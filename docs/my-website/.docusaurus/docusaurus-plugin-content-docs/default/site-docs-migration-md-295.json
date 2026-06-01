@@ -1,0 +1,23 @@
+{
+  "id": "migration",
+  "title": "Migration Guide - LiteLLM v1.0.0+",
+  "description": "When we have breaking changes (i.e. going from 1.x.x to 2.x.x), we will document those changes here.",
+  "source": "@site/docs/migration.md",
+  "sourceDirName": ".",
+  "slug": "/migration",
+  "permalink": "/docs/migration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Custom Pricing - SageMaker, Azure, etc",
+    "permalink": "/docs/sdk_custom_pricing"
+  },
+  "next": {
+    "title": "Data Privacy and Security",
+    "permalink": "/docs/data_security"
+  }
+}

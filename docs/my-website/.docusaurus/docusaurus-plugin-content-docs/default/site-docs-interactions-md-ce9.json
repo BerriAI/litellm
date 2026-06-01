@@ -1,0 +1,23 @@
+{
+  "id": "interactions",
+  "title": "/interactions",
+  "description": "| Feature | Supported | Notes |",
+  "source": "@site/docs/interactions.md",
+  "sourceDirName": ".",
+  "slug": "/interactions",
+  "permalink": "/docs/interactions",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/invoke",
+    "permalink": "/docs/bedrock_invoke"
+  },
+  "next": {
+    "title": "/images/edits",
+    "permalink": "/docs/image_edits"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "provider_registration/add_model_pricing",
+  "title": "Add Model Pricing & Context Window",
+  "description": "To add pricing or context window information for a model, simply make a PR to this file:",
+  "source": "@site/docs/provider_registration/add_model_pricing.md",
+  "sourceDirName": "provider_registration",
+  "slug": "/provider_registration/add_model_pricing",
+  "permalink": "/docs/provider_registration/add_model_pricing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Add Model Pricing & Context Window"
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Add OpenAI-Compatible Provider (JSON)",
+    "permalink": "/docs/contributing/adding_openai_compatible_providers"
+  },
+  "next": {
+    "title": "OpenAI",
+    "permalink": "/docs/providers/openai"
+  }
+}

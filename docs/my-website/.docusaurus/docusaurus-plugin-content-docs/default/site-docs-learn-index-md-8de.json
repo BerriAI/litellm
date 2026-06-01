@@ -1,0 +1,23 @@
+{
+  "id": "learn/index",
+  "title": "Learn LiteLLM",
+  "description": "LiteLLM gives you one OpenAI-compatible interface for 100+ LLM providers. Start with the path that matches your setup.",
+  "source": "@site/docs/learn/index.md",
+  "sourceDirName": "learn",
+  "slug": "/learn",
+  "permalink": "/docs/learn",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Learn LiteLLM",
+    "sidebar_label": "Learn",
+    "slug": "/learn"
+  },
+  "sidebar": "learnSidebar",
+  "next": {
+    "title": "SDK Quickstart",
+    "permalink": "/docs/learn/sdk_quickstart"
+  }
+}

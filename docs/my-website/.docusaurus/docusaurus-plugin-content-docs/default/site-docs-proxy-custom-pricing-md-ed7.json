@@ -1,0 +1,23 @@
+{
+  "id": "proxy/custom_pricing",
+  "title": "Custom LLM Pricing",
+  "description": "Overview",
+  "source": "@site/docs/proxy/custom_pricing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/custom_pricing",
+  "permalink": "/docs/proxy/custom_pricing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Request Tags for Spend Tracking",
+    "permalink": "/docs/proxy/request_tags"
+  },
+  "next": {
+    "title": "Pricing Calculator (Cost Estimation)",
+    "permalink": "/docs/proxy/pricing_calculator"
+  }
+}

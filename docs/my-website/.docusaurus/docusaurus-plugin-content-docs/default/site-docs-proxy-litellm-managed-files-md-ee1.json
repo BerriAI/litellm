@@ -1,0 +1,23 @@
+{
+  "id": "proxy/litellm_managed_files",
+  "title": "[BETA] LiteLLM Managed Files",
+  "description": "- Reuse the same file across different providers.",
+  "source": "@site/docs/proxy/litellm_managed_files.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/litellm_managed_files",
+  "permalink": "/docs/proxy/litellm_managed_files",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Provider Files Endpoints",
+    "permalink": "/docs/files_endpoints"
+  },
+  "next": {
+    "title": "/fine_tuning",
+    "permalink": "/docs/fine_tuning"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "files_endpoints",
+  "title": "Provider Files Endpoints",
+  "description": "Files are used to upload documents that can be used with features like Assistants, Fine-tuning, and Batch API.",
+  "source": "@site/docs/files_endpoints.md",
+  "sourceDirName": ".",
+  "slug": "/files_endpoints",
+  "permalink": "/docs/files_endpoints",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/embeddings",
+    "permalink": "/docs/embedding/supported_embedding"
+  },
+  "next": {
+    "title": "[BETA] LiteLLM Managed Files",
+    "permalink": "/docs/proxy/litellm_managed_files"
+  }
+}

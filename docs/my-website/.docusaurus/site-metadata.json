@@ -1,0 +1,62 @@
+{
+  "docusaurusVersion": "3.8.1",
+  "siteVersion": "0.0.0",
+  "pluginVersions": {
+    "docusaurus-plugin-content-docs": {
+      "type": "package",
+      "name": "@docusaurus/plugin-content-docs",
+      "version": "3.8.1"
+    },
+    "docusaurus-plugin-content-pages": {
+      "type": "package",
+      "name": "@docusaurus/plugin-content-pages",
+      "version": "3.8.1"
+    },
+    "docusaurus-plugin-google-gtag": {
+      "type": "package",
+      "name": "@docusaurus/plugin-google-gtag",
+      "version": "3.8.1"
+    },
+    "docusaurus-plugin-sitemap": {
+      "type": "package",
+      "name": "@docusaurus/plugin-sitemap",
+      "version": "3.8.1"
+    },
+    "docusaurus-plugin-svgr": {
+      "type": "package",
+      "name": "@docusaurus/plugin-svgr",
+      "version": "3.8.1"
+    },
+    "docusaurus-theme-classic": {
+      "type": "package",
+      "name": "@docusaurus/theme-classic",
+      "version": "3.8.1"
+    },
+    "docusaurus-plugin-inkeep": {
+      "type": "package",
+      "name": "@inkeep/cxkit-docusaurus",
+      "version": "0.5.107"
+    },
+    "docusaurus-plugin-ideal-image": {
+      "type": "package",
+      "name": "@docusaurus/plugin-ideal-image",
+      "version": "3.8.1"
+    },
+    "docusaurus-plugin-content-blog": {
+      "type": "package",
+      "name": "@docusaurus/plugin-content-blog",
+      "version": "3.8.1"
+    },
+    "cripchat": {
+      "type": "local"
+    },
+    "gtag-shim": {
+      "type": "local"
+    },
+    "docusaurus-theme-mermaid": {
+      "type": "package",
+      "name": "@docusaurus/theme-mermaid",
+      "version": "3.8.1"
+    }
+  }
+}

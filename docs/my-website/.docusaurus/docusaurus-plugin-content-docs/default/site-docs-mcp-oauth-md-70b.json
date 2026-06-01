@@ -1,0 +1,23 @@
+{
+  "id": "mcp_oauth",
+  "title": "MCP OAuth",
+  "description": "LiteLLM supports two OAuth 2.0 flows for MCP servers:",
+  "source": "@site/docs/mcp_oauth.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_oauth",
+  "permalink": "/docs/mcp_oauth",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP from OpenAPI Specs",
+    "permalink": "/docs/mcp_openapi"
+  },
+  "next": {
+    "title": "MCP - AWS SigV4 Auth",
+    "permalink": "/docs/mcp_aws_sigv4"
+  }
+}

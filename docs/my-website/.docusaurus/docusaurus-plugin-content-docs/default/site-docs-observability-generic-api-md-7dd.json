@@ -1,0 +1,23 @@
+{
+  "id": "observability/generic_api",
+  "title": "Generic API Callback (Webhook)",
+  "description": "Send LiteLLM logs to any HTTP endpoint.",
+  "source": "@site/docs/observability/generic_api.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/generic_api",
+  "permalink": "/docs/observability/generic_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Google Cloud Storage Buckets",
+    "permalink": "/docs/observability/gcs_bucket_integration"
+  },
+  "next": {
+    "title": "Greenscale - Track LLM Spend and Responsible Usage",
+    "permalink": "/docs/observability/greenscale_integration"
+  }
+}

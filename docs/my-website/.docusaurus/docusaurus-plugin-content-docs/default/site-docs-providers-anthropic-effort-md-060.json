@@ -1,0 +1,14 @@
+{
+  "id": "providers/anthropic_effort",
+  "title": "Anthropic Effort Parameter",
+  "description": "Control how many tokens Claude uses when responding with the effort parameter, trading off between response thoroughness and token efficiency.",
+  "source": "@site/docs/providers/anthropic_effort.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/anthropic_effort",
+  "permalink": "/docs/providers/anthropic_effort",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

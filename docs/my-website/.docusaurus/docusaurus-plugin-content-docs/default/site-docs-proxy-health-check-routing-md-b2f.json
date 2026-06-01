@@ -1,0 +1,23 @@
+{
+  "id": "proxy/health_check_routing",
+  "title": "Health Check Driven Routing",
+  "description": "Route traffic away from unhealthy deployments before users hit errors. Background health checks run on a configurable interval, and any deployment that fails gets removed from the routing pool proactively, not after a user request already failed.",
+  "source": "@site/docs/proxy/health_check_routing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/health_check_routing",
+  "permalink": "/docs/proxy/health_check_routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Provider specific Wildcard routing",
+    "permalink": "/docs/wildcard_routing"
+  },
+  "next": {
+    "title": "Benchmarks",
+    "permalink": "/docs/benchmarks"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "permalink": "/blog/gemini_embedding_2_multimodal",
+  "source": "@site/blog/gemini_embedding_2_multimodal/index.md",
+  "title": "Gemini Embedding 2 Preview: Multimodal Embeddings on LiteLLM",
+  "description": "Generate embeddings from text, images, audio, video, and PDFs with gemini-embedding-2-preview on LiteLLM via Gemini API and Vertex AI.",
+  "date": "2025-03-11T10:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "gemini",
+      "permalink": "/blog/tags/gemini"
+    },
+    {
+      "inline": true,
+      "label": "embeddings",
+      "permalink": "/blog/tags/embeddings"
+    },
+    {
+      "inline": true,
+      "label": "multimodal",
+      "permalink": "/blog/tags/multimodal"
+    },
+    {
+      "inline": true,
+      "label": "vertex ai",
+      "permalink": "/blog/tags/vertex-ai"
+    }
+  ],
+  "hasTruncateMarker": true,
+  "authors": [
+    {
+      "name": "Sameer Kankute",
+      "title": "SWE @ LiteLLM (LLM Translation)",
+      "url": "https://www.linkedin.com/in/sameer-kankute/",
+      "imageURL": "https://pbs.twimg.com/profile_images/2001352686994907136/ONgNuSk5_400x400.jpg",
+      "key": "sameer",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "gemini_embedding_2_multimodal",
+    "title": "Gemini Embedding 2 Preview: Multimodal Embeddings on LiteLLM",
+    "date": "2025-03-11T10:00:00.000Z",
+    "authors": [
+      "sameer"
+    ],
+    "description": "Generate embeddings from text, images, audio, video, and PDFs with gemini-embedding-2-preview on LiteLLM via Gemini API and Vertex AI.",
+    "tags": [
+      "gemini",
+      "embeddings",
+      "multimodal",
+      "vertex ai"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "DAY 0 Support: Gemini 3 on LiteLLM",
+    "permalink": "/blog/gemini_3"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "a2a_invoking_agents",
+  "title": "Invoking A2A Agents",
+  "description": "Learn how to invoke A2A agents through LiteLLM using different methods.",
+  "source": "@site/docs/a2a_invoking_agents.md",
+  "sourceDirName": ".",
+  "slug": "/a2a_invoking_agents",
+  "permalink": "/docs/a2a_invoking_agents",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Agent Gateway (A2A Protocol) - Overview",
+    "permalink": "/docs/a2a"
+  },
+  "next": {
+    "title": "A2A Agent Authentication Headers",
+    "permalink": "/docs/a2a_agent_headers"
+  }
+}

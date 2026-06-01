@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_agents",
+  "title": "Bedrock Agents",
+  "description": "Call Bedrock Agents in the OpenAI Request/Response format.",
+  "source": "@site/docs/providers/bedrock_agents.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_agents",
+  "permalink": "/docs/providers/bedrock_agents",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bedrock AgentCore",
+    "permalink": "/docs/providers/bedrock_agentcore"
+  },
+  "next": {
+    "title": "Bedrock - Writer Palmyra",
+    "permalink": "/docs/providers/bedrock_writer"
+  }
+}

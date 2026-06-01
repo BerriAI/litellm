@@ -1,0 +1,23 @@
+{
+  "id": "providers/nscale",
+  "title": "Nscale (EU Sovereign)",
+  "description": "https://docs.nscale.com/docs/inference/chat",
+  "source": "@site/docs/providers/nscale.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/nscale",
+  "permalink": "/docs/providers/nscale",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Novita AI",
+    "permalink": "/docs/providers/novita"
+  },
+  "next": {
+    "title": "Nvidia NIM",
+    "permalink": "/docs/providers/nvidia_nim"
+  }
+}

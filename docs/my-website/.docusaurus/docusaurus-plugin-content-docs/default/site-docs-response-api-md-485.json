@@ -1,0 +1,23 @@
+{
+  "id": "response_api",
+  "title": "/responses",
+  "description": "LiteLLM provides an endpoint in the spec of OpenAI's /responses API",
+  "source": "@site/docs/response_api.md",
+  "sourceDirName": ".",
+  "slug": "/response_api",
+  "permalink": "/docs/response_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "embedding()",
+    "permalink": "/docs/embedding/supported_embedding"
+  },
+  "next": {
+    "title": "text_completion()",
+    "permalink": "/docs/text_completion"
+  }
+}

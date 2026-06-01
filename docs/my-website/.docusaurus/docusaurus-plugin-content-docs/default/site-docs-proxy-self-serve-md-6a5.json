@@ -1,0 +1,23 @@
+{
+  "id": "proxy/self_serve",
+  "title": "Internal User Self-Serve",
+  "description": "Allow users to create their own keys on Proxy UI.",
+  "source": "@site/docs/proxy/self_serve.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/self_serve",
+  "permalink": "/docs/proxy/self_serve",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Store Model in DB Settings",
+    "permalink": "/docs/proxy/ui_store_model_db_setting"
+  },
+  "next": {
+    "title": "[BETA] Public Teams",
+    "permalink": "/docs/proxy/public_teams"
+  }
+}

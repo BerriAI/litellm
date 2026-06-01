@@ -1,0 +1,14 @@
+{
+  "id": "caching/caching_api",
+  "title": "Hosted Cache - api.litellm.ai",
+  "description": "Use api.litellm.ai for caching completion() and embedding() responses",
+  "source": "@site/docs/caching/caching_api.md",
+  "sourceDirName": "caching",
+  "slug": "/caching/caching_api",
+  "permalink": "/docs/caching/caching_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

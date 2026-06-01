@@ -1,0 +1,23 @@
+{
+  "id": "providers/triton-inference-server",
+  "title": "Triton Inference Server",
+  "description": "LiteLLM supports Embedding Models on Triton Inference Servers",
+  "source": "@site/docs/providers/triton-inference-server.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/triton-inference-server",
+  "permalink": "/docs/providers/triton-inference-server",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Topaz",
+    "permalink": "/docs/providers/topaz"
+  },
+  "next": {
+    "title": "v0",
+    "permalink": "/docs/providers/v0"
+  }
+}

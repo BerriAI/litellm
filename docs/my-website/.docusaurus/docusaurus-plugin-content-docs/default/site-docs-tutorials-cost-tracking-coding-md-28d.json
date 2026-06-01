@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/cost_tracking_coding",
+  "title": "Track Usage for Coding Tools",
+  "description": "Track usage and costs for AI-powered coding tools like Claude Code, Roo Code, Gemini CLI, and OpenAI Codex through LiteLLM.",
+  "source": "@site/docs/tutorials/cost_tracking_coding.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/cost_tracking_coding",
+  "permalink": "/docs/tutorials/cost_tracking_coding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Retool Assist",
+    "permalink": "/docs/tutorials/retool_assist"
+  },
+  "next": {
+    "title": "Agent SDKs",
+    "permalink": "/docs/agent_sdks"
+  }
+}

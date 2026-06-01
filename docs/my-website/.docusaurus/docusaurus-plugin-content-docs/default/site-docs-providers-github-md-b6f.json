@@ -1,0 +1,23 @@
+{
+  "id": "providers/github",
+  "title": "Github",
+  "description": "https://github.com/marketplace/models",
+  "source": "@site/docs/providers/github.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/github",
+  "permalink": "/docs/providers/github",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Galadriel",
+    "permalink": "/docs/providers/galadriel"
+  },
+  "next": {
+    "title": "GitHub Copilot",
+    "permalink": "/docs/providers/github_copilot"
+  }
+}

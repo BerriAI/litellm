@@ -1,0 +1,23 @@
+{
+  "id": "proxy/prompt_management",
+  "title": "Prompt Management",
+  "description": "Run experiments or change the specific model (e.g. from gpt-4o to gpt4o-mini finetune) from your prompt management tool (e.g. Langfuse) instead of making changes in the application.",
+  "source": "@site/docs/proxy/prompt_management.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/prompt_management",
+  "permalink": "/docs/proxy/prompt_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "LiteLLM Prompt Management (GitOps)",
+    "permalink": "/docs/proxy/native_litellm_prompt"
+  },
+  "next": {
+    "title": "Arize Phoenix Prompt Management",
+    "permalink": "/docs/proxy/arize_phoenix_prompts"
+  }
+}

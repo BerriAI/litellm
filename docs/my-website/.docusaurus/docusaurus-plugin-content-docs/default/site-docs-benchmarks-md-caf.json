@@ -1,0 +1,23 @@
+{
+  "id": "benchmarks",
+  "title": "Benchmarks",
+  "description": "Benchmarks for LiteLLM Gateway (Proxy Server) tested against a fake OpenAI endpoint.",
+  "source": "@site/docs/benchmarks.md",
+  "sourceDirName": ".",
+  "slug": "/benchmarks",
+  "permalink": "/docs/benchmarks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Health Check Driven Routing",
+    "permalink": "/docs/proxy/health_check_routing"
+  },
+  "next": {
+    "title": "LiteLLM Proxy - 1K RPS Load test on locust",
+    "permalink": "/docs/load_test_advanced"
+  }
+}

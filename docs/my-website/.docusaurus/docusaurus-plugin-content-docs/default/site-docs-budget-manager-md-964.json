@@ -1,0 +1,23 @@
+{
+  "id": "budget_manager",
+  "title": "Budget Manager",
+  "description": "Don't want to get crazy bills because either while you're calling LLM APIs or while your users are calling them? use this.",
+  "source": "@site/docs/budget_manager.md",
+  "sourceDirName": ".",
+  "slug": "/budget_manager",
+  "permalink": "/docs/budget_manager",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Reliability - Retries, Fallbacks",
+    "permalink": "/docs/completion/reliable_completions"
+  },
+  "next": {
+    "title": "Security & Network",
+    "permalink": "/docs/guides/security_network"
+  }
+}

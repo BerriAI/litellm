@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/token_usage",
+  "source": "@site/src/pages/token_usage.md",
+  "title": "Token Usage",
+  "description": "By default LiteLLM returns token usage in all completion requests (See here)",
+  "frontMatter": {},
+  "unlisted": false
+}

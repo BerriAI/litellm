@@ -1,0 +1,25 @@
+{
+  "id": "provider_registration/index",
+  "title": "Integrate as a Model Provider",
+  "description": "Quick Start for OpenAI-Compatible Providers",
+  "source": "@site/docs/provider_registration/index.md",
+  "sourceDirName": "provider_registration",
+  "slug": "/provider_registration/",
+  "permalink": "/docs/provider_registration/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Integrate as a Model Provider"
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Supported Models & Providers",
+    "permalink": "/docs/providers"
+  },
+  "next": {
+    "title": "Add OpenAI-Compatible Provider (JSON)",
+    "permalink": "/docs/contributing/adding_openai_compatible_providers"
+  }
+}

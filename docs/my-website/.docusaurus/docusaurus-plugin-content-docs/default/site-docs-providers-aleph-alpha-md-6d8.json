@@ -1,0 +1,23 @@
+{
+  "id": "providers/aleph_alpha",
+  "title": "Aleph Alpha",
+  "description": "LiteLLM supports all models from Aleph Alpha.",
+  "source": "@site/docs/providers/aleph_alpha.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/aleph_alpha",
+  "permalink": "/docs/providers/aleph_alpha",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "AI/ML API",
+    "permalink": "/docs/providers/aiml"
+  },
+  "next": {
+    "title": "Amazon Nova",
+    "permalink": "/docs/providers/amazon_nova"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/vercel_ai_gateway",
+  "title": "Vercel AI Gateway",
+  "description": "Overview",
+  "source": "@site/docs/providers/vercel_ai_gateway.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vercel_ai_gateway",
+  "permalink": "/docs/providers/vercel_ai_gateway",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "v0",
+    "permalink": "/docs/providers/v0"
+  },
+  "next": {
+    "title": "VLLM",
+    "permalink": "/docs/providers/vllm"
+  }
+}

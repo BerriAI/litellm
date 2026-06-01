@@ -1,0 +1,23 @@
+{
+  "id": "providers/manus",
+  "title": "Manus",
+  "description": "Use Manus AI agents through LiteLLM's OpenAI-compatible Responses API.",
+  "source": "@site/docs/providers/manus.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/manus",
+  "permalink": "/docs/providers/manus",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LM Studio",
+    "permalink": "/docs/providers/lm_studio"
+  },
+  "next": {
+    "title": "Meta Llama",
+    "permalink": "/docs/providers/meta_llama"
+  }
+}

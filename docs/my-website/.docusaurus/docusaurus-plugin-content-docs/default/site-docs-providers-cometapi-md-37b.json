@@ -1,0 +1,23 @@
+{
+  "id": "providers/cometapi",
+  "title": "CometAPI",
+  "description": "LiteLLM supports all AI models from CometAPI. CometAPI provides access to 500+ AI models through a unified API interface, including cutting-edge models like GPT-5, Claude Opus 4.1, and various other state-of-the-art language models.",
+  "source": "@site/docs/providers/cometapi.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/cometapi",
+  "permalink": "/docs/providers/cometapi",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Cohere",
+    "permalink": "/docs/providers/cohere"
+  },
+  "next": {
+    "title": "CompactifAI",
+    "permalink": "/docs/providers/compactifai"
+  }
+}

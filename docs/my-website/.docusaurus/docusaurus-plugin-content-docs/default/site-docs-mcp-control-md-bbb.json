@@ -1,0 +1,23 @@
+{
+  "id": "mcp_control",
+  "title": "MCP Permission Management",
+  "description": "Control which MCP servers and tools can be accessed by specific keys, teams, or organizations in LiteLLM. When a client attempts to list or call tools, LiteLLM enforces access controls based on configured permissions.",
+  "source": "@site/docs/mcp_control.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_control",
+  "permalink": "/docs/mcp_control",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Semantic Tool Filter",
+    "permalink": "/docs/mcp_semantic_filter"
+  },
+  "next": {
+    "title": "MCP Cost Tracking",
+    "permalink": "/docs/mcp_cost"
+  }
+}

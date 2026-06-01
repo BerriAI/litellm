@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/aim_security",
+  "title": "Aim Security",
+  "description": "Quick Start",
+  "source": "@site/docs/proxy/guardrails/aim_security.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/aim_security",
+  "permalink": "/docs/proxy/guardrails/aim_security",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Team Bring-Your-Own Guardrails",
+    "permalink": "/docs/proxy/guardrails/team_based_guardrails"
+  },
+  "next": {
+    "title": "Aporia",
+    "permalink": "/docs/proxy/guardrails/aporia_api"
+  }
+}

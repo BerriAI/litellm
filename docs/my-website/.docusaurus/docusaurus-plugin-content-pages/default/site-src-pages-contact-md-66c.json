@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/contact",
+  "source": "@site/src/pages/contact.md",
+  "title": "Contact Us",
+  "description": "* Meet with us 👋",
+  "frontMatter": {},
+  "unlisted": false
+}

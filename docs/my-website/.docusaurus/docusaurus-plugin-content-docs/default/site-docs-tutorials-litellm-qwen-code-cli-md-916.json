@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/litellm_qwen_code_cli",
+  "title": "Qwen Code CLI",
+  "description": "This tutorial shows you how to integrate the Qwen Code CLI with LiteLLM Proxy, allowing you to route requests through LiteLLM's unified interface.",
+  "source": "@site/docs/tutorials/litellm_qwen_code_cli.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/litellm_qwen_code_cli",
+  "permalink": "/docs/tutorials/litellm_qwen_code_cli",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Gemini CLI",
+    "permalink": "/docs/tutorials/litellm_gemini_cli"
+  },
+  "next": {
+    "title": "OpenAI Codex",
+    "permalink": "/docs/tutorials/openai_codex"
+  }
+}

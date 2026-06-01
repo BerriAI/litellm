@@ -1,0 +1,23 @@
+{
+  "id": "proxy/fallback_management",
+  "title": "[New] Fallback Management Endpoints",
+  "description": "Dedicated endpoints for managing model fallbacks separately from the general configuration.",
+  "source": "@site/docs/proxy/fallback_management.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/fallback_management",
+  "permalink": "/docs/proxy/fallback_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Fallbacks",
+    "permalink": "/docs/proxy/reliability"
+  },
+  "next": {
+    "title": "Tag Based Routing",
+    "permalink": "/docs/proxy/tag_routing"
+  }
+}

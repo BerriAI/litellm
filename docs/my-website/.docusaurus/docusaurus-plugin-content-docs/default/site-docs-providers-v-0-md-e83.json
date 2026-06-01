@@ -1,0 +1,23 @@
+{
+  "id": "providers/v0",
+  "title": "v0",
+  "description": "Overview",
+  "source": "@site/docs/providers/v0.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/v0",
+  "permalink": "/docs/providers/v0",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Triton Inference Server",
+    "permalink": "/docs/providers/triton-inference-server"
+  },
+  "next": {
+    "title": "Vercel AI Gateway",
+    "permalink": "/docs/providers/vercel_ai_gateway"
+  }
+}

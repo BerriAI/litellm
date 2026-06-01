@@ -1,0 +1,25 @@
+{
+  "id": "prompt_management",
+  "title": "Prompt Management with Responses API",
+  "description": "Use LiteLLM Prompt Management with /v1/responses by passing promptid and optional promptvariables.",
+  "source": "@site/docs/prompt_management.md",
+  "sourceDirName": ".",
+  "slug": "/prompt_management",
+  "permalink": "/docs/prompt_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Prompt Management with Responses API"
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/responses",
+    "permalink": "/docs/response_api"
+  },
+  "next": {
+    "title": "/responses/compact",
+    "permalink": "/docs/response_api_compact"
+  }
+}

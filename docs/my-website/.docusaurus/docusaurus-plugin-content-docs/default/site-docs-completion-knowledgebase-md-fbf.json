@@ -1,0 +1,23 @@
+{
+  "id": "completion/knowledgebase",
+  "title": "Using Vector Stores (Knowledge Bases)",
+  "description": "<Image",
+  "source": "@site/docs/completion/knowledgebase.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/knowledgebase",
+  "permalink": "/docs/completion/knowledgebase",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Retrieval & Knowledge",
+    "permalink": "/docs/guides/retrieval_knowledge"
+  },
+  "next": {
+    "title": "Prompts & Context",
+    "permalink": "/docs/guides/prompts_context"
+  }
+}

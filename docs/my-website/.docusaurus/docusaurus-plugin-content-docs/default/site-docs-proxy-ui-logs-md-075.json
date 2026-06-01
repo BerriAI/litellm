@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui_logs",
+  "title": "Getting Started with UI Logs",
+  "description": "View Spend, Token Usage, Key, Team Name for Each Request to LiteLLM",
+  "source": "@site/docs/proxy/ui_logs.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ui_logs",
+  "permalink": "/docs/proxy/ui_logs",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Endpoint Activity",
+    "permalink": "/docs/proxy/endpoint_activity"
+  },
+  "next": {
+    "title": "UI Spend Log Settings",
+    "permalink": "/docs/proxy/ui_spend_log_settings"
+  }
+}

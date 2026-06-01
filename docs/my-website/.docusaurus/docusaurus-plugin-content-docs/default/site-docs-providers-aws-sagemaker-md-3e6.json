@@ -1,0 +1,23 @@
+{
+  "id": "providers/aws_sagemaker",
+  "title": "AWS Sagemaker",
+  "description": "LiteLLM supports All Sagemaker Huggingface Jumpstart Models",
+  "source": "@site/docs/providers/aws_sagemaker.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/aws_sagemaker",
+  "permalink": "/docs/providers/aws_sagemaker",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Anthropic",
+    "permalink": "/docs/providers/anthropic"
+  },
+  "next": {
+    "title": "AWS Bedrock",
+    "permalink": "/docs/providers/bedrock"
+  }
+}

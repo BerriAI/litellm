@@ -1,0 +1,52 @@
+{
+  "permalink": "/blog/model-cost-map-incident",
+  "source": "@site/blog/model_cost_map_incident/index.md",
+  "title": "Incident Report: Invalid model cost map on main",
+  "description": "Date: January 27, 2026",
+  "date": "2026-02-10T10:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "incident-report",
+      "permalink": "/blog/tags/incident-report"
+    },
+    {
+      "inline": true,
+      "label": "stability",
+      "permalink": "/blog/tags/stability"
+    }
+  ],
+  "hasTruncateMarker": true,
+  "authors": [
+    {
+      "name": "Ishaan Jaffer",
+      "title": "CTO, LiteLLM",
+      "url": "https://www.linkedin.com/in/reffajnaahsi/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg",
+      "key": "ishaan",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "model-cost-map-incident",
+    "title": "Incident Report: Invalid model cost map on main",
+    "date": "2026-02-10T10:00:00.000Z",
+    "authors": [
+      "ishaan"
+    ],
+    "tags": [
+      "incident-report",
+      "stability"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "Day 0 Support: MiniMax-M2.5",
+    "permalink": "/blog/minimax_m2_5"
+  },
+  "nextItem": {
+    "title": "Your Middleware Could Be a Bottleneck",
+    "permalink": "/blog/fastapi-middleware-performance"
+  }
+}

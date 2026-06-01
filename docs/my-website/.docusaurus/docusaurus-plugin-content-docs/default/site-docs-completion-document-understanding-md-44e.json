@@ -1,0 +1,23 @@
+{
+  "id": "completion/document_understanding",
+  "title": "Using PDF Input",
+  "description": "How to send / receive pdf's (other document types) to a /chat/completions endpoint",
+  "source": "@site/docs/completion/document_understanding.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/document_understanding",
+  "permalink": "/docs/completion/document_understanding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Using Audio Models",
+    "permalink": "/docs/completion/audio"
+  },
+  "next": {
+    "title": "Image Generation in Chat Completions, Responses API",
+    "permalink": "/docs/completion/image_generation_chat"
+  }
+}

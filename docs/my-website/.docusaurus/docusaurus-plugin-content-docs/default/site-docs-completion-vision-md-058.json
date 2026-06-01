@@ -1,0 +1,23 @@
+{
+  "id": "completion/vision",
+  "title": "Using Vision Models",
+  "description": "Quick Start",
+  "source": "@site/docs/completion/vision.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/vision",
+  "permalink": "/docs/completion/vision",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Multimodal I/O",
+    "permalink": "/docs/guides/multimodal_io"
+  },
+  "next": {
+    "title": "Using Audio Models",
+    "permalink": "/docs/completion/audio"
+  }
+}

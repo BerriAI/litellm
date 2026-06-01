@@ -1,0 +1,14 @@
+{
+  "id": "old_guardrails",
+  "title": "🛡️ [Beta] Guardrails",
+  "description": "Setup Prompt Injection Detection, Secret Detection on LiteLLM Proxy",
+  "source": "@site/docs/old_guardrails.md",
+  "sourceDirName": ".",
+  "slug": "/old_guardrails",
+  "permalink": "/docs/old_guardrails",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

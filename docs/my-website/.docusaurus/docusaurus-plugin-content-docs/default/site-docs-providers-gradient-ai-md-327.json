@@ -1,0 +1,23 @@
+{
+  "id": "providers/gradient_ai",
+  "title": "GradientAI",
+  "description": "https://digitalocean.com/products/gradientai",
+  "source": "@site/docs/providers/gradient_ai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/gradient_ai",
+  "permalink": "/docs/providers/gradient_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "ChatGPT Subscription",
+    "permalink": "/docs/providers/chatgpt"
+  },
+  "next": {
+    "title": "Groq",
+    "permalink": "/docs/providers/groq"
+  }
+}

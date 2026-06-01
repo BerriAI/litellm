@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/model_fallbacks",
+  "title": "Model Fallbacks w/ LiteLLM",
+  "description": "Here's how you can implement model fallbacks across 3 LLM providers (OpenAI, Anthropic, Azure) using LiteLLM.",
+  "source": "@site/docs/tutorials/model_fallbacks.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/model_fallbacks",
+  "permalink": "/docs/tutorials/model_fallbacks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "provider_specific_params",
+    "permalink": "/docs/tutorials/provider_specific_params"
+  },
+  "next": {
+    "title": "Using completion() with Fallbacks for Reliability",
+    "permalink": "/docs/tutorials/fallbacks"
+  }
+}

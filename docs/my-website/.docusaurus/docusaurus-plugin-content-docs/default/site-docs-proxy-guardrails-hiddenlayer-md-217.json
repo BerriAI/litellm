@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/hiddenlayer",
+  "title": "HiddenLayer Guardrails",
+  "description": "LiteLLM ships with a native integration for HiddenLayer. The proxy sends every request/response to HiddenLayer’s /detection/v1/interactions endpoint so you can block or redact unsafe content before it reaches your users.",
+  "source": "@site/docs/proxy/guardrails/hiddenlayer.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/hiddenlayer",
+  "permalink": "/docs/proxy/guardrails/hiddenlayer",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Guardrails AI",
+    "permalink": "/docs/proxy/guardrails/guardrails_ai"
+  },
+  "next": {
+    "title": "IBM Guardrails",
+    "permalink": "/docs/proxy/guardrails/ibm_guardrails"
+  }
+}

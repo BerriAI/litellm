@@ -1,0 +1,62 @@
+{
+  "permalink": "/blog/security-update-march-2026",
+  "source": "@site/blog/security_update_march_2026/index.md",
+  "title": "Security Update: Suspected Supply Chain Incident",
+  "description": "As of 2:00 PM ET on March 24, 2026",
+  "date": "2026-03-24T14:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "security",
+      "permalink": "/blog/tags/security"
+    },
+    {
+      "inline": true,
+      "label": "incident-report",
+      "permalink": "/blog/tags/incident-report"
+    }
+  ],
+  "hasTruncateMarker": false,
+  "authors": [
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    },
+    {
+      "name": "Ishaan Jaff",
+      "title": "CTO, LiteLLM",
+      "url": "https://www.linkedin.com/in/reffajnaahsi/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg",
+      "key": "ishaan-alt",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "security-update-march-2026",
+    "title": "Security Update: Suspected Supply Chain Incident",
+    "date": "2026-03-24T14:00:00.000Z",
+    "authors": [
+      "krrish",
+      "ishaan-alt"
+    ],
+    "description": "As of 2:00 PM ET on March 24, 2026",
+    "tags": [
+      "security",
+      "incident-report"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "Security Townhall Updates",
+    "permalink": "/blog/security-townhall-updates"
+  },
+  "nextItem": {
+    "title": "Incident Report: Guardrail logging exposed secret headers in spend logs and traces",
+    "permalink": "/blog/guardrail-logging-secret-exposure-incident"
+  }
+}

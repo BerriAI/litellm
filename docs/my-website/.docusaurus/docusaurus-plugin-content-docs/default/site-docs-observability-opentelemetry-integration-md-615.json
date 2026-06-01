@@ -1,0 +1,23 @@
+{
+  "id": "observability/opentelemetry_integration",
+  "title": "OpenTelemetry - Tracing LLMs with any observability tool",
+  "description": "OpenTelemetry is a CNCF standard for observability. It connects to any observability tool, such as Jaeger, Zipkin, Datadog, New Relic, Traceloop, Levo AI and others.",
+  "source": "@site/docs/observability/opentelemetry_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/opentelemetry_integration",
+  "permalink": "/docs/observability/opentelemetry_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "OpenMeter - Usage-Based Billing",
+    "permalink": "/docs/observability/openmeter"
+  },
+  "next": {
+    "title": "Comet Opik - Logging + Evals",
+    "permalink": "/docs/observability/opik_integration"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/guardrails_ai",
+  "title": "Guardrails AI",
+  "description": "Use Guardrails AI (guardrailsai.com) to add checks to LLM output.",
+  "source": "@site/docs/proxy/guardrails/guardrails_ai.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/guardrails_ai",
+  "permalink": "/docs/proxy/guardrails/guardrails_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Gray Swan Cygnal Guardrail",
+    "permalink": "/docs/proxy/guardrails/grayswan"
+  },
+  "next": {
+    "title": "HiddenLayer Guardrails",
+    "permalink": "/docs/proxy/guardrails/hiddenlayer"
+  }
+}

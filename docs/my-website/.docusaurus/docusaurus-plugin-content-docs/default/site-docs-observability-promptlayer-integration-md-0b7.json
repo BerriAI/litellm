@@ -1,0 +1,23 @@
+{
+  "id": "observability/promptlayer_integration",
+  "title": "Promptlayer Tutorial",
+  "description": "This is community maintained, Please make an issue if you run into a bug",
+  "source": "@site/docs/observability/promptlayer_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/promptlayer_integration",
+  "permalink": "/docs/observability/promptlayer_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "PostHog - Tracking LLM Usage Analytics",
+    "permalink": "/docs/observability/posthog_integration"
+  },
+  "next": {
+    "title": "Qualifire - LLM Evaluation, Guardrails & Observability",
+    "permalink": "/docs/observability/qualifire_integration"
+  }
+}

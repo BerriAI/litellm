@@ -1,0 +1,23 @@
+{
+  "id": "observability/agentops_integration",
+  "title": "🖇️ AgentOps - LLM Observability Platform",
+  "description": "This is community maintained. Please make an issue if you run into a bug:",
+  "source": "@site/docs/observability/agentops_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/agentops_integration",
+  "permalink": "/docs/observability/agentops_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Contribute Custom Webhook API",
+    "permalink": "/docs/contribute_integration/custom_webhook_api"
+  },
+  "next": {
+    "title": "Argilla",
+    "permalink": "/docs/observability/argilla"
+  }
+}

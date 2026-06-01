@@ -1,0 +1,23 @@
+{
+  "id": "proxy/health",
+  "title": "Health Checks",
+  "description": "Use this to health check all LLMs defined in your config.yaml",
+  "source": "@site/docs/proxy/health.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/health",
+  "permalink": "/docs/proxy/health",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Docker, Helm, Terraform",
+    "permalink": "/docs/proxy/deploy"
+  },
+  "next": {
+    "title": "Rotating Master Key",
+    "permalink": "/docs/proxy/master_key_rotations"
+  }
+}

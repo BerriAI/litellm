@@ -1,0 +1,23 @@
+{
+  "id": "image_edits",
+  "title": "/images/edits",
+  "description": "LiteLLM provides image editing functionality that maps to OpenAI's /images/edits API endpoint. Now supports both single and multiple image editing.",
+  "source": "@site/docs/image_edits.md",
+  "sourceDirName": ".",
+  "slug": "/image_edits",
+  "permalink": "/docs/image_edits",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/interactions",
+    "permalink": "/docs/interactions"
+  },
+  "next": {
+    "title": "Image Generations",
+    "permalink": "/docs/image_generation"
+  }
+}

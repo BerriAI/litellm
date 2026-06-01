@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_realtime",
+  "title": "Vertex AI Gemini Live - Realtime API",
+  "description": "Use Vertex AI's Gemini Live API (BidiGenerateContent) through LiteLLM's unified /realtime endpoint, which speaks the OpenAI Realtime protocol.",
+  "source": "@site/docs/providers/vertex_realtime.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_realtime",
+  "permalink": "/docs/providers/vertex_realtime",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI Agent Engine",
+    "permalink": "/docs/providers/vertex_ai_agent_engine"
+  },
+  "next": {
+    "title": "Gemini - Google AI Studio",
+    "permalink": "/docs/providers/gemini"
+  }
+}

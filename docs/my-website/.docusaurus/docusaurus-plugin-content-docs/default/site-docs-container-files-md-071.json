@@ -1,0 +1,26 @@
+{
+  "id": "container_files",
+  "title": "/containers/files",
+  "description": "Manage files within Code Interpreter containers. Files are created automatically when code interpreter generates outputs (charts, CSVs, images, etc.).",
+  "source": "@site/docs/container_files.md",
+  "sourceDirName": ".",
+  "slug": "/container_files",
+  "permalink": "/docs/container_files",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "id": "container_files",
+    "title": "/containers/files"
+  },
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/containers",
+    "permalink": "/docs/containers"
+  },
+  "next": {
+    "title": "/chat/completions",
+    "permalink": "/docs/completion"
+  }
+}

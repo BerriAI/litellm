@@ -1,0 +1,69 @@
+{
+  "id": "v1.56.1/index",
+  "title": "v1.56.1",
+  "description": "key management, budgets/rate limits, logging, guardrails",
+  "source": "@site/release_notes/v1.56.1/index.md",
+  "sourceDirName": "v1.56.1",
+  "slug": "/v1.56.1/v1.56.1",
+  "permalink": "/release_notes/v1.56.1/v1.56.1",
+  "draft": false,
+  "unlisted": false,
+  "tags": [
+    {
+      "inline": true,
+      "label": "key management",
+      "permalink": "/release_notes/tags/key-management"
+    },
+    {
+      "inline": true,
+      "label": "budgets/rate limits",
+      "permalink": "/release_notes/tags/budgets-rate-limits"
+    },
+    {
+      "inline": true,
+      "label": "logging",
+      "permalink": "/release_notes/tags/logging"
+    },
+    {
+      "inline": true,
+      "label": "guardrails",
+      "permalink": "/release_notes/tags/guardrails"
+    }
+  ],
+  "version": "current",
+  "frontMatter": {
+    "title": "v1.56.1",
+    "slug": "v1.56.1",
+    "date": "2024-12-27T10:00:00.000Z",
+    "authors": [
+      {
+        "name": "Krrish Dholakia",
+        "title": "CEO, LiteLLM",
+        "url": "https://www.linkedin.com/in/krish-d/",
+        "image_url": "https://media.licdn.com/dms/image/v2/D4D03AQGrlsJ3aqpHmQ/profile-displayphoto-shrink_400_400/B4DZSAzgP7HYAg-/0/1737327772964?e=1749686400&v=beta&t=Hkl3U8Ps0VtvNxX0BNNq24b4dtX5wQaPFp6oiKCIHD8"
+      },
+      {
+        "name": "Ishaan Jaffer",
+        "title": "CTO, LiteLLM",
+        "url": "https://www.linkedin.com/in/reffajnaahsi/",
+        "image_url": "https://media.licdn.com/dms/image/v2/D4D03AQGiM7ZrUwqu_Q/profile-displayphoto-shrink_800_800/profile-displayphoto-shrink_800_800/0/1675971026692?e=1741824000&v=beta&t=eQnRdXPJo4eiINWTZARoYTfqh064pgZ-E21pQTSy8jc"
+      }
+    ],
+    "tags": [
+      "key management",
+      "budgets/rate limits",
+      "logging",
+      "guardrails"
+    ],
+    "hide_table_of_contents": false
+  },
+  "sidebar": "releaseNotesSidebar",
+  "previous": {
+    "title": "v1.56.3",
+    "permalink": "/release_notes/v1.56.3/v1.56.3"
+  },
+  "next": {
+    "title": "v1.55.10",
+    "permalink": "/release_notes/v1.55.10/v1.55.10"
+  }
+}

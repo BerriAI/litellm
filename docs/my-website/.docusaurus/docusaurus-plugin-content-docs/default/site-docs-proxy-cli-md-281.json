@@ -1,0 +1,23 @@
+{
+  "id": "proxy/cli",
+  "title": "CLI Arguments",
+  "description": "This page documents all command-line interface (CLI) arguments available for the LiteLLM proxy server.",
+  "source": "@site/docs/proxy/cli.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/cli",
+  "permalink": "/docs/proxy/cli",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "CLI - Quick Start",
+    "permalink": "/docs/proxy/quick_start"
+  },
+  "next": {
+    "title": "Debugging",
+    "permalink": "/docs/proxy/debugging"
+  }
+}

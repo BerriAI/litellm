@@ -1,0 +1,23 @@
+{
+  "id": "proxy/native_litellm_prompt",
+  "title": "LiteLLM Prompt Management (GitOps)",
+  "description": "Store prompts as .prompt files in your repository and use them directly with LiteLLM. No external services required.",
+  "source": "@site/docs/proxy/native_litellm_prompt.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/native_litellm_prompt",
+  "permalink": "/docs/proxy/native_litellm_prompt",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Custom Prompt Management",
+    "permalink": "/docs/proxy/custom_prompt_management"
+  },
+  "next": {
+    "title": "Prompt Management",
+    "permalink": "/docs/proxy/prompt_management"
+  }
+}

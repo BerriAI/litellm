@@ -1,0 +1,23 @@
+{
+  "id": "proxy/billing",
+  "title": "Billing",
+  "description": "Bill internal teams, external customers for their usage",
+  "source": "@site/docs/proxy/billing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/billing",
+  "permalink": "/docs/proxy/billing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Auto Sync New Models (Day-0 Launches)",
+    "permalink": "/docs/proxy/sync_models_github"
+  },
+  "next": {
+    "title": "Supported Endpoints",
+    "permalink": "/docs/supported_endpoints"
+  }
+}

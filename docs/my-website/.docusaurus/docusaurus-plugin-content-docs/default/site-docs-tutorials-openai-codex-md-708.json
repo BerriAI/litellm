@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/openai_codex",
+  "title": "OpenAI Codex",
+  "description": "This guide walks you through connecting OpenAI Codex to LiteLLM. Using LiteLLM with Codex allows teams to:",
+  "source": "@site/docs/tutorials/openai_codex.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/openai_codex",
+  "permalink": "/docs/tutorials/openai_codex",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Qwen Code CLI",
+    "permalink": "/docs/tutorials/litellm_qwen_code_cli"
+  },
+  "next": {
+    "title": "Retool Assist",
+    "permalink": "/docs/tutorials/retool_assist"
+  }
+}

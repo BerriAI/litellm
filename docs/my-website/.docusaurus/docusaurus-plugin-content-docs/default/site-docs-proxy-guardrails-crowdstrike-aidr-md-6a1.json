@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/crowdstrike_aidr",
+  "title": "CrowdStrike AIDR",
+  "description": "The CrowdStrike AIDR guardrail uses configurable detection policies to identify",
+  "source": "@site/docs/proxy/guardrails/crowdstrike_aidr.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/crowdstrike_aidr",
+  "permalink": "/docs/proxy/guardrails/crowdstrike_aidr",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Bedrock Guardrails",
+    "permalink": "/docs/proxy/guardrails/bedrock"
+  },
+  "next": {
+    "title": "Custom Code Guardrail",
+    "permalink": "/docs/proxy/guardrails/custom_code_guardrail"
+  }
+}

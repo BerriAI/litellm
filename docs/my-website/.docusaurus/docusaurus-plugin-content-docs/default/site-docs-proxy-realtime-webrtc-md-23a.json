@@ -1,0 +1,23 @@
+{
+  "id": "proxy/realtime_webrtc",
+  "title": "/realtime - WebRTC Support",
+  "description": "Connect to the Realtime API via WebRTC from browser/mobile clients. LiteLLM handles auth; audio streams directly to OpenAI/Azure.",
+  "source": "@site/docs/proxy/realtime_webrtc.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/realtime_webrtc",
+  "permalink": "/docs/proxy/realtime_webrtc",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/realtime",
+    "permalink": "/docs/realtime"
+  },
+  "next": {
+    "title": "/rerank",
+    "permalink": "/docs/rerank"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/access_control",
+  "title": "Role-based Access Controls (RBAC)",
+  "description": "Role-based access control (RBAC) is based on Organizations, Teams and Internal User Roles",
+  "source": "@site/docs/proxy/access_control.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/access_control",
+  "permalink": "/docs/proxy/access_control",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[Beta] Service Accounts",
+    "permalink": "/docs/proxy/service_accounts"
+  },
+  "next": {
+    "title": "CLI Authentication",
+    "permalink": "/docs/proxy/cli_sso"
+  }
+}

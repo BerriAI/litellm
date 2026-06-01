@@ -1,0 +1,23 @@
+{
+  "id": "proxy/customers",
+  "title": "Customers / End-Users",
+  "description": "Track spend, set budgets and permissions for your customers.",
+  "source": "@site/docs/proxy/customers.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/customers",
+  "permalink": "/docs/proxy/customers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Setting Tag Budgets",
+    "permalink": "/docs/proxy/tag_budgets"
+  },
+  "next": {
+    "title": "Dynamic TPM/RPM Allocation",
+    "permalink": "/docs/proxy/dynamic_rate_limit"
+  }
+}

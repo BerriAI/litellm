@@ -1,0 +1,23 @@
+{
+  "id": "proxy/provider_budget_routing",
+  "title": "Budget Routing",
+  "description": "LiteLLM Supports setting the following budgets:",
+  "source": "@site/docs/proxy/provider_budget_routing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/provider_budget_routing",
+  "permalink": "/docs/proxy/provider_budget_routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "UI - Router Settings for Keys and Teams",
+    "permalink": "/docs/proxy/keys_teams_router_settings"
+  },
+  "next": {
+    "title": "Fallbacks",
+    "permalink": "/docs/proxy/reliability"
+  }
+}

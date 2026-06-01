@@ -1,0 +1,23 @@
+{
+  "id": "observability/langtrace_integration",
+  "title": "Langtrace AI",
+  "description": "Monitor, evaluate & improve your LLM apps",
+  "source": "@site/docs/observability/langtrace_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/langtrace_integration",
+  "permalink": "/docs/observability/langtrace_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Langsmith - Logging LLM Input/Output",
+    "permalink": "/docs/observability/langsmith_integration"
+  },
+  "next": {
+    "title": "Levo AI",
+    "permalink": "/docs/observability/levo_integration"
+  }
+}

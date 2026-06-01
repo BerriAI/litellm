@@ -1,0 +1,23 @@
+{
+  "id": "providers/pydantic_ai_agent",
+  "title": "Pydantic AI Agents",
+  "description": "Call Pydantic AI Agents via LiteLLM's A2A Gateway.",
+  "source": "@site/docs/providers/pydantic_ai_agent.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/pydantic_ai_agent",
+  "permalink": "/docs/providers/pydantic_ai_agent",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Predibase",
+    "permalink": "/docs/providers/predibase"
+  },
+  "next": {
+    "title": "RAGFlow",
+    "permalink": "/docs/providers/ragflow"
+  }
+}

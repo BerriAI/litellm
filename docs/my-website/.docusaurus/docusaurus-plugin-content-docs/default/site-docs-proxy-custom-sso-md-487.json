@@ -1,0 +1,23 @@
+{
+  "id": "proxy/custom_sso",
+  "title": "✨ Event Hooks for SSO Login",
+  "description": "✨ SSO is free for up to 5 users. After that, an enterprise license is required. Get Started with Enterprise here",
+  "source": "@site/docs/proxy/custom_sso.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/custom_sso",
+  "permalink": "/docs/proxy/custom_sso",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Customize UI Logo",
+    "permalink": "/docs/proxy/ui/ui_edit_logo"
+  },
+  "next": {
+    "title": "UI - Custom Root Path",
+    "permalink": "/docs/proxy/custom_root_ui"
+  }
+}

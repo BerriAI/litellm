@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/scim_litellm",
+  "title": "SCIM with LiteLLM",
+  "description": "✨ Enterprise: SCIM support requires a premium license.",
+  "source": "@site/docs/tutorials/scim_litellm.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/scim_litellm",
+  "permalink": "/docs/tutorials/scim_litellm",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Microsoft SSO: Sync Groups, Members with LiteLLM",
+    "permalink": "/docs/tutorials/msft_sso"
+  },
+  "next": {
+    "title": "[Beta] Routing based on request metadata",
+    "permalink": "/docs/tutorials/tag_management"
+  }
+}

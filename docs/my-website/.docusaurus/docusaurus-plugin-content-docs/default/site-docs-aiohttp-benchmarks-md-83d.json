@@ -1,0 +1,14 @@
+{
+  "id": "aiohttp_benchmarks",
+  "title": "LiteLLM v1.71.1 Benchmarks",
+  "description": "Overview",
+  "source": "@site/docs/aiohttp_benchmarks.md",
+  "sourceDirName": ".",
+  "slug": "/aiohttp_benchmarks",
+  "permalink": "/docs/aiohttp_benchmarks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

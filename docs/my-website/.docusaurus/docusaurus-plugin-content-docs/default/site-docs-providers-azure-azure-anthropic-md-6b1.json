@@ -1,0 +1,14 @@
+{
+  "id": "providers/azure/azure_anthropic",
+  "title": "Azure Anthropic (Claude via Azure Foundry)",
+  "description": "LiteLLM supports Claude models deployed via Microsoft Azure Foundry, including Claude Sonnet 4.5, Claude Haiku 4.5, and Claude Opus 4.1.",
+  "source": "@site/docs/providers/azure/azure_anthropic.md",
+  "sourceDirName": "providers/azure",
+  "slug": "/providers/azure/azure_anthropic",
+  "permalink": "/docs/providers/azure/azure_anthropic",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

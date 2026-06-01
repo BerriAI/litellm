@@ -1,0 +1,23 @@
+{
+  "id": "ocr",
+  "title": "/ocr",
+  "description": "| Feature | Supported |",
+  "source": "@site/docs/ocr.md",
+  "sourceDirName": ".",
+  "slug": "/ocr",
+  "permalink": "/docs/ocr",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/moderations",
+    "permalink": "/docs/moderation"
+  },
+  "next": {
+    "title": "Why Pass-Through Endpoints?",
+    "permalink": "/docs/pass_through/intro"
+  }
+}

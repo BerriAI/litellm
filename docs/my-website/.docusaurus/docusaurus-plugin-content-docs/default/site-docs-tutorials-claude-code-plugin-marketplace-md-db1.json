@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/claude_code_plugin_marketplace",
+  "title": "Claude Code Plugin Marketplace (Managed Skills)",
+  "description": "LiteLLM AI Gateway acts as a central registry for Claude Code plugins. Admins can govern which plugins are available across the organization, and engineers can discover and install approved plugins from a single source.",
+  "source": "@site/docs/tutorials/claude_code_plugin_marketplace.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_code_plugin_marketplace",
+  "permalink": "/docs/tutorials/claude_code_plugin_marketplace",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Use Claude Code with Non-Anthropic Models",
+    "permalink": "/docs/tutorials/claude_non_anthropic_models"
+  },
+  "next": {
+    "title": "Claude Code - Managing Anthropic Beta Headers",
+    "permalink": "/docs/tutorials/claude_code_beta_headers"
+  }
+}

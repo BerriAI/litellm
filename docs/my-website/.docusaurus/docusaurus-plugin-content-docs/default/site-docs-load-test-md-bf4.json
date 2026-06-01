@@ -1,0 +1,14 @@
+{
+  "id": "load_test",
+  "title": "LiteLLM Proxy - Locust Load Test",
+  "description": "Locust Load Test LiteLLM Proxy",
+  "source": "@site/docs/load_test.md",
+  "sourceDirName": ".",
+  "slug": "/load_test",
+  "permalink": "/docs/load_test",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

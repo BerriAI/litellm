@@ -1,0 +1,23 @@
+{
+  "id": "extras/creating_adapters",
+  "title": "Call any LiteLLM model in your custom format",
+  "description": "Use this to call any LiteLLM supported .completion() model, in your custom format. Useful if you have a custom API and want to support any LiteLLM supported model.",
+  "source": "@site/docs/extras/creating_adapters.md",
+  "sourceDirName": "extras",
+  "slug": "/extras/creating_adapters",
+  "permalink": "/docs/extras/creating_adapters",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Calling Finetuned Models",
+    "permalink": "/docs/guides/finetuned_models"
+  },
+  "next": {
+    "title": "Reliability, Testing & Spend",
+    "permalink": "/docs/guides/reliability_testing_spend"
+  }
+}

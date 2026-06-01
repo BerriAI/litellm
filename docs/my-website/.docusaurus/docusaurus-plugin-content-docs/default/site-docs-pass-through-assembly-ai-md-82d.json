@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/assembly_ai",
+  "title": "AssemblyAI",
+  "description": "Pass-through endpoints for AssemblyAI - call AssemblyAI endpoints, in native format (no translation).",
+  "source": "@site/docs/pass_through/assembly_ai.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/assembly_ai",
+  "permalink": "/docs/pass_through/assembly_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Anthropic Passthrough",
+    "permalink": "/docs/pass_through/anthropic_completion"
+  },
+  "next": {
+    "title": "Bedrock (boto3) SDK",
+    "permalink": "/docs/pass_through/bedrock"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/prompt_injection",
+  "title": "In-memory Prompt Injection Detection",
+  "description": "LiteLLM Supports the following methods for detecting prompt injection attacks",
+  "source": "@site/docs/proxy/guardrails/prompt_injection.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/prompt_injection",
+  "permalink": "/docs/proxy/guardrails/prompt_injection",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Pillar Security",
+    "permalink": "/docs/proxy/guardrails/pillar_security"
+  },
+  "next": {
+    "title": "Qualifire",
+    "permalink": "/docs/proxy/guardrails/qualifire"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "text_completion",
+  "title": "/completions",
+  "description": "Overview",
+  "source": "@site/docs/text_completion.md",
+  "sourceDirName": ".",
+  "slug": "/text_completion",
+  "permalink": "/docs/text_completion",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "responses()",
+    "permalink": "/docs/response_api"
+  },
+  "next": {
+    "title": "image_generation()",
+    "permalink": "/docs/image_generation"
+  }
+}

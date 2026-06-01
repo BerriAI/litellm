@@ -1,0 +1,23 @@
+{
+  "id": "contributing/adding_openai_compatible_providers",
+  "title": "Adding OpenAI-Compatible Providers",
+  "description": "For simple OpenAI-compatible providers (like Hyperbolic, Nscale, etc.), you can add support by editing a single JSON file.",
+  "source": "@site/docs/contributing/adding_openai_compatible_providers.md",
+  "sourceDirName": "contributing",
+  "slug": "/contributing/adding_openai_compatible_providers",
+  "permalink": "/docs/contributing/adding_openai_compatible_providers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Integrate as a Model Provider",
+    "permalink": "/docs/provider_registration/"
+  },
+  "next": {
+    "title": "Add Model Pricing & Context Window",
+    "permalink": "/docs/provider_registration/add_model_pricing"
+  }
+}

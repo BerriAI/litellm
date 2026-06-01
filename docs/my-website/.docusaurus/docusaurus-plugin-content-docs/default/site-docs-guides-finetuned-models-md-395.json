@@ -1,0 +1,23 @@
+{
+  "id": "guides/finetuned_models",
+  "title": "Calling Finetuned Models",
+  "description": "OpenAI",
+  "source": "@site/docs/guides/finetuned_models.md",
+  "sourceDirName": "guides",
+  "slug": "/guides/finetuned_models",
+  "permalink": "/docs/guides/finetuned_models",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Model Alias",
+    "permalink": "/docs/completion/model_alias"
+  },
+  "next": {
+    "title": "Call any LiteLLM model in your custom format",
+    "permalink": "/docs/extras/creating_adapters"
+  }
+}

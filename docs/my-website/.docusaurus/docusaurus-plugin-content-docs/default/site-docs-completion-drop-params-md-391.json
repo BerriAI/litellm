@@ -1,0 +1,23 @@
+{
+  "id": "completion/drop_params",
+  "title": "Drop Unsupported Params",
+  "description": "Drop unsupported OpenAI params by your LLM Provider.",
+  "source": "@site/docs/completion/drop_params.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/drop_params",
+  "permalink": "/docs/completion/drop_params",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Provider-specific Params",
+    "permalink": "/docs/completion/provider_specific_params"
+  },
+  "next": {
+    "title": "Model Alias",
+    "permalink": "/docs/completion/model_alias"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "mcp_zero_trust",
+  "title": "MCP Zero Trust Auth (JWT Signer)",
+  "description": "Zero Trust MCP Gateway",
+  "source": "@site/docs/mcp_zero_trust.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_zero_trust",
+  "permalink": "/docs/mcp_zero_trust",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP - AWS SigV4 Auth",
+    "permalink": "/docs/mcp_aws_sigv4"
+  },
+  "next": {
+    "title": "Exposing MCPs on the Public Internet",
+    "permalink": "/docs/mcp_public_internet"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "projects/Langstream",
+  "title": "Langstream",
+  "description": "Build robust LLM applications with true composability 🔗",
+  "source": "@site/docs/projects/Langstream.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Langstream",
+  "permalink": "/docs/projects/Langstream",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Quivr",
+    "permalink": "/docs/projects/Quivr"
+  },
+  "next": {
+    "title": "Otter",
+    "permalink": "/docs/projects/Otter"
+  }
+}

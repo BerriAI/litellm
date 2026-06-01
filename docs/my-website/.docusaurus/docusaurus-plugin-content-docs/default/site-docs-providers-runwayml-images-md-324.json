@@ -1,0 +1,23 @@
+{
+  "id": "providers/runwayml/images",
+  "title": "RunwayML - Image Generation",
+  "description": "Overview",
+  "source": "@site/docs/providers/runwayml/images.md",
+  "sourceDirName": "providers/runwayml",
+  "slug": "/providers/runwayml/images",
+  "permalink": "/docs/providers/runwayml/images",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Replicate",
+    "permalink": "/docs/providers/replicate"
+  },
+  "next": {
+    "title": "RunwayML - Video Generation",
+    "permalink": "/docs/providers/runwayml/videos"
+  }
+}

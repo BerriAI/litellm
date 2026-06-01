@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/policy_flow_builder",
+  "title": "Policy Flow Builder",
+  "description": "The Policy Flow Builder lets you design guardrail pipelines with conditional execution. Instead of running guardrails independently, you chain them into ordered steps and control what happens when each guardrail passes, fails a policy check (content intervention), or hits a technical error (e.g. timeout, unreachable provider, missing guardrail).",
+  "source": "@site/docs/proxy/guardrails/policy_flow_builder.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/policy_flow_builder",
+  "permalink": "/docs/proxy/guardrails/policy_flow_builder",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[Beta] Guardrail Policies",
+    "permalink": "/docs/proxy/guardrails/guardrail_policies"
+  },
+  "next": {
+    "title": "Policy Templates",
+    "permalink": "/docs/proxy/guardrails/policy_templates"
+  }
+}

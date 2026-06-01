@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui_store_model_db_setting",
+  "title": "Store Model in DB Settings",
+  "description": "Enable or disable storing model definitions in the database directly from the Admin UI—no config file edits or proxy restart required. This is especially useful for cloud deployments where updating the config is difficult or requires a long release process.",
+  "source": "@site/docs/proxy/ui_store_model_db_setting.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ui_store_model_db_setting",
+  "permalink": "/docs/proxy/ui_store_model_db_setting",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Model Compare Playground UI",
+    "permalink": "/docs/proxy/model_compare_ui"
+  },
+  "next": {
+    "title": "Internal User Self-Serve",
+    "permalink": "/docs/proxy/self_serve"
+  }
+}

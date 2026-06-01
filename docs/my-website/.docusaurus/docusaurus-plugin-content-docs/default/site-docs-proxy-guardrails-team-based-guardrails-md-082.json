@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/team_based_guardrails",
+  "title": "Team Bring-Your-Own Guardrails",
+  "description": "Team-based guardrails let developers register a guardrail for their team via the API; an admin then reviews and approves or rejects it in the LiteLLM UI. Only Generic Guardrail API guardrails can be registered this way.",
+  "source": "@site/docs/proxy/guardrails/team_based_guardrails.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/team_based_guardrails",
+  "permalink": "/docs/proxy/guardrails/team_based_guardrails",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Guardrails - Quick Start",
+    "permalink": "/docs/proxy/guardrails/quick_start"
+  },
+  "next": {
+    "title": "Guardrail Load Balancing",
+    "permalink": "/docs/proxy/guardrails/guardrail_load_balancing"
+  }
+}

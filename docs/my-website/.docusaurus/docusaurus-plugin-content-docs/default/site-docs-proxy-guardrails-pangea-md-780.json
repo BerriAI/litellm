@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/pangea",
+  "title": "Pangea",
+  "description": "The Pangea guardrail uses configurable detection policies (called recipes) from its AI Guard service to identify and mitigate risks in AI application traffic, including:",
+  "source": "@site/docs/proxy/guardrails/pangea.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/pangea",
+  "permalink": "/docs/proxy/guardrails/pangea",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "OpenAI Moderation",
+    "permalink": "/docs/proxy/guardrails/openai_moderation"
+  },
+  "next": {
+    "title": "PANW Prisma AIRS",
+    "permalink": "/docs/proxy/guardrails/panw_prisma_airs"
+  }
+}

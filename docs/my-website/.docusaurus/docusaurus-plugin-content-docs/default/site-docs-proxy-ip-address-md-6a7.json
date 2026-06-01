@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ip_address",
+  "title": "IP Address Filtering",
+  "description": "You need a LiteLLM License to unlock this feature. Grab time, to get one today!",
+  "source": "@site/docs/proxy/ip_address.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ip_address",
+  "permalink": "/docs/proxy/ip_address",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Custom Auth",
+    "permalink": "/docs/proxy/custom_auth"
+  },
+  "next": {
+    "title": "✨ Audit Logs",
+    "permalink": "/docs/proxy/multiple_admins"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "search/tavily",
+  "title": "Tavily Search",
+  "description": "Get API Key//tavily.com",
+  "source": "@site/docs/search/tavily.md",
+  "sourceDirName": "search",
+  "slug": "/search/tavily",
+  "permalink": "/docs/search/tavily",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Perplexity AI Search",
+    "permalink": "/docs/search/perplexity"
+  },
+  "next": {
+    "title": "Exa AI Search",
+    "permalink": "/docs/search/exa_ai"
+  }
+}

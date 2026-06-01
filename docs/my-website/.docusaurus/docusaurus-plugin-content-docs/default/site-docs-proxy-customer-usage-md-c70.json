@@ -1,0 +1,23 @@
+{
+  "id": "proxy/customer_usage",
+  "title": "Customer Usage",
+  "description": "Track and visualize end-user spend directly in the dashboard. Monitor customer-level usage analytics, spend logs, and activity metrics to understand how your customers are using your LLM services.",
+  "source": "@site/docs/proxy/customer_usage.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/customer_usage",
+  "permalink": "/docs/proxy/customer_usage",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Control Page Visibility for Internal Users",
+    "permalink": "/docs/proxy/ui/page_visibility"
+  },
+  "next": {
+    "title": "Endpoint Activity",
+    "permalink": "/docs/proxy/endpoint_activity"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/cohere",
+  "title": "Cohere SDK",
+  "description": "Pass-through endpoints for Cohere - call provider-specific endpoint, in native format (no translation).",
+  "source": "@site/docs/pass_through/cohere.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/cohere",
+  "permalink": "/docs/pass_through/cohere",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure Passthrough",
+    "permalink": "/docs/pass_through/azure_passthrough"
+  },
+  "next": {
+    "title": "Cursor Cloud Agents",
+    "permalink": "/docs/pass_through/cursor"
+  }
+}

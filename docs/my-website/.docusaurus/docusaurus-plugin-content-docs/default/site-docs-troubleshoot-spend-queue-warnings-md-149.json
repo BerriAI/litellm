@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/spend_queue_warnings",
+  "title": "Spend Update Queue Full Warnings",
+  "description": "Overview",
+  "source": "@site/docs/troubleshoot/spend_queue_warnings.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/spend_queue_warnings",
+  "permalink": "/docs/troubleshoot/spend_queue_warnings",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Memory Issue Classification & Reproduction",
+    "permalink": "/docs/troubleshoot/memory_issues"
+  },
+  "next": {
+    "title": "MAX_CALLBACKS Limit",
+    "permalink": "/docs/troubleshoot/max_callbacks"
+  }
+}

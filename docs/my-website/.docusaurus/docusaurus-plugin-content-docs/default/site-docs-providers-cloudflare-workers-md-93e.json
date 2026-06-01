@@ -1,0 +1,23 @@
+{
+  "id": "providers/cloudflare_workers",
+  "title": "Cloudflare Workers AI",
+  "description": "https://developers.cloudflare.com/workers-ai/models/text-generation/",
+  "source": "@site/docs/providers/cloudflare_workers.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/cloudflare_workers",
+  "permalink": "/docs/providers/cloudflare_workers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Clarifai",
+    "permalink": "/docs/providers/clarifai"
+  },
+  "next": {
+    "title": "Codestral API [Mistral AI]",
+    "permalink": "/docs/providers/codestral"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "providers/anthropic_programmatic_tool_calling",
+  "title": "Anthropic Programmatic Tool Calling",
+  "description": "Programmatic tool calling allows Claude to write code that calls your tools programmatically within a code execution container, rather than requiring round trips through the model for each tool invocation. This reduces latency for multi-tool workflows and decreases token consumption by allowing Claude to filter or process data before it reaches the model's context window.",
+  "source": "@site/docs/providers/anthropic_programmatic_tool_calling.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/anthropic_programmatic_tool_calling",
+  "permalink": "/docs/providers/anthropic_programmatic_tool_calling",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

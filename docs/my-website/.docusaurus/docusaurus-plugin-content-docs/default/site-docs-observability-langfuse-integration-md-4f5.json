@@ -1,0 +1,23 @@
+{
+  "id": "observability/langfuse_integration",
+  "title": "🪢 Langfuse - Logging LLM Input/Output",
+  "description": "What is Langfuse?",
+  "source": "@site/docs/observability/langfuse_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/langfuse_integration",
+  "permalink": "/docs/observability/langfuse_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Lago - Usage Based Billing",
+    "permalink": "/docs/observability/lago"
+  },
+  "next": {
+    "title": "🪢 Langfuse OpenTelemetry Integration",
+    "permalink": "/docs/observability/langfuse_otel_integration"
+  }
+}

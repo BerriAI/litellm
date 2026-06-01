@@ -1,0 +1,23 @@
+{
+  "id": "mcp_semantic_filter",
+  "title": "MCP Semantic Tool Filter",
+  "description": "Automatically filter MCP tools by semantic relevance. When you have many MCP tools registered, LiteLLM semantically matches the user's query against tool descriptions and sends only the most relevant tools to the LLM.",
+  "source": "@site/docs/mcp_semantic_filter.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_semantic_filter",
+  "permalink": "/docs/mcp_semantic_filter",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Exposing MCPs on the Public Internet",
+    "permalink": "/docs/mcp_public_internet"
+  },
+  "next": {
+    "title": "MCP Permission Management",
+    "permalink": "/docs/mcp_control"
+  }
+}

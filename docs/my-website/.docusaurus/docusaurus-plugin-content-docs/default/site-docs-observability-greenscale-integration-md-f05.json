@@ -1,0 +1,23 @@
+{
+  "id": "observability/greenscale_integration",
+  "title": "Greenscale - Track LLM Spend and Responsible Usage",
+  "description": "This is community maintained, Please make an issue if you run into a bug",
+  "source": "@site/docs/observability/greenscale_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/greenscale_integration",
+  "permalink": "/docs/observability/greenscale_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Generic API Callback (Webhook)",
+    "permalink": "/docs/observability/generic_api"
+  },
+  "next": {
+    "title": "Helicone - OSS LLM Observability Platform",
+    "permalink": "/docs/observability/helicone_integration"
+  }
+}

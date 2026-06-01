@@ -1,0 +1,23 @@
+{
+  "id": "proxy/pagerduty",
+  "title": "PagerDuty Alerting",
+  "description": "✨ PagerDuty Alerting is on LiteLLM Enterprise",
+  "source": "@site/docs/proxy/pagerduty.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/pagerduty",
+  "permalink": "/docs/proxy/pagerduty",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Alerting / Webhooks",
+    "permalink": "/docs/proxy/alerting"
+  },
+  "next": {
+    "title": "📈 Prometheus metrics",
+    "permalink": "/docs/proxy/prometheus"
+  }
+}

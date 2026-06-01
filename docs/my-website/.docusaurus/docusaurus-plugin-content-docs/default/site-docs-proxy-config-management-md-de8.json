@@ -1,0 +1,23 @@
+{
+  "id": "proxy/config_management",
+  "title": "File Management",
+  "description": "include external YAML files in a config.yaml",
+  "source": "@site/docs/proxy/config_management.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/config_management",
+  "permalink": "/docs/proxy/config_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Overview",
+    "permalink": "/docs/proxy/configs"
+  },
+  "next": {
+    "title": "All settings",
+    "permalink": "/docs/proxy/config_settings"
+  }
+}

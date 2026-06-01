@@ -1,0 +1,23 @@
+{
+  "id": "completion/audio",
+  "title": "Using Audio Models",
+  "description": "How to send / receive audio to a /chat/completions endpoint",
+  "source": "@site/docs/completion/audio.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/audio",
+  "permalink": "/docs/completion/audio",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Using Vision Models",
+    "permalink": "/docs/completion/vision"
+  },
+  "next": {
+    "title": "Using PDF Input",
+    "permalink": "/docs/completion/document_understanding"
+  }
+}

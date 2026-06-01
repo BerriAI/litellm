@@ -1,0 +1,23 @@
+{
+  "id": "providers/nlp_cloud",
+  "title": "NLP Cloud",
+  "description": "LiteLLM supports all LLMs on NLP Cloud.",
+  "source": "@site/docs/providers/nlp_cloud.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/nlp_cloud",
+  "permalink": "/docs/providers/nlp_cloud",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Nebius AI Studio",
+    "permalink": "/docs/providers/nebius"
+  },
+  "next": {
+    "title": "NanoGPT",
+    "permalink": "/docs/providers/nano-gpt"
+  }
+}

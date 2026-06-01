@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/tag_management",
+  "title": "[Beta] Routing based on request metadata",
+  "description": "Create routing rules based on request metadata.",
+  "source": "@site/docs/tutorials/tag_management.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/tag_management",
+  "permalink": "/docs/tutorials/tag_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "SCIM with LiteLLM",
+    "permalink": "/docs/tutorials/scim_litellm"
+  },
+  "next": {
+    "title": "Proxy: Features & Safety",
+    "permalink": "/docs/tutorials/proxy_features_safety"
+  }
+}

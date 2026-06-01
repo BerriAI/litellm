@@ -1,0 +1,23 @@
+{
+  "id": "completion/model_alias",
+  "title": "Model Alias",
+  "description": "The model name you show an end-user might be different from the one you pass to LiteLLM - e.g. Displaying GPT-3.5 while calling gpt-3.5-turbo-16k on the backend.",
+  "source": "@site/docs/completion/model_alias.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/model_alias",
+  "permalink": "/docs/completion/model_alias",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Drop Unsupported Params",
+    "permalink": "/docs/completion/drop_params"
+  },
+  "next": {
+    "title": "Calling Finetuned Models",
+    "permalink": "/docs/guides/finetuned_models"
+  }
+}

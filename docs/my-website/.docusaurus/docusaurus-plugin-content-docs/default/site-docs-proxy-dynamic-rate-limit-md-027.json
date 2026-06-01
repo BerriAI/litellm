@@ -1,0 +1,23 @@
+{
+  "id": "proxy/dynamic_rate_limit",
+  "title": "Dynamic TPM/RPM Allocation",
+  "description": "Prevent projects from gobbling too much tpm/rpm.",
+  "source": "@site/docs/proxy/dynamic_rate_limit.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/dynamic_rate_limit",
+  "permalink": "/docs/proxy/dynamic_rate_limit",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Customers / End-Users",
+    "permalink": "/docs/proxy/customers"
+  },
+  "next": {
+    "title": "✨ Budget / Rate Limit Tiers",
+    "permalink": "/docs/proxy/rate_limit_tiers"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/databricks",
+  "title": "Databricks",
+  "description": "LiteLLM supports all models on Databricks",
+  "source": "@site/docs/providers/databricks.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/databricks",
+  "permalink": "/docs/providers/databricks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Dashscope API (Qwen models)",
+    "permalink": "/docs/providers/dashscope"
+  },
+  "next": {
+    "title": "DataRobot",
+    "permalink": "/docs/providers/datarobot"
+  }
+}

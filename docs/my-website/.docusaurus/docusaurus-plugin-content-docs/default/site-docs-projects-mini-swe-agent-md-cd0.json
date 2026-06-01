@@ -1,0 +1,23 @@
+{
+  "id": "projects/mini-swe-agent",
+  "title": "mini-swe-agent",
+  "description": "mini-swe-agent The 100 line AI agent that solves GitHub issues & more.",
+  "source": "@site/docs/projects/mini-swe-agent.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/mini-swe-agent",
+  "permalink": "/docs/projects/mini-swe-agent",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "🤗 Smolagents",
+    "permalink": "/docs/projects/smolagents"
+  },
+  "next": {
+    "title": "OpenAI Agents SDK",
+    "permalink": "/docs/projects/openai-agents"
+  }
+}

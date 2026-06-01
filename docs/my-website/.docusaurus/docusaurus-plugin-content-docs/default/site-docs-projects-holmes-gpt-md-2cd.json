@@ -1,0 +1,23 @@
+{
+  "id": "projects/HolmesGPT",
+  "title": "HolmesGPT",
+  "description": "HolmesGPT is an AI-powered observability tool designed to enhance incident response and troubleshooting processes. It's like your 24/7 on-call assistant, helps you solve alerts faster with Automatic Correlations, Investigations, and More.",
+  "source": "@site/docs/projects/HolmesGPT.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/HolmesGPT",
+  "permalink": "/docs/projects/HolmesGPT",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "GPTLocalhost",
+    "permalink": "/docs/projects/GPTLocalhost"
+  },
+  "next": {
+    "title": "Railtracks",
+    "permalink": "/docs/projects/Railtracks"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy_server",
+  "title": "[OLD PROXY 👉 [NEW proxy here](./simple_proxy)] Local LiteLLM Proxy Server",
+  "description": "A fast, and lightweight OpenAI-compatible server to call 100+ LLM APIs.",
+  "source": "@site/docs/proxy_server.md",
+  "sourceDirName": ".",
+  "slug": "/proxy_server",
+  "permalink": "/docs/proxy_server",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[DEPRECATED] Region-based Routing",
+    "permalink": "/docs/proxy/customer_routing"
+  },
+  "next": {
+    "title": "UI Troubleshooting",
+    "permalink": "/docs/troubleshoot/ui_issues"
+  }
+}

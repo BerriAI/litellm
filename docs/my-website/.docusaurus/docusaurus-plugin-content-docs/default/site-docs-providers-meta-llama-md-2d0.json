@@ -1,0 +1,23 @@
+{
+  "id": "providers/meta_llama",
+  "title": "Meta Llama",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/meta_llama.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/meta_llama",
+  "permalink": "/docs/providers/meta_llama",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Manus",
+    "permalink": "/docs/providers/manus"
+  },
+  "next": {
+    "title": "Milvus - Vector Store",
+    "permalink": "/docs/providers/milvus_vector_stores"
+  }
+}

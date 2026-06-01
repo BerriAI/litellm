@@ -1,0 +1,23 @@
+{
+  "id": "observability/posthog_integration",
+  "title": "PostHog - Tracking LLM Usage Analytics",
+  "description": "What is PostHog?",
+  "source": "@site/docs/observability/posthog_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/posthog_integration",
+  "permalink": "/docs/observability/posthog_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Arize Phoenix OSS",
+    "permalink": "/docs/observability/phoenix_integration"
+  },
+  "next": {
+    "title": "Promptlayer Tutorial",
+    "permalink": "/docs/observability/promptlayer_integration"
+  }
+}

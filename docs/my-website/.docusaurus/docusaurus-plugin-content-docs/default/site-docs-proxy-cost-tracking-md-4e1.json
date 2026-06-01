@@ -1,0 +1,23 @@
+{
+  "id": "proxy/cost_tracking",
+  "title": "Spend Tracking",
+  "description": "Track spend for keys, users, and teams across 100+ LLMs.",
+  "source": "@site/docs/proxy/cost_tracking.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/cost_tracking",
+  "permalink": "/docs/proxy/cost_tracking",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] OpenID Connect (OIDC)",
+    "permalink": "/docs/oidc"
+  },
+  "next": {
+    "title": "Vertex AI PayGo and Priority",
+    "permalink": "/docs/tutorials/vertex_ai_pay_go"
+  }
+}

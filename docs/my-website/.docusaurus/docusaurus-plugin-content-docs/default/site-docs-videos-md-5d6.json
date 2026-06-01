@@ -1,0 +1,23 @@
+{
+  "id": "videos",
+  "title": "/videos",
+  "description": "| Feature | Supported |",
+  "source": "@site/docs/videos.md",
+  "sourceDirName": ".",
+  "slug": "/videos",
+  "permalink": "/docs/videos",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] Image Variations",
+    "permalink": "/docs/image_variations"
+  },
+  "next": {
+    "title": "/vector_stores/\\{vector_store_id\\}/files",
+    "permalink": "/docs/vector_store_files"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/panw_prisma_airs",
+  "title": "PANW Prisma AIRS",
+  "description": "LiteLLM supports PANW Prisma AIRS (AI Runtime Security) guardrails via the Prisma AIRS Scan API. This integration provides Security-as-Code for AI applications using Palo Alto Networks' AI security platform.",
+  "source": "@site/docs/proxy/guardrails/panw_prisma_airs.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/panw_prisma_airs",
+  "permalink": "/docs/proxy/guardrails/panw_prisma_airs",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Pangea",
+    "permalink": "/docs/proxy/guardrails/pangea"
+  },
+  "next": {
+    "title": "PII, PHI Masking - Presidio",
+    "permalink": "/docs/proxy/guardrails/pii_masking_v2"
+  }
+}

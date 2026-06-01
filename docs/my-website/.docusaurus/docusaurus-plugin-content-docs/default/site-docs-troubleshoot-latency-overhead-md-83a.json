@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/latency_overhead",
+  "title": "Latency Overhead Troubleshooting",
+  "description": "Use this guide when you see unexpected latency overhead between LiteLLM proxy and the LLM provider.",
+  "source": "@site/docs/troubleshoot/latency_overhead.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/latency_overhead",
+  "permalink": "/docs/troubleshoot/latency_overhead",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Troubleshooting Guide",
+    "permalink": "/docs/mcp_troubleshoot"
+  },
+  "next": {
+    "title": "CPU Issue Classification & Reproduction",
+    "permalink": "/docs/troubleshoot/cpu_issues"
+  }
+}

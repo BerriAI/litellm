@@ -1,0 +1,14 @@
+{
+  "id": "proxy/shared_health_check",
+  "title": "Shared Health Check State Across Pods",
+  "description": "This feature enables coordination of health checks across multiple LiteLLM proxy pods to avoid duplicate health checks and reduce costs.",
+  "source": "@site/docs/proxy/shared_health_check.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/shared_health_check",
+  "permalink": "/docs/proxy/shared_health_check",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

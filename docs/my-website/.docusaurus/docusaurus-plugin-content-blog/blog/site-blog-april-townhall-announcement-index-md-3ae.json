@@ -1,0 +1,53 @@
+{
+  "permalink": "/blog/april-townhall-announcement",
+  "source": "@site/blog/april_townhall_announcement/index.md",
+  "title": "April Townhall: Security + Product Roadmap",
+  "description": "Join the LiteLLM April townhall on Friday, 10 April at 7:30 AM to learn about LiteLLM's security and product roadmap.",
+  "date": "2026-04-02T07:30:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "announcement",
+      "permalink": "/blog/tags/announcement"
+    },
+    {
+      "inline": true,
+      "label": "townhall",
+      "permalink": "/blog/tags/townhall"
+    }
+  ],
+  "hasTruncateMarker": true,
+  "authors": [
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "april-townhall-announcement",
+    "title": "April Townhall: Security + Product Roadmap",
+    "date": "2026-04-02T07:30:00.000Z",
+    "authors": [
+      "krrish"
+    ],
+    "description": "Join the LiteLLM April townhall on Friday, 10 April at 7:30 AM to learn about LiteLLM's security and product roadmap.",
+    "tags": [
+      "announcement",
+      "townhall"
+    ],
+    "hide_table_of_contents": true
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "Security Update: Vulnerability Disclosures and Ongoing Hardening",
+    "permalink": "/blog/security-hardening-april-2026"
+  },
+  "nextItem": {
+    "title": "Announcing CI/CD v2 for LiteLLM",
+    "permalink": "/blog/ci-cd-v2-improvements"
+  }
+}

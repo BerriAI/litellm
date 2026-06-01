@@ -1,0 +1,23 @@
+{
+  "id": "wildcard_routing",
+  "title": "Provider specific Wildcard routing",
+  "description": "Proxy all models from a provider",
+  "source": "@site/docs/wildcard_routing.md",
+  "sourceDirName": ".",
+  "slug": "/wildcard_routing",
+  "permalink": "/docs/wildcard_routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Timeouts",
+    "permalink": "/docs/proxy/timeout"
+  },
+  "next": {
+    "title": "Health Check Driven Routing",
+    "permalink": "/docs/proxy/health_check_routing"
+  }
+}

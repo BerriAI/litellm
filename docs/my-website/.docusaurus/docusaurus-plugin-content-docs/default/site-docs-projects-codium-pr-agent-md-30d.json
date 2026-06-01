@@ -1,0 +1,23 @@
+{
+  "id": "projects/Codium PR Agent",
+  "title": "Codium PR Agent",
+  "description": "An AI-Powered 🤖 Tool for Automated Pull Request Analysis,",
+  "source": "@site/docs/projects/Codium PR Agent.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Codium PR Agent",
+  "permalink": "/docs/projects/Codium PR Agent",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "PROMPTMETHEUS",
+    "permalink": "/docs/projects/PROMPTMETHEUS"
+  },
+  "next": {
+    "title": "Prompt2Model",
+    "permalink": "/docs/projects/Prompt2Model"
+  }
+}

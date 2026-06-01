@@ -1,0 +1,23 @@
+{
+  "id": "providers/watsonx/audio_transcription",
+  "title": "WatsonX Audio Transcription",
+  "description": "Overview",
+  "source": "@site/docs/providers/watsonx/audio_transcription.md",
+  "sourceDirName": "providers/watsonx",
+  "slug": "/providers/watsonx/audio_transcription",
+  "permalink": "/docs/providers/watsonx/audio_transcription",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "IBM watsonx.ai",
+    "permalink": "/docs/providers/watsonx/"
+  },
+  "next": {
+    "title": "xAI",
+    "permalink": "/docs/providers/xai"
+  }
+}

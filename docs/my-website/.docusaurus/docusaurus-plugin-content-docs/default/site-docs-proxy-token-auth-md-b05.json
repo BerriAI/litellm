@@ -1,0 +1,23 @@
+{
+  "id": "proxy/token_auth",
+  "title": "OIDC - JWT-based Auth",
+  "description": "Use JWT's to auth admins / users / projects into the proxy.",
+  "source": "@site/docs/proxy/token_auth.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/token_auth",
+  "permalink": "/docs/proxy/token_auth",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Virtual Keys",
+    "permalink": "/docs/proxy/virtual_keys"
+  },
+  "next": {
+    "title": "JWT → Virtual Key Mapping",
+    "permalink": "/docs/proxy/jwt_key_mapping"
+  }
+}

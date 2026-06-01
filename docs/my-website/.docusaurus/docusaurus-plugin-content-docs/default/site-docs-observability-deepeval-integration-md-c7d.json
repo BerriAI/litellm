@@ -1,0 +1,23 @@
+{
+  "id": "observability/deepeval_integration",
+  "title": "🔭 DeepEval - Open-Source Evals with Tracing",
+  "description": "What is DeepEval?",
+  "source": "@site/docs/observability/deepeval_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/deepeval_integration",
+  "permalink": "/docs/observability/deepeval_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "DataDog",
+    "permalink": "/docs/observability/datadog"
+  },
+  "next": {
+    "title": "Focus Export (Experimental)",
+    "permalink": "/docs/observability/focus"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/cohere",
+  "title": "Cohere",
+  "description": "API KEYS",
+  "source": "@site/docs/providers/cohere.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/cohere",
+  "permalink": "/docs/providers/cohere",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Codestral API [Mistral AI]",
+    "permalink": "/docs/providers/codestral"
+  },
+  "next": {
+    "title": "CometAPI",
+    "permalink": "/docs/providers/cometapi"
+  }
+}

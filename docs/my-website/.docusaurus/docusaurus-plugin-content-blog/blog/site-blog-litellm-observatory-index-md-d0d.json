@@ -1,0 +1,83 @@
+{
+  "permalink": "/blog/litellm-observatory",
+  "source": "@site/blog/litellm_observatory/index.md",
+  "title": "Improve release stability with 24 hour load tests",
+  "description": "How we built a long-running, release-validation system to catch regressions before they reach users.",
+  "date": "2026-02-06T10:00:00.000Z",
+  "tags": [
+    {
+      "inline": true,
+      "label": "testing",
+      "permalink": "/blog/tags/testing"
+    },
+    {
+      "inline": true,
+      "label": "observability",
+      "permalink": "/blog/tags/observability"
+    },
+    {
+      "inline": true,
+      "label": "reliability",
+      "permalink": "/blog/tags/reliability"
+    },
+    {
+      "inline": true,
+      "label": "releases",
+      "permalink": "/blog/tags/releases"
+    }
+  ],
+  "hasTruncateMarker": true,
+  "authors": [
+    {
+      "name": "Alexsander Hamir",
+      "title": "Performance Engineer, LiteLLM",
+      "url": "https://www.linkedin.com/in/alexsander-baptista/",
+      "imageURL": "https://github.com/AlexsanderHamir.png",
+      "key": "alexsander",
+      "page": null
+    },
+    {
+      "name": "Krrish Dholakia",
+      "title": "CEO, LiteLLM",
+      "url": "https://www.linkedin.com/in/krish-d/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg",
+      "key": "krrish",
+      "page": null
+    },
+    {
+      "name": "Ishaan Jaff",
+      "title": "CTO, LiteLLM",
+      "url": "https://www.linkedin.com/in/reffajnaahsi/",
+      "imageURL": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg",
+      "key": "ishaan-alt",
+      "page": null
+    }
+  ],
+  "frontMatter": {
+    "slug": "litellm-observatory",
+    "title": "Improve release stability with 24 hour load tests",
+    "date": "2026-02-06T10:00:00.000Z",
+    "authors": [
+      "alexsander",
+      "krrish",
+      "ishaan-alt"
+    ],
+    "description": "How we built a long-running, release-validation system to catch regressions before they reach users.",
+    "tags": [
+      "testing",
+      "observability",
+      "reliability",
+      "releases"
+    ],
+    "hide_table_of_contents": false
+  },
+  "unlisted": false,
+  "prevItem": {
+    "title": "Your Middleware Could Be a Bottleneck",
+    "permalink": "/blog/fastapi-middleware-performance"
+  },
+  "nextItem": {
+    "title": "Day 0 Support: Claude Opus 4.6",
+    "permalink": "/blog/claude_opus_4_6"
+  }
+}

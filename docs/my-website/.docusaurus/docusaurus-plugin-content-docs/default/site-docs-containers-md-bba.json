@@ -1,0 +1,23 @@
+{
+  "id": "containers",
+  "title": "/containers",
+  "description": "Manage OpenAI code interpreter containers (sessions) for executing code in isolated environments.",
+  "source": "@site/docs/containers.md",
+  "sourceDirName": ".",
+  "slug": "/containers",
+  "permalink": "/docs/containers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] LiteLLM Managed Files with Batches",
+    "permalink": "/docs/proxy/managed_batches"
+  },
+  "next": {
+    "title": "/containers/files",
+    "permalink": "/docs/container_files"
+  }
+}

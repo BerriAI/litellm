@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui/bulk_edit_users",
+  "title": "Bulk Edit Users",
+  "description": "Assign existing users to a default team and default model access.",
+  "source": "@site/docs/proxy/ui/bulk_edit_users.md",
+  "sourceDirName": "proxy/ui",
+  "slug": "/proxy/ui/bulk_edit_users",
+  "permalink": "/docs/proxy/ui/bulk_edit_users",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[Beta] Project Management UI",
+    "permalink": "/docs/proxy/ui_project_management"
+  },
+  "next": {
+    "title": "Control Page Visibility for Internal Users",
+    "permalink": "/docs/proxy/ui/page_visibility"
+  }
+}

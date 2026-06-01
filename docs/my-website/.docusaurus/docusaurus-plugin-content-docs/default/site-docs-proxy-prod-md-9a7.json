@@ -1,0 +1,23 @@
+{
+  "id": "proxy/prod",
+  "title": "⚡ Best Practices for Production",
+  "description": "1. Use this config.yaml",
+  "source": "@site/docs/proxy/prod.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/prod",
+  "permalink": "/docs/proxy/prod",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Model Management",
+    "permalink": "/docs/proxy/model_management"
+  },
+  "next": {
+    "title": "Worker Startup Hooks",
+    "permalink": "/docs/proxy/worker_startup_hooks"
+  }
+}

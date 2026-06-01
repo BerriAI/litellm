@@ -1,0 +1,23 @@
+{
+  "id": "providers/vllm",
+  "title": "VLLM",
+  "description": "LiteLLM supports all models on VLLM.",
+  "source": "@site/docs/providers/vllm.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vllm",
+  "permalink": "/docs/providers/vllm",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vercel AI Gateway",
+    "permalink": "/docs/providers/vercel_ai_gateway"
+  },
+  "next": {
+    "title": "vLLM - Batch + Files API",
+    "permalink": "/docs/providers/vllm_batches"
+  }
+}

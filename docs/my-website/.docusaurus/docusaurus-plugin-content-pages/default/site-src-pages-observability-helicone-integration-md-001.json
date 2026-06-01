@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/observability/helicone_integration",
+  "source": "@site/src/pages/observability/helicone_integration.md",
+  "title": "Helicone Tutorial",
+  "description": "Helicone is an open source observability platform that proxies your OpenAI traffic and provides you key insights into your spend, latency and usage.",
+  "frontMatter": {},
+  "unlisted": false
+}

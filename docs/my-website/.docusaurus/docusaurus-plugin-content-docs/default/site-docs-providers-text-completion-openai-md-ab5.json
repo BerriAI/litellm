@@ -1,0 +1,23 @@
+{
+  "id": "providers/text_completion_openai",
+  "title": "OpenAI (Text Completion)",
+  "description": "LiteLLM supports OpenAI text completion models",
+  "source": "@site/docs/providers/text_completion_openai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/text_completion_openai",
+  "permalink": "/docs/providers/text_completion_openai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenAI Video Generation",
+    "permalink": "/docs/providers/openai/videos"
+  },
+  "next": {
+    "title": "OpenAI-Compatible Endpoints",
+    "permalink": "/docs/providers/openai_compatible"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "id": "proxy/embedding",
+  "title": "Embeddings - /embeddings",
+  "description": "See supported Embedding Providers & Models here",
+  "source": "@site/docs/proxy/embedding.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/embedding",
+  "permalink": "/docs/proxy/embedding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

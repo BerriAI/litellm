@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/mock_completion",
+  "title": "Mock Completion Responses - Save Testing Costs",
+  "description": "Trying to test making LLM Completion calls without calling the LLM APIs ?",
+  "source": "@site/docs/tutorials/mock_completion.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/mock_completion",
+  "permalink": "/docs/tutorials/mock_completion",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Using Text Completion Format - with Completion()",
+    "permalink": "/docs/tutorials/text_completion"
+  },
+  "next": {
+    "title": "Python SDK",
+    "permalink": "/docs/tutorials/python_sdk"
+  }
+}

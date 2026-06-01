@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_batches",
+  "title": "Bedrock Batches",
+  "description": "Use Amazon Bedrock Batch Inference API through LiteLLM.",
+  "source": "@site/docs/providers/bedrock_batches.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_batches",
+  "permalink": "/docs/providers/bedrock_batches",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bedrock - Writer Palmyra",
+    "permalink": "/docs/providers/bedrock_writer"
+  },
+  "next": {
+    "title": "Bedrock Realtime API",
+    "permalink": "/docs/providers/bedrock_realtime_with_audio"
+  }
+}

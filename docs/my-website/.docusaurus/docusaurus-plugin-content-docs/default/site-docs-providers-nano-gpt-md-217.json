@@ -1,0 +1,23 @@
+{
+  "id": "providers/nano-gpt",
+  "title": "NanoGPT",
+  "description": "Overview",
+  "source": "@site/docs/providers/nano-gpt.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/nano-gpt",
+  "permalink": "/docs/providers/nano-gpt",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "NLP Cloud",
+    "permalink": "/docs/providers/nlp_cloud"
+  },
+  "next": {
+    "title": "Novita AI",
+    "permalink": "/docs/providers/novita"
+  }
+}

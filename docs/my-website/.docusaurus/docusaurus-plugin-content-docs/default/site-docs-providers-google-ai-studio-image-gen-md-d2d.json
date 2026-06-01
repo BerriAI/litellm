@@ -1,0 +1,23 @@
+{
+  "id": "providers/google_ai_studio/image_gen",
+  "title": "Google AI Studio Image Generation",
+  "description": "Google AI Studio provides powerful image generation capabilities using Google's Imagen models to create high-quality images from text descriptions.",
+  "source": "@site/docs/providers/google_ai_studio/image_gen.md",
+  "sourceDirName": "providers/google_ai_studio",
+  "slug": "/providers/google_ai_studio/image_gen",
+  "permalink": "/docs/providers/google_ai_studio/image_gen",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] Google AI Studio (Gemini) Files API",
+    "permalink": "/docs/providers/google_ai_studio/files"
+  },
+  "next": {
+    "title": "Gemini Realtime API - Google AI Studio",
+    "permalink": "/docs/providers/google_ai_studio/realtime"
+  }
+}

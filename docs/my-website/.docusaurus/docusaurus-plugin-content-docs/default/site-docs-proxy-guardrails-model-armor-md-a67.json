@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/model_armor",
+  "title": "Google Cloud Model Armor",
+  "description": "LiteLLM supports Google Cloud Model Armor guardrails via the Model Armor API.",
+  "source": "@site/docs/proxy/guardrails/model_armor.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/model_armor",
+  "permalink": "/docs/proxy/guardrails/model_armor",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Lasso Security",
+    "permalink": "/docs/proxy/guardrails/lasso_security"
+  },
+  "next": {
+    "title": "Noma Security",
+    "permalink": "/docs/proxy/guardrails/noma_security"
+  }
+}

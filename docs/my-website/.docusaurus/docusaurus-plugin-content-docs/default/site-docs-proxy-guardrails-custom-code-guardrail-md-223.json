@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/custom_code_guardrail",
+  "title": "Custom Code Guardrail",
+  "description": "Write custom guardrail logic using Python-like code that runs in a sandboxed environment.",
+  "source": "@site/docs/proxy/guardrails/custom_code_guardrail.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/custom_code_guardrail",
+  "permalink": "/docs/proxy/guardrails/custom_code_guardrail",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "CrowdStrike AIDR",
+    "permalink": "/docs/proxy/guardrails/crowdstrike_aidr"
+  },
+  "next": {
+    "title": "Custom Guardrail",
+    "permalink": "/docs/proxy/guardrails/custom_guardrail"
+  }
+}

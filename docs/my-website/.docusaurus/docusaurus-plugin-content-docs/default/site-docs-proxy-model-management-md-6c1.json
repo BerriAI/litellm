@@ -1,0 +1,23 @@
+{
+  "id": "proxy/model_management",
+  "title": "Model Management",
+  "description": "Add new models + Get model info without restarting proxy.",
+  "source": "@site/docs/proxy/model_management.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/model_management",
+  "permalink": "/docs/proxy/model_management",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Rotating Master Key",
+    "permalink": "/docs/proxy/master_key_rotations"
+  },
+  "next": {
+    "title": "⚡ Best Practices for Production",
+    "permalink": "/docs/proxy/prod"
+  }
+}

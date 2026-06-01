@@ -1,0 +1,23 @@
+{
+  "id": "completion/computer_use",
+  "title": "Computer Use",
+  "description": "Computer use allows models to interact with computer interfaces by taking screenshots and performing actions like clicking, typing, and scrolling. This enables AI models to autonomously operate desktop environments.",
+  "source": "@site/docs/completion/computer_use.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/computer_use",
+  "permalink": "/docs/completion/computer_use",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Web Fetch",
+    "permalink": "/docs/completion/web_fetch"
+  },
+  "next": {
+    "title": "Code Interpreter",
+    "permalink": "/docs/guides/code_interpreter"
+  }
+}

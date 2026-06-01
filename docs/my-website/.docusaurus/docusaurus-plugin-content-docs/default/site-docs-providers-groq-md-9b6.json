@@ -1,0 +1,23 @@
+{
+  "id": "providers/groq",
+  "title": "Groq",
+  "description": "https://groq.com/",
+  "source": "@site/docs/providers/groq.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/groq",
+  "permalink": "/docs/providers/groq",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "GradientAI",
+    "permalink": "/docs/providers/gradient_ai"
+  },
+  "next": {
+    "title": "Helicone",
+    "permalink": "/docs/providers/helicone"
+  }
+}

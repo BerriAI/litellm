@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/aporia_api",
+  "title": "Aporia",
+  "description": "Use Aporia to  detect PII in requests and profanity in responses",
+  "source": "@site/docs/proxy/guardrails/aporia_api.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/aporia_api",
+  "permalink": "/docs/proxy/guardrails/aporia_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Aim Security",
+    "permalink": "/docs/proxy/guardrails/aim_security"
+  },
+  "next": {
+    "title": "Azure Content Safety Guardrail",
+    "permalink": "/docs/proxy/guardrails/azure_content_guardrail"
+  }
+}

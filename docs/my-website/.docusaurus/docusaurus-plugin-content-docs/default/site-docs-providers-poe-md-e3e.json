@@ -1,0 +1,23 @@
+{
+  "id": "providers/poe",
+  "title": "Poe",
+  "description": "Overview",
+  "source": "@site/docs/providers/poe.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/poe",
+  "permalink": "/docs/providers/poe",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Petals",
+    "permalink": "/docs/providers/petals"
+  },
+  "next": {
+    "title": "PublicAI",
+    "permalink": "/docs/providers/publicai"
+  }
+}

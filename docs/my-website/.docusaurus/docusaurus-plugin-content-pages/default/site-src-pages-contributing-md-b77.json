@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/contributing",
+  "source": "@site/src/pages/contributing.md",
+  "title": "Contributing to Documentation",
+  "description": "Clone litellm",
+  "frontMatter": {},
+  "unlisted": false
+}

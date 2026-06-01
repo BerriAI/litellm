@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-release-notes docs-version-current docs-doc-page docs-doc-id-v1.82.0/index" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.8.1">
+<title data-rh="true">v1.82.0 - Realtime Guardrails, Projects Management, and 10+ Performance Optimizations | liteLLM</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" name="twitter:image" content="https://docs.litellm.ai/img/docusaurus-social-card.png"><meta data-rh="true" property="og:url" content="https://docs.litellm.ai/release_notes/v1.82.0/v1-82-0"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-release-notes-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-release-notes-current"><meta data-rh="true" property="og:title" content="v1.82.0 - Realtime Guardrails, Projects Management, and 10+ Performance Optimizations | liteLLM"><meta data-rh="true" name="description" content="Deploy this version"><meta data-rh="true" property="og:description" content="Deploy this version"><link data-rh="true" rel="icon" href="/img/favicon.ico"><link data-rh="true" rel="canonical" href="https://docs.litellm.ai/release_notes/v1.82.0/v1-82-0"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/release_notes/v1.82.0/v1-82-0" hreflang="en"><link data-rh="true" rel="alternate" href="https://docs.litellm.ai/release_notes/v1.82.0/v1-82-0" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"v1.82.0","item":"https://docs.litellm.ai/release_notes/v1.82.0/v1-82-0"}]}</script><link rel="preconnect" href="https://www.google-analytics.com">
+<link rel="preconnect" href="https://www.googletagmanager.com">
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-K7K215ZVNC"></script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],gtag("js",new Date),gtag("config","G-K7K215ZVNC",{anonymize_ip:!0})</script>
+
+
+
+
+
+
+<link rel="alternate" type="application/rss+xml" href="/blog/rss.xml" title="liteLLM RSS Feed">
+<link rel="alternate" type="application/atom+xml" href="/blog/atom.xml" title="liteLLM Atom Feed">
+<script>window.$crisp=[],window.CRISP_WEBSITE_ID="be07a4d6-dba0-4df7-961d-9302c86b7ebc",d=document,s=d.createElement("script"),s.src="https://client.crisp.chat/l.js",s.async=1,d.getElementsByTagName("head")[0].appendChild(s)</script>
+<script>function gtag(){dataLayer.push(arguments)}window.dataLayer=window.dataLayer||[],window.gtag||(window.gtag=gtag)</script>
+
+<script async src="https://www.feedbackrocket.io/sdk/v1.2.js" data-fr-id="GQwepB0f0L-x_ZH63kR_V" data-fr-theme="dynamic"></script><link rel="stylesheet" href="/assets/css/styles.f56ea1ab.css">
+<script src="/assets/js/runtime~main.b9bf1bac.js" defer="defer"></script>
+<script src="/assets/js/main.028e115a.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg xmlns="http://www.w3.org/2000/svg" style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_fXgn" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="navbar__brand-col"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/"><b class="navbar__title text--truncate">🚅 LiteLLM</b></a></div><div class="navbar__center-col"><a class="navbar__item navbar__link" href="/docs/">Docs</a><a class="navbar__item navbar__link" href="/docs/learn">Learn</a><a class="navbar__item navbar__link" href="/docs/integrations/">Integrations</a><a class="navbar__item navbar__link" href="/docs/enterprise">Enterprise</a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/release_notes">Changelog</a><a class="navbar__item navbar__link" href="/blog">Blog</a></div><div class="navbar__right-col"><a href="https://github.com/BerriAI/litellm" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-github-link" aria-label="GitHub repository"></a><a href="https://www.litellm.ai/support" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link header-discord-link" aria-label="Discord / Slack community"></a><div class="navbarSearchContainer_Bca1"><div id="inkeep-shadowradix-:Rtr5a5:" style="display:contents"></div><span></span></div><div class="toggle_vylO"><button class="clean-btn toggleButton_gllP toggleButtonDisabled_aARS" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP lightToggleIcon_pyhR"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP darkToggleIcon_wfgR"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_g3eP systemToggleIcon_QzmC"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_z2l0"><div class="docsWrapper_hBAB"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_sjWU" type="button"></button><div class="docRoot_UBD9"><aside class="theme-doc-sidebar-container docSidebarContainer_YfHR"><div class="sidebarViewport_aRkj"><div class="sidebarContainer_YAFp"><div class="searchBarContainer_wiet"><div id="inkeep-shadowradix-:R5aqlda5:" style="display:contents"></div><span></span></div><div class="sidebar_njMd"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_SIkG"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-1 menu__list-item"><a class="menu__link" href="/release_notes/">Overview</a></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/release_notes/v1.83.3/v1-83-3-rc-1">2026</a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.83.3/v1-83-3-rc-1">v1.83.3</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.83.0/v1-83-0">v1.83.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.82.3/v1-82-3">v1.82.3</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/release_notes/v1.82.0/v1-82-0">v1.82.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.14/v1-81-14">v1.81.14</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.12/v1-81-12">v1.81.12</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.9/v1-81-9">v1.81.9</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.6/v1-81-6">v1.81.6</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.3-stable/v1-81-3">v1.81.3-stable</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.81.0/v1-81-0">v1.81.0</a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/release_notes/v1.80.15/v1-80-15">v1.80.15</a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/release_notes/v1.80.11-stable/v1-80-11">2025</a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/release_notes/v1.56.4/v1.56.4">2024</a></div></li></ul></nav></div></div></div></aside><main class="docMainContainer_TBSr"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_VOVn"><div class="docItemContainer_Djhp"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_Z_bl" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_YNFT"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">2026</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">v1.82.0</span></li></ul></nav><div class="tocCollapsible_ETCw theme-doc-toc-mobile tocMobile_ITEo"><button type="button" class="clean-btn tocCollapsibleButton_TO0P">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>v1.82.0 - Realtime Guardrails, Projects Management, and 10+ Performance Optimizations</h1></header><h2 class="anchor anchorWithStickyNavbar_LWe7" id="deploy-this-version">Deploy this version<a href="#deploy-this-version" class="hash-link" aria-label="Direct link to Deploy this version" title="Direct link to Deploy this version">​</a></h2>
+<!-- -->
+<div class="tabs-container tabList__CuJ"><ul role="tablist" aria-orientation="horizontal" class="tabs"><li role="tab" tabindex="0" aria-selected="true" class="tabs__item tabItem_LNqP tabs__item--active">Docker</li><li role="tab" tabindex="-1" aria-selected="false" class="tabs__item tabItem_LNqP">Pip</li></ul><div class="margin-top--md"><div role="tabpanel" class="tabItem_Ymn6"><div class="language-showLineNumbers language-showlinenumbers codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockTitle_OeMC">docker run litellm</div><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-showlinenumbers codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">docker run \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">-e STORE_MODEL_IN_DB=True \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">-p 4000:4000 \</span><br></span><span class="token-line" style="color:#000000"><span class="token plain">ghcr.io/berriai/litellm:main-1.82.0-stable</span><br></span></code></pre></div></div></div><div role="tabpanel" class="tabItem_Ymn6" hidden=""><div class="language-showLineNumbers language-showlinenumbers codeBlockContainer_Ckt0 theme-code-block" style="--prism-color:#000000;--prism-background-color:#ffffff"><div class="codeBlockTitle_OeMC">pip install litellm</div><div class="codeBlockContent_QJqH"><pre tabindex="0" class="prism-code language-showlinenumbers codeBlock_bY9V thin-scrollbar" style="color:#000000;background-color:#ffffff"><code class="codeBlockLines_e6Vv"><span class="token-line" style="color:#000000"><span class="token plain">pip install litellm==1.82.0</span><br></span></code></pre></div></div></div></div></div>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="key-highlights">Key Highlights<a href="#key-highlights" class="hash-link" aria-label="Direct link to Key Highlights" title="Direct link to Key Highlights">​</a></h2>
+<ul>
+<li><strong>Realtime API guardrails</strong> — <a href="/docs/proxy/guardrails">Full guardrails support for <code>/v1/realtime</code> WebSocket sessions with pre/post-call enforcement, voice transcription hooks, session termination policies, and Vertex AI Gemini Live support</a> - <a href="https://github.com/BerriAI/litellm/pull/22152" target="_blank" rel="noopener noreferrer">PR #22152</a>, <a href="https://github.com/BerriAI/litellm/pull/22153" target="_blank" rel="noopener noreferrer">PR #22153</a>, <a href="https://github.com/BerriAI/litellm/pull/22161" target="_blank" rel="noopener noreferrer">PR #22161</a>, <a href="https://github.com/BerriAI/litellm/pull/22165" target="_blank" rel="noopener noreferrer">PR #22165</a></li>
+<li><strong>Projects Management</strong> — <a href="/docs/proxy/ui_store_model_db_setting">New Projects UI with full CRUD, project-scoped virtual keys, and admin opt-in toggle — organize teams and keys by project</a> - <a href="https://github.com/BerriAI/litellm/pull/22315" target="_blank" rel="noopener noreferrer">PR #22315</a>, <a href="https://github.com/BerriAI/litellm/pull/22360" target="_blank" rel="noopener noreferrer">PR #22360</a>, <a href="https://github.com/BerriAI/litellm/pull/22373" target="_blank" rel="noopener noreferrer">PR #22373</a>, <a href="https://github.com/BerriAI/litellm/pull/22412" target="_blank" rel="noopener noreferrer">PR #22412</a></li>
+<li><strong>Guardrail ecosystem expansion</strong> — <a href="/docs/proxy/guardrails">Noma v2, Lakera v2 post-call, Singapore regulatory policies (PDPA + MAS), employment discrimination blockers, code execution blocker, guardrail policy versioning, and production monitoring</a> - <a href="https://github.com/BerriAI/litellm/pull/21400" target="_blank" rel="noopener noreferrer">PR #21400</a>, <a href="https://github.com/BerriAI/litellm/pull/21783" target="_blank" rel="noopener noreferrer">PR #21783</a>, <a href="https://github.com/BerriAI/litellm/pull/21948" target="_blank" rel="noopener noreferrer">PR #21948</a></li>
+<li><strong>OpenAI Codex 5.3 — day 0</strong> — <a href="/docs/providers/openai">Full support for <code>gpt-5.3-codex</code> on OpenAI and Azure, plus <code>gpt-audio-1.5</code> and <code>gpt-realtime-1.5</code> model coverage</a> - <a href="https://github.com/BerriAI/litellm/pull/22035" target="_blank" rel="noopener noreferrer">PR #22035</a></li>
+<li><strong>10+ performance optimizations</strong> — Streaming hot-path fixes, Redis pipeline batching, database task batching, ModelResponse init skip, and router cache improvements — lower latency and CPU on every request</li>
+<li><strong><code>/v1/messages</code> → <code>/responses</code> routing</strong> — <code>/v1/messages</code> requests are now routed to the <a href="/docs/response_api">Responses API</a> by default for OpenAI/Azure models</li>
+</ul>
+<div class="theme-admonition theme-admonition-danger admonition_xJq3 alert alert--danger"><div class="admonitionHeading_Gvgb"><span class="admonitionIcon_Rf37"><svg viewBox="0 0 12 16"><path fill-rule="evenodd" d="M5.05.31c.81 2.17.41 3.38-.52 4.31C3.55 5.67 1.98 6.45.9 7.98c-1.45 2.05-1.7 6.53 3.53 7.7-2.2-1.16-2.67-4.52-.3-6.61-.61 2.03.53 3.33 1.94 2.86 1.39-.47 2.3.53 2.27 1.67-.02.78-.31 1.44-1.13 1.81 3.42-.59 4.78-3.42 4.78-5.56 0-2.84-2.53-3.22-1.25-5.61-1.52.13-2.03 1.13-1.89 2.75.09 1.08-1.02 1.8-1.86 1.33-.67-.41-.66-1.19-.06-1.78C8.18 5.31 8.68 2.45 5.05.32L5.03.3l.02.01z"></path></svg></span>v1/messages routing change</div><div class="admonitionContent_BuS1"><p>This version starts routing <code>/v1/messages</code> requests to the <code>/responses</code> API by default. To opt out and continue using chat/completions, set <code>LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true</code> or <code>litellm_settings.use_chat_completions_url_for_anthropic_messages: true</code> in your config.</p></div></div>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="new-models--updated-models">New Models / Updated Models<a href="#new-models--updated-models" class="hash-link" aria-label="Direct link to New Models / Updated Models" title="Direct link to New Models / Updated Models">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="new-model-support-20-new-models">New Model Support (20 new models)<a href="#new-model-support-20-new-models" class="hash-link" aria-label="Direct link to New Model Support (20 new models)" title="Direct link to New Model Support (20 new models)">​</a></h4>
+<table><thead><tr><th>Provider</th><th>Model</th><th>Context Window</th><th>Input ($/1M tokens)</th><th>Output ($/1M tokens)</th><th>Features</th></tr></thead><tbody><tr><td>OpenAI</td><td><code>gpt-5.3-codex</code></td><td>272K</td><td>$1.75</td><td>$14.00</td><td>Reasoning, coding</td></tr><tr><td>Azure OpenAI</td><td><code>azure/gpt-5.3-codex</code></td><td>272K</td><td>$1.75</td><td>$14.00</td><td>Azure deployment</td></tr><tr><td>OpenAI</td><td><code>gpt-audio-1.5</code></td><td>128K</td><td>$2.50</td><td>$10.00</td><td>Audio model</td></tr><tr><td>Azure OpenAI</td><td><code>azure/gpt-audio-1.5-2026-02-23</code></td><td>128K</td><td>$2.50</td><td>$10.00</td><td>Audio model</td></tr><tr><td>OpenAI</td><td><code>gpt-realtime-1.5</code></td><td>32K</td><td>$4.00</td><td>$16.00</td><td>Realtime model</td></tr><tr><td>Azure OpenAI</td><td><code>azure/gpt-realtime-1.5-2026-02-23</code></td><td>32K</td><td>$4.00</td><td>$16.00</td><td>Realtime model</td></tr><tr><td>Groq</td><td><code>groq/openai/gpt-oss-safeguard-20b</code></td><td>131K</td><td>$0.075</td><td>$0.30</td><td>Guardrail inference</td></tr><tr><td>Google Vertex AI</td><td><code>vertex_ai/gemini-3.1-flash-image-preview</code></td><td>-</td><td>-</td><td>-</td><td>Image generation</td></tr><tr><td>Perplexity</td><td><code>perplexity/perplexity/sonar</code></td><td>-</td><td>-</td><td>-</td><td>Sonar search</td></tr><tr><td>Perplexity</td><td><code>perplexity/openai/gpt-5.1</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/openai/gpt-5-mini</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/google/gemini-2.5-flash</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/google/gemini-2.5-pro</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/google/gemini-3-flash-preview</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/google/gemini-3-pro-preview</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/anthropic/claude-haiku-4-5</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/anthropic/claude-sonnet-4-5</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/anthropic/claude-opus-4-5</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/anthropic/claude-opus-4-6</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr><tr><td>Perplexity</td><td><code>perplexity/xai/grok-4-1-fast-non-reasoning</code></td><td>-</td><td>-</td><td>-</td><td>Hosted routing</td></tr></tbody></table>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="features">Features<a href="#features" class="hash-link" aria-label="Direct link to Features" title="Direct link to Features">​</a></h4>
+<ul>
+<li>
+<p><strong><a href="/docs/providers/openai">OpenAI</a></strong></p>
+<ul>
+<li>Day 0 support for <code>gpt-5.3-codex</code> on OpenAI and Azure - <a href="https://github.com/BerriAI/litellm/pull/22035" target="_blank" rel="noopener noreferrer">PR #22035</a></li>
+<li>Add <code>gpt-audio-1.5</code> model cost map - <a href="https://github.com/BerriAI/litellm/pull/22303" target="_blank" rel="noopener noreferrer">PR #22303</a></li>
+<li>Add <code>gpt-realtime-1.5</code> model cost map - <a href="https://github.com/BerriAI/litellm/pull/22304" target="_blank" rel="noopener noreferrer">PR #22304</a></li>
+<li>Add <code>audio</code> as supported OpenAI param - <a href="https://github.com/BerriAI/litellm/pull/22092" target="_blank" rel="noopener noreferrer">PR #22092</a></li>
+<li>Add <code>prompt_cache_key</code> and <code>prompt_cache_retention</code> support - <a href="https://github.com/BerriAI/litellm/pull/20397" target="_blank" rel="noopener noreferrer">PR #20397</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/azure">Azure OpenAI</a></strong></p>
+<ul>
+<li>New Azure OpenAI models 2026-02-25 - <a href="https://github.com/BerriAI/litellm/pull/22114" target="_blank" rel="noopener noreferrer">PR #22114</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/anthropic">Anthropic</a></strong></p>
+<ul>
+<li>Add v1 Anthropic Responses API transformation - <a href="https://github.com/BerriAI/litellm/pull/22087" target="_blank" rel="noopener noreferrer">PR #22087</a></li>
+<li>Sanitize <code>tool_use</code> IDs in <code>convert_to_anthropic_tool_invoke</code> - <a href="https://github.com/BerriAI/litellm/pull/21964" target="_blank" rel="noopener noreferrer">PR #21964</a></li>
+<li>Fix model wildcard access issue - <a href="https://github.com/BerriAI/litellm/pull/21917" target="_blank" rel="noopener noreferrer">PR #21917</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/bedrock">AWS Bedrock</a></strong></p>
+<ul>
+<li>Encode model ARNs for OpenAI-compatible Bedrock imported models - <a href="https://github.com/BerriAI/litellm/pull/21701" target="_blank" rel="noopener noreferrer">PR #21701</a></li>
+<li>Support optional regional STS endpoint in role assumption - <a href="https://github.com/BerriAI/litellm/pull/21640" target="_blank" rel="noopener noreferrer">PR #21640</a></li>
+<li>Native structured outputs API support - <a href="https://github.com/BerriAI/litellm/pull/21222" target="_blank" rel="noopener noreferrer">PR #21222</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/vertex">Google Vertex AI</a></strong></p>
+<ul>
+<li>Add <code>gemini-3.1-flash-image-preview</code> to model cost map - <a href="https://github.com/BerriAI/litellm/pull/22223" target="_blank" rel="noopener noreferrer">PR #22223</a></li>
+<li>Enable <code>context-1m-2025-08-07</code> beta header for Vertex AI provider - <a href="https://github.com/BerriAI/litellm/pull/21867" target="_blank" rel="noopener noreferrer">PR #21867</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/openrouter">OpenRouter</a></strong></p>
+<ul>
+<li>Add OpenRouter native models to model cost map - <a href="https://github.com/BerriAI/litellm/pull/20520" target="_blank" rel="noopener noreferrer">PR #20520</a></li>
+<li>Add OpenRouter Opus 4.6 to model map - <a href="https://github.com/BerriAI/litellm/pull/20525" target="_blank" rel="noopener noreferrer">PR #20525</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/mistral">Mistral</a></strong></p>
+<ul>
+<li>Adjust <code>mistral-small-2503</code> input/output cost per token - <a href="https://github.com/BerriAI/litellm/pull/22097" target="_blank" rel="noopener noreferrer">PR #22097</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/groq">Groq</a></strong></p>
+<ul>
+<li>Add <code>groq/openai/gpt-oss-safeguard-20b</code> model pricing - <a href="https://github.com/BerriAI/litellm/pull/21951" target="_blank" rel="noopener noreferrer">PR #21951</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/aiml">AI/ML</a></strong></p>
+<ul>
+<li>Update AIML model pricing - <a href="https://github.com/BerriAI/litellm/pull/22139" target="_blank" rel="noopener noreferrer">PR #22139</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/ollama">Ollama</a></strong></p>
+<ul>
+<li>Thread <code>api_base</code> to <code>get_model_info</code> + graceful fallback - <a href="https://github.com/BerriAI/litellm/pull/21970" target="_blank" rel="noopener noreferrer">PR #21970</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/openai">PublicAI</a></strong></p>
+<ul>
+<li>Fix function calling for PublicAI Apertus models - <a href="https://github.com/BerriAI/litellm/pull/21582" target="_blank" rel="noopener noreferrer">PR #21582</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/xai">xAI</a></strong></p>
+<ul>
+<li>Add deprecation dates for <code>grok-2-vision-1212</code> and <code>grok-3-mini</code> models - <a href="https://github.com/BerriAI/litellm/pull/20102" target="_blank" rel="noopener noreferrer">PR #20102</a></li>
+</ul>
+</li>
+<li>
+<p><strong>General</strong></p>
+<ul>
+<li>Forward auth headers of provider - <a href="https://github.com/BerriAI/litellm/pull/22070" target="_blank" rel="noopener noreferrer">PR #22070</a></li>
+<li>Normalize camelCase <code>thinking</code> param keys to snake_case - <a href="https://github.com/BerriAI/litellm/pull/21762" target="_blank" rel="noopener noreferrer">PR #21762</a></li>
+<li>Allow <code>dimensions</code> param passthrough for non-text-embedding-3 OpenAI models - <a href="https://github.com/BerriAI/litellm/pull/22144" target="_blank" rel="noopener noreferrer">PR #22144</a></li>
+</ul>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="bug-fixes">Bug Fixes<a href="#bug-fixes" class="hash-link" aria-label="Direct link to Bug Fixes" title="Direct link to Bug Fixes">​</a></h3>
+<ul>
+<li>
+<p><strong><a href="/docs/providers/bedrock">AWS Bedrock</a></strong></p>
+<ul>
+<li>Fix converse handling for <code>parallel_tool_calls</code> - <a href="https://github.com/BerriAI/litellm/pull/22267" target="_blank" rel="noopener noreferrer">PR #22267</a></li>
+<li>Restore <code>parallel_tool_calls</code> mapping in <code>map_openai_params</code> - <a href="https://github.com/BerriAI/litellm/pull/22333" target="_blank" rel="noopener noreferrer">PR #22333</a></li>
+<li>Correct <code>modelInput</code> format for Converse API batch models - <a href="https://github.com/BerriAI/litellm/pull/21656" target="_blank" rel="noopener noreferrer">PR #21656</a></li>
+<li>Prevent double UUID in <code>create_file</code> S3 key - <a href="https://github.com/BerriAI/litellm/pull/21650" target="_blank" rel="noopener noreferrer">PR #21650</a></li>
+<li>Filter internal <code>json_tool_call</code> when mixed with real tools - <a href="https://github.com/BerriAI/litellm/pull/21107" target="_blank" rel="noopener noreferrer">PR #21107</a></li>
+<li>Pass timeout param to Bedrock rerank HTTP client - <a href="https://github.com/BerriAI/litellm/pull/22021" target="_blank" rel="noopener noreferrer">PR #22021</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/anthropic">Anthropic</a></strong></p>
+<ul>
+<li>Fix model cost map for anthropic fast and <code>inference_geo</code> - <a href="https://github.com/BerriAI/litellm/pull/21904" target="_blank" rel="noopener noreferrer">PR #21904</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/image_generation">Image Generation</a></strong></p>
+<ul>
+<li>Propagate <code>extra_headers</code> to upstream image generation - <a href="https://github.com/BerriAI/litellm/pull/22026" target="_blank" rel="noopener noreferrer">PR #22026</a></li>
+<li>Add <code>ChatCompletionImageObject</code> in <code>OpenAIChatCompletionAssistantMessage</code> - <a href="https://github.com/BerriAI/litellm/pull/22155" target="_blank" rel="noopener noreferrer">PR #22155</a></li>
+</ul>
+</li>
+<li>
+<p><strong>General</strong></p>
+<ul>
+<li>Preserve forwarding of server-side called tools - <a href="https://github.com/BerriAI/litellm/pull/22260" target="_blank" rel="noopener noreferrer">PR #22260</a></li>
+<li>Fix free model handling from UI paths - <a href="https://github.com/BerriAI/litellm/pull/22258" target="_blank" rel="noopener noreferrer">PR #22258</a></li>
+<li>Fix <code>None</code> TypeError in mapping - <a href="https://github.com/BerriAI/litellm/pull/22080" target="_blank" rel="noopener noreferrer">PR #22080</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="llm-api-endpoints">LLM API Endpoints<a href="#llm-api-endpoints" class="hash-link" aria-label="Direct link to LLM API Endpoints" title="Direct link to LLM API Endpoints">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="features-1">Features<a href="#features-1" class="hash-link" aria-label="Direct link to Features" title="Direct link to Features">​</a></h4>
+<ul>
+<li>
+<p><strong><a href="/docs/response_api">Realtime API</a></strong></p>
+<ul>
+<li>Guardrails support for <code>/v1/realtime</code> WebSocket endpoint - <a href="https://github.com/BerriAI/litellm/pull/22152" target="_blank" rel="noopener noreferrer">PR #22152</a></li>
+<li>Vertex AI Gemini Live via unified <code>/realtime</code> endpoint - <a href="https://github.com/BerriAI/litellm/pull/22153" target="_blank" rel="noopener noreferrer">PR #22153</a></li>
+<li>Guardrails with <code>pre_call</code>/<code>post_call</code> mode on realtime WebSocket - <a href="https://github.com/BerriAI/litellm/pull/22161" target="_blank" rel="noopener noreferrer">PR #22161</a></li>
+<li><code>end_session_after_n_fails</code> + Endpoint Settings wizard step - <a href="https://github.com/BerriAI/litellm/pull/22165" target="_blank" rel="noopener noreferrer">PR #22165</a></li>
+<li>Guardrail hook for voice transcription - <a href="https://github.com/BerriAI/litellm/pull/21976" target="_blank" rel="noopener noreferrer">PR #21976</a></li>
+<li>Fix guardrails not firing for Gemini/Vertex AI and <code>provider_config</code> realtime sessions - <a href="https://github.com/BerriAI/litellm/pull/22168" target="_blank" rel="noopener noreferrer">PR #22168</a></li>
+<li>Add logging, spend tracking support + tool tracing - <a href="https://github.com/BerriAI/litellm/pull/22105" target="_blank" rel="noopener noreferrer">PR #22105</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/video_generation">Video Generation</a></strong></p>
+<ul>
+<li>Add <code>variant</code> parameter to video content download - <a href="https://github.com/BerriAI/litellm/pull/21955" target="_blank" rel="noopener noreferrer">PR #21955</a></li>
+<li>Pass <code>api_key</code> from <code>litellm_params</code> to video remix handlers - <a href="https://github.com/BerriAI/litellm/pull/21965" target="_blank" rel="noopener noreferrer">PR #21965</a></li>
+<li>Apply custom video pricing from deployment <code>model_info</code> - <a href="https://github.com/BerriAI/litellm/pull/21923" target="_blank" rel="noopener noreferrer">PR #21923</a></li>
+<li>Fix passing of image and parameters in videos API - <a href="https://github.com/BerriAI/litellm/pull/22170" target="_blank" rel="noopener noreferrer">PR #22170</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/providers/openai#ocr--document-understanding">OCR</a></strong></p>
+<ul>
+<li>Enable local file support for OCR - <a href="https://github.com/BerriAI/litellm/pull/22133" target="_blank" rel="noopener noreferrer">PR #22133</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/completion/input">Websearch / Tool Calling</a></strong></p>
+<ul>
+<li>Preserve thinking blocks in agentic loop follow-up messages - <a href="https://github.com/BerriAI/litellm/pull/21604" target="_blank" rel="noopener noreferrer">PR #21604</a></li>
+</ul>
+</li>
+<li>
+<p><strong>General</strong></p>
+<ul>
+<li>Add configurable upper bound for chunk processing time - <a href="https://github.com/BerriAI/litellm/pull/22209" target="_blank" rel="noopener noreferrer">PR #22209</a></li>
+<li>Emit <code>x-litellm-overhead-duration-ms</code> header for streaming requests - <a href="https://github.com/BerriAI/litellm/pull/22027" target="_blank" rel="noopener noreferrer">PR #22027</a></li>
+</ul>
+</li>
+</ul>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="bugs">Bugs<a href="#bugs" class="hash-link" aria-label="Direct link to Bugs" title="Direct link to Bugs">​</a></h4>
+<ul>
+<li><strong>General</strong>
+<ul>
+<li>Fix mypy attr-defined errors on realtime websocket calls - <a href="https://github.com/BerriAI/litellm/pull/22202" target="_blank" rel="noopener noreferrer">PR #22202</a></li>
+</ul>
+</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="management-endpoints--ui">Management Endpoints / UI<a href="#management-endpoints--ui" class="hash-link" aria-label="Direct link to Management Endpoints / UI" title="Direct link to Management Endpoints / UI">​</a></h2>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="features-2">Features<a href="#features-2" class="hash-link" aria-label="Direct link to Features" title="Direct link to Features">​</a></h4>
+<ul>
+<li>
+<p><strong>Projects</strong></p>
+<ul>
+<li>Add Projects page with list and create flows - <a href="https://github.com/BerriAI/litellm/pull/22315" target="_blank" rel="noopener noreferrer">PR #22315</a></li>
+<li>Add Project Details page with edit modal - <a href="https://github.com/BerriAI/litellm/pull/22360" target="_blank" rel="noopener noreferrer">PR #22360</a></li>
+<li>Add project keys table and project dropdown on key create/edit - <a href="https://github.com/BerriAI/litellm/pull/22373" target="_blank" rel="noopener noreferrer">PR #22373</a></li>
+<li>Add delete project action to Projects table - <a href="https://github.com/BerriAI/litellm/pull/22412" target="_blank" rel="noopener noreferrer">PR #22412</a></li>
+<li>Add Projects Opt-In Toggle in Admin Settings - <a href="https://github.com/BerriAI/litellm/pull/22416" target="_blank" rel="noopener noreferrer">PR #22416</a></li>
+<li>Include <code>created_at</code> and <code>updated_at</code> in <code>/project/list</code> response - <a href="https://github.com/BerriAI/litellm/pull/22323" target="_blank" rel="noopener noreferrer">PR #22323</a></li>
+<li>Add tags in project - <a href="https://github.com/BerriAI/litellm/pull/22216" target="_blank" rel="noopener noreferrer">PR #22216</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Virtual Keys + Access Groups</strong></p>
+<ul>
+<li>Add bidirectional team/key sync for Access Group CRUD flows - <a href="https://github.com/BerriAI/litellm/pull/22253" target="_blank" rel="noopener noreferrer">PR #22253</a></li>
+<li>Add pagination and search to <code>/key/aliases</code> to prevent OOMs - <a href="https://github.com/BerriAI/litellm/pull/22137" target="_blank" rel="noopener noreferrer">PR #22137</a></li>
+<li>Add paginated key alias selector in UI - <a href="https://github.com/BerriAI/litellm/pull/22157" target="_blank" rel="noopener noreferrer">PR #22157</a></li>
+<li>Add <code>project_id</code> and <code>access_group_id</code> filters for key list endpoint - <a href="https://github.com/BerriAI/litellm/pull/22356" target="_blank" rel="noopener noreferrer">PR #22356</a></li>
+<li>Add KeyInfoHeader component - <a href="https://github.com/BerriAI/litellm/pull/22047" target="_blank" rel="noopener noreferrer">PR #22047</a></li>
+<li>Restrict Edit Settings to key owners - <a href="https://github.com/BerriAI/litellm/pull/21985" target="_blank" rel="noopener noreferrer">PR #21985</a></li>
+<li>Fix virtual key grace period from env/UI - <a href="https://github.com/BerriAI/litellm/pull/20321" target="_blank" rel="noopener noreferrer">PR #20321</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Agents</strong></p>
+<ul>
+<li>Assign virtual keys to agents - <a href="https://github.com/BerriAI/litellm/pull/22045" target="_blank" rel="noopener noreferrer">PR #22045</a></li>
+<li>Assign tools to agents - <a href="https://github.com/BerriAI/litellm/pull/22064" target="_blank" rel="noopener noreferrer">PR #22064</a></li>
+<li>Ensure internal users cannot create agents (RBAC enforcement) - <a href="https://github.com/BerriAI/litellm/pull/22329" target="_blank" rel="noopener noreferrer">PR #22329</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Proxy Auth / SSO</strong></p>
+<ul>
+<li>OIDC discovery URLs, roles array handling, and dot-notation error hints - <a href="https://github.com/BerriAI/litellm/pull/22336" target="_blank" rel="noopener noreferrer">PR #22336</a></li>
+<li>Add PROXY_ADMIN role to system user for key rotation - <a href="https://github.com/BerriAI/litellm/pull/21896" target="_blank" rel="noopener noreferrer">PR #21896</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Usage / Spend Logs</strong></p>
+<ul>
+<li>Add user filtering to usage page - <a href="https://github.com/BerriAI/litellm/pull/22059" target="_blank" rel="noopener noreferrer">PR #22059</a></li>
+<li>Allow using AI to understand usage patterns - <a href="https://github.com/BerriAI/litellm/pull/22042" target="_blank" rel="noopener noreferrer">PR #22042</a></li>
+<li>Use backend <code>request_duration_ms</code> and make Duration sortable in Logs - <a href="https://github.com/BerriAI/litellm/pull/22122" target="_blank" rel="noopener noreferrer">PR #22122</a></li>
+<li>Add <code>request_duration_ms</code> to SpendLogs - <a href="https://github.com/BerriAI/litellm/pull/22066" target="_blank" rel="noopener noreferrer">PR #22066</a></li>
+<li>Enrich failure spend logs with key/team metadata - <a href="https://github.com/BerriAI/litellm/pull/22049" target="_blank" rel="noopener noreferrer">PR #22049</a></li>
+<li>Show real tool names in logs for Anthropic-format tools - <a href="https://github.com/BerriAI/litellm/pull/22048" target="_blank" rel="noopener noreferrer">PR #22048</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Models + Endpoints</strong></p>
+<ul>
+<li>Show proxy URL in ModelHub - <a href="https://github.com/BerriAI/litellm/pull/21660" target="_blank" rel="noopener noreferrer">PR #21660</a></li>
+<li>Add <code>/public/endpoints</code> for provider endpoint support - <a href="https://github.com/BerriAI/litellm/pull/22248" target="_blank" rel="noopener noreferrer">PR #22248</a></li>
+</ul>
+</li>
+<li>
+<p><strong>UI Improvements</strong></p>
+<ul>
+<li>Add custom favicon support - <a href="https://github.com/BerriAI/litellm/pull/21653" target="_blank" rel="noopener noreferrer">PR #21653</a></li>
+<li>Add Blog Dropdown in Navbar - <a href="https://github.com/BerriAI/litellm/pull/21859" target="_blank" rel="noopener noreferrer">PR #21859</a></li>
+<li>Add UI banner warning for detailed debug mode - <a href="https://github.com/BerriAI/litellm/pull/21527" target="_blank" rel="noopener noreferrer">PR #21527</a></li>
+<li>Make auth value optional for MCP Server create flow - <a href="https://github.com/BerriAI/litellm/pull/22119" target="_blank" rel="noopener noreferrer">PR #22119</a></li>
+<li>Tool policies: auto-discover tools + policy enforcement guardrail - <a href="https://github.com/BerriAI/litellm/pull/22041" target="_blank" rel="noopener noreferrer">PR #22041</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Health Checks</strong></p>
+<ul>
+<li>Add health check max tokens configuration - <a href="https://github.com/BerriAI/litellm/pull/22299" target="_blank" rel="noopener noreferrer">PR #22299</a></li>
+<li>Limit concurrent health checks with <code>health_check_concurrency</code> - <a href="https://github.com/BerriAI/litellm/pull/20584" target="_blank" rel="noopener noreferrer">PR #20584</a></li>
+<li>Fix health check <code>model_id</code> filtering - <a href="https://github.com/BerriAI/litellm/pull/21071" target="_blank" rel="noopener noreferrer">PR #21071</a></li>
+</ul>
+</li>
+</ul>
+<h4 class="anchor anchorWithStickyNavbar_LWe7" id="bugs-1">Bugs<a href="#bugs-1" class="hash-link" aria-label="Direct link to Bugs" title="Direct link to Bugs">​</a></h4>
+<ul>
+<li>Populate <code>user_id</code> and <code>user_info</code> for admin users in <code>/user/info</code> - <a href="https://github.com/BerriAI/litellm/pull/22239" target="_blank" rel="noopener noreferrer">PR #22239</a></li>
+<li>Fix virtual keys pagination stale totals when filtering - <a href="https://github.com/BerriAI/litellm/pull/22222" target="_blank" rel="noopener noreferrer">PR #22222</a></li>
+<li>Fix Spend Update Queue aggregation never triggers with default presets - <a href="https://github.com/BerriAI/litellm/pull/21963" target="_blank" rel="noopener noreferrer">PR #21963</a></li>
+<li>Fix timezone config lookup and replace hardcoded timezone map with <code>ZoneInfo</code> - <a href="https://github.com/BerriAI/litellm/pull/21754" target="_blank" rel="noopener noreferrer">PR #21754</a></li>
+<li>Fix custom auth budget issue - <a href="https://github.com/BerriAI/litellm/pull/22164" target="_blank" rel="noopener noreferrer">PR #22164</a></li>
+<li>Fix missing OAuth session state - <a href="https://github.com/BerriAI/litellm/pull/21992" target="_blank" rel="noopener noreferrer">PR #21992</a></li>
+<li>Fix Transport Type for OpenAPI Spec on UI - <a href="https://github.com/BerriAI/litellm/pull/22005" target="_blank" rel="noopener noreferrer">PR #22005</a></li>
+<li>Fix Claude Code plugin schema - <a href="https://github.com/BerriAI/litellm/pull/22271" target="_blank" rel="noopener noreferrer">PR #22271</a></li>
+<li>Add missing migration for <code>LiteLLM_ClaudeCodePluginTable</code> - <a href="https://github.com/BerriAI/litellm/pull/22335" target="_blank" rel="noopener noreferrer">PR #22335</a></li>
+<li>Only tag selected deployment in access group creation - <a href="https://github.com/BerriAI/litellm/pull/21655" target="_blank" rel="noopener noreferrer">PR #21655</a></li>
+<li>State management fixes for CheckBatchCost - <a href="https://github.com/BerriAI/litellm/pull/21921" target="_blank" rel="noopener noreferrer">PR #21921</a></li>
+<li>Remove duplicate antd import in ToolPolicies - <a href="https://github.com/BerriAI/litellm/pull/22107" target="_blank" rel="noopener noreferrer">PR #22107</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="ai-integrations">AI Integrations<a href="#ai-integrations" class="hash-link" aria-label="Direct link to AI Integrations" title="Direct link to AI Integrations">​</a></h2>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="logging">Logging<a href="#logging" class="hash-link" aria-label="Direct link to Logging" title="Direct link to Logging">​</a></h3>
+<ul>
+<li>
+<p><strong><a href="/docs/proxy/logging#datadog">DataDog</a></strong></p>
+<ul>
+<li>Add ability to trace metrics in DataDog - <a href="https://github.com/BerriAI/litellm/pull/22103" target="_blank" rel="noopener noreferrer">PR #22103</a></li>
+<li>Correlate LiteLLM call IDs with DataDog APM spans - <a href="https://github.com/BerriAI/litellm/pull/22219" target="_blank" rel="noopener noreferrer">PR #22219</a></li>
+<li>Fix TTS metric emission issues - <a href="https://github.com/BerriAI/litellm/pull/20632" target="_blank" rel="noopener noreferrer">PR #20632</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/proxy/logging#prometheus">Prometheus</a></strong></p>
+<ul>
+<li>Add opt-in <code>stream</code> label on <code>litellm_proxy_total_requests_metric</code> - <a href="https://github.com/BerriAI/litellm/pull/22023" target="_blank" rel="noopener noreferrer">PR #22023</a></li>
+<li>Fix team <code>+Inf</code> budgets in Prometheus metrics - <a href="https://github.com/BerriAI/litellm/pull/22243" target="_blank" rel="noopener noreferrer">PR #22243</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/proxy/logging#langfuse">Langfuse</a></strong></p>
+<ul>
+<li>Fix Langfuse OTEL trace issues - <a href="https://github.com/BerriAI/litellm/pull/21309" target="_blank" rel="noopener noreferrer">PR #21309</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/observability/arize_phoenix">Arize Phoenix</a></strong></p>
+<ul>
+<li>Fix nested traces coexistence with OTEL callback - <a href="https://github.com/BerriAI/litellm/pull/22169" target="_blank" rel="noopener noreferrer">PR #22169</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/proxy/alerting">Slack</a></strong></p>
+<ul>
+<li>Add optional digest mode for Slack alert types - <a href="https://github.com/BerriAI/litellm/pull/21683" target="_blank" rel="noopener noreferrer">PR #21683</a></li>
+</ul>
+</li>
+<li>
+<p><strong>General</strong></p>
+<ul>
+<li>Fix Gemini trace ID missing in logging - <a href="https://github.com/BerriAI/litellm/pull/22077" target="_blank" rel="noopener noreferrer">PR #22077</a></li>
+<li>Populate <code>cache_read_input_tokens</code> from <code>prompt_tokens_details</code> for OpenAI/Azure - <a href="https://github.com/BerriAI/litellm/pull/22090" target="_blank" rel="noopener noreferrer">PR #22090</a></li>
+</ul>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="guardrails">Guardrails<a href="#guardrails" class="hash-link" aria-label="Direct link to Guardrails" title="Direct link to Guardrails">​</a></h3>
+<ul>
+<li>
+<p><strong><a href="/docs/proxy/guardrails">Noma</a></strong></p>
+<ul>
+<li>Noma guardrails v2 based on custom guardrails framework - <a href="https://github.com/BerriAI/litellm/pull/21400" target="_blank" rel="noopener noreferrer">PR #21400</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/proxy/guardrails">LakeraAI</a></strong></p>
+<ul>
+<li>Add Lakera v2 post-call hook with fixed PII masking - <a href="https://github.com/BerriAI/litellm/pull/21783" target="_blank" rel="noopener noreferrer">PR #21783</a></li>
+</ul>
+</li>
+<li>
+<p><strong><a href="/docs/proxy/guardrails">Presidio</a></strong></p>
+<ul>
+<li>Fix Presidio streaming and false positives - <a href="https://github.com/BerriAI/litellm/pull/21949" target="_blank" rel="noopener noreferrer">PR #21949</a></li>
+<li>Fix Presidio streaming v3 reliability improvements - <a href="https://github.com/BerriAI/litellm/pull/22283" target="_blank" rel="noopener noreferrer">PR #22283</a></li>
+<li>Prevent Presidio crash on non-JSON responses - <a href="https://github.com/BerriAI/litellm/pull/22084" target="_blank" rel="noopener noreferrer">PR #22084</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Built-in Guardrails</strong></p>
+<ul>
+<li>Block code execution guardrail to prevent agents from executing code - <a href="https://github.com/BerriAI/litellm/pull/22154" target="_blank" rel="noopener noreferrer">PR #22154</a></li>
+<li>Employment discrimination topic blockers for 5 protected classes - <a href="https://github.com/BerriAI/litellm/pull/21962" target="_blank" rel="noopener noreferrer">PR #21962</a></li>
+<li>Claims agent guardrails (5 categories + policy template) - <a href="https://github.com/BerriAI/litellm/pull/22113" target="_blank" rel="noopener noreferrer">PR #22113</a></li>
+<li>New code execution evaluation dataset - <a href="https://github.com/BerriAI/litellm/pull/22065" target="_blank" rel="noopener noreferrer">PR #22065</a></li>
+<li>Tool policies: auto-discover tools + policy enforcement - <a href="https://github.com/BerriAI/litellm/pull/22041" target="_blank" rel="noopener noreferrer">PR #22041</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Policy Templates</strong></p>
+<ul>
+<li>Singapore guardrail policies (PDPA + MAS AI Risk Management) - <a href="https://github.com/BerriAI/litellm/pull/21948" target="_blank" rel="noopener noreferrer">PR #21948</a></li>
+<li>Prefix SG guardrail policy IDs with country code - <a href="https://github.com/BerriAI/litellm/pull/21974" target="_blank" rel="noopener noreferrer">PR #21974</a></li>
+<li>Guardrail policy versioning - <a href="https://github.com/BerriAI/litellm/pull/21862" target="_blank" rel="noopener noreferrer">PR #21862</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Guardrail Monitoring</strong></p>
+<ul>
+<li>Guardrail Monitor — measure guardrail reliability in production - <a href="https://github.com/BerriAI/litellm/pull/21944" target="_blank" rel="noopener noreferrer">PR #21944</a></li>
+</ul>
+</li>
+<li>
+<p><strong>Security</strong></p>
+<ul>
+<li>Fix unauthenticated RCE and sandbox escape in custom code guardrail - <a href="https://github.com/BerriAI/litellm/pull/22095" target="_blank" rel="noopener noreferrer">PR #22095</a></li>
+</ul>
+</li>
+</ul>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="prompt-management">Prompt Management<a href="#prompt-management" class="hash-link" aria-label="Direct link to Prompt Management" title="Direct link to Prompt Management">​</a></h3>
+<p>No major prompt management changes in this release.</p>
+<h3 class="anchor anchorWithStickyNavbar_LWe7" id="secret-managers">Secret Managers<a href="#secret-managers" class="hash-link" aria-label="Direct link to Secret Managers" title="Direct link to Secret Managers">​</a></h3>
+<p>No major secret manager changes in this release.</p>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="spend-tracking-budgets-and-rate-limiting">Spend Tracking, Budgets and Rate Limiting<a href="#spend-tracking-budgets-and-rate-limiting" class="hash-link" aria-label="Direct link to Spend Tracking, Budgets and Rate Limiting" title="Direct link to Spend Tracking, Budgets and Rate Limiting">​</a></h2>
+<ul>
+<li><strong>Priority PayGo cost tracking</strong> for Gemini/Vertex AI - <a href="https://github.com/BerriAI/litellm/pull/21909" target="_blank" rel="noopener noreferrer">PR #21909</a></li>
+<li><strong>Add <code>request_duration_ms</code> to SpendLogs</strong> for latency tracking per request - <a href="https://github.com/BerriAI/litellm/pull/22066" target="_blank" rel="noopener noreferrer">PR #22066</a></li>
+<li><strong>Add <code>in_flight_requests</code> metric</strong> to <code>/health/backlog</code> + Prometheus - <a href="https://github.com/BerriAI/litellm/pull/22319" target="_blank" rel="noopener noreferrer">PR #22319</a></li>
+<li><strong>Enrich failure spend logs</strong> with key/team metadata - <a href="https://github.com/BerriAI/litellm/pull/22049" target="_blank" rel="noopener noreferrer">PR #22049</a></li>
+<li><strong>Add spend tracking lifecycle logging</strong> for debugging spend flows - <a href="https://github.com/BerriAI/litellm/pull/22029" target="_blank" rel="noopener noreferrer">PR #22029</a></li>
+<li><strong>Fix budget timezone config lookup</strong> and replace hardcoded timezone map with <code>ZoneInfo</code> - <a href="https://github.com/BerriAI/litellm/pull/21754" target="_blank" rel="noopener noreferrer">PR #21754</a></li>
+<li><strong>Fix Spend Update Queue aggregation</strong> never triggering with default presets - <a href="https://github.com/BerriAI/litellm/pull/21963" target="_blank" rel="noopener noreferrer">PR #21963</a></li>
+<li><strong>Avoid mutating caller-owned dicts</strong> in <code>SpendUpdateQueue</code> aggregation - <a href="https://github.com/BerriAI/litellm/pull/21742" target="_blank" rel="noopener noreferrer">PR #21742</a></li>
+<li><strong>Optimize old spendlog deletion</strong> cron job - <a href="https://github.com/BerriAI/litellm/pull/21930" target="_blank" rel="noopener noreferrer">PR #21930</a></li>
+<li><strong>Health check max tokens</strong> configuration - <a href="https://github.com/BerriAI/litellm/pull/22299" target="_blank" rel="noopener noreferrer">PR #22299</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="mcp-gateway">MCP Gateway<a href="#mcp-gateway" class="hash-link" aria-label="Direct link to MCP Gateway" title="Direct link to MCP Gateway">​</a></h2>
+<ul>
+<li><strong>Pass MCP auth headers</strong> from request context to tool fetch for <code>/v1/responses</code> and <code>/chat/completions</code> - <a href="https://github.com/BerriAI/litellm/pull/22291" target="_blank" rel="noopener noreferrer">PR #22291</a></li>
+<li><strong>Default <code>available_on_public_internet</code> to true</strong> for MCP server behavior consistency - <a href="https://github.com/BerriAI/litellm/pull/22331" target="_blank" rel="noopener noreferrer">PR #22331</a></li>
+<li><strong>Clear error messages</strong> for IP filtering / no available tools - <a href="https://github.com/BerriAI/litellm/pull/22142" target="_blank" rel="noopener noreferrer">PR #22142</a></li>
+<li><strong>Strip stale <code>mcp-session-id</code> header</strong> to prevent 400 errors across proxy workers - <a href="https://github.com/BerriAI/litellm/pull/21417" target="_blank" rel="noopener noreferrer">PR #21417</a></li>
+<li><strong>Skip health check for MCP</strong> with passthrough token auth - <a href="https://github.com/BerriAI/litellm/pull/21982" target="_blank" rel="noopener noreferrer">PR #21982</a></li>
+<li><strong>Fix missing OAuth session state</strong> - <a href="https://github.com/BerriAI/litellm/pull/21992" target="_blank" rel="noopener noreferrer">PR #21992</a></li>
+<li><strong>Fix Transport Type</strong> for OpenAPI Spec on UI - <a href="https://github.com/BerriAI/litellm/pull/22005" target="_blank" rel="noopener noreferrer">PR #22005</a></li>
+<li><strong>Add e2e test</strong> for stateless StreamableHTTP behavior - <a href="https://github.com/BerriAI/litellm/pull/22033" target="_blank" rel="noopener noreferrer">PR #22033</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="performance--loadbalancing--reliability-improvements">Performance / Loadbalancing / Reliability improvements<a href="#performance--loadbalancing--reliability-improvements" class="hash-link" aria-label="Direct link to Performance / Loadbalancing / Reliability improvements" title="Direct link to Performance / Loadbalancing / Reliability improvements">​</a></h2>
+<p><strong>Streaming &amp; hot-path</strong></p>
+<ul>
+<li>Streaming latency improvements — 4 targeted hot-path fixes - <a href="https://github.com/BerriAI/litellm/pull/22346" target="_blank" rel="noopener noreferrer">PR #22346</a></li>
+<li>Skip throwaway <code>Usage()</code> construction in <code>ModelResponse.__init__</code> - <a href="https://github.com/BerriAI/litellm/pull/21611" target="_blank" rel="noopener noreferrer">PR #21611</a></li>
+<li>Optimize <code>is_model_o_series_model</code> with <code>startswith</code> - <a href="https://github.com/BerriAI/litellm/pull/21690" target="_blank" rel="noopener noreferrer">PR #21690</a></li>
+<li>Use cached <code>_safe_get_request_headers</code> instead of per-request construction - <a href="https://github.com/BerriAI/litellm/pull/21430" target="_blank" rel="noopener noreferrer">PR #21430</a></li>
+<li>Emit <code>x-litellm-overhead-duration-ms</code> header for streaming requests - <a href="https://github.com/BerriAI/litellm/pull/22027" target="_blank" rel="noopener noreferrer">PR #22027</a></li>
+</ul>
+<p><strong>Database &amp; Redis</strong></p>
+<ul>
+<li>Batch 11 <code>create_task()</code> calls into 1 in <code>update_database()</code> - <a href="https://github.com/BerriAI/litellm/pull/22028" target="_blank" rel="noopener noreferrer">PR #22028</a></li>
+<li>Redis pipeline spend updates for batched writes - <a href="https://github.com/BerriAI/litellm/pull/22044" target="_blank" rel="noopener noreferrer">PR #22044</a></li>
+<li>Recover from prisma-query-engine zombie process - <a href="https://github.com/BerriAI/litellm/pull/21899" target="_blank" rel="noopener noreferrer">PR #21899</a></li>
+<li>Optimize old spendlog deletion cron job - <a href="https://github.com/BerriAI/litellm/pull/21930" target="_blank" rel="noopener noreferrer">PR #21930</a></li>
+</ul>
+<p><strong>Router &amp; caching</strong></p>
+<ul>
+<li>Add cache invalidation for <code>_cached_get_model_group_info</code> - <a href="https://github.com/BerriAI/litellm/pull/20376" target="_blank" rel="noopener noreferrer">PR #20376</a></li>
+<li>Remove cache eviction close that kills in-use httpx clients - <a href="https://github.com/BerriAI/litellm/pull/22247" target="_blank" rel="noopener noreferrer">PR #22247</a></li>
+<li>Store background task references in <code>LLMClientCache._remove_key</code> to prevent unawaited coroutine warnings - <a href="https://github.com/BerriAI/litellm/pull/22143" target="_blank" rel="noopener noreferrer">PR #22143</a></li>
+<li>Fix <code>ensure_arrival_time</code> set before calculating queue time - <a href="https://github.com/BerriAI/litellm/pull/21918" target="_blank" rel="noopener noreferrer">PR #21918</a></li>
+</ul>
+<p><strong>Connection management</strong></p>
+<ul>
+<li>Only set <code>enable_cleanup_closed</code> on aiohttp when required - <a href="https://github.com/BerriAI/litellm/pull/21897" target="_blank" rel="noopener noreferrer">PR #21897</a></li>
+<li>Prometheus child_exit cleanup for gunicorn workers - <a href="https://github.com/BerriAI/litellm/pull/22324" target="_blank" rel="noopener noreferrer">PR #22324</a></li>
+<li>Prometheus multiprocess cleanup - <a href="https://github.com/BerriAI/litellm/pull/22221" target="_blank" rel="noopener noreferrer">PR #22221</a></li>
+<li>Limit concurrent health checks with <code>health_check_concurrency</code> - <a href="https://github.com/BerriAI/litellm/pull/20584" target="_blank" rel="noopener noreferrer">PR #20584</a></li>
+<li>Isolate <code>get_config</code> failures from model sync loop - <a href="https://github.com/BerriAI/litellm/pull/22224" target="_blank" rel="noopener noreferrer">PR #22224</a></li>
+</ul>
+<p><strong>Other</strong></p>
+<ul>
+<li>Semantic cache: support configurable vector dimensions - <a href="https://github.com/BerriAI/litellm/pull/21649" target="_blank" rel="noopener noreferrer">PR #21649</a></li>
+<li>Honor <code>MAX_STRING_LENGTH_PROMPT_IN_DB</code> from config env vars - <a href="https://github.com/BerriAI/litellm/pull/22106" target="_blank" rel="noopener noreferrer">PR #22106</a></li>
+<li>Enhance <code>MidStreamFallbackError</code> to preserve original status code and attributes - <a href="https://github.com/BerriAI/litellm/pull/22225" target="_blank" rel="noopener noreferrer">PR #22225</a></li>
+<li>Network mock utility for testing - <a href="https://github.com/BerriAI/litellm/pull/21942" target="_blank" rel="noopener noreferrer">PR #21942</a></li>
+<li>Add missing return type annotations to iterator protocol methods in streaming_handler - <a href="https://github.com/BerriAI/litellm/pull/21750" target="_blank" rel="noopener noreferrer">PR #21750</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="security">Security<a href="#security" class="hash-link" aria-label="Direct link to Security" title="Direct link to Security">​</a></h2>
+<ul>
+<li>Fix critical/high CVEs in OS-level libs and NPM transitive dependencies - <a href="https://github.com/BerriAI/litellm/pull/22008" target="_blank" rel="noopener noreferrer">PR #22008</a></li>
+<li>Fix unauthenticated RCE and sandbox escape in custom code guardrail - <a href="https://github.com/BerriAI/litellm/pull/22095" target="_blank" rel="noopener noreferrer">PR #22095</a></li>
+<li>Remove hardcoded base64 string flagged by secret scanner - <a href="https://github.com/BerriAI/litellm/pull/22125" target="_blank" rel="noopener noreferrer">PR #22125</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="documentation-updates">Documentation Updates<a href="#documentation-updates" class="hash-link" aria-label="Direct link to Documentation Updates" title="Direct link to Documentation Updates">​</a></h2>
+<ul>
+<li>Add OpenAI Agents SDK tutorial with LiteLLM Proxy - <a href="https://github.com/BerriAI/litellm/pull/21221" target="_blank" rel="noopener noreferrer">PR #21221</a></li>
+<li>Add OpenClaw integration tutorial - <a href="https://github.com/BerriAI/litellm/pull/21605" target="_blank" rel="noopener noreferrer">PR #21605</a></li>
+<li>Add Google GenAI SDK tutorial (JS &amp; Python) - <a href="https://github.com/BerriAI/litellm/pull/21885" target="_blank" rel="noopener noreferrer">PR #21885</a></li>
+<li>Add Gollem Go agent framework cookbook example - <a href="https://github.com/BerriAI/litellm/pull/21747" target="_blank" rel="noopener noreferrer">PR #21747</a></li>
+<li>Update AssemblyAI docs with Universal-3 Pro, Speech Understanding, and LLM Gateway - <a href="https://github.com/BerriAI/litellm/pull/21130" target="_blank" rel="noopener noreferrer">PR #21130</a></li>
+<li>Add <code>store_model_in_db</code> release docs - <a href="https://github.com/BerriAI/litellm/pull/21863" target="_blank" rel="noopener noreferrer">PR #21863</a></li>
+<li>Add Credential Usage Tracking docs - <a href="https://github.com/BerriAI/litellm/pull/22112" target="_blank" rel="noopener noreferrer">PR #22112</a></li>
+<li>Add proxy request tags docs - <a href="https://github.com/BerriAI/litellm/pull/22129" target="_blank" rel="noopener noreferrer">PR #22129</a></li>
+<li>Add trailing slash to <code>/mcp</code> endpoint URLs - <a href="https://github.com/BerriAI/litellm/pull/20509" target="_blank" rel="noopener noreferrer">PR #20509</a></li>
+<li>Add pre-PR checklist to UI contributing guide - <a href="https://github.com/BerriAI/litellm/pull/21886" target="_blank" rel="noopener noreferrer">PR #21886</a></li>
+<li>Replace Azure OpenAI key with mock key in docs - <a href="https://github.com/BerriAI/litellm/pull/21997" target="_blank" rel="noopener noreferrer">PR #21997</a></li>
+<li>Add performance &amp; reliability section to v1.81.14 release notes - <a href="https://github.com/BerriAI/litellm/pull/21950" target="_blank" rel="noopener noreferrer">PR #21950</a></li>
+<li>Update v1.81.12-stable release notes to point to stable.1 - <a href="https://github.com/BerriAI/litellm/pull/22036" target="_blank" rel="noopener noreferrer">PR #22036</a></li>
+<li>Add security vulnerability scan report to v1.81.14 release notes - <a href="https://github.com/BerriAI/litellm/pull/22385" target="_blank" rel="noopener noreferrer">PR #22385</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="new-contributors">New Contributors<a href="#new-contributors" class="hash-link" aria-label="Direct link to New Contributors" title="Direct link to New Contributors">​</a></h2>
+<ul>
+<li>@janfrederickk made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21660" target="_blank" rel="noopener noreferrer">PR #21660</a></li>
+<li>@hztBUAA made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21656" target="_blank" rel="noopener noreferrer">PR #21656</a></li>
+<li>@LeeJuOh made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21754" target="_blank" rel="noopener noreferrer">PR #21754</a></li>
+<li>@WhoisMonesh made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21750" target="_blank" rel="noopener noreferrer">PR #21750</a></li>
+<li>@trevorprater made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21747" target="_blank" rel="noopener noreferrer">PR #21747</a></li>
+<li>@edwiniac made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21870" target="_blank" rel="noopener noreferrer">PR #21870</a></li>
+<li>@stakeswky made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21867" target="_blank" rel="noopener noreferrer">PR #21867</a></li>
+<li>@ta-stripe made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21701" target="_blank" rel="noopener noreferrer">PR #21701</a></li>
+<li>@ron-zhong made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21948" target="_blank" rel="noopener noreferrer">PR #21948</a></li>
+<li>@Arindam200 made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21221" target="_blank" rel="noopener noreferrer">PR #21221</a></li>
+<li>@Canvinus made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21964" target="_blank" rel="noopener noreferrer">PR #21964</a></li>
+<li>@nicolopignatelli made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21951" target="_blank" rel="noopener noreferrer">PR #21951</a></li>
+<li>@MarshHawk made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/20584" target="_blank" rel="noopener noreferrer">PR #20584</a></li>
+<li>@gavksingh made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/22106" target="_blank" rel="noopener noreferrer">PR #22106</a></li>
+<li>@roni-frantchi made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/22090" target="_blank" rel="noopener noreferrer">PR #22090</a></li>
+<li>@noahnistler made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/22133" target="_blank" rel="noopener noreferrer">PR #22133</a></li>
+<li>@dylan-duan-aai made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/21130" target="_blank" rel="noopener noreferrer">PR #21130</a></li>
+<li>@rasmi made their first contribution in <a href="https://github.com/BerriAI/litellm/pull/22322" target="_blank" rel="noopener noreferrer">PR #22322</a></li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="diff-summary">Diff Summary<a href="#diff-summary" class="hash-link" aria-label="Direct link to Diff Summary" title="Direct link to Diff Summary">​</a></h2>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="02282026">02/28/2026<a href="#02282026" class="hash-link" aria-label="Direct link to 02/28/2026" title="Direct link to 02/28/2026">​</a></h2>
+<ul>
+<li>New Models / Updated Models: 26</li>
+<li>LLM API Endpoints: 14</li>
+<li>Management Endpoints / UI: 38</li>
+<li>AI Integrations: 25</li>
+<li>Spend Tracking, Budgets and Rate Limiting: 10</li>
+<li>MCP Gateway: 8</li>
+<li>Performance / Loadbalancing / Reliability improvements: 22</li>
+<li>Security: 3</li>
+<li>Documentation Updates: 14</li>
+</ul>
+<hr>
+<h2 class="anchor anchorWithStickyNavbar_LWe7" id="full-changelog">Full Changelog<a href="#full-changelog" class="hash-link" aria-label="Direct link to Full Changelog" title="Direct link to Full Changelog">​</a></h2>
+<p><a href="https://github.com/BerriAI/litellm/compare/v1.81.14.rc.1...v1.82.0" target="_blank" rel="noopener noreferrer">v1.81.14.rc.1...v1.82.0</a></p></div></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/release_notes/v1.82.3/v1-82-3"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">v1.82.3</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/release_notes/v1.81.14/v1-81-14"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">v1.81.14</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_jeP5 theme-doc-toc-desktop"><div class="tocItemsContainer_yosJ thin-scrollbar"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#deploy-this-version" class="table-of-contents__link toc-highlight">Deploy this version</a></li><li><a href="#key-highlights" class="table-of-contents__link toc-highlight">Key Highlights</a></li><li><a href="#new-models--updated-models" class="table-of-contents__link toc-highlight">New Models / Updated Models</a><ul><li><a href="#bug-fixes" class="table-of-contents__link toc-highlight">Bug Fixes</a></li></ul></li><li><a href="#llm-api-endpoints" class="table-of-contents__link toc-highlight">LLM API Endpoints</a></li><li><a href="#management-endpoints--ui" class="table-of-contents__link toc-highlight">Management Endpoints / UI</a></li><li><a href="#ai-integrations" class="table-of-contents__link toc-highlight">AI Integrations</a><ul><li><a href="#logging" class="table-of-contents__link toc-highlight">Logging</a></li><li><a href="#guardrails" class="table-of-contents__link toc-highlight">Guardrails</a></li><li><a href="#prompt-management" class="table-of-contents__link toc-highlight">Prompt Management</a></li><li><a href="#secret-managers" class="table-of-contents__link toc-highlight">Secret Managers</a></li></ul></li><li><a href="#spend-tracking-budgets-and-rate-limiting" class="table-of-contents__link toc-highlight">Spend Tracking, Budgets and Rate Limiting</a></li><li><a href="#mcp-gateway" class="table-of-contents__link toc-highlight">MCP Gateway</a></li><li><a href="#performance--loadbalancing--reliability-improvements" class="table-of-contents__link toc-highlight">Performance / Loadbalancing / Reliability improvements</a></li><li><a href="#security" class="table-of-contents__link toc-highlight">Security</a></li><li><a href="#documentation-updates" class="table-of-contents__link toc-highlight">Documentation Updates</a></li><li><a href="#new-contributors" class="table-of-contents__link toc-highlight">New Contributors</a></li><li><a href="#diff-summary" class="table-of-contents__link toc-highlight">Diff Summary</a></li><li><a href="#02282026" class="table-of-contents__link toc-highlight">02/28/2026</a></li><li><a href="#full-changelog" class="table-of-contents__link toc-highlight">Full Changelog</a></li></ul></div><div class="promoCard_SGxZ"><div class="promoEmoji_Dg1q">🚅</div><div class="promoHeading_s_Ub">LiteLLM Enterprise</div><div class="promoDescription_qSAY">SSO/SAML, audit logs, spend tracking, multi-team management, and guardrails — built for production.</div><a class="promoButton_KLlx" href="/docs/enterprise">Learn more →</a></div></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://docs.litellm.ai/docs/" target="_blank" rel="noopener noreferrer" class="footer__link-item">Getting Started</a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Community</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://discord.com/invite/wuPM9dRgDw" target="_blank" rel="noopener noreferrer" class="footer__link-item">Discord<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li><li class="footer__item"><a href="https://twitter.com/LiteLLM" target="_blank" rel="noopener noreferrer" class="footer__link-item">Twitter<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div><div class="theme-layout-footer-column col footer__col"><div class="footer__title">More</div><ul class="footer__items clean-list"><li class="footer__item"><a href="https://github.com/BerriAI/litellm/" target="_blank" rel="noopener noreferrer" class="footer__link-item">GitHub<svg width="13.5" height="13.5" aria-hidden="true" class="iconExternalLink_nPIU"><use href="#theme-svg-external-link"></use></svg></a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 liteLLM</div></div></div></footer><div id="inkeep-shadowradix-:Rp:" style="display:contents"></div><span></span></div>
+</body>
+</html>

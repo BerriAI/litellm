@@ -1,0 +1,42 @@
+{
+  "id": "v1.76.1-stable/index",
+  "title": "v1.76.1-stable - Gemini 2.5 Flash Image",
+  "description": "Deploy this version",
+  "source": "@site/release_notes/v1.76.1-stable/index.md",
+  "sourceDirName": "v1.76.1-stable",
+  "slug": "/v1.76.1-stable/v1-76-1",
+  "permalink": "/release_notes/v1.76.1-stable/v1-76-1",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "v1.76.1-stable - Gemini 2.5 Flash Image",
+    "slug": "v1-76-1",
+    "date": "2025-08-30T10:00:00.000Z",
+    "authors": [
+      {
+        "name": "Krrish Dholakia",
+        "title": "CEO, LiteLLM",
+        "url": "https://www.linkedin.com/in/krish-d/",
+        "image_url": "https://pbs.twimg.com/profile_images/1298587542745358340/DZv3Oj-h_400x400.jpg"
+      },
+      {
+        "name": "Ishaan Jaffer",
+        "title": "CTO, LiteLLM",
+        "url": "https://www.linkedin.com/in/reffajnaahsi/",
+        "image_url": "https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg"
+      }
+    ],
+    "hide_table_of_contents": false
+  },
+  "sidebar": "releaseNotesSidebar",
+  "previous": {
+    "title": "v1.76.3-stable",
+    "permalink": "/release_notes/v1.76.3-stable/v1-76-3"
+  },
+  "next": {
+    "title": "v1.76.0-stable",
+    "permalink": "/release_notes/v1.76.0-stable/v1-76-0"
+  }
+}

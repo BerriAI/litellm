@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex",
+  "title": "VertexAI [Gemini]",
+  "description": "Overview",
+  "source": "@site/docs/providers/vertex.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex",
+  "permalink": "/docs/providers/vertex",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure AI Search - Vector Store (Passthrough API)",
+    "permalink": "/docs/providers/azure_ai/azure_ai_vector_stores_passthrough"
+  },
+  "next": {
+    "title": "Vertex AI Video Generation (Veo)",
+    "permalink": "/docs/providers/vertex_ai/videos"
+  }
+}

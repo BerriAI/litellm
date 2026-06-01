@@ -1,0 +1,23 @@
+{
+  "id": "fine_tuning",
+  "title": "/fine_tuning",
+  "description": "This is an Enterprise only endpoint Get Started with Enterprise here",
+  "source": "@site/docs/fine_tuning.md",
+  "sourceDirName": ".",
+  "slug": "/fine_tuning",
+  "permalink": "/docs/fine_tuning",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] LiteLLM Managed Files",
+    "permalink": "/docs/proxy/litellm_managed_files"
+  },
+  "next": {
+    "title": "✨ [BETA] LiteLLM Managed Files with Finetuning",
+    "permalink": "/docs/proxy/managed_finetuning"
+  }
+}

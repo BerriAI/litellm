@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/policy_templates",
+  "title": "Policy Templates",
+  "description": "Policy templates provide pre-configured guardrail policies that you can use as a starting point for your organization. Instead of manually creating policies and guardrails, you can select a template that matches your use case and deploy it with one click.",
+  "source": "@site/docs/proxy/guardrails/policy_templates.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/policy_templates",
+  "permalink": "/docs/proxy/guardrails/policy_templates",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Policy Flow Builder",
+    "permalink": "/docs/proxy/guardrails/policy_flow_builder"
+  },
+  "next": {
+    "title": "Tag-Based Policy Attachments",
+    "permalink": "/docs/proxy/guardrails/policy_tags"
+  }
+}

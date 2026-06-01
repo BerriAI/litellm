@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/guardrail_load_balancing",
+  "title": "Guardrail Load Balancing",
+  "description": "Load balance guardrail requests across multiple guardrail deployments. This is useful when you have rate limits on guardrail providers (e.g., AWS Bedrock Guardrails) and want to distribute requests across multiple accounts or regions.",
+  "source": "@site/docs/proxy/guardrails/guardrail_load_balancing.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/guardrail_load_balancing",
+  "permalink": "/docs/proxy/guardrails/guardrail_load_balancing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Team Bring-Your-Own Guardrails",
+    "permalink": "/docs/proxy/guardrails/team_based_guardrails"
+  },
+  "next": {
+    "title": "Guardrail Testing Playground",
+    "permalink": "/docs/proxy/guardrails/test_playground"
+  }
+}

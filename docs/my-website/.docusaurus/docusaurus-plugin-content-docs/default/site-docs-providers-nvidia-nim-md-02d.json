@@ -1,0 +1,23 @@
+{
+  "id": "providers/nvidia_nim",
+  "title": "Nvidia NIM",
+  "description": "https://docs.api.nvidia.com/nim/reference/",
+  "source": "@site/docs/providers/nvidia_nim.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/nvidia_nim",
+  "permalink": "/docs/providers/nvidia_nim",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Nscale (EU Sovereign)",
+    "permalink": "/docs/providers/nscale"
+  },
+  "next": {
+    "title": "Nvidia NIM - Rerank",
+    "permalink": "/docs/providers/nvidia_nim_rerank"
+  }
+}

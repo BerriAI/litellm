@@ -1,0 +1,14 @@
+{
+  "id": "proxy/sync_anthropic_beta_headers",
+  "title": "Auto Sync Anthropic Beta Headers",
+  "description": "Automatically keep your Anthropic beta headers configuration up to date without restarting your service. This allows you to support new Anthropic beta features across all providers without restarting your service.",
+  "source": "@site/docs/proxy/sync_anthropic_beta_headers.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/sync_anthropic_beta_headers",
+  "permalink": "/docs/proxy/sync_anthropic_beta_headers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

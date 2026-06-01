@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/test_playground",
+  "title": "Guardrail Testing Playground",
+  "description": "Test and compare multiple guardrails in real-time with an interactive playground interface.",
+  "source": "@site/docs/proxy/guardrails/test_playground.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/test_playground",
+  "permalink": "/docs/proxy/guardrails/test_playground",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Guardrail Load Balancing",
+    "permalink": "/docs/proxy/guardrails/guardrail_load_balancing"
+  },
+  "next": {
+    "title": "LiteLLM Content Filter (Built-in Guardrails)",
+    "permalink": "/docs/proxy/guardrails/litellm_content_filter"
+  }
+}

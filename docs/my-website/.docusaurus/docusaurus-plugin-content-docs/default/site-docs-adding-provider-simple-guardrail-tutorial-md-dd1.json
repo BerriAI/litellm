@@ -1,0 +1,23 @@
+{
+  "id": "adding_provider/simple_guardrail_tutorial",
+  "title": "Adding a New Guardrail Integration",
+  "description": "You're going to create a class that checks text before it goes to the LLM or after it comes back. If it violates your rules, you block it.",
+  "source": "@site/docs/adding_provider/simple_guardrail_tutorial.md",
+  "sourceDirName": "adding_provider",
+  "slug": "/adding_provider/simple_guardrail_tutorial",
+  "permalink": "/docs/adding_provider/simple_guardrail_tutorial",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] Generic Guardrail API - Integrate Without a PR",
+    "permalink": "/docs/adding_provider/generic_guardrail_api"
+  },
+  "next": {
+    "title": "Adding Guardrail Support to Endpoints",
+    "permalink": "/docs/adding_provider/adding_guardrail_support"
+  }
+}

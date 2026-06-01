@@ -1,0 +1,23 @@
+{
+  "id": "proxy/clientside_auth",
+  "title": "Clientside LLM Credentials",
+  "description": "Pass User LLM API Keys, Fallbacks",
+  "source": "@site/docs/proxy/clientside_auth.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/clientside_auth",
+  "permalink": "/docs/proxy/clientside_auth",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl examples",
+    "permalink": "/docs/proxy/user_keys"
+  },
+  "next": {
+    "title": "Request Headers",
+    "permalink": "/docs/proxy/request_headers"
+  }
+}

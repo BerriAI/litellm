@@ -1,0 +1,14 @@
+{
+  "id": "caching/local_caching",
+  "title": "LiteLLM - Local Caching",
+  "description": "Caching completion() and embedding() calls when switched on",
+  "source": "@site/docs/caching/local_caching.md",
+  "sourceDirName": "caching",
+  "slug": "/caching/local_caching",
+  "permalink": "/docs/caching/local_caching",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

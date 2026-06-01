@@ -1,0 +1,23 @@
+{
+  "id": "mcp_public_internet",
+  "title": "Exposing MCPs on the Public Internet",
+  "description": "Control which MCP servers are visible to external callers (e.g., ChatGPT, Claude Desktop) vs. internal-only callers. This is useful when you want a subset of your MCP servers available publicly while keeping sensitive servers restricted to your private network.",
+  "source": "@site/docs/mcp_public_internet.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_public_internet",
+  "permalink": "/docs/mcp_public_internet",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Zero Trust Auth (JWT Signer)",
+    "permalink": "/docs/mcp_zero_trust"
+  },
+  "next": {
+    "title": "MCP Semantic Tool Filter",
+    "permalink": "/docs/mcp_semantic_filter"
+  }
+}

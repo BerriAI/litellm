@@ -1,0 +1,23 @@
+{
+  "id": "langchain/langchain",
+  "title": "Using ChatLiteLLM() - Langchain",
+  "description": "Pre-Requisites",
+  "source": "@site/docs/langchain/langchain.md",
+  "sourceDirName": "langchain",
+  "slug": "/langchain/",
+  "permalink": "/docs/langchain/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Instructor with LiteLLM",
+    "permalink": "/docs/tutorials/instructor"
+  },
+  "next": {
+    "title": "OpenAI Agents SDK",
+    "permalink": "/docs/projects/openai-agents"
+  }
+}

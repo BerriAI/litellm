@@ -1,0 +1,23 @@
+{
+  "id": "observability/custom_callback",
+  "title": "Custom Callbacks",
+  "description": "For PROXY Go Here",
+  "source": "@site/docs/observability/custom_callback.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/custom_callback",
+  "permalink": "/docs/observability/custom_callback",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "CloudZero Integration",
+    "permalink": "/docs/observability/cloudzero"
+  },
+  "next": {
+    "title": "DataDog",
+    "permalink": "/docs/observability/datadog"
+  }
+}

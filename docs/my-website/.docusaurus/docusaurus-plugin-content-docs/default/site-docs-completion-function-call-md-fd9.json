@@ -1,0 +1,23 @@
+{
+  "id": "completion/function_call",
+  "title": "Function Calling",
+  "description": "Checking if a model supports function calling",
+  "source": "@site/docs/completion/function_call.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/function_call",
+  "permalink": "/docs/completion/function_call",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Tool Calling",
+    "permalink": "/docs/guides/tools_integrations"
+  },
+  "next": {
+    "title": "Web Search",
+    "permalink": "/docs/completion/web_search"
+  }
+}

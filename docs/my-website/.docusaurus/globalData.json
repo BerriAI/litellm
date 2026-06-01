@@ -1,0 +1,3881 @@
+{
+  "docusaurus-plugin-content-docs": {
+    "default": {
+      "path": "/docs",
+      "versions": [
+        {
+          "name": "current",
+          "label": "Next",
+          "isLast": true,
+          "path": "/docs",
+          "mainDocId": "index",
+          "docs": [
+            {
+              "id": "a2a",
+              "path": "/docs/a2a",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "a2a_agent_headers",
+              "path": "/docs/a2a_agent_headers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "a2a_agent_permissions",
+              "path": "/docs/a2a_agent_permissions",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "a2a_cost_tracking",
+              "path": "/docs/a2a_cost_tracking",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "a2a_invoking_agents",
+              "path": "/docs/a2a_invoking_agents",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "a2a_iteration_budgets",
+              "path": "/docs/a2a_iteration_budgets",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "adding_provider/adding_guardrail_support",
+              "path": "/docs/adding_provider/adding_guardrail_support",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "adding_provider/directory_structure",
+              "path": "/docs/adding_provider/directory_structure",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "adding_provider/generic_guardrail_api",
+              "path": "/docs/adding_provider/generic_guardrail_api",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "adding_provider/generic_prompt_management_api",
+              "path": "/docs/adding_provider/generic_prompt_management_api",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "adding_provider/new_rerank_provider",
+              "path": "/docs/adding_provider/new_rerank_provider",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "adding_provider/simple_guardrail_tutorial",
+              "path": "/docs/adding_provider/simple_guardrail_tutorial",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "aiohttp_benchmarks",
+              "path": "/docs/aiohttp_benchmarks"
+            },
+            {
+              "id": "anthropic_count_tokens",
+              "path": "/docs/anthropic_count_tokens",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "anthropic_unified/index",
+              "path": "/docs/anthropic_unified/",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "anthropic_unified/messages_to_responses_mapping",
+              "path": "/docs/anthropic_unified/messages_to_responses_mapping",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "anthropic_unified/structured_output",
+              "path": "/docs/anthropic_unified/structured_output",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "apply_guardrail",
+              "path": "/docs/apply_guardrail",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "assistants",
+              "path": "/docs/assistants",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "audio_transcription",
+              "path": "/docs/audio_transcription",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "batches",
+              "path": "/docs/batches",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "bedrock_converse",
+              "path": "/docs/bedrock_converse",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "bedrock_invoke",
+              "path": "/docs/bedrock_invoke",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "benchmarks",
+              "path": "/docs/benchmarks",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "budget_manager",
+              "path": "/docs/budget_manager",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "caching/all_caches",
+              "path": "/docs/caching/all_caches",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "caching/caching_api",
+              "path": "/docs/caching/caching_api"
+            },
+            {
+              "id": "caching/local_caching",
+              "path": "/docs/caching/local_caching"
+            },
+            {
+              "id": "completion/audio",
+              "path": "/docs/completion/audio",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/batching",
+              "path": "/docs/completion/batching",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/computer_use",
+              "path": "/docs/completion/computer_use",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/document_understanding",
+              "path": "/docs/completion/document_understanding",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/drop_params",
+              "path": "/docs/completion/drop_params",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/function_call",
+              "path": "/docs/completion/function_call",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/http_handler_config",
+              "path": "/docs/completion/http_handler_config",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "completion/image_generation_chat",
+              "path": "/docs/completion/image_generation_chat",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/input",
+              "path": "/docs/completion/input",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "completion/json_mode",
+              "path": "/docs/completion/json_mode",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/knowledgebase",
+              "path": "/docs/completion/knowledgebase",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/message_sanitization",
+              "path": "/docs/completion/message_sanitization",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/message_trimming",
+              "path": "/docs/completion/message_trimming",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/mock_requests",
+              "path": "/docs/completion/mock_requests",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/model_alias",
+              "path": "/docs/completion/model_alias",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/multiple_deployments",
+              "path": "/docs/completion/multiple_deployments"
+            },
+            {
+              "id": "completion/output",
+              "path": "/docs/completion/output",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "completion/predict_outputs",
+              "path": "/docs/completion/predict_outputs",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/prefix",
+              "path": "/docs/completion/prefix",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/prompt_caching",
+              "path": "/docs/completion/prompt_caching",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/prompt_formatting",
+              "path": "/docs/completion/prompt_formatting",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/provider_specific_params",
+              "path": "/docs/completion/provider_specific_params",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/reliable_completions",
+              "path": "/docs/completion/reliable_completions",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/shared_session",
+              "path": "/docs/completion/shared_session"
+            },
+            {
+              "id": "completion/stream",
+              "path": "/docs/completion/stream",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/token_usage",
+              "path": "/docs/completion/token_usage",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "completion/usage",
+              "path": "/docs/completion/usage",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "completion/vision",
+              "path": "/docs/completion/vision",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/web_fetch",
+              "path": "/docs/completion/web_fetch",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "completion/web_search",
+              "path": "/docs/completion/web_search",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "contact",
+              "path": "/docs/contact"
+            },
+            {
+              "id": "container_files",
+              "path": "/docs/container_files",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "containers",
+              "path": "/docs/containers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "contribute_integration/custom_webhook_api",
+              "path": "/docs/contribute_integration/custom_webhook_api",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "contributing",
+              "path": "/docs/contributing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "contributing/adding_openai_compatible_providers",
+              "path": "/docs/contributing/adding_openai_compatible_providers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "count_tokens",
+              "path": "/docs/count_tokens"
+            },
+            {
+              "id": "data_retention",
+              "path": "/docs/data_retention",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "data_security",
+              "path": "/docs/data_security",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "debugging/hosted_debugging",
+              "path": "/docs/debugging/hosted_debugging"
+            },
+            {
+              "id": "debugging/local_debugging",
+              "path": "/docs/debugging/local_debugging"
+            },
+            {
+              "id": "default_code_snippet",
+              "path": "/docs/default_code_snippet",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "embedding/async_embedding",
+              "path": "/docs/embedding/async_embedding"
+            },
+            {
+              "id": "embedding/moderation",
+              "path": "/docs/embedding/moderation"
+            },
+            {
+              "id": "embedding/supported_embedding",
+              "path": "/docs/embedding/supported_embedding",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "enterprise",
+              "path": "/docs/enterprise"
+            },
+            {
+              "id": "evals_api",
+              "path": "/docs/evals_api",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "exception_mapping",
+              "path": "/docs/exception_mapping",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "extras/code_quality",
+              "path": "/docs/extras/code_quality",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "extras/contributing",
+              "path": "/docs/extras/contributing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "extras/contributing_code",
+              "path": "/docs/extras/contributing_code",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "extras/creating_adapters",
+              "path": "/docs/extras/creating_adapters",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "extras/gemini_img_migration",
+              "path": "/docs/extras/gemini_img_migration"
+            },
+            {
+              "id": "files_endpoints",
+              "path": "/docs/files_endpoints",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "fine_tuning",
+              "path": "/docs/fine_tuning",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "generateContent",
+              "path": "/docs/generateContent",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "guides/code_interpreter",
+              "path": "/docs/guides/code_interpreter",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "guides/finetuned_models",
+              "path": "/docs/guides/finetuned_models",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "guides/index",
+              "path": "/docs/guides/",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "guides/security_settings",
+              "path": "/docs/guides/security_settings",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "image_edits",
+              "path": "/docs/image_edits",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "image_generation",
+              "path": "/docs/image_generation",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "image_variations",
+              "path": "/docs/image_variations",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "index",
+              "path": "/docs/",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "integrations/community",
+              "path": "/docs/integrations/community",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "integrations/index",
+              "path": "/docs/integrations/",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "integrations/letta",
+              "path": "/docs/integrations/letta",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "integrations/observability_index",
+              "path": "/docs/integrations/observability_integrations",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "integrations/websearch_interception",
+              "path": "/docs/integrations/websearch_interception",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "interactions",
+              "path": "/docs/interactions",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "langchain/langchain",
+              "path": "/docs/langchain/",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "learn/gateway_quickstart",
+              "path": "/docs/learn/gateway_quickstart",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "learn/index",
+              "path": "/docs/learn",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "learn/sdk_quickstart",
+              "path": "/docs/learn/sdk_quickstart",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "load_test",
+              "path": "/docs/load_test"
+            },
+            {
+              "id": "load_test_advanced",
+              "path": "/docs/load_test_advanced",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "load_test_rpm",
+              "path": "/docs/load_test_rpm",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "load_test_sdk",
+              "path": "/docs/load_test_sdk",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp",
+              "path": "/docs/mcp",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_aws_sigv4",
+              "path": "/docs/mcp_aws_sigv4",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_control",
+              "path": "/docs/mcp_control",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_cost",
+              "path": "/docs/mcp_cost",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_guardrail",
+              "path": "/docs/mcp_guardrail",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_oauth",
+              "path": "/docs/mcp_oauth",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_openapi",
+              "path": "/docs/mcp_openapi",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_public_internet",
+              "path": "/docs/mcp_public_internet",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_semantic_filter",
+              "path": "/docs/mcp_semantic_filter",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_toolsets",
+              "path": "/docs/mcp_toolsets",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_troubleshoot",
+              "path": "/docs/mcp_troubleshoot",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_usage",
+              "path": "/docs/mcp_usage",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "mcp_zero_trust",
+              "path": "/docs/mcp_zero_trust",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "migration",
+              "path": "/docs/migration",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "migration_policy",
+              "path": "/docs/migration_policy",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "moderation",
+              "path": "/docs/moderation",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "observability/agentops_integration",
+              "path": "/docs/observability/agentops_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/argilla",
+              "path": "/docs/observability/argilla",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/arize_integration",
+              "path": "/docs/observability/arize_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/athina_integration",
+              "path": "/docs/observability/athina_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/azure_sentinel",
+              "path": "/docs/observability/azure_sentinel",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/braintrust",
+              "path": "/docs/observability/braintrust",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/callbacks",
+              "path": "/docs/observability/callbacks",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/cloudzero",
+              "path": "/docs/observability/cloudzero",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/custom_callback",
+              "path": "/docs/observability/custom_callback",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/datadog",
+              "path": "/docs/observability/datadog",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/deepeval_integration",
+              "path": "/docs/observability/deepeval_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/focus",
+              "path": "/docs/observability/focus",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/gcs_bucket_integration",
+              "path": "/docs/observability/gcs_bucket_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/generic_api",
+              "path": "/docs/observability/generic_api",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/greenscale_integration",
+              "path": "/docs/observability/greenscale_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/helicone_integration",
+              "path": "/docs/observability/helicone_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/humanloop",
+              "path": "/docs/observability/humanloop",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/lago",
+              "path": "/docs/observability/lago",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/langfuse_integration",
+              "path": "/docs/observability/langfuse_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/langfuse_otel_integration",
+              "path": "/docs/observability/langfuse_otel_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/langsmith_integration",
+              "path": "/docs/observability/langsmith_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/langtrace_integration",
+              "path": "/docs/observability/langtrace_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/levo_integration",
+              "path": "/docs/observability/levo_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/literalai_integration",
+              "path": "/docs/observability/literalai_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/logfire_integration",
+              "path": "/docs/observability/logfire_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/lunary_integration",
+              "path": "/docs/observability/lunary_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/mlflow",
+              "path": "/docs/observability/mlflow",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/openmeter",
+              "path": "/docs/observability/openmeter",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/opentelemetry_integration",
+              "path": "/docs/observability/opentelemetry_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/opik_integration",
+              "path": "/docs/observability/opik_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/phoenix_integration",
+              "path": "/docs/observability/phoenix_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/posthog_integration",
+              "path": "/docs/observability/posthog_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/promptlayer_integration",
+              "path": "/docs/observability/promptlayer_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/qualifire_integration",
+              "path": "/docs/observability/qualifire_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/raw_request_response",
+              "path": "/docs/observability/raw_request_response",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/scrub_data",
+              "path": "/docs/observability/scrub_data",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/sentry",
+              "path": "/docs/observability/sentry",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/signoz",
+              "path": "/docs/observability/signoz",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/slack_integration",
+              "path": "/docs/observability/slack_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/sumologic_integration",
+              "path": "/docs/observability/sumologic_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/supabase_integration",
+              "path": "/docs/observability/supabase_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/telemetry",
+              "path": "/docs/observability/telemetry",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/vantage",
+              "path": "/docs/observability/vantage",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "observability/wandb_integration",
+              "path": "/docs/observability/wandb_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "ocr",
+              "path": "/docs/ocr",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "oidc",
+              "path": "/docs/oidc",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "old_guardrails",
+              "path": "/docs/old_guardrails"
+            },
+            {
+              "id": "pass_through/anthropic_completion",
+              "path": "/docs/pass_through/anthropic_completion",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/assembly_ai",
+              "path": "/docs/pass_through/assembly_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/azure_passthrough",
+              "path": "/docs/pass_through/azure_passthrough",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/bedrock",
+              "path": "/docs/pass_through/bedrock",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/cohere",
+              "path": "/docs/pass_through/cohere",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/cursor",
+              "path": "/docs/pass_through/cursor",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/google_ai_studio",
+              "path": "/docs/pass_through/google_ai_studio",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/intro",
+              "path": "/docs/pass_through/intro",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/langfuse",
+              "path": "/docs/pass_through/langfuse",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/mistral",
+              "path": "/docs/pass_through/mistral",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/openai_passthrough",
+              "path": "/docs/pass_through/openai_passthrough",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/vertex_ai",
+              "path": "/docs/pass_through/vertex_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/vertex_ai_live_websocket",
+              "path": "/docs/pass_through/vertex_ai_live_websocket",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/vertex_ai_search_datastores",
+              "path": "/docs/pass_through/vertex_ai_search_datastores",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "pass_through/vllm",
+              "path": "/docs/pass_through/vllm",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects",
+              "path": "/docs/projects"
+            },
+            {
+              "id": "projects/Agent Lightning",
+              "path": "/docs/projects/Agent Lightning",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Codium PR Agent",
+              "path": "/docs/projects/Codium PR Agent",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/dbally",
+              "path": "/docs/projects/dbally",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Docq.AI",
+              "path": "/docs/projects/Docq.AI",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Elroy",
+              "path": "/docs/projects/Elroy",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/FastREPL",
+              "path": "/docs/projects/FastREPL",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Google ADK",
+              "path": "/docs/projects/Google ADK",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/GPT Migrate",
+              "path": "/docs/projects/GPT Migrate"
+            },
+            {
+              "id": "projects/GPTLocalhost",
+              "path": "/docs/projects/GPTLocalhost",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/GraphRAG",
+              "path": "/docs/projects/GraphRAG",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Harbor",
+              "path": "/docs/projects/Harbor",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/HolmesGPT",
+              "path": "/docs/projects/HolmesGPT",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Langstream",
+              "path": "/docs/projects/Langstream",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/LiteLLM Proxy",
+              "path": "/docs/projects/LiteLLM Proxy"
+            },
+            {
+              "id": "projects/llm_cord",
+              "path": "/docs/projects/llm_cord",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/mini-swe-agent",
+              "path": "/docs/projects/mini-swe-agent",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/openai-agents",
+              "path": "/docs/projects/openai-agents",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/OpenInterpreter",
+              "path": "/docs/projects/OpenInterpreter",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Otter",
+              "path": "/docs/projects/Otter",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/PDL",
+              "path": "/docs/projects/PDL",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/pgai",
+              "path": "/docs/projects/pgai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Prompt2Model",
+              "path": "/docs/projects/Prompt2Model",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/PROMPTMETHEUS",
+              "path": "/docs/projects/PROMPTMETHEUS",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Quivr",
+              "path": "/docs/projects/Quivr",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Railtracks",
+              "path": "/docs/projects/Railtracks",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/SalesGPT",
+              "path": "/docs/projects/SalesGPT",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/smolagents",
+              "path": "/docs/projects/smolagents",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/Softgen",
+              "path": "/docs/projects/Softgen",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "projects/YiVal",
+              "path": "/docs/projects/YiVal",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "prompt_management",
+              "path": "/docs/prompt_management",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "provider_registration/add_model_pricing",
+              "path": "/docs/provider_registration/add_model_pricing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "provider_registration/index",
+              "path": "/docs/provider_registration/",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/abliteration",
+              "path": "/docs/providers/abliteration",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/ai21",
+              "path": "/docs/providers/ai21",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/aiml",
+              "path": "/docs/providers/aiml",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/aleph_alpha",
+              "path": "/docs/providers/aleph_alpha",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/amazon_nova",
+              "path": "/docs/providers/amazon_nova",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/anthropic",
+              "path": "/docs/providers/anthropic",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/anthropic_effort",
+              "path": "/docs/providers/anthropic_effort"
+            },
+            {
+              "id": "providers/anthropic_programmatic_tool_calling",
+              "path": "/docs/providers/anthropic_programmatic_tool_calling"
+            },
+            {
+              "id": "providers/anthropic_tool_input_examples",
+              "path": "/docs/providers/anthropic_tool_input_examples"
+            },
+            {
+              "id": "providers/anthropic_tool_search",
+              "path": "/docs/providers/anthropic_tool_search"
+            },
+            {
+              "id": "providers/anyscale",
+              "path": "/docs/providers/anyscale",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/apertis",
+              "path": "/docs/providers/apertis",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/aws_polly",
+              "path": "/docs/providers/aws_polly",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/aws_sagemaker",
+              "path": "/docs/providers/aws_sagemaker",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ai",
+              "path": "/docs/providers/azure_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ai_agents",
+              "path": "/docs/providers/azure_ai_agents",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ai_img",
+              "path": "/docs/providers/azure_ai_img",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ai_img_edit",
+              "path": "/docs/providers/azure_ai_img_edit"
+            },
+            {
+              "id": "providers/azure_ai_speech",
+              "path": "/docs/providers/azure_ai_speech",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ai_vector_stores",
+              "path": "/docs/providers/azure_ai_vector_stores",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ai/azure_ai_vector_stores_passthrough",
+              "path": "/docs/providers/azure_ai/azure_ai_vector_stores_passthrough",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ai/azure_model_router",
+              "path": "/docs/providers/azure_ai/azure_model_router",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_document_intelligence",
+              "path": "/docs/providers/azure_document_intelligence",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure_ocr",
+              "path": "/docs/providers/azure_ocr",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure/azure",
+              "path": "/docs/providers/azure/",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure/azure_anthropic",
+              "path": "/docs/providers/azure/azure_anthropic"
+            },
+            {
+              "id": "providers/azure/azure_embedding",
+              "path": "/docs/providers/azure/azure_embedding",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure/azure_responses",
+              "path": "/docs/providers/azure/azure_responses",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure/azure_speech",
+              "path": "/docs/providers/azure/azure_speech",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/azure/videos",
+              "path": "/docs/providers/azure/videos",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/baseten",
+              "path": "/docs/providers/baseten",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock",
+              "path": "/docs/providers/bedrock",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_agentcore",
+              "path": "/docs/providers/bedrock_agentcore",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_agents",
+              "path": "/docs/providers/bedrock_agents",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_batches",
+              "path": "/docs/providers/bedrock_batches",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_embedding",
+              "path": "/docs/providers/bedrock_embedding",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_image_gen",
+              "path": "/docs/providers/bedrock_image_gen",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_imported",
+              "path": "/docs/providers/bedrock_imported",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_mantle",
+              "path": "/docs/providers/bedrock_mantle",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_realtime_with_audio",
+              "path": "/docs/providers/bedrock_realtime_with_audio",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_rerank",
+              "path": "/docs/providers/bedrock_rerank",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_vector_store",
+              "path": "/docs/providers/bedrock_vector_store",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bedrock_writer",
+              "path": "/docs/providers/bedrock_writer",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/black_forest_labs",
+              "path": "/docs/providers/black_forest_labs",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/black_forest_labs_img_edit",
+              "path": "/docs/providers/black_forest_labs_img_edit",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/bytez",
+              "path": "/docs/providers/bytez",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/cerebras",
+              "path": "/docs/providers/cerebras",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/chatgpt",
+              "path": "/docs/providers/chatgpt",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/chutes",
+              "path": "/docs/providers/chutes",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/clarifai",
+              "path": "/docs/providers/clarifai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/cloudflare_workers",
+              "path": "/docs/providers/cloudflare_workers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/codestral",
+              "path": "/docs/providers/codestral",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/cohere",
+              "path": "/docs/providers/cohere",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/cometapi",
+              "path": "/docs/providers/cometapi",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/compactifai",
+              "path": "/docs/providers/compactifai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/custom_llm_server",
+              "path": "/docs/providers/custom_llm_server",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/dashscope",
+              "path": "/docs/providers/dashscope",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/databricks",
+              "path": "/docs/providers/databricks",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/datarobot",
+              "path": "/docs/providers/datarobot",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/deepgram",
+              "path": "/docs/providers/deepgram",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/deepinfra",
+              "path": "/docs/providers/deepinfra",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/deepseek",
+              "path": "/docs/providers/deepseek",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/docker_model_runner",
+              "path": "/docs/providers/docker_model_runner",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/elevenlabs",
+              "path": "/docs/providers/elevenlabs",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/empower",
+              "path": "/docs/providers/empower"
+            },
+            {
+              "id": "providers/fal_ai",
+              "path": "/docs/providers/fal_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/featherless_ai",
+              "path": "/docs/providers/featherless_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/fireworks_ai",
+              "path": "/docs/providers/fireworks_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/friendliai",
+              "path": "/docs/providers/friendliai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/galadriel",
+              "path": "/docs/providers/galadriel",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/gemini",
+              "path": "/docs/providers/gemini",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/gemini_file_search",
+              "path": "/docs/providers/gemini_file_search"
+            },
+            {
+              "id": "providers/gemini/music",
+              "path": "/docs/providers/gemini/music",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/gemini/videos",
+              "path": "/docs/providers/gemini/videos",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/gigachat",
+              "path": "/docs/providers/gigachat"
+            },
+            {
+              "id": "providers/github",
+              "path": "/docs/providers/github",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/github_copilot",
+              "path": "/docs/providers/github_copilot",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/gmi",
+              "path": "/docs/providers/gmi",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/google_ai_studio/files",
+              "path": "/docs/providers/google_ai_studio/files",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/google_ai_studio/image_gen",
+              "path": "/docs/providers/google_ai_studio/image_gen",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/google_ai_studio/realtime",
+              "path": "/docs/providers/google_ai_studio/realtime",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/gradient_ai",
+              "path": "/docs/providers/gradient_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/groq",
+              "path": "/docs/providers/groq",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/helicone",
+              "path": "/docs/providers/helicone",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/heroku",
+              "path": "/docs/providers/heroku",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/huggingface",
+              "path": "/docs/providers/huggingface",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/huggingface_rerank",
+              "path": "/docs/providers/huggingface_rerank",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/hyperbolic",
+              "path": "/docs/providers/hyperbolic",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/infinity",
+              "path": "/docs/providers/infinity",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/jina_ai",
+              "path": "/docs/providers/jina_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/lambda_ai",
+              "path": "/docs/providers/lambda_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/langgraph",
+              "path": "/docs/providers/langgraph",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/lemonade",
+              "path": "/docs/providers/lemonade",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/litellm_proxy",
+              "path": "/docs/providers/litellm_proxy",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/llamafile",
+              "path": "/docs/providers/llamafile",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/llamagate",
+              "path": "/docs/providers/llamagate",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/lm_studio",
+              "path": "/docs/providers/lm_studio",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/manus",
+              "path": "/docs/providers/manus",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/meta_llama",
+              "path": "/docs/providers/meta_llama",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/milvus_vector_stores",
+              "path": "/docs/providers/milvus_vector_stores",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/minimax",
+              "path": "/docs/providers/minimax",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/mistral",
+              "path": "/docs/providers/mistral",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/moonshot",
+              "path": "/docs/providers/moonshot",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/morph",
+              "path": "/docs/providers/morph",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/nano-gpt",
+              "path": "/docs/providers/nano-gpt",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/nebius",
+              "path": "/docs/providers/nebius",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/nlp_cloud",
+              "path": "/docs/providers/nlp_cloud",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/novita",
+              "path": "/docs/providers/novita",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/nscale",
+              "path": "/docs/providers/nscale",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/nvidia_nim",
+              "path": "/docs/providers/nvidia_nim",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/nvidia_nim_rerank",
+              "path": "/docs/providers/nvidia_nim_rerank",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/oci",
+              "path": "/docs/providers/oci",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/ollama",
+              "path": "/docs/providers/ollama",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/openai",
+              "path": "/docs/providers/openai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/openai_compatible",
+              "path": "/docs/providers/openai_compatible",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/openai/responses_api",
+              "path": "/docs/providers/openai/responses_api",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/openai/text_to_speech",
+              "path": "/docs/providers/openai/text_to_speech",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/openai/videos",
+              "path": "/docs/providers/openai/videos",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/openrouter",
+              "path": "/docs/providers/openrouter",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/ovhcloud",
+              "path": "/docs/providers/ovhcloud",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/perplexity",
+              "path": "/docs/providers/perplexity",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/perplexity_embedding",
+              "path": "/docs/providers/perplexity_embedding",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/petals",
+              "path": "/docs/providers/petals",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/poe",
+              "path": "/docs/providers/poe",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/predibase",
+              "path": "/docs/providers/predibase",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/publicai",
+              "path": "/docs/providers/publicai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/pydantic_ai_agent",
+              "path": "/docs/providers/pydantic_ai_agent",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/ragflow",
+              "path": "/docs/providers/ragflow",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/ragflow_vector_store",
+              "path": "/docs/providers/ragflow_vector_store"
+            },
+            {
+              "id": "providers/recraft",
+              "path": "/docs/providers/recraft",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/replicate",
+              "path": "/docs/providers/replicate",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/runwayml/images",
+              "path": "/docs/providers/runwayml/images",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/runwayml/text-to-speech",
+              "path": "/docs/providers/runwayml/text-to-speech"
+            },
+            {
+              "id": "providers/runwayml/videos",
+              "path": "/docs/providers/runwayml/videos",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/salad_cloud",
+              "path": "/docs/providers/salad_cloud",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/sambanova",
+              "path": "/docs/providers/sambanova",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/sap",
+              "path": "/docs/providers/sap",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/sarvam",
+              "path": "/docs/providers/sarvam",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/scaleway",
+              "path": "/docs/providers/scaleway",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/snowflake",
+              "path": "/docs/providers/snowflake",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/stability",
+              "path": "/docs/providers/stability",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/synthetic",
+              "path": "/docs/providers/synthetic",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/text_completion_openai",
+              "path": "/docs/providers/text_completion_openai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/togetherai",
+              "path": "/docs/providers/togetherai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/topaz",
+              "path": "/docs/providers/topaz",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/triton-inference-server",
+              "path": "/docs/providers/triton-inference-server",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/v0",
+              "path": "/docs/providers/v0",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vercel_ai_gateway",
+              "path": "/docs/providers/vercel_ai_gateway",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex",
+              "path": "/docs/providers/vertex",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_ai_agent_engine",
+              "path": "/docs/providers/vertex_ai_agent_engine",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_ai/videos",
+              "path": "/docs/providers/vertex_ai/videos",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_batch",
+              "path": "/docs/providers/vertex_batch",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_embedding",
+              "path": "/docs/providers/vertex_embedding",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_image",
+              "path": "/docs/providers/vertex_image",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_ocr",
+              "path": "/docs/providers/vertex_ocr",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_partner",
+              "path": "/docs/providers/vertex_partner",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_realtime",
+              "path": "/docs/providers/vertex_realtime",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_self_deployed",
+              "path": "/docs/providers/vertex_self_deployed",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vertex_speech",
+              "path": "/docs/providers/vertex_speech",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vllm",
+              "path": "/docs/providers/vllm",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/vllm_batches",
+              "path": "/docs/providers/vllm_batches",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/volcano",
+              "path": "/docs/providers/volcano",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/voyage",
+              "path": "/docs/providers/voyage",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/wandb_inference",
+              "path": "/docs/providers/wandb_inference",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/watsonx/audio_transcription",
+              "path": "/docs/providers/watsonx/audio_transcription",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/watsonx/index",
+              "path": "/docs/providers/watsonx/",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/watsonx/rerank",
+              "path": "/docs/providers/watsonx/rerank"
+            },
+            {
+              "id": "providers/xai",
+              "path": "/docs/providers/xai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/xai_realtime",
+              "path": "/docs/providers/xai_realtime",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/xiaomi_mimo",
+              "path": "/docs/providers/xiaomi_mimo",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/xinference",
+              "path": "/docs/providers/xinference",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "providers/zai",
+              "path": "/docs/providers/zai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy_api",
+              "path": "/docs/proxy_api"
+            },
+            {
+              "id": "proxy_auth",
+              "path": "/docs/proxy_auth",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy_server",
+              "path": "/docs/proxy_server",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/access_control",
+              "path": "/docs/proxy/access_control",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/access_groups",
+              "path": "/docs/proxy/access_groups",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/admin_ui_sso",
+              "path": "/docs/proxy/admin_ui_sso",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ai_hub",
+              "path": "/docs/proxy/ai_hub",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/alerting",
+              "path": "/docs/proxy/alerting",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/architecture",
+              "path": "/docs/proxy/architecture",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/arize_phoenix_prompts",
+              "path": "/docs/proxy/arize_phoenix_prompts",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/auto_routing",
+              "path": "/docs/proxy/auto_routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/billing",
+              "path": "/docs/proxy/billing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/budget_reset_and_tz",
+              "path": "/docs/proxy/budget_reset_and_tz",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/caching",
+              "path": "/docs/proxy/caching",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/call_hooks",
+              "path": "/docs/proxy/call_hooks",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/cli",
+              "path": "/docs/proxy/cli",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/cli_sso",
+              "path": "/docs/proxy/cli_sso",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/clientside_auth",
+              "path": "/docs/proxy/clientside_auth",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/config_management",
+              "path": "/docs/proxy/config_management",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/config_settings",
+              "path": "/docs/proxy/config_settings",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/configs",
+              "path": "/docs/proxy/configs",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/control_plane_and_data_plane",
+              "path": "/docs/proxy/control_plane_and_data_plane",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/cost_tracking",
+              "path": "/docs/proxy/cost_tracking",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/credential_usage_tracking",
+              "path": "/docs/proxy/credential_usage_tracking"
+            },
+            {
+              "id": "proxy/custom_auth",
+              "path": "/docs/proxy/custom_auth",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/custom_pricing",
+              "path": "/docs/proxy/custom_pricing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/custom_prompt_management",
+              "path": "/docs/proxy/custom_prompt_management",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/custom_root_ui",
+              "path": "/docs/proxy/custom_root_ui",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/custom_sso",
+              "path": "/docs/proxy/custom_sso",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/customer_routing",
+              "path": "/docs/proxy/customer_routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/customer_usage",
+              "path": "/docs/proxy/customer_usage",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/customers",
+              "path": "/docs/proxy/customers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/db_deadlocks",
+              "path": "/docs/proxy/db_deadlocks",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/db_info",
+              "path": "/docs/proxy/db_info",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/debugging",
+              "path": "/docs/proxy/debugging",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/deleted_keys_teams",
+              "path": "/docs/proxy/deleted_keys_teams",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/deploy",
+              "path": "/docs/proxy/deploy",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/docker_quick_start",
+              "path": "/docs/proxy/docker_quick_start",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/dynamic_logging",
+              "path": "/docs/proxy/dynamic_logging",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/dynamic_rate_limit",
+              "path": "/docs/proxy/dynamic_rate_limit",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/email",
+              "path": "/docs/proxy/email",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/embedding",
+              "path": "/docs/proxy/embedding"
+            },
+            {
+              "id": "proxy/endpoint_activity",
+              "path": "/docs/proxy/endpoint_activity",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/enterprise",
+              "path": "/docs/proxy/enterprise",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/error_diagnosis",
+              "path": "/docs/proxy/error_diagnosis",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/fallback_management",
+              "path": "/docs/proxy/fallback_management",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/forward_client_headers",
+              "path": "/docs/proxy/forward_client_headers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/aim_security",
+              "path": "/docs/proxy/guardrails/aim_security",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/akto",
+              "path": "/docs/proxy/guardrails/akto"
+            },
+            {
+              "id": "proxy/guardrails/aporia_api",
+              "path": "/docs/proxy/guardrails/aporia_api",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/azure_content_guardrail",
+              "path": "/docs/proxy/guardrails/azure_content_guardrail",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/bedrock",
+              "path": "/docs/proxy/guardrails/bedrock",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/crowdstrike_aidr",
+              "path": "/docs/proxy/guardrails/crowdstrike_aidr",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/custom_code_guardrail",
+              "path": "/docs/proxy/guardrails/custom_code_guardrail",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/custom_guardrail",
+              "path": "/docs/proxy/guardrails/custom_guardrail",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/dynamoai",
+              "path": "/docs/proxy/guardrails/dynamoai",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/enkryptai",
+              "path": "/docs/proxy/guardrails/enkryptai",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/grayswan",
+              "path": "/docs/proxy/guardrails/grayswan",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/guardrail_load_balancing",
+              "path": "/docs/proxy/guardrails/guardrail_load_balancing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/guardrail_policies",
+              "path": "/docs/proxy/guardrails/guardrail_policies",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/guardrails_ai",
+              "path": "/docs/proxy/guardrails/guardrails_ai",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/hiddenlayer",
+              "path": "/docs/proxy/guardrails/hiddenlayer",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/ibm_guardrails",
+              "path": "/docs/proxy/guardrails/ibm_guardrails",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/javelin",
+              "path": "/docs/proxy/guardrails/javelin",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/lakera_ai",
+              "path": "/docs/proxy/guardrails/lakera_ai",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/lasso_security",
+              "path": "/docs/proxy/guardrails/lasso_security",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/litellm_content_filter",
+              "path": "/docs/proxy/guardrails/litellm_content_filter",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/model_armor",
+              "path": "/docs/proxy/guardrails/model_armor",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/noma_security",
+              "path": "/docs/proxy/guardrails/noma_security",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/onyx_security",
+              "path": "/docs/proxy/guardrails/onyx_security",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/openai_moderation",
+              "path": "/docs/proxy/guardrails/openai_moderation",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/pangea",
+              "path": "/docs/proxy/guardrails/pangea",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/panw_prisma_airs",
+              "path": "/docs/proxy/guardrails/panw_prisma_airs",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/pii_masking_v2",
+              "path": "/docs/proxy/guardrails/pii_masking_v2",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/pillar_security",
+              "path": "/docs/proxy/guardrails/pillar_security",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/policy_flow_builder",
+              "path": "/docs/proxy/guardrails/policy_flow_builder",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/policy_tags",
+              "path": "/docs/proxy/guardrails/policy_tags",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/policy_templates",
+              "path": "/docs/proxy/guardrails/policy_templates",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/prompt_injection",
+              "path": "/docs/proxy/guardrails/prompt_injection",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/prompt_security",
+              "path": "/docs/proxy/guardrails/prompt_security"
+            },
+            {
+              "id": "proxy/guardrails/qualifire",
+              "path": "/docs/proxy/guardrails/qualifire",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/quick_start",
+              "path": "/docs/proxy/guardrails/quick_start",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/realtime_guardrails",
+              "path": "/docs/proxy/guardrails/realtime_guardrails",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/secret_detection",
+              "path": "/docs/proxy/guardrails/secret_detection",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/team_based_guardrails",
+              "path": "/docs/proxy/guardrails/team_based_guardrails",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/test_playground",
+              "path": "/docs/proxy/guardrails/test_playground",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/guardrails/tool_permission",
+              "path": "/docs/proxy/guardrails/tool_permission",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/guardrails/zscaler_ai_guard",
+              "path": "/docs/proxy/guardrails/zscaler_ai_guard",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/health",
+              "path": "/docs/proxy/health",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/health_check_routing",
+              "path": "/docs/proxy/health_check_routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/high_availability_control_plane",
+              "path": "/docs/proxy/high_availability_control_plane",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/image_handling",
+              "path": "/docs/proxy/image_handling",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ip_address",
+              "path": "/docs/proxy/ip_address",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/jwt_auth_arch",
+              "path": "/docs/proxy/jwt_auth_arch",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/jwt_key_mapping",
+              "path": "/docs/proxy/jwt_key_mapping",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/keys_teams_router_settings",
+              "path": "/docs/proxy/keys_teams_router_settings",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/litellm_managed_files",
+              "path": "/docs/proxy/litellm_managed_files",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/litellm_prompt_management",
+              "path": "/docs/proxy/litellm_prompt_management",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/load_balancing",
+              "path": "/docs/proxy/load_balancing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/logging",
+              "path": "/docs/proxy/logging",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/logging_spec",
+              "path": "/docs/proxy/logging_spec",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/managed_batches",
+              "path": "/docs/proxy/managed_batches",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/managed_finetuning",
+              "path": "/docs/proxy/managed_finetuning",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/management_cli",
+              "path": "/docs/proxy/management_cli",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/master_key_rotations",
+              "path": "/docs/proxy/master_key_rotations",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/metrics",
+              "path": "/docs/proxy/metrics"
+            },
+            {
+              "id": "proxy/model_access",
+              "path": "/docs/proxy/model_access",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/model_access_groups",
+              "path": "/docs/proxy/model_access_groups",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/model_access_guide",
+              "path": "/docs/proxy/model_access_guide",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/model_compare_ui",
+              "path": "/docs/proxy/model_compare_ui",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/model_discovery",
+              "path": "/docs/proxy/model_discovery",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/model_management",
+              "path": "/docs/proxy/model_management",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/multi_tenant_architecture",
+              "path": "/docs/proxy/multi_tenant_architecture",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/multiple_admins",
+              "path": "/docs/proxy/multiple_admins",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/native_litellm_prompt",
+              "path": "/docs/proxy/native_litellm_prompt",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/oauth2",
+              "path": "/docs/proxy/oauth2"
+            },
+            {
+              "id": "proxy/pagerduty",
+              "path": "/docs/proxy/pagerduty",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/pass_through",
+              "path": "/docs/proxy/pass_through",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/pass_through_guardrails",
+              "path": "/docs/proxy/pass_through_guardrails",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/perf",
+              "path": "/docs/proxy/perf"
+            },
+            {
+              "id": "proxy/pricing_calculator",
+              "path": "/docs/proxy/pricing_calculator",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/prod",
+              "path": "/docs/proxy/prod",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/project_management",
+              "path": "/docs/proxy/project_management",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/prometheus",
+              "path": "/docs/proxy/prometheus",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/prompt_management",
+              "path": "/docs/proxy/prompt_management",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/provider_budget_routing",
+              "path": "/docs/proxy/provider_budget_routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/provider_discounts",
+              "path": "/docs/proxy/provider_discounts",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/provider_margins",
+              "path": "/docs/proxy/provider_margins",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/public_routes",
+              "path": "/docs/proxy/public_routes",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/public_teams",
+              "path": "/docs/proxy/public_teams",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/pyroscope_profiling",
+              "path": "/docs/proxy/pyroscope_profiling",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "proxy/quick_start",
+              "path": "/docs/proxy/quick_start",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/rate_limit_tiers",
+              "path": "/docs/proxy/rate_limit_tiers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/realtime_webrtc",
+              "path": "/docs/proxy/realtime_webrtc",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/reject_clientside_metadata_tags",
+              "path": "/docs/proxy/reject_clientside_metadata_tags"
+            },
+            {
+              "id": "proxy/release_cycle",
+              "path": "/docs/proxy/release_cycle",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/reliability",
+              "path": "/docs/proxy/reliability",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/request_headers",
+              "path": "/docs/proxy/request_headers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/request_tags",
+              "path": "/docs/proxy/request_tags",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/response_headers",
+              "path": "/docs/proxy/response_headers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/rules",
+              "path": "/docs/proxy/rules",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/security_encryption_faq",
+              "path": "/docs/proxy/security_encryption_faq",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/self_serve",
+              "path": "/docs/proxy/self_serve",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/service_accounts",
+              "path": "/docs/proxy/service_accounts",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/shared_health_check",
+              "path": "/docs/proxy/shared_health_check"
+            },
+            {
+              "id": "proxy/spend_logs_deletion",
+              "path": "/docs/proxy/spend_logs_deletion",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/sync_anthropic_beta_headers",
+              "path": "/docs/proxy/sync_anthropic_beta_headers"
+            },
+            {
+              "id": "proxy/sync_models_github",
+              "path": "/docs/proxy/sync_models_github",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/tag_budgets",
+              "path": "/docs/proxy/tag_budgets",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/tag_routing",
+              "path": "/docs/proxy/tag_routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/team_based_routing",
+              "path": "/docs/proxy/team_based_routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/team_budgets",
+              "path": "/docs/proxy/team_budgets",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/team_logging",
+              "path": "/docs/proxy/team_logging",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/team_model_add",
+              "path": "/docs/proxy/team_model_add",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/temporary_budget_increase",
+              "path": "/docs/proxy/temporary_budget_increase",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/timeout",
+              "path": "/docs/proxy/timeout",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/token_auth",
+              "path": "/docs/proxy/token_auth",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui",
+              "path": "/docs/proxy/ui",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui_credentials",
+              "path": "/docs/proxy/ui_credentials",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui_logs",
+              "path": "/docs/proxy/ui_logs",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui_logs_sessions",
+              "path": "/docs/proxy/ui_logs_sessions",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui_project_management",
+              "path": "/docs/proxy/ui_project_management",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui_spend_log_settings",
+              "path": "/docs/proxy/ui_spend_log_settings",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui_store_model_db_setting",
+              "path": "/docs/proxy/ui_store_model_db_setting",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui_team_soft_budget_alerts",
+              "path": "/docs/proxy/ui_team_soft_budget_alerts",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui/bulk_edit_users",
+              "path": "/docs/proxy/ui/bulk_edit_users",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui/page_visibility",
+              "path": "/docs/proxy/ui/page_visibility",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/ui/ui_edit_logo",
+              "path": "/docs/proxy/ui/ui_edit_logo",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/user_keys",
+              "path": "/docs/proxy/user_keys",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/user_management_heirarchy",
+              "path": "/docs/proxy/user_management_heirarchy",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/user_onboarding",
+              "path": "/docs/proxy/user_onboarding"
+            },
+            {
+              "id": "proxy/users",
+              "path": "/docs/proxy/users",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/veo_video_generation",
+              "path": "/docs/proxy/veo_video_generation",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "proxy/virtual_keys",
+              "path": "/docs/proxy/virtual_keys",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "proxy/worker_startup_hooks",
+              "path": "/docs/proxy/worker_startup_hooks",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "rag_ingest",
+              "path": "/docs/rag_ingest",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "rag_query",
+              "path": "/docs/rag_query",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "realtime",
+              "path": "/docs/realtime",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "reasoning_content",
+              "path": "/docs/reasoning_content",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "rerank",
+              "path": "/docs/rerank",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "response_api",
+              "path": "/docs/response_api",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "response_api_compact",
+              "path": "/docs/response_api_compact",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "router_architecture",
+              "path": "/docs/router_architecture",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "routing",
+              "path": "/docs/routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "rules",
+              "path": "/docs/rules",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "scheduler",
+              "path": "/docs/scheduler",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "sdk_custom_pricing",
+              "path": "/docs/sdk_custom_pricing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/brave",
+              "path": "/docs/search/brave",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/dataforseo",
+              "path": "/docs/search/dataforseo",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/exa_ai",
+              "path": "/docs/search/exa_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/firecrawl",
+              "path": "/docs/search/firecrawl",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/google_pse",
+              "path": "/docs/search/google_pse",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/index",
+              "path": "/docs/search/",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/linkup",
+              "path": "/docs/search/linkup",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/parallel_ai",
+              "path": "/docs/search/parallel_ai",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/perplexity",
+              "path": "/docs/search/perplexity",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/searchapi",
+              "path": "/docs/search/searchapi"
+            },
+            {
+              "id": "search/searxng",
+              "path": "/docs/search/searxng",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/serper",
+              "path": "/docs/search/serper",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "search/tavily",
+              "path": "/docs/search/tavily",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret",
+              "path": "/docs/secret"
+            },
+            {
+              "id": "secret_managers/aws_kms",
+              "path": "/docs/secret_managers/aws_kms",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/aws_secret_manager",
+              "path": "/docs/secret_managers/aws_secret_manager",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/azure_key_vault",
+              "path": "/docs/secret_managers/azure_key_vault",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/custom_secret_manager",
+              "path": "/docs/secret_managers/custom_secret_manager",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/cyberark",
+              "path": "/docs/secret_managers/cyberark",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/google_kms",
+              "path": "/docs/secret_managers/google_kms",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/google_secret_manager",
+              "path": "/docs/secret_managers/google_secret_manager",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/hashicorp_vault",
+              "path": "/docs/secret_managers/hashicorp_vault",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "secret_managers/overview",
+              "path": "/docs/secret_managers/overview",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "set_keys",
+              "path": "/docs/set_keys",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "skills",
+              "path": "/docs/skills",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "text_completion",
+              "path": "/docs/text_completion",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "text_to_speech",
+              "path": "/docs/text_to_speech",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "traffic_mirroring",
+              "path": "/docs/traffic_mirroring",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot",
+              "path": "/docs/troubleshoot",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/cpu_issues",
+              "path": "/docs/troubleshoot/cpu_issues",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/latency_overhead",
+              "path": "/docs/troubleshoot/latency_overhead",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/max_callbacks",
+              "path": "/docs/troubleshoot/max_callbacks",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/memory_issues",
+              "path": "/docs/troubleshoot/memory_issues",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/pip_venv_upgrade",
+              "path": "/docs/troubleshoot/pip_venv_upgrade",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/prisma_migrations",
+              "path": "/docs/troubleshoot/prisma_migrations",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/rollback",
+              "path": "/docs/troubleshoot/rollback",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/spend_queue_warnings",
+              "path": "/docs/troubleshoot/spend_queue_warnings",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "troubleshoot/ui_issues",
+              "path": "/docs/troubleshoot/ui_issues",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "tutorials/anthropic_file_usage",
+              "path": "/docs/tutorials/anthropic_file_usage",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/azure_openai",
+              "path": "/docs/tutorials/azure_openai",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/claude_agent_sdk",
+              "path": "/docs/tutorials/claude_agent_sdk",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_beta_headers",
+              "path": "/docs/tutorials/claude_code_beta_headers",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_byok",
+              "path": "/docs/tutorials/claude_code_byok",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_customer_tracking",
+              "path": "/docs/tutorials/claude_code_customer_tracking",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_max_subscription",
+              "path": "/docs/tutorials/claude_code_max_subscription",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_plugin_marketplace",
+              "path": "/docs/tutorials/claude_code_plugin_marketplace",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_prompt_cache_routing",
+              "path": "/docs/tutorials/claude_code_prompt_cache_routing",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_skills",
+              "path": "/docs/tutorials/claude_code_skills",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_code_websearch",
+              "path": "/docs/tutorials/claude_code_websearch",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_mcp",
+              "path": "/docs/tutorials/claude_mcp",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_non_anthropic_models",
+              "path": "/docs/tutorials/claude_non_anthropic_models",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/claude_responses_api",
+              "path": "/docs/tutorials/claude_responses_api",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/compare_llms",
+              "path": "/docs/tutorials/compare_llms",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/compare_llms_2",
+              "path": "/docs/tutorials/compare_llms_2"
+            },
+            {
+              "id": "tutorials/copilotkit_sdk",
+              "path": "/docs/tutorials/copilotkit_sdk",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/cost_tracking_coding",
+              "path": "/docs/tutorials/cost_tracking_coding",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/cursor_integration",
+              "path": "/docs/tutorials/cursor_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/default_team_self_serve",
+              "path": "/docs/tutorials/default_team_self_serve",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/elasticsearch_logging",
+              "path": "/docs/tutorials/elasticsearch_logging",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/eval_suites",
+              "path": "/docs/tutorials/eval_suites",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/fallbacks",
+              "path": "/docs/tutorials/fallbacks",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/file_search_responses_api",
+              "path": "/docs/tutorials/file_search_responses_api",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/finetuned_chat_gpt",
+              "path": "/docs/tutorials/finetuned_chat_gpt",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/first_playground",
+              "path": "/docs/tutorials/first_playground",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/gemini_realtime_with_audio",
+              "path": "/docs/tutorials/gemini_realtime_with_audio",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/github_copilot_integration",
+              "path": "/docs/tutorials/github_copilot_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/google_adk",
+              "path": "/docs/tutorials/google_adk",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/google_genai_sdk",
+              "path": "/docs/tutorials/google_genai_sdk",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/gradio_integration",
+              "path": "/docs/tutorials/gradio_integration",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/huggingface_codellama",
+              "path": "/docs/tutorials/huggingface_codellama",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/huggingface_tutorial",
+              "path": "/docs/tutorials/huggingface_tutorial",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/index",
+              "path": "/docs/tutorials/",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/installation",
+              "path": "/docs/tutorials/installation",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/instructor",
+              "path": "/docs/tutorials/instructor",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/litellm_gemini_cli",
+              "path": "/docs/tutorials/litellm_gemini_cli",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/litellm_proxy_aporia",
+              "path": "/docs/tutorials/litellm_proxy_aporia",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/litellm_qwen_code_cli",
+              "path": "/docs/tutorials/litellm_qwen_code_cli",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/litellm_Test_Multiple_Providers",
+              "path": "/docs/tutorials/litellm_Test_Multiple_Providers",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/livekit_xai_realtime",
+              "path": "/docs/tutorials/livekit_xai_realtime",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/lm_evaluation_harness",
+              "path": "/docs/tutorials/lm_evaluation_harness",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/mock_completion",
+              "path": "/docs/tutorials/mock_completion",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/model_config_proxy",
+              "path": "/docs/tutorials/model_config_proxy"
+            },
+            {
+              "id": "tutorials/model_fallbacks",
+              "path": "/docs/tutorials/model_fallbacks",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/msft_sso",
+              "path": "/docs/tutorials/msft_sso",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/oobabooga",
+              "path": "/docs/tutorials/oobabooga",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/openai_agents_sdk",
+              "path": "/docs/tutorials/openai_agents_sdk",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/openai_codex",
+              "path": "/docs/tutorials/openai_codex",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/openclaw_integration",
+              "path": "/docs/tutorials/openclaw_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/opencode_integration",
+              "path": "/docs/tutorials/opencode_integration",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/openweb_ui",
+              "path": "/docs/tutorials/openweb_ui",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/presidio_pii_masking",
+              "path": "/docs/tutorials/presidio_pii_masking",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/prompt_caching",
+              "path": "/docs/tutorials/prompt_caching",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/provider_specific_params",
+              "path": "/docs/tutorials/provider_specific_params",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/retool_assist",
+              "path": "/docs/tutorials/retool_assist",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "tutorials/scim_litellm",
+              "path": "/docs/tutorials/scim_litellm",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/tag_management",
+              "path": "/docs/tutorials/tag_management",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/text_completion",
+              "path": "/docs/tutorials/text_completion",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/TogetherAI_liteLLM",
+              "path": "/docs/tutorials/TogetherAI_liteLLM",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "tutorials/vertex_ai_pay_go",
+              "path": "/docs/tutorials/vertex_ai_pay_go",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "vector_store_files",
+              "path": "/docs/vector_store_files",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "vector_stores/create",
+              "path": "/docs/vector_stores/create",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "vector_stores/search",
+              "path": "/docs/vector_stores/search",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "vertex_batch_passthrough",
+              "path": "/docs/vertex_batch_passthrough"
+            },
+            {
+              "id": "videos",
+              "path": "/docs/videos",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "wildcard_routing",
+              "path": "/docs/wildcard_routing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "/guardrail_providers",
+              "path": "/docs/guardrail_providers",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "/ai_tools",
+              "path": "/docs/ai_tools",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "/agent_sdks",
+              "path": "/docs/agent_sdks",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "/manage_with_ai_agents",
+              "path": "/docs/manage_with_ai_agents",
+              "sidebar": "integrationsSidebar"
+            },
+            {
+              "id": "/simple_proxy",
+              "path": "/docs/simple_proxy",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "/supported_endpoints",
+              "path": "/docs/supported_endpoints",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "/completion",
+              "path": "/docs/completion",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "/providers",
+              "path": "/docs/providers",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "/routing-load-balancing",
+              "path": "/docs/routing-load-balancing",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "/project",
+              "path": "/docs/project",
+              "sidebar": "tutorialSidebar"
+            },
+            {
+              "id": "/guides/core_request_response_patterns",
+              "path": "/docs/guides/core_request_response_patterns",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/guides/tools_integrations",
+              "path": "/docs/guides/tools_integrations",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/guides/multimodal_io",
+              "path": "/docs/guides/multimodal_io",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/guides/retrieval_knowledge",
+              "path": "/docs/guides/retrieval_knowledge",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/guides/prompts_context",
+              "path": "/docs/guides/prompts_context",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/guides/compatibility_extensibility",
+              "path": "/docs/guides/compatibility_extensibility",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/guides/reliability_testing_spend",
+              "path": "/docs/guides/reliability_testing_spend",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/guides/security_network",
+              "path": "/docs/guides/security_network",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/tutorials/getting_started",
+              "path": "/docs/tutorials/getting_started",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/tutorials/python_sdk",
+              "path": "/docs/tutorials/python_sdk",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/tutorials/provider_tutorials",
+              "path": "/docs/tutorials/provider_tutorials",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/tutorials/proxy_admin_access",
+              "path": "/docs/tutorials/proxy_admin_access",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/tutorials/proxy_features_safety",
+              "path": "/docs/tutorials/proxy_features_safety",
+              "sidebar": "learnSidebar"
+            },
+            {
+              "id": "/tutorials/observability_evaluation",
+              "path": "/docs/tutorials/observability_evaluation",
+              "sidebar": "learnSidebar"
+            }
+          ],
+          "draftIds": [],
+          "sidebars": {
+            "integrationsSidebar": {
+              "link": {
+                "path": "/docs/integrations/",
+                "label": "integrations/index"
+              }
+            },
+            "tutorialSidebar": {
+              "link": {
+                "path": "/docs/",
+                "label": "Quickstart"
+              }
+            },
+            "learnSidebar": {
+              "link": {
+                "path": "/docs/learn",
+                "label": "Learn"
+              }
+            }
+          }
+        }
+      ],
+      "breadcrumbs": true
+    },
+    "release-notes": {
+      "path": "/release_notes",
+      "versions": [
+        {
+          "name": "current",
+          "label": "Next",
+          "isLast": true,
+          "path": "/release_notes",
+          "mainDocId": "index",
+          "docs": [
+            {
+              "id": "index",
+              "path": "/release_notes/",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.55.10/index",
+              "path": "/release_notes/v1.55.10/v1.55.10",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.55.8-stable/index",
+              "path": "/release_notes/v1.55.8-stable/v1.55.8-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.56.1/index",
+              "path": "/release_notes/v1.56.1/v1.56.1",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.56.3/index",
+              "path": "/release_notes/v1.56.3/v1.56.3",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.56.4/index",
+              "path": "/release_notes/v1.56.4/v1.56.4",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.57.3/index",
+              "path": "/release_notes/v1.57.3/v1.57.3",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.57.7/index",
+              "path": "/release_notes/v1.57.7/v1.57.7",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.57.8-stable/index",
+              "path": "/release_notes/v1.57.8-stable/v1.57.8-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.59.0/index",
+              "path": "/release_notes/v1.59.0/v1.59.0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.59.8-stable/index",
+              "path": "/release_notes/v1.59.8-stable/v1.59.8-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.61.20-stable/index",
+              "path": "/release_notes/v1.61.20-stable/v1.61.20-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.63.0/index",
+              "path": "/release_notes/v1.63.0/v1.63.0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.63.11-stable/index",
+              "path": "/release_notes/v1.63.11-stable/v1.63.11-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.63.14/index",
+              "path": "/release_notes/v1.63.14/v1.63.14-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.63.2-stable/index",
+              "path": "/release_notes/v1.63.2-stable/v1.63.2-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.65.0-stable/index",
+              "path": "/release_notes/v1.65.0-stable/v1.65.0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.65.0/index",
+              "path": "/release_notes/v1.65.0/v1.65.0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.65.4-stable/index",
+              "path": "/release_notes/v1.65.4-stable/v1.65.4-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.66.0-stable/index",
+              "path": "/release_notes/v1.66.0-stable/v1.66.0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.67.0-stable/index",
+              "path": "/release_notes/v1.67.0-stable/v1.67.0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.67.4-stable/index",
+              "path": "/release_notes/v1.67.4-stable/v1.67.4-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.68.0-stable/index",
+              "path": "/release_notes/v1.68.0-stable/v1.68.0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.69.0-stable/index",
+              "path": "/release_notes/v1.69.0-stable/v1.69.0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.70.1-stable/index",
+              "path": "/release_notes/v1.70.1-stable/v1.70.1-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.71.1-stable/index",
+              "path": "/release_notes/v1.71.1-stable/v1.71.1-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.72.0-stable/index",
+              "path": "/release_notes/v1.72.0-stable/v1-72-0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.72.2-stable/index",
+              "path": "/release_notes/v1.72.2-stable/v1-72-2-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.72.6-stable/index",
+              "path": "/release_notes/v1.72.6-stable/v1-72-6-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.73.0-stable/index",
+              "path": "/release_notes/v1.73.0-stable/v1-73-0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.73.6-stable/index",
+              "path": "/release_notes/v1.73.6-stable/v1-73-6-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.74.0-stable/index",
+              "path": "/release_notes/v1.74.0-stable/v1-74-0-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.74.15-stable/index",
+              "path": "/release_notes/v1.74.15-stable/v1-74-15",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.74.3-stable/index",
+              "path": "/release_notes/v1.74.3-stable/v1-74-3-stable",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.74.7/index",
+              "path": "/release_notes/v1.74.7/v1-74-7",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.74.9-stable/index",
+              "path": "/release_notes/v1.74.9-stable/v1-74-9",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.75.5-stable/index",
+              "path": "/release_notes/v1.75.5-stable/v1-75-5",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.75.8/index",
+              "path": "/release_notes/v1.75.8/v1-75-8",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.76.0-stable/index",
+              "path": "/release_notes/v1.76.0-stable/v1-76-0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.76.1-stable/index",
+              "path": "/release_notes/v1.76.1-stable/v1-76-1",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.76.3-stable/index",
+              "path": "/release_notes/v1.76.3-stable/v1-76-3",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.77.2-stable/index",
+              "path": "/release_notes/v1.77.2-stable/v1-77-2",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.77.3-stable/index",
+              "path": "/release_notes/v1.77.3-stable/v1-77-3",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.77.5-stable/index",
+              "path": "/release_notes/v1.77.5-stable/v1-77-5",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.77.7-stable/index",
+              "path": "/release_notes/v1.77.7-stable/v1-77-7",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.78.0-stable/index",
+              "path": "/release_notes/v1.78.0-stable/v1-78-0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.78.5-stable/index",
+              "path": "/release_notes/v1.78.5-stable/v1-78-5",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.79.0-stable/index",
+              "path": "/release_notes/v1.79.0-stable/v1-79-0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.79.1-stable/index",
+              "path": "/release_notes/v1.79.1-stable/v1-79-1",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.79.3-stable/index",
+              "path": "/release_notes/v1.79.3-stable/v1-79-3",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.80.0-stable/index",
+              "path": "/release_notes/v1.80.0-stable/v1-80-0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.80.10-stable/index",
+              "path": "/release_notes/v1.80.10-stable/v1-80-10",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.80.11-stable/index",
+              "path": "/release_notes/v1.80.11-stable/v1-80-11",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.80.15/index",
+              "path": "/release_notes/v1.80.15/v1-80-15",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.80.5-stable/index",
+              "path": "/release_notes/v1.80.5-stable/v1-80-5",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.80.8-stable/index",
+              "path": "/release_notes/v1.80.8-stable/v1-80-8",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.81.0/index",
+              "path": "/release_notes/v1.81.0/v1-81-0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.81.12/index",
+              "path": "/release_notes/v1.81.12/v1-81-12",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.81.14/index",
+              "path": "/release_notes/v1.81.14/v1-81-14",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.81.3-stable/index",
+              "path": "/release_notes/v1.81.3-stable/v1-81-3",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.81.6/index",
+              "path": "/release_notes/v1.81.6/v1-81-6",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.81.9/index",
+              "path": "/release_notes/v1.81.9/v1-81-9",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.82.0/index",
+              "path": "/release_notes/v1.82.0/v1-82-0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.82.3/index",
+              "path": "/release_notes/v1.82.3/v1-82-3",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.83.0/index",
+              "path": "/release_notes/v1.83.0/v1-83-0",
+              "sidebar": "releaseNotesSidebar"
+            },
+            {
+              "id": "v1.83.3/index",
+              "path": "/release_notes/v1.83.3/v1-83-3-rc-1",
+              "sidebar": "releaseNotesSidebar"
+            }
+          ],
+          "draftIds": [],
+          "sidebars": {
+            "releaseNotesSidebar": {
+              "link": {
+                "path": "/release_notes/",
+                "label": "Release Notes"
+              }
+            }
+          }
+        }
+      ],
+      "breadcrumbs": true
+    }
+  },
+  "docusaurus-plugin-google-gtag": {
+    "default": {
+      "trackingID": [
+        "G-K7K215ZVNC"
+      ],
+      "anonymizeIP": true,
+      "id": "default"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "projects/Docq.AI",
+  "title": "Docq.AI",
+  "description": "A private and secure ChatGPT alternative that knows your business.",
+  "source": "@site/docs/projects/Docq.AI.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Docq.AI",
+  "permalink": "/docs/projects/Docq.AI",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Microsoft GraphRAG",
+    "permalink": "/docs/projects/GraphRAG"
+  },
+  "next": {
+    "title": "PDL",
+    "permalink": "/docs/projects/PDL"
+  }
+}

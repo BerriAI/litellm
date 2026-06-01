@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/google_genai_sdk",
+  "title": "Google GenAI SDK with LiteLLM",
+  "description": "Use Google's official GenAI SDK (JavaScript/TypeScript and Python) with any LLM provider through LiteLLM Proxy.",
+  "source": "@site/docs/tutorials/google_genai_sdk.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/google_genai_sdk",
+  "permalink": "/docs/tutorials/google_genai_sdk",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Google ADK with LiteLLM",
+    "permalink": "/docs/tutorials/google_adk"
+  },
+  "next": {
+    "title": "LiveKit xAI Realtime Voice Agent",
+    "permalink": "/docs/tutorials/livekit_xai_realtime"
+  }
+}

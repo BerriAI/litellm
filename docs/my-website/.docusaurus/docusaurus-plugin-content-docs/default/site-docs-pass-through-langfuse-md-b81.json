@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/langfuse",
+  "title": "Langfuse SDK",
+  "description": "Pass-through endpoints for Langfuse - call langfuse endpoints with LiteLLM Virtual Key.",
+  "source": "@site/docs/pass_through/langfuse.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/langfuse",
+  "permalink": "/docs/pass_through/langfuse",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Google AI Studio SDK",
+    "permalink": "/docs/pass_through/google_ai_studio"
+  },
+  "next": {
+    "title": "Mistral",
+    "permalink": "/docs/pass_through/mistral"
+  }
+}

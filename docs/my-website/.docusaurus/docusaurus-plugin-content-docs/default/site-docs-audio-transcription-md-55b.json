@@ -1,0 +1,23 @@
+{
+  "id": "audio_transcription",
+  "title": "/audio/transcriptions",
+  "description": "Overview",
+  "source": "@site/docs/audio_transcription.md",
+  "sourceDirName": ".",
+  "slug": "/audio_transcription",
+  "permalink": "/docs/audio_transcription",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "image_generation()",
+    "permalink": "/docs/image_generation"
+  },
+  "next": {
+    "title": "speech()",
+    "permalink": "/docs/text_to_speech"
+  }
+}

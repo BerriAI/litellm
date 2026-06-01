@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/anthropic_completion",
+  "title": "Anthropic Passthrough",
+  "description": "Pass-through endpoints for Anthropic - call provider-specific endpoint, in native format (no translation).",
+  "source": "@site/docs/pass_through/anthropic_completion.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/anthropic_completion",
+  "permalink": "/docs/pass_through/anthropic_completion",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Why Pass-Through Endpoints?",
+    "permalink": "/docs/pass_through/intro"
+  },
+  "next": {
+    "title": "AssemblyAI",
+    "permalink": "/docs/pass_through/assembly_ai"
+  }
+}

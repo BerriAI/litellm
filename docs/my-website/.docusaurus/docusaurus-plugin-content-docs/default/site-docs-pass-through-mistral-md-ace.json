@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/mistral",
+  "title": "Mistral",
+  "description": "Pass-through endpoints for Mistral - call provider-specific endpoint, in native format (no translation).",
+  "source": "@site/docs/pass_through/mistral.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/mistral",
+  "permalink": "/docs/pass_through/mistral",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Langfuse SDK",
+    "permalink": "/docs/pass_through/langfuse"
+  },
+  "next": {
+    "title": "OpenAI Passthrough",
+    "permalink": "/docs/pass_through/openai_passthrough"
+  }
+}

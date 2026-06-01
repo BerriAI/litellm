@@ -1,0 +1,23 @@
+{
+  "id": "evals_api",
+  "title": "/evals",
+  "description": "LiteLLM Proxy supports OpenAI's Evaluations (Evals) API, allowing you to create, manage, and run evaluations to measure model performance against defined testing criteria.",
+  "source": "@site/docs/evals_api.md",
+  "sourceDirName": ".",
+  "slug": "/evals_api",
+  "permalink": "/docs/evals_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ [BETA] LiteLLM Managed Files with Finetuning",
+    "permalink": "/docs/proxy/managed_finetuning"
+  },
+  "next": {
+    "title": "/generateContent",
+    "permalink": "/docs/generateContent"
+  }
+}

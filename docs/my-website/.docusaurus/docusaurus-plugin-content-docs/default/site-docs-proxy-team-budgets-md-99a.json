@@ -1,0 +1,23 @@
+{
+  "id": "proxy/team_budgets",
+  "title": "Setting Team Budgets",
+  "description": "- You must set up a Postgres database (e.g. Supabase, Neon, etc.)",
+  "source": "@site/docs/proxy/team_budgets.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/team_budgets",
+  "permalink": "/docs/proxy/team_budgets",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Budgets, Rate Limits",
+    "permalink": "/docs/proxy/users"
+  },
+  "next": {
+    "title": "[Beta] Project Management",
+    "permalink": "/docs/proxy/project_management"
+  }
+}

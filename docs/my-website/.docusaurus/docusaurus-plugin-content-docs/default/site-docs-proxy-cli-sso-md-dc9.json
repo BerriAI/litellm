@@ -1,0 +1,23 @@
+{
+  "id": "proxy/cli_sso",
+  "title": "CLI Authentication",
+  "description": "Use the litellm cli to authenticate to the LiteLLM Gateway. This is great if you're trying to give a large number of developers self-serve access to the LiteLLM Gateway.",
+  "source": "@site/docs/proxy/cli_sso.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/cli_sso",
+  "permalink": "/docs/proxy/cli_sso",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Role-based Access Controls (RBAC)",
+    "permalink": "/docs/proxy/access_control"
+  },
+  "next": {
+    "title": "Custom Auth",
+    "permalink": "/docs/proxy/custom_auth"
+  }
+}

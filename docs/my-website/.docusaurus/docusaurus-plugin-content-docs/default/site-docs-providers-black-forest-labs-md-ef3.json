@@ -1,0 +1,23 @@
+{
+  "id": "providers/black_forest_labs",
+  "title": "Black Forest Labs Image Generation",
+  "description": "Black Forest Labs provides state-of-the-art text-to-image generation using their FLUX models.",
+  "source": "@site/docs/providers/black_forest_labs.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/black_forest_labs",
+  "permalink": "/docs/providers/black_forest_labs",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Baseten",
+    "permalink": "/docs/providers/baseten"
+  },
+  "next": {
+    "title": "Black Forest Labs Image Editing",
+    "permalink": "/docs/providers/black_forest_labs_img_edit"
+  }
+}

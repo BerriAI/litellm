@@ -1,0 +1,14 @@
+{
+  "id": "debugging/hosted_debugging",
+  "title": "hosted_debugging",
+  "description": "",
+  "source": "@site/docs/debugging/hosted_debugging.md",
+  "sourceDirName": "debugging",
+  "slug": "/debugging/hosted_debugging",
+  "permalink": "/docs/debugging/hosted_debugging",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/snowflake",
+  "title": "Snowflake",
+  "description": "| Property                   | Details                                                                                                   |",
+  "source": "@site/docs/providers/snowflake.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/snowflake",
+  "permalink": "/docs/providers/snowflake",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Synthetic",
+    "permalink": "/docs/providers/synthetic"
+  },
+  "next": {
+    "title": "Together AI",
+    "permalink": "/docs/providers/togetherai"
+  }
+}

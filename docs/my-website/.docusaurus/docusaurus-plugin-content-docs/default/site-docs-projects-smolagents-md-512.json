@@ -1,0 +1,23 @@
+{
+  "id": "projects/smolagents",
+  "title": "🤗 Smolagents",
+  "description": "smolagents is a barebones library for agents. Agents write python code to call tools and orchestrate other agents.",
+  "source": "@site/docs/projects/smolagents.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/smolagents",
+  "permalink": "/docs/projects/smolagents",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "❤️ 🚅 Projects built on LiteLLM",
+    "permalink": "/docs/project"
+  },
+  "next": {
+    "title": "mini-swe-agent",
+    "permalink": "/docs/projects/mini-swe-agent"
+  }
+}

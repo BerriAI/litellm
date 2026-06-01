@@ -1,0 +1,23 @@
+{
+  "id": "providers/compactifai",
+  "title": "CompactifAI",
+  "description": "https://docs.compactif.ai/",
+  "source": "@site/docs/providers/compactifai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/compactifai",
+  "permalink": "/docs/providers/compactifai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "CometAPI",
+    "permalink": "/docs/providers/cometapi"
+  },
+  "next": {
+    "title": "Custom API Server (Custom Format)",
+    "permalink": "/docs/providers/custom_llm_server"
+  }
+}

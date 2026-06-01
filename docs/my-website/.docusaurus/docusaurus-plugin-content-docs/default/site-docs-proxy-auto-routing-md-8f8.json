@@ -1,0 +1,23 @@
+{
+  "id": "proxy/auto_routing",
+  "title": "Auto Routing",
+  "description": "LiteLLM can auto select the best model for a request based on rules you define.",
+  "source": "@site/docs/proxy/auto_routing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/auto_routing",
+  "permalink": "/docs/proxy/auto_routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] Request Prioritization",
+    "permalink": "/docs/scheduler"
+  },
+  "next": {
+    "title": "Proxy - Load Balancing",
+    "permalink": "/docs/proxy/load_balancing"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/dynamoai",
+  "title": "DynamoAI Guardrails",
+  "description": "LiteLLM supports DynamoAI guardrails for content moderation and policy enforcement on LLM inputs and outputs.",
+  "source": "@site/docs/proxy/guardrails/dynamoai.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/dynamoai",
+  "permalink": "/docs/proxy/guardrails/dynamoai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Custom Guardrail",
+    "permalink": "/docs/proxy/guardrails/custom_guardrail"
+  },
+  "next": {
+    "title": "EnkryptAI Guardrails",
+    "permalink": "/docs/proxy/guardrails/enkryptai"
+  }
+}

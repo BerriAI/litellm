@@ -1,0 +1,23 @@
+{
+  "id": "proxy/model_access",
+  "title": "Restrict Model Access",
+  "description": "Restrict models by Virtual Key",
+  "source": "@site/docs/proxy/model_access.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/model_access",
+  "permalink": "/docs/proxy/model_access",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "How Model Access Works",
+    "permalink": "/docs/proxy/model_access_guide"
+  },
+  "next": {
+    "title": "Model Access Groups",
+    "permalink": "/docs/proxy/model_access_groups"
+  }
+}

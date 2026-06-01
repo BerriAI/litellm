@@ -1,0 +1,23 @@
+{
+  "id": "proxy/worker_startup_hooks",
+  "title": "Worker Startup Hooks",
+  "description": "Use LITELLMWORKERSTARTUPHOOKS to run custom initialization functions in **each worker process** during proxy startup. This is essential when using multi-worker deployments (--numworkers > 1) with libraries that require per-process initialization, such as gflags.",
+  "source": "@site/docs/proxy/worker_startup_hooks.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/worker_startup_hooks",
+  "permalink": "/docs/proxy/worker_startup_hooks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "⚡ Best Practices for Production",
+    "permalink": "/docs/proxy/prod"
+  },
+  "next": {
+    "title": "Release Cycle",
+    "permalink": "/docs/proxy/release_cycle"
+  }
+}

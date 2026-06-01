@@ -1,0 +1,23 @@
+{
+  "id": "observability/mlflow",
+  "title": "🔁 MLflow - OSS LLM Observability and Evaluation",
+  "description": "What is MLflow?",
+  "source": "@site/docs/observability/mlflow.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/mlflow",
+  "permalink": "/docs/observability/mlflow",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "🌙 Lunary - GenAI Observability",
+    "permalink": "/docs/observability/lunary_integration"
+  },
+  "next": {
+    "title": "OpenMeter - Usage-Based Billing",
+    "permalink": "/docs/observability/openmeter"
+  }
+}

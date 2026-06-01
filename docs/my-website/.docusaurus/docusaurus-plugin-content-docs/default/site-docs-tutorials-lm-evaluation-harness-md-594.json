@@ -1,0 +1,19 @@
+{
+  "id": "tutorials/lm_evaluation_harness",
+  "title": "Benchmark LLMs - LM Harness, FastEval, Flask",
+  "description": "LM Harness Benchmarks",
+  "source": "@site/docs/tutorials/lm_evaluation_harness.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/lm_evaluation_harness",
+  "permalink": "/docs/tutorials/lm_evaluation_harness",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Evaluate LLMs - MLflow Evals, Auto Eval",
+    "permalink": "/docs/tutorials/eval_suites"
+  }
+}

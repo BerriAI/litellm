@@ -1,0 +1,25 @@
+{
+  "id": "tutorials/openclaw_integration",
+  "title": "OpenClaw + LiteLLM Integration",
+  "description": "OpenClaw is a self-hosted AI assistant that connects chat apps (WhatsApp, Telegram, Discord, and more) to LLM providers. By routing OpenClaw through LiteLLM Proxy, you get access to 100+ providers, cost tracking, spend limits, and automatic failover — all from a single gateway.",
+  "source": "@site/docs/tutorials/openclaw_integration.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/openclaw_integration",
+  "permalink": "/docs/tutorials/openclaw_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "sidebar_label": "OpenClaw"
+  },
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "OpenCode Quickstart",
+    "permalink": "/docs/tutorials/opencode_integration"
+  },
+  "next": {
+    "title": "Cursor Integration",
+    "permalink": "/docs/tutorials/cursor_integration"
+  }
+}

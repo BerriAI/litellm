@@ -1,0 +1,23 @@
+{
+  "id": "providers/salad_cloud",
+  "title": "SaladCloud AI Gateway",
+  "description": "Overview",
+  "source": "@site/docs/providers/salad_cloud.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/salad_cloud",
+  "permalink": "/docs/providers/salad_cloud",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "RunwayML - Video Generation",
+    "permalink": "/docs/providers/runwayml/videos"
+  },
+  "next": {
+    "title": "SambaNova",
+    "permalink": "/docs/providers/sambanova"
+  }
+}

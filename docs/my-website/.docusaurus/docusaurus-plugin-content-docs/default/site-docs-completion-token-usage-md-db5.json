@@ -1,0 +1,23 @@
+{
+  "id": "completion/token_usage",
+  "title": "Completion Token Usage & Cost",
+  "description": "By default LiteLLM returns token usage in all completion requests (See here)",
+  "source": "@site/docs/completion/token_usage.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/token_usage",
+  "permalink": "/docs/completion/token_usage",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Caching - In-Memory, Redis, s3, gcs, Redis Semantic Cache, Disk",
+    "permalink": "/docs/caching/all_caches"
+  },
+  "next": {
+    "title": "Exception Mapping",
+    "permalink": "/docs/exception_mapping"
+  }
+}

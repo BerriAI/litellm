@@ -1,0 +1,23 @@
+{
+  "id": "guides/code_interpreter",
+  "title": "Code Interpreter",
+  "description": "Use OpenAI's Code Interpreter tool to execute Python code in a secure, sandboxed environment.",
+  "source": "@site/docs/guides/code_interpreter.md",
+  "sourceDirName": "guides",
+  "slug": "/guides/code_interpreter",
+  "permalink": "/docs/guides/code_interpreter",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Computer Use",
+    "permalink": "/docs/completion/computer_use"
+  },
+  "next": {
+    "title": "Message Sanitization for Tool Calling for anthropic models",
+    "permalink": "/docs/completion/message_sanitization"
+  }
+}

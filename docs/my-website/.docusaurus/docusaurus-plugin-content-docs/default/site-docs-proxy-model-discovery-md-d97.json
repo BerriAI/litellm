@@ -1,0 +1,23 @@
+{
+  "id": "proxy/model_discovery",
+  "title": "Model Discovery",
+  "description": "Use this to give users an accurate list of models available behind provider endpoint, when calling /v1/models for wildcard models.",
+  "source": "@site/docs/proxy/model_discovery.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/model_discovery",
+  "permalink": "/docs/proxy/model_discovery",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Forward Client Headers to LLM API",
+    "permalink": "/docs/proxy/forward_client_headers"
+  },
+  "next": {
+    "title": "How Model Access Works",
+    "permalink": "/docs/proxy/model_access_guide"
+  }
+}

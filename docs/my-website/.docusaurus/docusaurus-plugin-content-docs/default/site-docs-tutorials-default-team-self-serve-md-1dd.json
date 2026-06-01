@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/default_team_self_serve",
+  "title": "Onboard Users for AI Exploration",
+  "description": "v1.73.0 introduces the ability to assign new users to Default Teams. This makes it much easier to enable experimentation with LLMs within your company, by allowing users to sign in and create $10 keys for AI exploration.",
+  "source": "@site/docs/tutorials/default_team_self_serve.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/default_team_self_serve",
+  "permalink": "/docs/tutorials/default_team_self_serve",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Proxy: Admin & Access",
+    "permalink": "/docs/tutorials/proxy_admin_access"
+  },
+  "next": {
+    "title": "Microsoft SSO: Sync Groups, Members with LiteLLM",
+    "permalink": "/docs/tutorials/msft_sso"
+  }
+}

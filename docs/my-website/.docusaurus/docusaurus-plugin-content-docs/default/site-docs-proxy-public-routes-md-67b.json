@@ -1,0 +1,23 @@
+{
+  "id": "proxy/public_routes",
+  "title": "Control Public & Private Routes",
+  "description": "Requires a LiteLLM Enterprise License. Get a free trial.",
+  "source": "@site/docs/proxy/public_routes.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/public_routes",
+  "permalink": "/docs/proxy/public_routes",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ Audit Logs",
+    "permalink": "/docs/proxy/multiple_admins"
+  },
+  "next": {
+    "title": "Budgets, Rate Limits",
+    "permalink": "/docs/proxy/users"
+  }
+}

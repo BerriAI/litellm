@@ -1,0 +1,23 @@
+{
+  "id": "proxy/keys_teams_router_settings",
+  "title": "UI - Router Settings for Keys and Teams",
+  "description": "Configure router settings at the key and team level to achieve granular control over routing behavior, fallbacks, retries, and other router configurations. This enables you to customize routing behavior for specific keys or teams without affecting global settings.",
+  "source": "@site/docs/proxy/keys_teams_router_settings.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/keys_teams_router_settings",
+  "permalink": "/docs/proxy/keys_teams_router_settings",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Proxy - Load Balancing",
+    "permalink": "/docs/proxy/load_balancing"
+  },
+  "next": {
+    "title": "Budget Routing",
+    "permalink": "/docs/proxy/provider_budget_routing"
+  }
+}

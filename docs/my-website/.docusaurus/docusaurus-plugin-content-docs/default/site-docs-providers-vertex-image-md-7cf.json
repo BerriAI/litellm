@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_image",
+  "title": "Vertex AI Image Generation",
+  "description": "Vertex AI supports two types of image generation:",
+  "source": "@site/docs/providers/vertex_image.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_image",
+  "permalink": "/docs/providers/vertex_image",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI Embedding",
+    "permalink": "/docs/providers/vertex_embedding"
+  },
+  "next": {
+    "title": "Vertex AI Text to Speech",
+    "permalink": "/docs/providers/vertex_speech"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "observability/humanloop",
+  "title": "Humanloop",
+  "description": "Humanloop enables product teams to build robust AI features with LLMs, using best-in-class tooling for Evaluation, Prompt Management, and Observability.",
+  "source": "@site/docs/observability/humanloop.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/humanloop",
+  "permalink": "/docs/observability/humanloop",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Helicone - OSS LLM Observability Platform",
+    "permalink": "/docs/observability/helicone_integration"
+  },
+  "next": {
+    "title": "Lago - Usage Based Billing",
+    "permalink": "/docs/observability/lago"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/email",
+  "title": "Email Notifications",
+  "description": "<Image",
+  "source": "@site/docs/proxy/email.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/email",
+  "permalink": "/docs/proxy/email",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Team/Key Based Logging",
+    "permalink": "/docs/proxy/team_logging"
+  },
+  "next": {
+    "title": "Langchain, OpenAI SDK, LlamaIndex, Instructor, Curl examples",
+    "permalink": "/docs/proxy/user_keys"
+  }
+}

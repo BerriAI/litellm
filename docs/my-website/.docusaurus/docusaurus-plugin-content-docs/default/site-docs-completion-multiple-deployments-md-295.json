@@ -1,0 +1,14 @@
+{
+  "id": "completion/multiple_deployments",
+  "title": "Multiple Deployments",
+  "description": "If you have multiple deployments of the same model, you can pass the list of deployments, and LiteLLM will return the first result.",
+  "source": "@site/docs/completion/multiple_deployments.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/multiple_deployments",
+  "permalink": "/docs/completion/multiple_deployments",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

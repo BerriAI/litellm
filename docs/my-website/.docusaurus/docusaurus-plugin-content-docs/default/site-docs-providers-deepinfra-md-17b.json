@@ -1,0 +1,23 @@
+{
+  "id": "providers/deepinfra",
+  "title": "DeepInfra",
+  "description": "https://deepinfra.com/",
+  "source": "@site/docs/providers/deepinfra.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/deepinfra",
+  "permalink": "/docs/providers/deepinfra",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Deepgram",
+    "permalink": "/docs/providers/deepgram"
+  },
+  "next": {
+    "title": "Deepseek",
+    "permalink": "/docs/providers/deepseek"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "observability/telemetry",
+  "title": "Telemetry",
+  "description": "There is no Telemetry on LiteLLM - no data is stored by us",
+  "source": "@site/docs/observability/telemetry.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/telemetry",
+  "permalink": "/docs/observability/telemetry",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Supabase Tutorial",
+    "permalink": "/docs/observability/supabase_integration"
+  },
+  "next": {
+    "title": "Vantage Integration",
+    "permalink": "/docs/observability/vantage"
+  }
+}

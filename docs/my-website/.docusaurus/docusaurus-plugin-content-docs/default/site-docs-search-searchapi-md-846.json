@@ -1,0 +1,14 @@
+{
+  "id": "search/searchapi",
+  "title": "SearchAPI.io (Google Search)",
+  "description": "Get started by creating a free API key via https://www.searchapi.io/.",
+  "source": "@site/docs/search/searchapi.md",
+  "sourceDirName": "search",
+  "slug": "/search/searchapi",
+  "permalink": "/docs/search/searchapi",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

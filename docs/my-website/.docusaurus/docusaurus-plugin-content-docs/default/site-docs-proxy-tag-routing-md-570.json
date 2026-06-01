@@ -1,0 +1,23 @@
+{
+  "id": "proxy/tag_routing",
+  "title": "Tag Based Routing",
+  "description": "Route requests based on tags.",
+  "source": "@site/docs/proxy/tag_routing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/tag_routing",
+  "permalink": "/docs/proxy/tag_routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[New] Fallback Management Endpoints",
+    "permalink": "/docs/proxy/fallback_management"
+  },
+  "next": {
+    "title": "Timeouts",
+    "permalink": "/docs/proxy/timeout"
+  }
+}

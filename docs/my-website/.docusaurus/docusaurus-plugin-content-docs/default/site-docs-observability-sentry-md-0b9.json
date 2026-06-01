@@ -1,0 +1,23 @@
+{
+  "id": "observability/sentry",
+  "title": "Sentry - Log LLM Exceptions",
+  "description": "This is community maintained, Please make an issue if you run into a bug",
+  "source": "@site/docs/observability/sentry.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/sentry",
+  "permalink": "/docs/observability/sentry",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Scrub Logged Data",
+    "permalink": "/docs/observability/scrub_data"
+  },
+  "next": {
+    "title": "SigNoz LiteLLM Integration",
+    "permalink": "/docs/observability/signoz"
+  }
+}

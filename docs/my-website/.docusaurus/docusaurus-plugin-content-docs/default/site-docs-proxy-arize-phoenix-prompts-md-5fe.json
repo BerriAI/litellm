@@ -1,0 +1,23 @@
+{
+  "id": "proxy/arize_phoenix_prompts",
+  "title": "Arize Phoenix Prompt Management",
+  "description": "Use prompt versions from Arize Phoenix with LiteLLM SDK and Proxy.",
+  "source": "@site/docs/proxy/arize_phoenix_prompts.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/arize_phoenix_prompts",
+  "permalink": "/docs/proxy/arize_phoenix_prompts",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Prompt Management",
+    "permalink": "/docs/proxy/prompt_management"
+  },
+  "next": {
+    "title": "AI Tools",
+    "permalink": "/docs/ai_tools"
+  }
+}

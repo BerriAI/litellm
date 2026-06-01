@@ -1,0 +1,23 @@
+{
+  "id": "proxy/configs",
+  "title": "Overview",
+  "description": "Set model list, apibase, apikey, temperature & proxy server settings (master-key) on the config.yaml.",
+  "source": "@site/docs/proxy/configs.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/configs",
+  "permalink": "/docs/proxy/configs",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Toolsets",
+    "permalink": "/docs/mcp_toolsets"
+  },
+  "next": {
+    "title": "File Management",
+    "permalink": "/docs/proxy/config_management"
+  }
+}

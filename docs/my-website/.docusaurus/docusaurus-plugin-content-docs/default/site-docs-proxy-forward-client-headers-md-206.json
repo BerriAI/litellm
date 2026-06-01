@@ -1,0 +1,23 @@
+{
+  "id": "proxy/forward_client_headers",
+  "title": "Forward Client Headers to LLM API",
+  "description": "Control which model groups can forward client headers to the underlying LLM provider APIs.",
+  "source": "@site/docs/proxy/forward_client_headers.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/forward_client_headers",
+  "permalink": "/docs/proxy/forward_client_headers",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Response Headers",
+    "permalink": "/docs/proxy/response_headers"
+  },
+  "next": {
+    "title": "Model Discovery",
+    "permalink": "/docs/proxy/model_discovery"
+  }
+}

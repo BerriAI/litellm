@@ -1,0 +1,23 @@
+{
+  "id": "proxy/load_balancing",
+  "title": "Proxy - Load Balancing",
+  "description": "Load balance multiple instances of the same model",
+  "source": "@site/docs/proxy/load_balancing.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/load_balancing",
+  "permalink": "/docs/proxy/load_balancing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Auto Routing",
+    "permalink": "/docs/proxy/auto_routing"
+  },
+  "next": {
+    "title": "UI - Router Settings for Keys and Teams",
+    "permalink": "/docs/proxy/keys_teams_router_settings"
+  }
+}

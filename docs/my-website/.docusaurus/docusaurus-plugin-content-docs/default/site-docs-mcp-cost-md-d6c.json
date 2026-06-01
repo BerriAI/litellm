@@ -1,0 +1,23 @@
+{
+  "id": "mcp_cost",
+  "title": "MCP Cost Tracking",
+  "description": "LiteLLM provides two ways to track costs for MCP tool calls:",
+  "source": "@site/docs/mcp_cost.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_cost",
+  "permalink": "/docs/mcp_cost",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Permission Management",
+    "permalink": "/docs/mcp_control"
+  },
+  "next": {
+    "title": "MCP Guardrails",
+    "permalink": "/docs/mcp_guardrail"
+  }
+}

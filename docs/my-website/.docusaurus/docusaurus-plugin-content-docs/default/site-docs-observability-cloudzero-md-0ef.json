@@ -1,0 +1,23 @@
+{
+  "id": "observability/cloudzero",
+  "title": "CloudZero Integration",
+  "description": "LiteLLM provides an integration with CloudZero's AnyCost API, allowing you to export your LLM usage data to CloudZero for cost tracking analysis.",
+  "source": "@site/docs/observability/cloudzero.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/cloudzero",
+  "permalink": "/docs/observability/cloudzero",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Callbacks",
+    "permalink": "/docs/observability/callbacks"
+  },
+  "next": {
+    "title": "Custom Callbacks",
+    "permalink": "/docs/observability/custom_callback"
+  }
+}

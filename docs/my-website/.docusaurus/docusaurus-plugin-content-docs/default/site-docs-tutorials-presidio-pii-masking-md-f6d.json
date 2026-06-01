@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/presidio_pii_masking",
+  "title": "Presidio PII Masking with LiteLLM - Complete Tutorial",
+  "description": "This tutorial will guide you through setting up PII (Personally Identifiable Information) masking with Microsoft Presidio and LiteLLM Gateway. By the end of this tutorial, you'll have a production-ready setup that automatically detects and masks sensitive information in your LLM requests.",
+  "source": "@site/docs/tutorials/presidio_pii_masking.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/presidio_pii_masking",
+  "permalink": "/docs/tutorials/presidio_pii_masking",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Aporia Guardrails with LiteLLM Gateway",
+    "permalink": "/docs/tutorials/litellm_proxy_aporia"
+  },
+  "next": {
+    "title": "Observability & Evaluation",
+    "permalink": "/docs/tutorials/observability_evaluation"
+  }
+}

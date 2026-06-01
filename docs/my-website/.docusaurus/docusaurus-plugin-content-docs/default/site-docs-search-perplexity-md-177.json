@@ -1,0 +1,23 @@
+{
+  "id": "search/perplexity",
+  "title": "Perplexity AI Search",
+  "description": "Get API Key//www.perplexity.ai/settings/api",
+  "source": "@site/docs/search/perplexity.md",
+  "sourceDirName": "search",
+  "slug": "/search/perplexity",
+  "permalink": "/docs/search/perplexity",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Overview",
+    "permalink": "/docs/search/"
+  },
+  "next": {
+    "title": "Tavily Search",
+    "permalink": "/docs/search/tavily"
+  }
+}

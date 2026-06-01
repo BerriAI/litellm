@@ -1,0 +1,23 @@
+{
+  "id": "observability/slack_integration",
+  "title": "Slack - Logging LLM Input/Output, Exceptions",
+  "description": "We want to learn how we can make the callbacks better! Meet the LiteLLM founders or",
+  "source": "@site/docs/observability/slack_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/slack_integration",
+  "permalink": "/docs/observability/slack_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "SigNoz LiteLLM Integration",
+    "permalink": "/docs/observability/signoz"
+  },
+  "next": {
+    "title": "Sumo Logic",
+    "permalink": "/docs/observability/sumologic_integration"
+  }
+}

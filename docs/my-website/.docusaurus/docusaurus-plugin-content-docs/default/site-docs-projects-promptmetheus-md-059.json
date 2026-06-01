@@ -1,0 +1,23 @@
+{
+  "id": "projects/PROMPTMETHEUS",
+  "title": "PROMPTMETHEUS",
+  "description": "🔥 PROMPTMETHEUS – Prompt Engineering IDE",
+  "source": "@site/docs/projects/PROMPTMETHEUS.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/PROMPTMETHEUS",
+  "permalink": "/docs/projects/PROMPTMETHEUS",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "FastREPL",
+    "permalink": "/docs/projects/FastREPL"
+  },
+  "next": {
+    "title": "Codium PR Agent",
+    "permalink": "/docs/projects/Codium PR Agent"
+  }
+}

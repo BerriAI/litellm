@@ -1,0 +1,23 @@
+{
+  "id": "a2a_cost_tracking",
+  "title": "A2A Agent Cost Tracking",
+  "description": "LiteLLM supports adding custom cost tracking for A2A agents. You can configure:",
+  "source": "@site/docs/a2a_cost_tracking.md",
+  "sourceDirName": ".",
+  "slug": "/a2a_cost_tracking",
+  "permalink": "/docs/a2a_cost_tracking",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "A2A Agent Authentication Headers",
+    "permalink": "/docs/a2a_agent_headers"
+  },
+  "next": {
+    "title": "Agent Permission Management",
+    "permalink": "/docs/a2a_agent_permissions"
+  }
+}

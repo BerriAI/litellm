@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/bedrock",
+  "title": "Bedrock (boto3) SDK",
+  "description": "Pass-through endpoints for Bedrock - call provider-specific endpoint, in native format (no translation).",
+  "source": "@site/docs/pass_through/bedrock.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/bedrock",
+  "permalink": "/docs/pass_through/bedrock",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "AssemblyAI",
+    "permalink": "/docs/pass_through/assembly_ai"
+  },
+  "next": {
+    "title": "Azure Passthrough",
+    "permalink": "/docs/pass_through/azure_passthrough"
+  }
+}

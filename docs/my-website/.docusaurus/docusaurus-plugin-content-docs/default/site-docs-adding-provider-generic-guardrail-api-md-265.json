@@ -1,0 +1,23 @@
+{
+  "id": "adding_provider/generic_guardrail_api",
+  "title": "[BETA] Generic Guardrail API - Integrate Without a PR",
+  "description": "The Problem",
+  "source": "@site/docs/adding_provider/generic_guardrail_api.md",
+  "sourceDirName": "adding_provider",
+  "slug": "/adding_provider/generic_guardrail_api",
+  "permalink": "/docs/adding_provider/generic_guardrail_api",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Realtime API Guardrails",
+    "permalink": "/docs/proxy/guardrails/realtime_guardrails"
+  },
+  "next": {
+    "title": "Adding a New Guardrail Integration",
+    "permalink": "/docs/adding_provider/simple_guardrail_tutorial"
+  }
+}

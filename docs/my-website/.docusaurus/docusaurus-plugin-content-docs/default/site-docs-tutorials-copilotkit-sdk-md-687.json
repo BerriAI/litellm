@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/copilotkit_sdk",
+  "title": "CopilotKit SDK with LiteLLM",
+  "description": "Use CopilotKit SDK with any LLM provider through LiteLLM Proxy.",
+  "source": "@site/docs/tutorials/copilotkit_sdk.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/copilotkit_sdk",
+  "permalink": "/docs/tutorials/copilotkit_sdk",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Claude Agent SDK with LiteLLM",
+    "permalink": "/docs/tutorials/claude_agent_sdk"
+  },
+  "next": {
+    "title": "Google ADK with LiteLLM",
+    "permalink": "/docs/tutorials/google_adk"
+  }
+}

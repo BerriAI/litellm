@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/cpu_issues",
+  "title": "CPU Issue Classification & Reproduction",
+  "description": "1. Classify the CPU Issue",
+  "source": "@site/docs/troubleshoot/cpu_issues.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/cpu_issues",
+  "permalink": "/docs/troubleshoot/cpu_issues",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Latency Overhead Troubleshooting",
+    "permalink": "/docs/troubleshoot/latency_overhead"
+  },
+  "next": {
+    "title": "Memory Issue Classification & Reproduction",
+    "permalink": "/docs/troubleshoot/memory_issues"
+  }
+}

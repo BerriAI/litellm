@@ -1,0 +1,23 @@
+{
+  "id": "pass_through/vertex_ai",
+  "title": "Vertex AI SDK",
+  "description": "Pass-through endpoints for Vertex AI - call provider-specific endpoint, in native format (no translation).",
+  "source": "@site/docs/pass_through/vertex_ai.md",
+  "sourceDirName": "pass_through",
+  "slug": "/pass_through/vertex_ai",
+  "permalink": "/docs/pass_through/vertex_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "OpenAI Passthrough",
+    "permalink": "/docs/pass_through/openai_passthrough"
+  },
+  "next": {
+    "title": "Vertex AI Live API WebSocket Passthrough",
+    "permalink": "/docs/pass_through/vertex_ai_live_websocket"
+  }
+}

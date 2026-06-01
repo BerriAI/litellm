@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/claude_mcp",
+  "title": "Use Claude Code with MCPs",
+  "description": "This tutorial shows how to connect MCP servers to Claude Code via LiteLLM Proxy.",
+  "source": "@site/docs/tutorials/claude_mcp.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_mcp",
+  "permalink": "/docs/tutorials/claude_mcp",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Claude Code - WebSearch Across All Providers",
+    "permalink": "/docs/tutorials/claude_code_websearch"
+  },
+  "next": {
+    "title": "Use Claude Code with Non-Anthropic Models",
+    "permalink": "/docs/tutorials/claude_non_anthropic_models"
+  }
+}

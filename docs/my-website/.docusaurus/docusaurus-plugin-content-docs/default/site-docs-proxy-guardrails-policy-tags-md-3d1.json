@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/policy_tags",
+  "title": "Tag-Based Policy Attachments",
+  "description": "Apply guardrail policies automatically to any key or team that has a specific tag. Instead of attaching policies one-by-one, tag your keys and let the policy engine handle the rest.",
+  "source": "@site/docs/proxy/guardrails/policy_tags.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/policy_tags",
+  "permalink": "/docs/proxy/guardrails/policy_tags",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Policy Templates",
+    "permalink": "/docs/proxy/guardrails/policy_templates"
+  },
+  "next": {
+    "title": "Modify / Reject Incoming Requests",
+    "permalink": "/docs/proxy/call_hooks"
+  }
+}

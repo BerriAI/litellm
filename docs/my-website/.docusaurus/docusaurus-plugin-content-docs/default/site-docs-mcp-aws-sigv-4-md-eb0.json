@@ -1,0 +1,23 @@
+{
+  "id": "mcp_aws_sigv4",
+  "title": "MCP - AWS SigV4 Auth",
+  "description": "Use AWS SigV4 authentication to connect LiteLLM to MCP servers hosted on AWS Bedrock AgentCore.",
+  "source": "@site/docs/mcp_aws_sigv4.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_aws_sigv4",
+  "permalink": "/docs/mcp_aws_sigv4",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP OAuth",
+    "permalink": "/docs/mcp_oauth"
+  },
+  "next": {
+    "title": "MCP Zero Trust Auth (JWT Signer)",
+    "permalink": "/docs/mcp_zero_trust"
+  }
+}

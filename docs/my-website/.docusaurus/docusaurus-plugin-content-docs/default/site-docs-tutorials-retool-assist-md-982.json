@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/retool_assist",
+  "title": "Retool Assist",
+  "description": "This guide walks you through connecting Retool Assist to LiteLLM Proxy. Retool Assist uses AI to generate and edit apps from within the Retool app IDE. Using LiteLLM with Retool Assist allows you to:",
+  "source": "@site/docs/tutorials/retool_assist.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/retool_assist",
+  "permalink": "/docs/tutorials/retool_assist",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "OpenAI Codex",
+    "permalink": "/docs/tutorials/openai_codex"
+  },
+  "next": {
+    "title": "Track Usage for Coding Tools",
+    "permalink": "/docs/tutorials/cost_tracking_coding"
+  }
+}

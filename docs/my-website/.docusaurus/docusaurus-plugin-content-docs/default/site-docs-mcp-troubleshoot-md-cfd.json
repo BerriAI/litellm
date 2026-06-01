@@ -1,0 +1,23 @@
+{
+  "id": "mcp_troubleshoot",
+  "title": "MCP Troubleshooting Guide",
+  "description": "When LiteLLM acts as an MCP proxy, traffic normally flows Client → LiteLLM Proxy → MCP Server, while OAuth-enabled setups add an authorization server for metadata discovery.",
+  "source": "@site/docs/mcp_troubleshoot.md",
+  "sourceDirName": ".",
+  "slug": "/mcp_troubleshoot",
+  "permalink": "/docs/mcp_troubleshoot",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MCP Zero Trust Auth (JWT Signer)",
+    "permalink": "/docs/mcp_zero_trust"
+  },
+  "next": {
+    "title": "/v1/messages",
+    "permalink": "/docs/anthropic_unified/"
+  }
+}

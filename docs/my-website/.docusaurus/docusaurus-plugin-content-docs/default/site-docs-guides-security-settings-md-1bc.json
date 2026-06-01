@@ -1,0 +1,23 @@
+{
+  "id": "guides/security_settings",
+  "title": "SSL, HTTP Proxy Security Settings",
+  "description": "If you're in an environment using an older TTS bundle, with an older encryption, follow this guide. By default",
+  "source": "@site/docs/guides/security_settings.md",
+  "sourceDirName": "guides",
+  "slug": "/guides/security_settings",
+  "permalink": "/docs/guides/security_settings",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Security & Network",
+    "permalink": "/docs/guides/security_network"
+  },
+  "next": {
+    "title": "Overview",
+    "permalink": "/docs/tutorials/"
+  }
+}

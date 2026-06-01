@@ -1,0 +1,23 @@
+{
+  "id": "providers/gmi",
+  "title": "GMI Cloud",
+  "description": "Overview",
+  "source": "@site/docs/providers/gmi.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/gmi",
+  "permalink": "/docs/providers/gmi",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "GitHub Copilot",
+    "permalink": "/docs/providers/github_copilot"
+  },
+  "next": {
+    "title": "ChatGPT Subscription",
+    "permalink": "/docs/providers/chatgpt"
+  }
+}

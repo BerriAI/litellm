@@ -1,0 +1,23 @@
+{
+  "id": "projects/Railtracks",
+  "title": "Railtracks",
+  "description": "Railtracks is an open-source agentic framework that helps developers build resilient agentic systems offering local and remote monitoring tools.",
+  "source": "@site/docs/projects/Railtracks.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/Railtracks",
+  "permalink": "/docs/projects/Railtracks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "HolmesGPT",
+    "permalink": "/docs/projects/HolmesGPT"
+  },
+  "next": {
+    "title": "Code Quality",
+    "permalink": "/docs/extras/code_quality"
+  }
+}

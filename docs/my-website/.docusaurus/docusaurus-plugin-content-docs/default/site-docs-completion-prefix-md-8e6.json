@@ -1,0 +1,23 @@
+{
+  "id": "completion/prefix",
+  "title": "Pre-fix Assistant Messages",
+  "description": "Supported by:",
+  "source": "@site/docs/completion/prefix.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/prefix",
+  "permalink": "/docs/completion/prefix",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Prompts & Context",
+    "permalink": "/docs/guides/prompts_context"
+  },
+  "next": {
+    "title": "Predicted Outputs",
+    "permalink": "/docs/completion/predict_outputs"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "observability/gcs_bucket_integration",
+  "title": "Google Cloud Storage Buckets",
+  "description": "Log LLM Logs to Google Cloud Storage Buckets",
+  "source": "@site/docs/observability/gcs_bucket_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/gcs_bucket_integration",
+  "permalink": "/docs/observability/gcs_bucket_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Focus Export (Experimental)",
+    "permalink": "/docs/observability/focus"
+  },
+  "next": {
+    "title": "Generic API Callback (Webhook)",
+    "permalink": "/docs/observability/generic_api"
+  }
+}

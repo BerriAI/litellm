@@ -1,0 +1,23 @@
+{
+  "id": "data_retention",
+  "title": "Data Retention Policy",
+  "description": "LiteLLM Cloud",
+  "source": "@site/docs/data_retention.md",
+  "sourceDirName": ".",
+  "slug": "/data_retention",
+  "permalink": "/docs/data_retention",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Data Privacy and Security",
+    "permalink": "/docs/data_security"
+  },
+  "next": {
+    "title": "LiteLLM Self-Hosted Security & Encryption FAQ",
+    "permalink": "/docs/proxy/security_encryption_faq"
+  }
+}

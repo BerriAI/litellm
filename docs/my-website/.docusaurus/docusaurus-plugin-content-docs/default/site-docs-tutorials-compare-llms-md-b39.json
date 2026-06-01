@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/compare_llms",
+  "title": "Benchmark LLMs",
+  "description": "Easily benchmark LLMs for a given question by viewing",
+  "source": "@site/docs/tutorials/compare_llms.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/compare_llms",
+  "permalink": "/docs/tutorials/compare_llms",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Elasticsearch Logging with LiteLLM",
+    "permalink": "/docs/tutorials/elasticsearch_logging"
+  },
+  "next": {
+    "title": "Reliability test Multiple LLM Providers with LiteLLM",
+    "permalink": "/docs/tutorials/litellm_Test_Multiple_Providers"
+  }
+}

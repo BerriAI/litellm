@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui/page_visibility",
+  "title": "Control Page Visibility for Internal Users",
+  "description": "Configure which navigation tabs and pages are visible to internal users (non-admin developers) in the LiteLLM UI.",
+  "source": "@site/docs/proxy/ui/page_visibility.md",
+  "sourceDirName": "proxy/ui",
+  "slug": "/proxy/ui/page_visibility",
+  "permalink": "/docs/proxy/ui/page_visibility",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bulk Edit Users",
+    "permalink": "/docs/proxy/ui/bulk_edit_users"
+  },
+  "next": {
+    "title": "Customer Usage",
+    "permalink": "/docs/proxy/customer_usage"
+  }
+}

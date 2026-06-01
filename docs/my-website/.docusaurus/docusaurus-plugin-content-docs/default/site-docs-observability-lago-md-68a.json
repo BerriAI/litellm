@@ -1,0 +1,23 @@
+{
+  "id": "observability/lago",
+  "title": "Lago - Usage Based Billing",
+  "description": "Lago offers a self-hosted and cloud, metering and usage-based billing solution.",
+  "source": "@site/docs/observability/lago.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/lago",
+  "permalink": "/docs/observability/lago",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Humanloop",
+    "permalink": "/docs/observability/humanloop"
+  },
+  "next": {
+    "title": "🪢 Langfuse - Logging LLM Input/Output",
+    "permalink": "/docs/observability/langfuse_integration"
+  }
+}

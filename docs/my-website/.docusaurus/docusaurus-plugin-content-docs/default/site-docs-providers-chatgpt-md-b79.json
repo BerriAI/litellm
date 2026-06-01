@@ -1,0 +1,23 @@
+{
+  "id": "providers/chatgpt",
+  "title": "ChatGPT Subscription",
+  "description": "Use ChatGPT Pro/Max subscription models through LiteLLM with OAuth device flow authentication.",
+  "source": "@site/docs/providers/chatgpt.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/chatgpt",
+  "permalink": "/docs/providers/chatgpt",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "GMI Cloud",
+    "permalink": "/docs/providers/gmi"
+  },
+  "next": {
+    "title": "GradientAI",
+    "permalink": "/docs/providers/gradient_ai"
+  }
+}

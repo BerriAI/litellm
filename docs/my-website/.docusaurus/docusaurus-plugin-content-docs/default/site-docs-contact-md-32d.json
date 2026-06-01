@@ -1,0 +1,14 @@
+{
+  "id": "contact",
+  "title": "Contact Us",
+  "description": "* Community Slack 💭",
+  "source": "@site/docs/contact.md",
+  "sourceDirName": ".",
+  "slug": "/contact",
+  "permalink": "/docs/contact",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

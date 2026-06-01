@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/enkryptai",
+  "title": "EnkryptAI Guardrails",
+  "description": "LiteLLM supports EnkryptAI guardrails for content moderation and safety checks on LLM inputs and outputs.",
+  "source": "@site/docs/proxy/guardrails/enkryptai.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/enkryptai",
+  "permalink": "/docs/proxy/guardrails/enkryptai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "DynamoAI Guardrails",
+    "permalink": "/docs/proxy/guardrails/dynamoai"
+  },
+  "next": {
+    "title": "Gray Swan Cygnal Guardrail",
+    "permalink": "/docs/proxy/guardrails/grayswan"
+  }
+}

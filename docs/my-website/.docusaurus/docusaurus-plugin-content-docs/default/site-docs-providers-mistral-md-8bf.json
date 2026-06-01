@@ -1,0 +1,23 @@
+{
+  "id": "providers/mistral",
+  "title": "Mistral AI API",
+  "description": "https://docs.mistral.ai/api/",
+  "source": "@site/docs/providers/mistral.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/mistral",
+  "permalink": "/docs/providers/mistral",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Milvus - Vector Store",
+    "permalink": "/docs/providers/milvus_vector_stores"
+  },
+  "next": {
+    "title": "MiniMax",
+    "permalink": "/docs/providers/minimax"
+  }
+}

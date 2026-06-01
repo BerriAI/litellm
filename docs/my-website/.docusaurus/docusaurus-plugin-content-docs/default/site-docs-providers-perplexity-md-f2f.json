@@ -1,0 +1,23 @@
+{
+  "id": "providers/perplexity",
+  "title": "Perplexity AI (pplx-api)",
+  "description": "https://www.perplexity.ai",
+  "source": "@site/docs/providers/perplexity.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/perplexity",
+  "permalink": "/docs/providers/perplexity",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "🆕 OVHCloud AI Endpoints",
+    "permalink": "/docs/providers/ovhcloud"
+  },
+  "next": {
+    "title": "Perplexity Embeddings",
+    "permalink": "/docs/providers/perplexity_embedding"
+  }
+}

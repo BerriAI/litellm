@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/first_playground",
+  "title": "Create your first LLM playground",
+  "description": "Create a playground to evaluate multiple LLM Providers in less than 10 minutes. If you want to see this in prod, check out our website.",
+  "source": "@site/docs/tutorials/first_playground.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/first_playground",
+  "permalink": "/docs/tutorials/first_playground",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Set up environment",
+    "permalink": "/docs/tutorials/installation"
+  },
+  "next": {
+    "title": "Using Text Completion Format - with Completion()",
+    "permalink": "/docs/tutorials/text_completion"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/lasso_security",
+  "title": "Lasso Security",
+  "description": "Use Lasso Security to protect your LLM applications from prompt injection attacks, harmful content generation, and other security threats through comprehensive input and output validation.",
+  "source": "@site/docs/proxy/guardrails/lasso_security.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/lasso_security",
+  "permalink": "/docs/proxy/guardrails/lasso_security",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Lakera AI",
+    "permalink": "/docs/proxy/guardrails/lakera_ai"
+  },
+  "next": {
+    "title": "Google Cloud Model Armor",
+    "permalink": "/docs/proxy/guardrails/model_armor"
+  }
+}

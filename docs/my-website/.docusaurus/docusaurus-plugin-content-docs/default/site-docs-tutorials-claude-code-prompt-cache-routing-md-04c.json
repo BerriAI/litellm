@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/claude_code_prompt_cache_routing",
+  "title": "Claude Code - Prompt Cache Routing",
+  "description": "Claude's Prompt Caching feature helps to optimize API usage through attempting to cache prompts and re-use cached prompts during subsequent API calls. This feature is used by Claude Code.",
+  "source": "@site/docs/tutorials/claude_code_prompt_cache_routing.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/claude_code_prompt_cache_routing",
+  "permalink": "/docs/tutorials/claude_code_prompt_cache_routing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Claude Code - Granular Cost Tracking",
+    "permalink": "/docs/tutorials/claude_code_customer_tracking"
+  },
+  "next": {
+    "title": "Claude Code - WebSearch Across All Providers",
+    "permalink": "/docs/tutorials/claude_code_websearch"
+  }
+}

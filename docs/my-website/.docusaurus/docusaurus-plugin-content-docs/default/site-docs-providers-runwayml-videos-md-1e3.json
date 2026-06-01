@@ -1,0 +1,23 @@
+{
+  "id": "providers/runwayml/videos",
+  "title": "RunwayML - Video Generation",
+  "description": "LiteLLM supports RunwayML's Gen-4 video generation API, allowing you to generate videos from text prompts and images.",
+  "source": "@site/docs/providers/runwayml/videos.md",
+  "sourceDirName": "providers/runwayml",
+  "slug": "/providers/runwayml/videos",
+  "permalink": "/docs/providers/runwayml/videos",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "RunwayML - Image Generation",
+    "permalink": "/docs/providers/runwayml/images"
+  },
+  "next": {
+    "title": "SaladCloud AI Gateway",
+    "permalink": "/docs/providers/salad_cloud"
+  }
+}

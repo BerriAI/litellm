@@ -1,0 +1,23 @@
+{
+  "id": "proxy/db_deadlocks",
+  "title": "High Availability Setup (Resolve DB Deadlocks)",
+  "description": "This configuration is required for production deployments handling 1000+ requests per second. Without Redis configured, you may experience PostgreSQL connection exhaustion (FATAL: sorry, too many clients already).",
+  "source": "@site/docs/proxy/db_deadlocks.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/db_deadlocks",
+  "permalink": "/docs/proxy/db_deadlocks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "[BETA] High Availability Control Plane",
+    "permalink": "/docs/proxy/high_availability_control_plane"
+  },
+  "next": {
+    "title": "What is stored in the DB",
+    "permalink": "/docs/proxy/db_info"
+  }
+}

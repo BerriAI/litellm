@@ -1,0 +1,23 @@
+{
+  "id": "providers/lm_studio",
+  "title": "LM Studio",
+  "description": "https://lmstudio.ai/docs/basics/server",
+  "source": "@site/docs/providers/lm_studio.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/lm_studio",
+  "permalink": "/docs/providers/lm_studio",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LlamaGate",
+    "permalink": "/docs/providers/llamagate"
+  },
+  "next": {
+    "title": "Manus",
+    "permalink": "/docs/providers/manus"
+  }
+}

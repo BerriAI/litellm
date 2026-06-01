@@ -1,0 +1,23 @@
+{
+  "id": "providers/zai",
+  "title": "Z.AI (Zhipu AI)",
+  "description": "https://z.ai/",
+  "source": "@site/docs/providers/zai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/zai",
+  "permalink": "/docs/providers/zai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Xinference [Xorbits Inference]",
+    "permalink": "/docs/providers/xinference"
+  },
+  "next": {
+    "title": "Routing & Load Balancing",
+    "permalink": "/docs/routing-load-balancing"
+  }
+}

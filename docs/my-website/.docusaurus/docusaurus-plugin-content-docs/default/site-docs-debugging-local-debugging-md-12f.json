@@ -1,0 +1,14 @@
+{
+  "id": "debugging/local_debugging",
+  "title": "Local Debugging",
+  "description": "There's 2 ways to do local debugging - litellm.turnondebug() and by passing in a custom function completion(...loggerfn=). Warning: Make sure to not use turnon_debug() in production. It logs API keys, which might end up in log files.",
+  "source": "@site/docs/debugging/local_debugging.md",
+  "sourceDirName": "debugging",
+  "slug": "/debugging/local_debugging",
+  "permalink": "/docs/debugging/local_debugging",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_ai_img",
+  "title": "Azure AI Image Generation (Black Forest Labs - Flux)",
+  "description": "Azure AI provides powerful image generation capabilities using FLUX models from Black Forest Labs to create high-quality images from text descriptions.",
+  "source": "@site/docs/providers/azure_ai_img.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/azure_ai_img",
+  "permalink": "/docs/providers/azure_ai_img",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure AI Speech (Cognitive Services)",
+    "permalink": "/docs/providers/azure_ai_speech"
+  },
+  "next": {
+    "title": "Azure AI Search - Vector Store (Unified API)",
+    "permalink": "/docs/providers/azure_ai_vector_stores"
+  }
+}

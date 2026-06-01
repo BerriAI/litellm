@@ -1,0 +1,23 @@
+{
+  "id": "completion/stream",
+  "title": "Streaming + Async",
+  "description": "| Feature | LiteLLM SDK | LiteLLM Proxy |",
+  "source": "@site/docs/completion/stream.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/stream",
+  "permalink": "/docs/completion/stream",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Core Requests",
+    "permalink": "/docs/guides/core_request_response_patterns"
+  },
+  "next": {
+    "title": "Batching Completion()",
+    "permalink": "/docs/completion/batching"
+  }
+}

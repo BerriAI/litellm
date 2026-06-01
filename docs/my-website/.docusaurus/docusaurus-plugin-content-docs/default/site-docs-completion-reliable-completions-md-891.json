@@ -1,0 +1,23 @@
+{
+  "id": "completion/reliable_completions",
+  "title": "Reliability - Retries, Fallbacks",
+  "description": "LiteLLM helps prevent failed requests in 2 ways:",
+  "source": "@site/docs/completion/reliable_completions.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/reliable_completions",
+  "permalink": "/docs/completion/reliable_completions",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Mock Completion() Responses - Save Testing Costs 💰",
+    "permalink": "/docs/completion/mock_requests"
+  },
+  "next": {
+    "title": "Budget Manager",
+    "permalink": "/docs/budget_manager"
+  }
+}

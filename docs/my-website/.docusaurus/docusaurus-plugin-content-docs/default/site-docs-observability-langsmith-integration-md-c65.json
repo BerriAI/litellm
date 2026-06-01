@@ -1,0 +1,23 @@
+{
+  "id": "observability/langsmith_integration",
+  "title": "Langsmith - Logging LLM Input/Output",
+  "description": "An all-in-one developer platform for every step of the application lifecycle",
+  "source": "@site/docs/observability/langsmith_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/langsmith_integration",
+  "permalink": "/docs/observability/langsmith_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "🪢 Langfuse OpenTelemetry Integration",
+    "permalink": "/docs/observability/langfuse_otel_integration"
+  },
+  "next": {
+    "title": "Langtrace AI",
+    "permalink": "/docs/observability/langtrace_integration"
+  }
+}

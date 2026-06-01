@@ -1,0 +1,14 @@
+{
+  "id": "extras/gemini_img_migration",
+  "title": "Gemini Image Generation Migration Guide",
+  "description": "Who is impacted by this change?",
+  "source": "@site/docs/extras/gemini_img_migration.md",
+  "sourceDirName": "extras",
+  "slug": "/extras/gemini_img_migration",
+  "permalink": "/docs/extras/gemini_img_migration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {}
+}

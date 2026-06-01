@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_realtime_with_audio",
+  "title": "Bedrock Realtime API",
+  "description": "Overview",
+  "source": "@site/docs/providers/bedrock_realtime_with_audio.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_realtime_with_audio",
+  "permalink": "/docs/providers/bedrock_realtime_with_audio",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bedrock Batches",
+    "permalink": "/docs/providers/bedrock_batches"
+  },
+  "next": {
+    "title": "AWS Polly Text to Speech (tts)",
+    "permalink": "/docs/providers/aws_polly"
+  }
+}

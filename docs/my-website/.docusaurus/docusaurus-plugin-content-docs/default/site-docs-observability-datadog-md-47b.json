@@ -1,0 +1,23 @@
+{
+  "id": "observability/datadog",
+  "title": "DataDog",
+  "description": "LiteLLM Supports logging to the following Datdog Integrations:",
+  "source": "@site/docs/observability/datadog.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/datadog",
+  "permalink": "/docs/observability/datadog",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Custom Callbacks",
+    "permalink": "/docs/observability/custom_callback"
+  },
+  "next": {
+    "title": "🔭 DeepEval - Open-Source Evals with Tracing",
+    "permalink": "/docs/observability/deepeval_integration"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/completion/output",
+  "source": "@site/src/pages/completion/output.md",
+  "title": "Completion Function - completion()",
+  "description": "Here's the exact json output you can expect from a litellm completion call:",
+  "frontMatter": {},
+  "unlisted": false
+}

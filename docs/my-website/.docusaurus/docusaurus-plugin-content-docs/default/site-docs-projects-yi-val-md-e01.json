@@ -1,0 +1,23 @@
+{
+  "id": "projects/YiVal",
+  "title": "YiVal",
+  "description": "🚀 Evaluate and Evolve.🚀 YiVal is an open source GenAI-Ops framework that allows you to manually or automatically tune and evaluate your AIGC prompts, retrieval configs and fine-tune the model params all at once with your preferred choices of test dataset generation, evaluation algorithms and improvement strategies.",
+  "source": "@site/docs/projects/YiVal.md",
+  "sourceDirName": "projects",
+  "slug": "/projects/YiVal",
+  "permalink": "/docs/projects/YiVal",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Otter",
+    "permalink": "/docs/projects/Otter"
+  },
+  "next": {
+    "title": "llmcord.py",
+    "permalink": "/docs/projects/llm_cord"
+  }
+}

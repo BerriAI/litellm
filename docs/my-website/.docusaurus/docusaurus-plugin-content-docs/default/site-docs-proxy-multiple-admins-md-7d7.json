@@ -1,0 +1,23 @@
+{
+  "id": "proxy/multiple_admins",
+  "title": "✨ Audit Logs",
+  "description": "<Image",
+  "source": "@site/docs/proxy/multiple_admins.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/multiple_admins",
+  "permalink": "/docs/proxy/multiple_admins",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "IP Address Filtering",
+    "permalink": "/docs/proxy/ip_address"
+  },
+  "next": {
+    "title": "Control Public & Private Routes",
+    "permalink": "/docs/proxy/public_routes"
+  }
+}

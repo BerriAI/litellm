@@ -1,0 +1,23 @@
+{
+  "id": "providers/moonshot",
+  "title": "Moonshot AI",
+  "description": "Overview",
+  "source": "@site/docs/providers/moonshot.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/moonshot",
+  "permalink": "/docs/providers/moonshot",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "MiniMax",
+    "permalink": "/docs/providers/minimax"
+  },
+  "next": {
+    "title": "Morph",
+    "permalink": "/docs/providers/morph"
+  }
+}

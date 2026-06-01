@@ -1,0 +1,23 @@
+{
+  "id": "troubleshoot/max_callbacks",
+  "title": "MAX_CALLBACKS Limit",
+  "description": "Error Message",
+  "source": "@site/docs/troubleshoot/max_callbacks.md",
+  "sourceDirName": "troubleshoot",
+  "slug": "/troubleshoot/max_callbacks",
+  "permalink": "/docs/troubleshoot/max_callbacks",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Spend Update Queue Full Warnings",
+    "permalink": "/docs/troubleshoot/spend_queue_warnings"
+  },
+  "next": {
+    "title": "Troubleshooting Prisma Migration Errors",
+    "permalink": "/docs/troubleshoot/prisma_migrations"
+  }
+}

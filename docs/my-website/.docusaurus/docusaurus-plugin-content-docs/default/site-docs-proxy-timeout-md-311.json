@@ -1,0 +1,23 @@
+{
+  "id": "proxy/timeout",
+  "title": "Timeouts",
+  "description": "The timeout set in router is for the entire length of the call, and is passed down to the completion() call level as well.",
+  "source": "@site/docs/proxy/timeout.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/timeout",
+  "permalink": "/docs/proxy/timeout",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Tag Based Routing",
+    "permalink": "/docs/proxy/tag_routing"
+  },
+  "next": {
+    "title": "Provider specific Wildcard routing",
+    "permalink": "/docs/wildcard_routing"
+  }
+}

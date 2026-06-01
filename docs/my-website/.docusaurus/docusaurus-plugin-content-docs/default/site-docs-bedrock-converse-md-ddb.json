@@ -1,0 +1,23 @@
+{
+  "id": "bedrock_converse",
+  "title": "/converse",
+  "description": "Call Bedrock's /converse endpoint through LiteLLM Proxy.",
+  "source": "@site/docs/bedrock_converse.md",
+  "sourceDirName": ".",
+  "slug": "/bedrock_converse",
+  "permalink": "/docs/bedrock_converse",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/completions",
+    "permalink": "/docs/text_completion"
+  },
+  "next": {
+    "title": "/embeddings",
+    "permalink": "/docs/embedding/supported_embedding"
+  }
+}

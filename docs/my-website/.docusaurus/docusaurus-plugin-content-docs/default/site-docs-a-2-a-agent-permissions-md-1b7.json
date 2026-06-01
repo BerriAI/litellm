@@ -1,0 +1,23 @@
+{
+  "id": "a2a_agent_permissions",
+  "title": "Agent Permission Management",
+  "description": "Control which A2A agents can be accessed by specific keys or teams in LiteLLM.",
+  "source": "@site/docs/a2a_agent_permissions.md",
+  "sourceDirName": ".",
+  "slug": "/a2a_agent_permissions",
+  "permalink": "/docs/a2a_agent_permissions",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "A2A Agent Cost Tracking",
+    "permalink": "/docs/a2a_cost_tracking"
+  },
+  "next": {
+    "title": "Agent Iteration Budgets",
+    "permalink": "/docs/a2a_iteration_budgets"
+  }
+}

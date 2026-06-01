@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure/azure_speech",
+  "title": "Azure Text to Speech (tts)",
+  "description": "Overview",
+  "source": "@site/docs/providers/azure/azure_speech.md",
+  "sourceDirName": "providers/azure",
+  "slug": "/providers/azure/azure_speech",
+  "permalink": "/docs/providers/azure/azure_speech",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure OpenAI Embeddings",
+    "permalink": "/docs/providers/azure/azure_embedding"
+  },
+  "next": {
+    "title": "Azure Video Generation",
+    "permalink": "/docs/providers/azure/videos"
+  }
+}

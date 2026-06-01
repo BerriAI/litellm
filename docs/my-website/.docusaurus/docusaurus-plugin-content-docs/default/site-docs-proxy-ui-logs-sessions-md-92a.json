@@ -1,0 +1,23 @@
+{
+  "id": "proxy/ui_logs_sessions",
+  "title": "Session Logs",
+  "description": "Group requests into sessions. This allows you to group related requests together.",
+  "source": "@site/docs/proxy/ui_logs_sessions.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/ui_logs_sessions",
+  "permalink": "/docs/proxy/ui_logs_sessions",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "UI Spend Log Settings",
+    "permalink": "/docs/proxy/ui_spend_log_settings"
+  },
+  "next": {
+    "title": "Deleted Keys & Teams Audit Logs",
+    "permalink": "/docs/proxy/deleted_keys_teams"
+  }
+}

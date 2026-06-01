@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_embedding",
+  "title": "Vertex AI Embedding",
+  "description": "Usage - Embedding",
+  "source": "@site/docs/providers/vertex_embedding.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_embedding",
+  "permalink": "/docs/providers/vertex_embedding",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex AI - Self Deployed Models",
+    "permalink": "/docs/providers/vertex_self_deployed"
+  },
+  "next": {
+    "title": "Vertex AI Image Generation",
+    "permalink": "/docs/providers/vertex_image"
+  }
+}

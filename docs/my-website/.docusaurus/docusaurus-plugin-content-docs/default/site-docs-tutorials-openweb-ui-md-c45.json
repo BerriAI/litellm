@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/openweb_ui",
+  "title": "Open WebUI",
+  "description": "This guide walks you through connecting Open WebUI to LiteLLM. Using LiteLLM with Open WebUI allows teams to",
+  "source": "@site/docs/tutorials/openweb_ui.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/openweb_ui",
+  "permalink": "/docs/tutorials/openweb_ui",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "AI Tools",
+    "permalink": "/docs/ai_tools"
+  },
+  "next": {
+    "title": "Claude Code Quickstart",
+    "permalink": "/docs/tutorials/claude_responses_api"
+  }
+}

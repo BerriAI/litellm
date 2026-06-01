@@ -1,0 +1,23 @@
+{
+  "id": "contributing",
+  "title": "Contributing - UI",
+  "description": "Thanks for contributing to the LiteLLM UI! This guide will help you set up your local development environment.",
+  "source": "@site/docs/contributing.md",
+  "sourceDirName": ".",
+  "slug": "/contributing",
+  "permalink": "/docs/contributing",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Contributing to Documentation",
+    "permalink": "/docs/extras/contributing"
+  },
+  "next": {
+    "title": "Custom Pricing - SageMaker, Azure, etc",
+    "permalink": "/docs/sdk_custom_pricing"
+  }
+}

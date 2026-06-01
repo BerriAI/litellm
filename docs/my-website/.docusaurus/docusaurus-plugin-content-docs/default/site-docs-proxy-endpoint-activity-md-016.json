@@ -1,0 +1,23 @@
+{
+  "id": "proxy/endpoint_activity",
+  "title": "Endpoint Activity",
+  "description": "Track and visualize API endpoint usage directly in the dashboard. Monitor endpoint-level activity analytics, spend breakdowns, and performance metrics to understand which endpoints are receiving the most traffic and how they're performing.",
+  "source": "@site/docs/proxy/endpoint_activity.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/endpoint_activity",
+  "permalink": "/docs/proxy/endpoint_activity",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Customer Usage",
+    "permalink": "/docs/proxy/customer_usage"
+  },
+  "next": {
+    "title": "Getting Started with UI Logs",
+    "permalink": "/docs/proxy/ui_logs"
+  }
+}

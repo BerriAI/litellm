@@ -1,0 +1,9 @@
+{
+  "type": "mdx",
+  "permalink": "/completion/supported",
+  "source": "@site/src/pages/completion/supported.md",
+  "title": "Generation/Completion/Chat Completion Models",
+  "description": "OpenAI Chat Completion Models",
+  "frontMatter": {},
+  "unlisted": false
+}

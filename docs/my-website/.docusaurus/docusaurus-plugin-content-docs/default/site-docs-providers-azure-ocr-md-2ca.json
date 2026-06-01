@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_ocr",
+  "title": "Azure AI OCR (Mistral)",
+  "description": "Overview",
+  "source": "@site/docs/providers/azure_ocr.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/azure_ocr",
+  "permalink": "/docs/providers/azure_ocr",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure AI Foundry Agents",
+    "permalink": "/docs/providers/azure_ai_agents"
+  },
+  "next": {
+    "title": "Azure Document Intelligence OCR",
+    "permalink": "/docs/providers/azure_document_intelligence"
+  }
+}

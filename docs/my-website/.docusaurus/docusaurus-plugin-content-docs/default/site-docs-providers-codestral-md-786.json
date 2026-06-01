@@ -1,0 +1,23 @@
+{
+  "id": "providers/codestral",
+  "title": "Codestral API [Mistral AI]",
+  "description": "Codestral is available in select code-completion plugins but can also be queried directly. See the documentation for more details.",
+  "source": "@site/docs/providers/codestral.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/codestral",
+  "permalink": "/docs/providers/codestral",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Cloudflare Workers AI",
+    "permalink": "/docs/providers/cloudflare_workers"
+  },
+  "next": {
+    "title": "Cohere",
+    "permalink": "/docs/providers/cohere"
+  }
+}

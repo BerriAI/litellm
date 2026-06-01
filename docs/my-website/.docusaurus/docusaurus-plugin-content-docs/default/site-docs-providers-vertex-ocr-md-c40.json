@@ -1,0 +1,23 @@
+{
+  "id": "providers/vertex_ocr",
+  "title": "Vertex AI OCR",
+  "description": "Overview",
+  "source": "@site/docs/providers/vertex_ocr.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vertex_ocr",
+  "permalink": "/docs/providers/vertex_ocr",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Vertex Batch APIs",
+    "permalink": "/docs/providers/vertex_batch"
+  },
+  "next": {
+    "title": "Vertex AI Agent Engine",
+    "permalink": "/docs/providers/vertex_ai_agent_engine"
+  }
+}

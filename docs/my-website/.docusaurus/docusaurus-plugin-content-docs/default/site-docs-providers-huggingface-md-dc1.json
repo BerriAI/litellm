@@ -1,0 +1,23 @@
+{
+  "id": "providers/huggingface",
+  "title": "Hugging Face",
+  "description": "LiteLLM supports running inference across multiple services for models hosted on the Hugging Face Hub.",
+  "source": "@site/docs/providers/huggingface.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/huggingface",
+  "permalink": "/docs/providers/huggingface",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Heroku",
+    "permalink": "/docs/providers/heroku"
+  },
+  "next": {
+    "title": "HuggingFace Rerank",
+    "permalink": "/docs/providers/huggingface_rerank"
+  }
+}

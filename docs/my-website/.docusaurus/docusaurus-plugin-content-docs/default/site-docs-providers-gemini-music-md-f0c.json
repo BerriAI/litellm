@@ -1,0 +1,23 @@
+{
+  "id": "providers/gemini/music",
+  "title": "Gemini — Lyria (music generation)",
+  "description": "Google Lyria 3 preview models are listed in LiteLLM’s model cost map under the gemini/ provider for metadata and spend tracking.",
+  "source": "@site/docs/providers/gemini/music.md",
+  "sourceDirName": "providers/gemini",
+  "slug": "/providers/gemini/music",
+  "permalink": "/docs/providers/gemini/music",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Gemini Video Generation (Veo)",
+    "permalink": "/docs/providers/gemini/videos"
+  },
+  "next": {
+    "title": "[BETA] Google AI Studio (Gemini) Files API",
+    "permalink": "/docs/providers/google_ai_studio/files"
+  }
+}

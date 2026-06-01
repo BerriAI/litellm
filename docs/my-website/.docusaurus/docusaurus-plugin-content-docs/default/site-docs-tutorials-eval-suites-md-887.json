@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/eval_suites",
+  "title": "Evaluate LLMs - MLflow Evals, Auto Eval",
+  "description": "Using LiteLLM with MLflow",
+  "source": "@site/docs/tutorials/eval_suites.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/eval_suites",
+  "permalink": "/docs/tutorials/eval_suites",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Reliability test Multiple LLM Providers with LiteLLM",
+    "permalink": "/docs/tutorials/litellm_Test_Multiple_Providers"
+  },
+  "next": {
+    "title": "Benchmark LLMs - LM Harness, FastEval, Flask",
+    "permalink": "/docs/tutorials/lm_evaluation_harness"
+  }
+}

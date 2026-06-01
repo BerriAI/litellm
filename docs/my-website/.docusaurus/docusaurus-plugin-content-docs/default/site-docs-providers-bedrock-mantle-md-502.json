@@ -1,0 +1,23 @@
+{
+  "id": "providers/bedrock_mantle",
+  "title": "Amazon Bedrock Mantle",
+  "description": "Amazon Bedrock Mantle is Amazon Bedrock's distributed inference engine (Project Mantle) that exposes an OpenAI-compatible API for Bedrock-hosted models.",
+  "source": "@site/docs/providers/bedrock_mantle.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/bedrock_mantle",
+  "permalink": "/docs/providers/bedrock_mantle",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Bedrock Knowledge Bases",
+    "permalink": "/docs/providers/bedrock_vector_store"
+  },
+  "next": {
+    "title": "LiteLLM Proxy (LLM Gateway)",
+    "permalink": "/docs/providers/litellm_proxy"
+  }
+}

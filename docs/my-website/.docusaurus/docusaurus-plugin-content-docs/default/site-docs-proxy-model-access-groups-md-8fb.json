@@ -1,0 +1,23 @@
+{
+  "id": "proxy/model_access_groups",
+  "title": "Model Access Groups",
+  "description": "Overview",
+  "source": "@site/docs/proxy/model_access_groups.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/model_access_groups",
+  "permalink": "/docs/proxy/model_access_groups",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Restrict Model Access",
+    "permalink": "/docs/proxy/model_access"
+  },
+  "next": {
+    "title": "Access Groups",
+    "permalink": "/docs/proxy/access_groups"
+  }
+}

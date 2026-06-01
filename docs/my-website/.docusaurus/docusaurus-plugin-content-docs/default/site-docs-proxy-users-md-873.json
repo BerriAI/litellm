@@ -1,0 +1,23 @@
+{
+  "id": "proxy/users",
+  "title": "Budgets, Rate Limits",
+  "description": "Personal budgets: Create virtual keys without team_id for individual spending limits",
+  "source": "@site/docs/proxy/users.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/users",
+  "permalink": "/docs/proxy/users",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Control Public & Private Routes",
+    "permalink": "/docs/proxy/public_routes"
+  },
+  "next": {
+    "title": "Setting Team Budgets",
+    "permalink": "/docs/proxy/team_budgets"
+  }
+}

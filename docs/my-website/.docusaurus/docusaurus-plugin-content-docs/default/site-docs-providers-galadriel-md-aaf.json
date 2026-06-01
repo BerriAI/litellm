@@ -1,0 +1,23 @@
+{
+  "id": "providers/galadriel",
+  "title": "Galadriel",
+  "description": "https://docs.galadriel.com/api-reference/chat-completion-API",
+  "source": "@site/docs/providers/galadriel.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/galadriel",
+  "permalink": "/docs/providers/galadriel",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "FriendliAI",
+    "permalink": "/docs/providers/friendliai"
+  },
+  "next": {
+    "title": "Github",
+    "permalink": "/docs/providers/github"
+  }
+}

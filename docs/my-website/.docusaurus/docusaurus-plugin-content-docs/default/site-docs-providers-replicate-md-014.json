@@ -1,0 +1,23 @@
+{
+  "id": "providers/replicate",
+  "title": "Replicate",
+  "description": "LiteLLM supports all models on Replicate",
+  "source": "@site/docs/providers/replicate.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/replicate",
+  "permalink": "/docs/providers/replicate",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Recraft",
+    "permalink": "/docs/providers/recraft"
+  },
+  "next": {
+    "title": "RunwayML - Image Generation",
+    "permalink": "/docs/providers/runwayml/images"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/fireworks_ai",
+  "title": "Fireworks AI",
+  "description": "We support ALL Fireworks AI models, just set fireworks_ai/ as a prefix when sending completion requests",
+  "source": "@site/docs/providers/fireworks_ai.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/fireworks_ai",
+  "permalink": "/docs/providers/fireworks_ai",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Featherless AI",
+    "permalink": "/docs/providers/featherless_ai"
+  },
+  "next": {
+    "title": "FriendliAI",
+    "permalink": "/docs/providers/friendliai"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "completion/http_handler_config",
+  "title": "Custom HTTP Handler",
+  "description": "Configure custom aiohttp sessions for better performance and control in LiteLLM completions.",
+  "source": "@site/docs/completion/http_handler_config.md",
+  "sourceDirName": "completion",
+  "slug": "/completion/http_handler_config",
+  "permalink": "/docs/completion/http_handler_config",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Usage",
+    "permalink": "/docs/completion/usage"
+  },
+  "next": {
+    "title": "/completions",
+    "permalink": "/docs/text_completion"
+  }
+}

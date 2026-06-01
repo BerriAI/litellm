@@ -1,0 +1,23 @@
+{
+  "id": "providers/vllm_batches",
+  "title": "vLLM - Batch + Files API",
+  "description": "LiteLLM supports vLLM's Batch and Files API for processing large volumes of requests asynchronously.",
+  "source": "@site/docs/providers/vllm_batches.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/vllm_batches",
+  "permalink": "/docs/providers/vllm_batches",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "VLLM",
+    "permalink": "/docs/providers/vllm"
+  },
+  "next": {
+    "title": "Volcano Engine (Volcengine)",
+    "permalink": "/docs/providers/volcano"
+  }
+}

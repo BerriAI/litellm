@@ -1,0 +1,23 @@
+{
+  "id": "proxy/provider_margins",
+  "title": "Fee/Price Margin on LLM Costs",
+  "description": "Apply percentage-based or fixed-amount margins to specific providers or globally. This is useful for enterprises that need to add operational overhead costs to bill internal consumers.",
+  "source": "@site/docs/proxy/provider_margins.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/provider_margins",
+  "permalink": "/docs/proxy/provider_margins",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Pricing Calculator (Cost Estimation)",
+    "permalink": "/docs/proxy/pricing_calculator"
+  },
+  "next": {
+    "title": "Provider Discounts",
+    "permalink": "/docs/proxy/provider_discounts"
+  }
+}

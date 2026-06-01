@@ -1,0 +1,23 @@
+{
+  "id": "providers/apertis",
+  "title": "Apertis AI (Stima API)",
+  "description": "Overview",
+  "source": "@site/docs/providers/apertis.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/apertis",
+  "permalink": "/docs/providers/apertis",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Anyscale",
+    "permalink": "/docs/providers/anyscale"
+  },
+  "next": {
+    "title": "Baseten",
+    "permalink": "/docs/providers/baseten"
+  }
+}

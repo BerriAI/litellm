@@ -1,0 +1,23 @@
+{
+  "id": "proxy/managed_finetuning",
+  "title": "✨ [BETA] LiteLLM Managed Files with Finetuning",
+  "description": "This is a free LiteLLM Enterprise feature.",
+  "source": "@site/docs/proxy/managed_finetuning.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/managed_finetuning",
+  "permalink": "/docs/proxy/managed_finetuning",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "/fine_tuning",
+    "permalink": "/docs/fine_tuning"
+  },
+  "next": {
+    "title": "/evals",
+    "permalink": "/docs/evals_api"
+  }
+}

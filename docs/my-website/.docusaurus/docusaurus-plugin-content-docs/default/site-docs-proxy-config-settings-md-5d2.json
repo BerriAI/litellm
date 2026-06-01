@@ -1,0 +1,23 @@
+{
+  "id": "proxy/config_settings",
+  "title": "All settings",
+  "description": "litellm_settings - Reference",
+  "source": "@site/docs/proxy/config_settings.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/config_settings",
+  "permalink": "/docs/proxy/config_settings",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "File Management",
+    "permalink": "/docs/proxy/config_management"
+  },
+  "next": {
+    "title": "CLI - Quick Start",
+    "permalink": "/docs/proxy/quick_start"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/novita",
+  "title": "Novita AI",
+  "description": "| Property | Details |",
+  "source": "@site/docs/providers/novita.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/novita",
+  "permalink": "/docs/providers/novita",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "NanoGPT",
+    "permalink": "/docs/providers/nano-gpt"
+  },
+  "next": {
+    "title": "Nscale (EU Sovereign)",
+    "permalink": "/docs/providers/nscale"
+  }
+}

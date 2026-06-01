@@ -1,0 +1,23 @@
+{
+  "id": "proxy/user_management_heirarchy",
+  "title": "User Management Hierarchy",
+  "description": "LiteLLM supports a hierarchy of users, teams, organizations, and budgets.",
+  "source": "@site/docs/proxy/user_management_heirarchy.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/user_management_heirarchy",
+  "permalink": "/docs/proxy/user_management_heirarchy",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "✨ Maximum Retention Period for Spend Logs",
+    "permalink": "/docs/proxy/spend_logs_deletion"
+  },
+  "next": {
+    "title": "Router Architecture (Fallbacks / Retries)",
+    "permalink": "/docs/router_architecture"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "set_keys",
+  "title": "Setting API Keys, Base, Version",
+  "description": "LiteLLM allows you to specify the following:",
+  "source": "@site/docs/set_keys.md",
+  "sourceDirName": ".",
+  "slug": "/set_keys",
+  "permalink": "/docs/set_keys",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "speech()",
+    "permalink": "/docs/text_to_speech"
+  },
+  "next": {
+    "title": "SDK Proxy Authentication (OAuth2/JWT Auto-Refresh)",
+    "permalink": "/docs/proxy_auth"
+  }
+}

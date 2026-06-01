@@ -1,0 +1,23 @@
+{
+  "id": "load_test_rpm",
+  "title": "Multi-Instance TPM/RPM (litellm.Router)",
+  "description": "Test if your defined tpm/rpm limits are respected across multiple instances of the Router object.",
+  "source": "@site/docs/load_test_rpm.md",
+  "sourceDirName": ".",
+  "slug": "/load_test_rpm",
+  "permalink": "/docs/load_test_rpm",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LiteLLM SDK vs OpenAI",
+    "permalink": "/docs/load_test_sdk"
+  },
+  "next": {
+    "title": "Contributing Code",
+    "permalink": "/docs/extras/contributing_code"
+  }
+}

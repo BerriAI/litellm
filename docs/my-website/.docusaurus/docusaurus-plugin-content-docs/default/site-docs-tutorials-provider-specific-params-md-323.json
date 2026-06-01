@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/provider_specific_params",
+  "title": "provider_specific_params",
+  "description": "Setting provider-specific Params",
+  "source": "@site/docs/tutorials/provider_specific_params.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/provider_specific_params",
+  "permalink": "/docs/tutorials/provider_specific_params",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "Gradio Chatbot + LiteLLM Tutorial",
+    "permalink": "/docs/tutorials/gradio_integration"
+  },
+  "next": {
+    "title": "Model Fallbacks w/ LiteLLM",
+    "permalink": "/docs/tutorials/model_fallbacks"
+  }
+}

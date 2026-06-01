@@ -1,0 +1,23 @@
+{
+  "id": "providers/aiml",
+  "title": "AI/ML API",
+  "description": "https://aimlapi.com/",
+  "source": "@site/docs/providers/aiml.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/aiml",
+  "permalink": "/docs/providers/aiml",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "AI21",
+    "permalink": "/docs/providers/ai21"
+  },
+  "next": {
+    "title": "Aleph Alpha",
+    "permalink": "/docs/providers/aleph_alpha"
+  }
+}

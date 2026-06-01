@@ -1,0 +1,23 @@
+{
+  "id": "proxy/db_info",
+  "title": "What is stored in the DB",
+  "description": "The LiteLLM Proxy uses a PostgreSQL database to store various information. Here's are the main features the DB is used for:",
+  "source": "@site/docs/proxy/db_info.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/db_info",
+  "permalink": "/docs/proxy/db_info",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "High Availability Setup (Resolve DB Deadlocks)",
+    "permalink": "/docs/proxy/db_deadlocks"
+  },
+  "next": {
+    "title": "Image URL Handling",
+    "permalink": "/docs/proxy/image_handling"
+  }
+}

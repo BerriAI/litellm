@@ -1,0 +1,23 @@
+{
+  "id": "providers/volcano",
+  "title": "Volcano Engine (Volcengine)",
+  "description": "https://www.volcengine.com/docs/82379/1263482",
+  "source": "@site/docs/providers/volcano.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/volcano",
+  "permalink": "/docs/providers/volcano",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "vLLM - Batch + Files API",
+    "permalink": "/docs/providers/vllm_batches"
+  },
+  "next": {
+    "title": "Voyage AI",
+    "permalink": "/docs/providers/voyage"
+  }
+}

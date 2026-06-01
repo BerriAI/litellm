@@ -1,0 +1,23 @@
+{
+  "id": "observability/arize_integration",
+  "title": "Arize AI",
+  "description": "AI Observability and Evaluation Platform",
+  "source": "@site/docs/observability/arize_integration.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/arize_integration",
+  "permalink": "/docs/observability/arize_integration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Argilla",
+    "permalink": "/docs/observability/argilla"
+  },
+  "next": {
+    "title": "Athina",
+    "permalink": "/docs/observability/athina_integration"
+  }
+}

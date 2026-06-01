@@ -1,0 +1,23 @@
+{
+  "id": "observability/raw_request_response",
+  "title": "Raw Request/Response Logging",
+  "description": "Logging",
+  "source": "@site/docs/observability/raw_request_response.md",
+  "sourceDirName": "observability",
+  "slug": "/observability/raw_request_response",
+  "permalink": "/docs/observability/raw_request_response",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "integrationsSidebar",
+  "previous": {
+    "title": "Qualifire - LLM Evaluation, Guardrails & Observability",
+    "permalink": "/docs/observability/qualifire_integration"
+  },
+  "next": {
+    "title": "Scrub Logged Data",
+    "permalink": "/docs/observability/scrub_data"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "providers/azure_ai_speech",
+  "title": "Azure AI Speech (Cognitive Services)",
+  "description": "Azure AI Speech is Azure's Cognitive Services text-to-speech API, separate from Azure OpenAI. It provides high-quality neural voices with broader language support and advanced speech customization.",
+  "source": "@site/docs/providers/azure_ai_speech.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/azure_ai_speech",
+  "permalink": "/docs/providers/azure_ai_speech",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Azure Document Intelligence OCR",
+    "permalink": "/docs/providers/azure_document_intelligence"
+  },
+  "next": {
+    "title": "Azure AI Image Generation (Black Forest Labs - Flux)",
+    "permalink": "/docs/providers/azure_ai_img"
+  }
+}

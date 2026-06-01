@@ -1,0 +1,23 @@
+{
+  "id": "proxy/spend_logs_deletion",
+  "title": "✨ Maximum Retention Period for Spend Logs",
+  "description": "This walks through how to set the maximum retention period for spend logs. This helps manage database size by deleting old logs automatically.",
+  "source": "@site/docs/proxy/spend_logs_deletion.md",
+  "sourceDirName": "proxy",
+  "slug": "/proxy/spend_logs_deletion",
+  "permalink": "/docs/proxy/spend_logs_deletion",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Control Model Access with OIDC (Azure AD/Keycloak/etc.)",
+    "permalink": "/docs/proxy/jwt_auth_arch"
+  },
+  "next": {
+    "title": "User Management Hierarchy",
+    "permalink": "/docs/proxy/user_management_heirarchy"
+  }
+}

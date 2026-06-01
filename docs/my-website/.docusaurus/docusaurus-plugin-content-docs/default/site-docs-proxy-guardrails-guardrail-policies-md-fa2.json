@@ -1,0 +1,23 @@
+{
+  "id": "proxy/guardrails/guardrail_policies",
+  "title": "[Beta] Guardrail Policies",
+  "description": "Use policies to group guardrails and control which ones run for specific teams, keys, or models.",
+  "source": "@site/docs/proxy/guardrails/guardrail_policies.md",
+  "sourceDirName": "proxy/guardrails",
+  "slug": "/proxy/guardrails/guardrail_policies",
+  "permalink": "/docs/proxy/guardrails/guardrail_policies",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "Adding Guardrail Support to Endpoints",
+    "permalink": "/docs/adding_provider/adding_guardrail_support"
+  },
+  "next": {
+    "title": "Policy Flow Builder",
+    "permalink": "/docs/proxy/guardrails/policy_flow_builder"
+  }
+}

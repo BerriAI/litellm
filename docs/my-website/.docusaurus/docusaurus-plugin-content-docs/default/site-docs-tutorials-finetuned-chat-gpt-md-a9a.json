@@ -1,0 +1,23 @@
+{
+  "id": "tutorials/finetuned_chat_gpt",
+  "title": "Using Fine-Tuned gpt-3.5-turbo",
+  "description": "LiteLLM allows you to call completion with your fine-tuned gpt-3.5-turbo models",
+  "source": "@site/docs/tutorials/finetuned_chat_gpt.md",
+  "sourceDirName": "tutorials",
+  "slug": "/tutorials/finetuned_chat_gpt",
+  "permalink": "/docs/tutorials/finetuned_chat_gpt",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "learnSidebar",
+  "previous": {
+    "title": "CodeLlama - Code Infilling",
+    "permalink": "/docs/tutorials/huggingface_codellama"
+  },
+  "next": {
+    "title": "Oobabooga Text Web API Tutorial",
+    "permalink": "/docs/tutorials/oobabooga"
+  }
+}

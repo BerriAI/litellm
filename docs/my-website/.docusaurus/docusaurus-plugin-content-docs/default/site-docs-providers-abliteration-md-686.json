@@ -1,0 +1,23 @@
+{
+  "id": "providers/abliteration",
+  "title": "Abliteration",
+  "description": "Overview",
+  "source": "@site/docs/providers/abliteration.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/abliteration",
+  "permalink": "/docs/providers/abliteration",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "LiteLLM Proxy (LLM Gateway)",
+    "permalink": "/docs/providers/litellm_proxy"
+  },
+  "next": {
+    "title": "AI21",
+    "permalink": "/docs/providers/ai21"
+  }
+}

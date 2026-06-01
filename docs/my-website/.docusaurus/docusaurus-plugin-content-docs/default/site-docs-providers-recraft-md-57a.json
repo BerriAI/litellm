@@ -1,0 +1,23 @@
+{
+  "id": "providers/recraft",
+  "title": "Recraft",
+  "description": "https://www.recraft.ai/",
+  "source": "@site/docs/providers/recraft.md",
+  "sourceDirName": "providers",
+  "slug": "/providers/recraft",
+  "permalink": "/docs/providers/recraft",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {},
+  "sidebar": "tutorialSidebar",
+  "previous": {
+    "title": "RAGFlow",
+    "permalink": "/docs/providers/ragflow"
+  },
+  "next": {
+    "title": "Replicate",
+    "permalink": "/docs/providers/replicate"
+  }
+}

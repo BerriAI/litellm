@@ -1,0 +1,22 @@
+{
+  "id": "integrations/index",
+  "title": "Integrations",
+  "description": "This section covers integrations with various tools and services that can be used with LiteLLM (either Proxy or SDK).",
+  "source": "@site/docs/integrations/index.md",
+  "sourceDirName": "integrations",
+  "slug": "/integrations/",
+  "permalink": "/docs/integrations/",
+  "draft": false,
+  "unlisted": false,
+  "tags": [],
+  "version": "current",
+  "frontMatter": {
+    "title": "Integrations",
+    "sidebar_label": "Overview"
+  },
+  "sidebar": "integrationsSidebar",
+  "next": {
+    "title": "Be an Integration Partner",
+    "permalink": "/docs/integrations/community"
+  }
+}
