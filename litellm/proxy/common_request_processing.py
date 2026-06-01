@@ -1285,9 +1285,6 @@ class ProxyBaseLLMRequestProcessing:
                         requested_model_from_client
                     )
 
-                if route_type == "agenerate_content_stream":
-                    self.data["_litellm_skip_openai_stream_done"] = True
-
                 # Streaming: attach a closure that fires after all guardrail
                 # end-of-stream blocks complete.  CSW.__anext__ stores the
                 # assembled response on logging_obj; the outer consumer
