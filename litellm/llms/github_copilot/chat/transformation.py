@@ -259,9 +259,9 @@ class GithubCopilotConfig(OpenAIConfig):
                 if "output_tokens" in usage and "completion_tokens" not in usage:
                     usage["completion_tokens"] = usage["output_tokens"]
                 if "total_tokens" not in usage:
-                    usage["total_tokens"] = usage.get(
-                        "prompt_tokens", 0
-                    ) + usage.get("completion_tokens", 0)
+                    usage["total_tokens"] = usage.get("prompt_tokens", 0) + usage.get(
+                        "completion_tokens", 0
+                    )
 
         final_response_obj = cast(
             ModelResponse,
