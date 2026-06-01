@@ -468,11 +468,9 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                 tools={tools}
                 searchFilter={toolSearchTerm}
                 value={
-                  existingAllowedTools !== null
-                    ? allowedTools
-                    : allowedTools.length === 0
-                      ? undefined
-                      : allowedTools
+                  existingAllowedTools === null && allowedTools.length === 0
+                    ? undefined
+                    : allowedTools
                 }
                 onChange={(allowed) => onAllowedToolsChange(allowed)}
               />
