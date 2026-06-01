@@ -711,3 +711,31 @@ class TestGithubCopilotTransformResponse:
         assert len(result.choices) >= 1
         assert result.choices[0].message.content == ""
         assert result.choices[0].finish_reason == "length"
+
+    def test_transform_response_invalid_json_falls_through_to_super(self):
+        """
+        When raw_response.json() raises an exception (e.g. non-JSON body),
+        transform_response should delegate to super() without crashing.
+        """
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        raw_response = httpx.Response(
+            status_code=200,
+            content=b"not valid json at all",
+            headers={"content-type": "text/plain"},
+        )
+        model_response = ModelResponse()
+
+        with pytest.raises(Exception):
+            config.transform_response(
+                model="github_copilot/claude-opus-4.7",
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=self._make_logging_obj(),
+                request_data={},
+                messages=[{"role": "user", "content": "Hi"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
