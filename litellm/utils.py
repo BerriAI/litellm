@@ -9389,6 +9389,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.apiserpent.search.transformation import (
+            APISerpentSearchConfig,
+        )
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
@@ -9419,6 +9422,7 @@ class ProviderConfigManager:
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
             SearchProviders.SEARCHAPI: SearchAPIConfig,
             SearchProviders.SERPER: SerperSearchConfig,
+            SearchProviders.APISERPENT: APISerpentSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
