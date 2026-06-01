@@ -1682,13 +1682,34 @@ class TestMissingChoicesGuard:
 
         assert "no 'choices'" in exc_info.value.message
 
+    def test_convert_to_model_response_object_stream_true_no_choices_raises_api_error(self):
+        """Missing choices via stream=True path raises APIError when generator is consumed."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            list(
+                convert_to_model_response_object(
+                    response_object=response_object,
+                    model_response_object=ModelResponse(),
+                    stream=True,
+                )
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
     def test_convert_to_streaming_response_async_no_choices_raises_api_error(self):
         """Missing choices in async streaming path raises APIError."""
         import asyncio
 
         from litellm.exceptions import APIError
         from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-            convert_to_model_response_object,
+            convert_to_streaming_response_async,
         )
 
         response_object = {
@@ -1697,13 +1718,16 @@ class TestMissingChoicesGuard:
             "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
         }
 
-        # The async streaming path is triggered via stream=True
+        async def consume():
+            chunks = []
+            async for chunk in convert_to_streaming_response_async(
+                response_object=response_object
+            ):
+                chunks.append(chunk)
+            return chunks
+
         with pytest.raises(APIError) as exc_info:
-            convert_to_model_response_object(
-                response_object=response_object,
-                model_response_object=ModelResponse(),
-                stream=True,
-            )
+            asyncio.run(consume())
 
         assert "no 'choices'" in exc_info.value.message
 
