@@ -30,7 +30,11 @@ from typing import (
 )
 
 from litellm import _custom_logger_compatible_callbacks_literal
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
+from litellm.constants import (
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    MAX_TEAM_LIST_LIMIT,
+)
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
@@ -556,6 +560,26 @@ class ProxyLogging:
         # Replace string entries in litellm.callbacks with initialized instances
         for idx, initialized_callback in string_callbacks_to_replace.items():
             litellm.callbacks[idx] = initialized_callback
+
+        # Fan ``litellm.callbacks`` (the "all events" registry) out into the
+        # success/failure event lists eagerly, at startup. ``completion()`` does
+        # this lazily in ``function_setup`` on the first call, but request paths
+        # that build their own logging object and never run ``function_setup`` —
+        # notably pass-through endpoints — read ``litellm._async_success_callback``
+        # directly. Without this, a config-registered logger (e.g. ``otel``) is
+        # invisible to pass-through traffic until some other request warms the
+        # global lists. The manager dedupes, so this is idempotent with
+        # ``function_setup``.
+        for callback in litellm.callbacks:
+            if isinstance(callback, CustomLogger):
+                litellm.logging_callback_manager.add_litellm_success_callback(callback)
+                litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+                litellm.logging_callback_manager.add_litellm_async_success_callback(
+                    callback
+                )
+                litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                    callback
+                )
 
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
@@ -1596,7 +1620,22 @@ class ProxyLogging:
                 iterator_overrides.append((resolved, "override"))
             elif "apply_guardrail" in cls_attrs:
                 iterator_overrides.append((resolved, "apply_guardrail"))
-            if "async_post_call_streaming_hook" in cls_attrs:
+            # Walk the MRO for ``async_post_call_streaming_hook`` rather than
+            # using the leaf-class ``__dict__`` check used by the other flags:
+            # before this PR the hook was unconditionally invoked, so a
+            # callback that inherits an override from an intermediate parent
+            # (e.g. a vendor base class providing the override, with the
+            # registered class adding nothing else) MUST still be detected.
+            # A leaf-class miss here would silently drop the inherited hook.
+            base_streaming_hook = CustomLogger.async_post_call_streaming_hook
+            cls_streaming_hook = getattr(
+                cls,
+                "async_post_call_streaming_hook",
+                base_streaming_hook,
+            )
+            if getattr(
+                cls_streaming_hook, "__func__", cls_streaming_hook
+            ) is not getattr(base_streaming_hook, "__func__", base_streaming_hook):
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
@@ -2156,6 +2195,15 @@ class ProxyLogging:
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
                 return
+            # This is a proxy-gate error (auth/rate-limit) for a request that never
+            # reached a provider. ``pre_call`` below still fires every callback's
+            # input hook so the failure is logged — but tracing callbacks must not
+            # fabricate an LLM-call span for a call that did not happen (and, since
+            # this runs inside the live ``auth`` phase span, would otherwise nest it
+            # under auth). The marker tells them to skip span creation.
+            litellm_logging_obj.model_call_details[
+                LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+            ] = True
             litellm_logging_obj.pre_call(
                 input=input,
                 api_key="",
