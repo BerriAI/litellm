@@ -525,3 +525,76 @@ async def test_advisor_subcall_forwards_explicit_credentials():
 
     assert captured_advisor_kwargs["api_key"] == "sk-explicit-override"
     assert captured_advisor_kwargs["api_base"] == "https://custom.endpoint.com"
+
+
+# ---------------------------------------------------------------------------
+# 6. Advisor sub-call carries the caller's budget/auth context
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_advisor_subcall_forwards_litellm_metadata_but_not_executor_params():
+    """The advisor leg must carry the caller's litellm_metadata (the proxy's
+    user_api_key/team/budget/session context) so its spend is attributed to the
+    caller's key and grouped under the session. It must NOT inherit the executor's
+    generation params (system prompt, tool_choice, sampling): feeding the advisor
+    the executor's agent system prompt makes it mimic the executor and echo the
+    advisor call instead of answering.
+
+    Two regressions guarded: (1) dropping litellm_metadata left the advisor's cost
+    unattributed; (2) forwarding the whole executor kwargs leaked the system
+    prompt / tool_choice into the advisor and broke its answers."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    sentinel_metadata = {
+        "user_api_key": "sk-caller-key",
+        "user_api_key_team_id": "team-42",
+        "litellm_session_id": "sess-abc",
+    }
+    executor_system = "You are the coding agent. Consult your advisor when stuck."
+    captured_executor_kwargs: Dict = {}
+    captured_advisor_kwargs: Dict = {}
+    call_count = 0
+
+    mock_router = MagicMock()
+
+    async def mock_router_call(**kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            captured_executor_kwargs.update(kwargs)
+            return _advisor_call_resp()
+        if call_count == 2:
+            captured_advisor_kwargs.update(kwargs)
+            return _text_resp("Advice.", model="claude-opus-4-6")
+        return _text_resp("Final answer.")
+
+    mock_router.anthropic_messages = AsyncMock(side_effect=mock_router_call)
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._get_llm_router",
+        return_value=mock_router,
+    ):
+        await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+            system=executor_system,
+            tool_choice={"type": "auto"},
+            litellm_metadata=sentinel_metadata,
+        )
+
+    # Budget context reaches both legs.
+    assert captured_executor_kwargs.get("litellm_metadata") == sentinel_metadata
+    assert captured_advisor_kwargs.get("litellm_metadata") == sentinel_metadata
+
+    # Executor keeps its system prompt; the advisor must not inherit it (nor
+    # tool_choice), or it mimics the executor and echoes the call.
+    assert captured_executor_kwargs.get("system") == executor_system
+    assert "system" not in captured_advisor_kwargs
+    assert "tool_choice" not in captured_advisor_kwargs

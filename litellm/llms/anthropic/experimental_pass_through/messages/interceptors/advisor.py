@@ -147,14 +147,22 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
             )
 
             # --- Advisor sub-call (always non-streaming, no tools) ---
-            # Only include api_key/api_base when explicitly set in the tool
-            # definition; passing None would override the router's deployment
-            # credentials during kwargs merging.
-            advisor_overrides: Dict = {}
+            # Carry only the proxy's budget/auth/session context (litellm_metadata)
+            # so the advisor's spend is attributed to the caller's key and groups
+            # under the same session. Deliberately do NOT inherit the executor's
+            # generation params (system, tool_choice, thinking, sampling): the
+            # advisor is a fresh consultation, and feeding it the executor's agent
+            # system prompt makes it mimic the executor and echo the advisor call
+            # instead of answering. api_key/api_base come from the advisor tool
+            # definition only — the executor's would be None under the router and
+            # override the advisor deployment's resolved credentials.
+            advisor_kwargs: Dict = {}
+            if "litellm_metadata" in kwargs:
+                advisor_kwargs["litellm_metadata"] = kwargs["litellm_metadata"]
             if advisor_api_key is not None:
-                advisor_overrides["api_key"] = advisor_api_key
+                advisor_kwargs["api_key"] = advisor_api_key
             if advisor_api_base is not None:
-                advisor_overrides["api_base"] = advisor_api_base
+                advisor_kwargs["api_base"] = advisor_api_base
 
             advisor_response: AnthropicMessagesResponse = await _call_messages_handler(
                 model=advisor_model,
@@ -168,7 +176,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                     "advisor_sub_call": True,
                     "parent_request_id": parent_request_id,
                 },
-                **advisor_overrides,
+                **advisor_kwargs,
             )
 
             advisor_text = _extract_response_text(advisor_response)
