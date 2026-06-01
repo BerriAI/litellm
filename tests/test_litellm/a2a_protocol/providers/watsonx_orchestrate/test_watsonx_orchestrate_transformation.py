@@ -86,6 +86,23 @@ class TestWatsonxOrchestrateTransformation:
         assert out["result"]["kind"] == "message"
         assert out["result"]["parts"][0]["text"] == "answer"
 
+    def test_extract_text_from_a2a_message_response(self):
+        envelope = WatsonxOrchestrateTransformation.build_a2a_message_response(
+            "req-1", "answer"
+        )
+        assert (
+            WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(
+                envelope
+            )
+            == "answer"
+        )
+        assert (
+            WatsonxOrchestrateTransformation.extract_text_from_a2a_message_response(
+                {"result": {}}
+            )
+            == ""
+        )
+
 
 def test_config_manager_returns_wxo_provider():
     config = A2AProviderConfigManager.get_provider_config(

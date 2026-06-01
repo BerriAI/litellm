@@ -102,6 +102,26 @@ class WatsonxOrchestrateTransformation:
         return ""
 
     @staticmethod
+    def extract_text_from_a2a_message_response(a2a_response: Dict[str, Any]) -> str:
+        result = a2a_response.get("result")
+        if not isinstance(result, dict):
+            verbose_logger.warning("WXO: A2A response missing result object")
+            return ""
+        parts = result.get("parts")
+        if not isinstance(parts, list):
+            verbose_logger.warning("WXO: A2A result has no parts list")
+            return ""
+        for part in parts:
+            if (
+                isinstance(part, dict)
+                and part.get("kind") == "text"
+                and part.get("text")
+            ):
+                return str(part["text"])
+        verbose_logger.warning("WXO: A2A result parts contained no text")
+        return ""
+
+    @staticmethod
     def build_a2a_message_response(request_id: str, text: str) -> Dict[str, Any]:
         """
         Build a standard A2A non-streaming SendMessageResponse (kind=message).
