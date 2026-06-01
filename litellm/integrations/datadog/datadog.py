@@ -320,6 +320,7 @@ class DataDogLogger(
         Raises:
             Raises a NON Blocking verbose_logger.exception if an error occurs
         """
+        batch_to_send: list = []
         try:
             if not self.log_queue:
                 verbose_logger.exception("Datadog: log_queue does not exist")
@@ -362,11 +363,9 @@ class DataDogLogger(
                     response.text,
                 )
 
-        except Exception as e:
+        except Exception:
             self.log_queue = batch_to_send + self.log_queue
-            verbose_logger.exception(
-                f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
-            )
+            raise
 
     async def flush_queue(self):
         if self.flush_lock is None:
@@ -377,9 +376,21 @@ class DataDogLogger(
                 verbose_logger.debug(
                     "Datadog: Flushing batch of %s events", len(self.log_queue)
                 )
-                await self.async_send_batch()
+                try:
+                    await self.async_send_batch()
+                except Exception:
+                    verbose_logger.exception(
+                        "Datadog Error sending batch API; preserving events for retry"
+                    )
+                    if not self._is_in_failure_state:
+                        self.handle_callback_failure(
+                            callback_name=self._get_callback_failure_name()
+                        )
+                        self._is_in_failure_state = True
+                    return
                 if not self.log_queue:
                     self.last_flush_time = time.time()
+                    self._is_in_failure_state = False
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         """

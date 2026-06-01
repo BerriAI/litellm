@@ -135,7 +135,7 @@ class GcsPubSubLogger(CustomBatchLogger):
                 self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception(
@@ -147,23 +147,13 @@ class GcsPubSubLogger(CustomBatchLogger):
         """
         Sends the batch of messages to Pub/Sub
         """
-        try:
-            if not self.log_queue:
-                return
+        if not self.log_queue:
+            return
 
-            verbose_logger.debug(
-                f"PubSub - about to flush {len(self.log_queue)} events"
-            )
+        verbose_logger.debug(f"PubSub - about to flush {len(self.log_queue)} events")
 
-            for message in self.log_queue:
-                await self.publish_message(message)
-
-        except Exception as e:
-            verbose_logger.exception(
-                f"PubSub Error sending batch - {str(e)}\n{traceback.format_exc()}"
-            )
-        finally:
-            self.log_queue.clear()
+        for message in self.log_queue:
+            await self.publish_message(message)
 
     async def publish_message(
         self, message: Union[SpendLogsPayload, StandardLoggingPayload]
@@ -211,4 +201,4 @@ class GcsPubSubLogger(CustomBatchLogger):
 
         except Exception as e:
             verbose_logger.error("Pub/Sub publish error: %s", str(e))
-            return None
+            raise

@@ -85,7 +85,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 self.log_queue.append(standard_logging_object)
 
                 if len(self.log_queue) >= self.batch_size:
-                    await self.async_send_batch()
+                    await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception(
@@ -114,6 +114,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
             verbose_logger.exception(
                 f"Datadog Cost Management: Error in async_send_batch: {str(e)}"
             )
+            raise
 
     def _aggregate_costs(
         self, logs: List[StandardLoggingPayload]

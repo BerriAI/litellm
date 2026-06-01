@@ -82,6 +82,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         self.message_logging = message_logging
         self.turn_off_message_logging = turn_off_message_logging
+        self.callback_name: Optional[str] = None
         pass
 
     @staticmethod

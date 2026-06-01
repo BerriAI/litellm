@@ -440,7 +440,7 @@ class LangsmithLogger(CustomBatchLogger):
 
         Returns: None
 
-        Raises: Does not raise an exception, will only verbose_logger.exception()
+        Raises: Re-raises on send failure so the batch flush can report the failure.
         """
         langsmith_api_base = credentials["LANGSMITH_BASE_URL"]
         langsmith_api_key = credentials["LANGSMITH_API_KEY"]
@@ -483,10 +483,12 @@ class LangsmithLogger(CustomBatchLogger):
             verbose_logger.exception(
                 f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}"
             )
+            raise
         except Exception:
             verbose_logger.exception(
                 f"Langsmith Layer Error - {traceback.format_exc()}"
             )
+            raise
 
     def _group_batches_by_credentials(self) -> Dict[CredentialsKey, BatchGroup]:
         """Groups queue objects by credentials using a proper key structure"""
@@ -580,13 +582,13 @@ class LangsmithLogger(CustomBatchLogger):
             loop = asyncio.get_event_loop()
             if loop.is_running():
                 # If we're already in an event loop, create a task
-                asyncio.create_task(self.async_send_batch())
+                asyncio.create_task(self.flush_queue())
             else:
                 # If no event loop is running, run the coroutine directly
-                loop.run_until_complete(self.async_send_batch())
+                loop.run_until_complete(self.flush_queue())
         except RuntimeError:
             # If we can't get an event loop, create a new one
-            asyncio.run(self.async_send_batch())
+            asyncio.run(self.flush_queue())
 
     def get_run_by_id(self, run_id):
         langsmith_api_key = self.default_credentials["LANGSMITH_API_KEY"]

@@ -161,7 +161,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             self.log_queue.append(payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(
                 f"DataDogLLMObs: Error logging success event - {str(e)}"
@@ -177,7 +177,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             self.log_queue.append(payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
         except Exception as e:
             verbose_logger.exception(
                 f"DataDogLLMObs: Error logging failure event - {str(e)}"
@@ -249,8 +249,10 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             verbose_logger.exception(
                 f"DataDogLLMObs: Error sending batch - {e.response.text}"
             )
+            raise
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error sending batch - {str(e)}")
+            raise
 
     def create_llm_obs_payload(
         self, kwargs: Dict, start_time: datetime, end_time: datetime

@@ -227,7 +227,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception(
@@ -262,7 +262,7 @@ class AzureSentinelLogger(CustomBatchLogger):
             self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception(
@@ -327,61 +327,67 @@ class AzureSentinelLogger(CustomBatchLogger):
         api_endpoint: str,
         log_type: str,
     ) -> None:
-        try:
-            if not log_queue:
-                return
+        if not log_queue:
+            return
 
-            verbose_logger.debug(
-                "Azure Sentinel - about to flush %s %s", len(log_queue), log_type
-            )
+        verbose_logger.debug(
+            "Azure Sentinel - about to flush %s %s", len(log_queue), log_type
+        )
 
-            # Get OAuth2 token
-            bearer_token = await self._get_oauth_token()
+        # Get OAuth2 token
+        bearer_token = await self._get_oauth_token()
 
-            # Convert log queue to JSON array format expected by Logs Ingestion API
-            # Each log entry should be a JSON object in the array
-            body = safe_dumps(log_queue)
+        # Convert log queue to JSON array format expected by Logs Ingestion API
+        # Each log entry should be a JSON object in the array
+        body = safe_dumps(log_queue)
 
-            # Set headers for Logs Ingestion API
-            headers = {
-                "Authorization": f"Bearer {bearer_token}",
-                "Content-Type": "application/json",
-            }
+        # Set headers for Logs Ingestion API
+        headers = {
+            "Authorization": f"Bearer {bearer_token}",
+            "Content-Type": "application/json",
+        }
 
-            # Send the request
-            response = await self.async_httpx_client.post(
-                url=api_endpoint, data=body.encode("utf-8"), headers=headers
-            )
+        # Send the request
+        response = await self.async_httpx_client.post(
+            url=api_endpoint, data=body.encode("utf-8"), headers=headers
+        )
 
-            if response.status_code not in [200, 204]:
-                verbose_logger.error(
-                    "Azure Sentinel API error: status_code=%s, response=%s",
-                    response.status_code,
-                    response.text,
-                )
-                raise Exception(
-                    f"Failed to send logs to Azure Sentinel: {response.status_code} - {response.text}"
-                )
-
-            verbose_logger.debug(
-                "Azure Sentinel: Response from API status_code: %s",
+        if response.status_code not in [200, 204]:
+            verbose_logger.error(
+                "Azure Sentinel API error: status_code=%s, response=%s",
                 response.status_code,
+                response.text,
+            )
+            raise Exception(
+                f"Failed to send logs to Azure Sentinel: {response.status_code} - {response.text}"
             )
 
-        except Exception as e:
-            verbose_logger.exception(
-                f"Azure Sentinel Error sending batch API - {str(e)}\n{traceback.format_exc()}"
-            )
-        finally:
-            log_queue.clear()
+        verbose_logger.debug(
+            "Azure Sentinel: Response from API status_code: %s",
+            response.status_code,
+        )
+
+        log_queue.clear()
 
     async def flush_queue(self):
         if self.flush_lock is None:
             return
 
         async with self.flush_lock:
-            if self.log_queue:
-                await self.async_send_batch()
-            if self.audit_log_queue:
-                await self.async_send_audit_batch()
+            try:
+                if self.log_queue:
+                    await self.async_send_batch()
+                if self.audit_log_queue:
+                    await self.async_send_audit_batch()
+            except Exception:
+                verbose_logger.exception(
+                    "Azure Sentinel: flush failed; preserving events for retry"
+                )
+                if not self._is_in_failure_state:
+                    self.handle_callback_failure(
+                        callback_name=self._get_callback_failure_name()
+                    )
+                    self._is_in_failure_state = True
+                return
             self.last_flush_time = time.time()
+            self._is_in_failure_state = False

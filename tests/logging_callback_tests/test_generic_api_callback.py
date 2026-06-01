@@ -2,7 +2,6 @@ import io
 import os
 import sys
 
-
 sys.path.insert(0, os.path.abspath("../.."))
 
 import asyncio
@@ -561,6 +560,7 @@ async def test_generic_api_callback_does_not_retry_4xx():
     generic_logger.async_httpx_client.post = mock_post
     generic_logger.log_queue = [{"event": "4xx-no-retry"}]
 
-    await generic_logger.async_send_batch()
+    with pytest.raises(httpx.HTTPStatusError):
+        await generic_logger.async_send_batch()
 
     mock_post.assert_called_once()

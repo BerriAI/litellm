@@ -46,8 +46,12 @@ class CustomBatchLogger(CustomLogger):
             if max_queue_size is not None
             else self.DEFAULT_MAX_QUEUE_SIZE
         )
+        self._is_in_failure_state: bool = False
 
         super().__init__(**kwargs)
+
+    def _get_callback_failure_name(self) -> str:
+        return self.callback_name or self.__class__.__name__
 
     async def periodic_flush(self):
         while True:
@@ -72,14 +76,16 @@ class CustomBatchLogger(CustomLogger):
                 except Exception:
                     # If the underlying batch send raised, do NOT drop the
                     # in-flight events. They will be retried on the next flush.
-                    # Most existing async_send_batch implementations swallow
-                    # their own errors, so this only affects loggers that opt
-                    # in to surfacing failures (e.g. Rubrik).
                     verbose_logger.exception(
                         "CustomLogger: async_send_batch raised; preserving "
                         "%s events in queue for retry",
                         log_queue_length,
                     )
+                    if not self._is_in_failure_state:
+                        self.handle_callback_failure(
+                            callback_name=self._get_callback_failure_name()
+                        )
+                        self._is_in_failure_state = True
                     # Guard against unbounded queue growth if the destination
                     # is persistently unreachable. Drop the oldest events
                     # beyond ``max_queue_size``.
@@ -98,6 +104,7 @@ class CustomBatchLogger(CustomLogger):
                 else:
                     self.log_queue.clear()
                 self.last_flush_time = time.time()
+                self._is_in_failure_state = False
 
     async def async_send_batch(self, *args, **kwargs):
         pass

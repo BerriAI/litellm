@@ -319,7 +319,7 @@ class GenericAPILogger(CustomBatchLogger):
                 self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception(
@@ -355,7 +355,7 @@ class GenericAPILogger(CustomBatchLogger):
                 self.log_queue.append(standard_logging_payload)
 
             if len(self.log_queue) >= self.batch_size:
-                await self.async_send_batch()
+                await self.flush_queue()
 
         except Exception as e:
             verbose_logger.exception(
@@ -371,58 +371,51 @@ class GenericAPILogger(CustomBatchLogger):
         - ndjson: Sends logs as newline-delimited JSON
         - single: Sends each log as individual HTTP request in parallel
         """
-        try:
-            if not self.log_queue:
-                return
+        if not self.log_queue:
+            return
+
+        verbose_logger.debug(
+            f"Generic API Logger - about to flush {len(self.log_queue)} events in '{self.log_format}' format"
+        )
+
+        if self.log_format == "single":
+            # Send each log as individual HTTP request in parallel
+            tasks = []
+            for log_entry in self.log_queue:
+                task = self._post_with_retries(data=safe_dumps(log_entry))
+                tasks.append(task)
+
+            # Execute all requests in parallel
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+            errors = [r for r in responses if isinstance(r, Exception)]
+            for idx, result in enumerate(responses):
+                if isinstance(result, Exception):
+                    verbose_logger.exception(
+                        f"Generic API Logger - Error sending log {idx}: {result}"
+                    )
+                else:
+                    verbose_logger.debug(
+                        f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
+                    )
+            if errors:
+                raise errors[0]
+        else:
+            # Format the payload based on log_format
+            if self.log_format == "json_array":
+                data = safe_dumps(self.log_queue)
+            elif self.log_format == "ndjson":
+                data = "\n".join(safe_dumps(log) for log in self.log_queue)
+            else:
+                raise ValueError(f"Unknown log_format: {self.log_format}")
+
+            # Make POST request
+            response = await self._post_with_retries(data=data)
 
             verbose_logger.debug(
-                f"Generic API Logger - about to flush {len(self.log_queue)} events in '{self.log_format}' format"
+                f"Generic API Logger - sent batch to {self.endpoint}, "
+                f"status: {response.status_code}, format: {self.log_format}"
             )
-
-            if self.log_format == "single":
-                # Send each log as individual HTTP request in parallel
-                tasks = []
-                for log_entry in self.log_queue:
-                    task = self._post_with_retries(data=safe_dumps(log_entry))
-                    tasks.append(task)
-
-                # Execute all requests in parallel
-                responses = await asyncio.gather(*tasks, return_exceptions=True)
-
-                # Log results
-                for idx, result in enumerate(responses):
-                    if isinstance(result, Exception):
-                        verbose_logger.exception(
-                            f"Generic API Logger - Error sending log {idx}: {result}"
-                        )
-                    else:
-                        # result is a Response object
-                        verbose_logger.debug(
-                            f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
-                        )
-            else:
-                # Format the payload based on log_format
-                if self.log_format == "json_array":
-                    data = safe_dumps(self.log_queue)
-                elif self.log_format == "ndjson":
-                    data = "\n".join(safe_dumps(log) for log in self.log_queue)
-                else:
-                    raise ValueError(f"Unknown log_format: {self.log_format}")
-
-                # Make POST request
-                response = await self._post_with_retries(data=data)
-
-                verbose_logger.debug(
-                    f"Generic API Logger - sent batch to {self.endpoint}, "
-                    f"status: {response.status_code}, format: {self.log_format}"
-                )
-
-        except Exception as e:
-            verbose_logger.exception(
-                f"Generic API Logger Error sending batch - {str(e)}\n{traceback.format_exc()}"
-            )
-        finally:
-            self.log_queue.clear()
 
     def _get_v1_logging_payload(
         self, kwargs, response_obj, start_time, end_time

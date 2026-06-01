@@ -254,17 +254,24 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
             return (success_count, error_count)
 
-    async def _send_individual_logs(self, items: List[GCSLogQueueItem]) -> None:
+    async def _send_individual_logs(self, items: List[GCSLogQueueItem]) -> int:
         """
         Send each log individually as separate GCS objects (legacy behavior).
         This is used when GCS_USE_BATCHED_LOGGING is disabled.
-        """
-        for item in items:
-            await self._send_single_log_item(item)
 
-    async def _send_single_log_item(self, item: GCSLogQueueItem) -> None:
+        Returns the number of items that failed to upload.
+        """
+        error_count = 0
+        for item in items:
+            if not await self._send_single_log_item(item):
+                error_count += 1
+        return error_count
+
+    async def _send_single_log_item(self, item: GCSLogQueueItem) -> bool:
         """
         Send a single log item to GCS as an individual object.
+
+        Returns True on success, False on failure.
         """
         try:
             gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
@@ -289,10 +296,12 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 object_name=object_name,
                 logging_payload=item["payload"],
             )
+            return True
         except Exception as e:
             verbose_logger.exception(
                 f"GCS Bucket error logging individual payload to GCS bucket: {str(e)}"
             )
+            return False
 
     async def async_send_batch(self):
         """
@@ -308,13 +317,20 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         if not items_to_process:
             return
 
+        error_count = 0
         if self.use_batched_logging:
             grouped_items = self._group_items_by_config(items_to_process)
 
             for config_key, group_items in grouped_items.items():
-                await self._send_grouped_batch(group_items, config_key)
+                _, group_errors = await self._send_grouped_batch(
+                    group_items, config_key
+                )
+                error_count += group_errors
         else:
-            await self._send_individual_logs(items_to_process)
+            error_count = await self._send_individual_logs(items_to_process)
+
+        if error_count > 0:
+            raise Exception(f"GCS Bucket: failed to upload {error_count} log(s) to GCS")
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
@@ -406,8 +422,19 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         Override flush_queue to work with asyncio.Queue.
         """
-        await self.async_send_batch()
+        try:
+            await self.async_send_batch()
+        except Exception:
+            verbose_logger.exception("GCS Bucket: flush failed")
+            if not self._is_in_failure_state:
+                self.handle_callback_failure(
+                    callback_name=self._get_callback_failure_name()
+                )
+                self._is_in_failure_state = True
+            self.last_flush_time = time.time()
+            return
         self.last_flush_time = time.time()
+        self._is_in_failure_state = False
 
     async def periodic_flush(self):
         """
