@@ -272,6 +272,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
+    def _is_claude_4_8_model(model: str) -> bool:
+        """Check if the model is a Claude 4.8 model (Opus 4.8)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-8",
+                "opus_4_8",
+                "opus-4.8",
+                "opus_4.8",
+            )
+        )
+
+    @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
         """Claude 4.6+ models use adaptive thinking with ``output_config.effort``."""
         from litellm.utils import _supports_factory
@@ -285,9 +299,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         except Exception:
             pass
-        return AnthropicModelInfo._is_claude_4_6_model(
-            model
-        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+        return (
+            AnthropicModelInfo._is_claude_4_6_model(model)
+            or AnthropicModelInfo._is_claude_4_7_model(model)
+            or AnthropicModelInfo._is_claude_4_8_model(model)
+        )
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None

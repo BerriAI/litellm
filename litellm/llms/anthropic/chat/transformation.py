@@ -393,6 +393,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if effort == "max" and not (
             AnthropicConfig._is_claude_4_6_model(model)
             or AnthropicConfig._is_claude_4_7_model(model)
+            or AnthropicConfig._is_claude_4_8_model(model)
             or AnthropicConfig._supports_effort_level(model, "max")
         ):
             return f"effort='max' is not supported by this model. Got model: {model}"

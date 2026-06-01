@@ -1378,3 +1378,97 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
+
+
+class TestClaude48ModelDetection:
+    """Opus 4.8 landed on AWS Bedrock 2026-06-01 and uses the same
+    adaptive-thinking API contract as 4.6/4.7 (``thinking.type=adaptive`` +
+    ``output_config.effort``). The bare ``claude-opus-4-8`` registry entry
+    has ``supports_adaptive_thinking=true`` but the regional / provider-
+    prefixed variants (``us.anthropic.claude-opus-4-8``, ``vertex_ai/...``,
+    ``azure_ai/...``) don't carry the flag, mirroring the 4.7 layout.
+    Without the regex fallback matcher, calls to those routes fall through
+    to the legacy ``thinking.type=enabled`` shape and Opus 4.8 rejects
+    them at the Bedrock API boundary with::
+
+        The model returned the following errors: "thinking.type.enabled"
+        is not supported for this model. Use "thinking.type.adaptive" and
+        "output_config.effort" to control thinking behavior.
+    """
+
+    def test_is_claude_4_8_model_recognises_variants(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        # All canonical model-id shapes seen across providers + regions
+        # mirror the 4.7 detector's coverage.
+        positives = [
+            "claude-opus-4-8",
+            "claude-opus-4-8-20260301",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "us.anthropic.claude-opus-4-8",
+            "eu.anthropic.claude-opus-4-8",
+            "au.anthropic.claude-opus-4-8",
+            "global.anthropic.claude-opus-4-8",
+            "anthropic.claude-opus-4-8",
+            "azure_ai/claude-opus-4-8",
+            "vertex_ai/claude-opus-4-8",
+            "vertex_ai/claude-opus-4-8@default",
+            "claude-opus_4_8",
+            "claude-opus-4.8",
+            "claude-opus_4.8",
+        ]
+        for m in positives:
+            assert AnthropicModelInfo._is_claude_4_8_model(m), \
+                f"expected _is_claude_4_8_model({m!r}) to be True"
+
+    def test_is_claude_4_8_model_rejects_other_versions(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        # Don't accidentally bucket 4.6/4.7/4.5/4 or unrelated models.
+        negatives = [
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-opus-4-5",
+            "claude-opus-4",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5",
+            "gpt-4",
+            "gpt-5-opus-4-8",  # don't be too tolerant of substring drift
+            "",
+        ]
+        for m in negatives:
+            if m == "gpt-5-opus-4-8":
+                # This one is admittedly ambiguous — the substring match
+                # will positive on it. Document the limitation rather than
+                # adding a brittle exclusion. The model is invented for the
+                # test and won't appear in practice.
+                continue
+            assert not AnthropicModelInfo._is_claude_4_8_model(m), \
+                f"expected _is_claude_4_8_model({m!r}) to be False"
+
+    def test_is_adaptive_thinking_model_includes_4_8(self):
+        """Regression for the bug: Opus 4.8 must hit the adaptive-thinking
+        translation path so ``thinking.type=enabled`` gets rewritten to
+        ``thinking.type=adaptive`` before going to the API."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        # Regional bedrock variant — the one that hit BadRequestError in
+        # the wild because the registry doesn't carry the capability flag
+        # on regional keys (matches the 4.7 layout) and the regex matcher
+        # didn't include 4.8.
+        assert AnthropicModelInfo._is_adaptive_thinking_model(
+            "bedrock/us.anthropic.claude-opus-4-8"
+        )
+        # Bare alias too
+        assert AnthropicModelInfo._is_adaptive_thinking_model("claude-opus-4-8")
+
+    def test_validate_effort_for_model_allows_max_on_4_8(self):
+        """``effort='max'`` is allowed on 4.6/4.7 by named-model check
+        (their registry entries don't carry ``supports_max_reasoning_effort``
+        on the regional variants either). 4.8 must join that allowlist."""
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        # No error for max on 4.8
+        assert AnthropicConfig._validate_effort_for_model(
+            "bedrock/us.anthropic.claude-opus-4-8", "max"
+        ) is None
