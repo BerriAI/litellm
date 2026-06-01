@@ -276,6 +276,41 @@ def test_chat_completion_routes_bedrock_claude_platform_to_messages_api():
     assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
 
 
+@pytest.mark.parametrize(
+    "workspace_param",
+    ("workspace_id", "aws_workspace_id", "anthropic_workspace_id"),
+)
+def test_chat_completion_keeps_claude_platform_workspace_out_of_body(
+    workspace_param,
+):
+    import litellm
+
+    requests = []
+
+    def mock_post(self, url, data=None, headers=None, **kwargs):
+        requests.append(_capture_request(url=url, headers=headers or {}, data=data))
+        return _anthropic_response(url)
+
+    with patch("litellm.llms.custom_httpx.http_handler.HTTPHandler.post", mock_post):
+        response = litellm.completion(
+            model="bedrock/claude_platform/claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "hello"}],
+            max_tokens=10,
+            api_base="https://aws-external-anthropic.us-west-2.api.aws",
+            api_key="fake-platform-key",
+            **{workspace_param: "wrkspc_test"},
+        )
+
+    assert response.choices[0].message.content == "ok"
+    assert len(requests) == 1
+    assert requests[0]["headers"]["anthropic-workspace-id"] == "wrkspc_test"
+    assert requests[0]["body"]["model"] == "claude-sonnet-4-6"
+    assert "workspace_id" not in requests[0]["body"]
+    assert "aws_workspace_id" not in requests[0]["body"]
+    assert "anthropic-workspace-id" not in requests[0]["body"]
+    assert "anthropic_workspace_id" not in requests[0]["body"]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_routes_bedrock_claude_platform_to_messages_api():
     import litellm

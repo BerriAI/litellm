@@ -5,7 +5,10 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 
-from .common_utils import BedrockClaudePlatformMixin
+from .common_utils import (
+    CLAUDE_PLATFORM_WORKSPACE_PARAM_KEYS,
+    BedrockClaudePlatformMixin,
+)
 
 
 class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
@@ -78,6 +81,27 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
         )
         anthropic_headers["anthropic-workspace-id"] = workspace_id
         return {**headers, **anthropic_headers}
+
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        optional_params = {
+            key: value
+            for key, value in optional_params.items()
+            if key not in CLAUDE_PLATFORM_WORKSPACE_PARAM_KEYS
+        }
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     def get_model_response_iterator(
         self,

@@ -8,6 +8,12 @@ CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
     "aws-external-anthropic"
 )
 CLAUDE_PLATFORM_BEDROCK_ROUTE = "claude_platform/"
+CLAUDE_PLATFORM_WORKSPACE_PARAM_KEYS = (
+    "workspace_id",
+    "aws_workspace_id",
+    "anthropic-workspace-id",
+    "anthropic_workspace_id",
+)
 
 
 def strip_claude_platform_route(model: str) -> str:
