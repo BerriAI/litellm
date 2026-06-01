@@ -280,7 +280,11 @@ class VigilGuardGuardrail(CustomGuardrail):
             source,
             str(exc),
         )
-        raise exc
+        raise GuardrailRaisedException(
+            guardrail_name=self.guardrail_name,
+            message="Vigil Guard backend unreachable; request blocked by fail_closed policy.",
+            should_wrap_with_default_message=False,
+        ) from exc
 
     @staticmethod
     def _build_output(

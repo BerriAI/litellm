@@ -420,16 +420,19 @@ async def test_retry_once_on_transient_exception(exc):
 
 
 @pytest.mark.parametrize(
-    "exc",
+    "exc, expected",
     [
-        RuntimeError("boom"),
-        httpx.WriteError("boom", request=httpx.Request("POST", _ENDPOINT)),
+        (RuntimeError("boom"), RuntimeError),
+        (
+            httpx.WriteError("boom", request=httpx.Request("POST", _ENDPOINT)),
+            GuardrailRaisedException,
+        ),
     ],
 )
-async def test_no_retry_on_non_transient_exception(exc):
+async def test_no_retry_on_non_transient_exception(exc, expected):
     handler = FakeHandler([exc])
     g = _make_guardrail(handler)
-    with pytest.raises(type(exc)):
+    with pytest.raises(expected):
         await g.apply_guardrail(
             inputs={"texts": ["x"]}, request_data={}, input_type="request"
         )
@@ -440,23 +443,45 @@ async def test_no_retry_on_non_transient_exception(exc):
 async def test_no_retry_on_non_429_4xx(code):
     handler = FakeHandler([_resp({}, status_code=code)])
     g = _make_guardrail(handler)
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(GuardrailRaisedException) as exc_info:
         await g.apply_guardrail(
             inputs={"texts": ["x"]}, request_data={}, input_type="request"
         )
+    assert exc_info.value.status_code == 400
     assert len(handler.calls) == 1
 
 
 async def test_fail_closed_raises_after_exhausted_retry(caplog):
     handler = FakeHandler([_resp({}, status_code=503), _resp({}, status_code=503)])
     g = _make_guardrail(handler)
-    with caplog.at_level(logging.ERROR), pytest.raises(httpx.HTTPStatusError):
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(GuardrailRaisedException) as exc_info,
+    ):
         await g.apply_guardrail(
             inputs={"texts": ["x"]}, request_data={}, input_type="request"
         )
+    assert exc_info.value.status_code == 400
     assert len(handler.calls) == 2
     assert any("fail_closed" in record.message for record in caplog.records)
     assert any("vigil-guard" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize("exc", _transient_exceptions())
+async def test_fail_closed_raises_controlled_block_on_transport_error(exc, caplog):
+    handler = FakeHandler([exc, exc])
+    g = _make_guardrail(handler)
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(GuardrailRaisedException) as exc_info,
+    ):
+        await g.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data={}, input_type="request"
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.guardrail_name == "vigil-guard"
+    assert exc_info.value.__cause__ is exc
+    assert any("fail_closed" in record.message for record in caplog.records)
 
 
 async def test_fail_open_returns_inputs_unchanged_on_backend_error(caplog):
@@ -622,12 +647,13 @@ async def test_tool_call_scan_backend_failure_fail_closed_raises():
     handler = FakeHandler([_resp({}, status_code=503), _resp({}, status_code=503)])
     g = _make_guardrail(handler)
     tcs = [_tool_call('{"x": "y"}')]
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(GuardrailRaisedException) as exc_info:
         await g.apply_guardrail(
             inputs={"texts": [], "tool_calls": tcs},
             request_data={},
             input_type="response",
         )
+    assert exc_info.value.status_code == 400
     assert len(handler.calls) == 2
 
 
