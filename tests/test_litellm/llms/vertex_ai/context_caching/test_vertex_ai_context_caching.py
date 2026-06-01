@@ -1218,6 +1218,90 @@ class TestContextCachingEndpoints:
     @patch(
         "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
     )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.transform_openai_messages_to_gemini_context_caching"
+    )
+    @patch.object(ContextCachingEndpoints, "check_cache")
+    @patch.object(ContextCachingEndpoints, "_get_token_and_url_context_caching")
+    def test_check_and_create_cache_tool_choice_typed_constructor(
+        self,
+        mock_get_token_url,
+        mock_check_cache,
+        mock_transform,
+        mock_cache_obj,
+        mock_separate,
+        custom_llm_provider,
+    ):
+        """Exercise the actual ToolConfig(FunctionCallingConfig(...)) constructor that map_tool_choice_values produces.
+
+        ToolConfig / FunctionCallingConfig are TypedDicts (litellm/types/llms/vertex_ai.py:158, 277)
+        so this is functionally identical to the dict-literal tests above at
+        runtime — but exercising the typed constructor pins the test to the
+        same call shape map_tool_choice_values uses and auto-follows if
+        either type ever migrates to a Pydantic model upstream.
+        """
+        from litellm.types.llms.vertex_ai import (
+            FunctionCallingConfig,
+            ToolConfig,
+        )
+
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        mock_separate.return_value = (cached_messages, non_cached_messages)
+        mock_cache_obj.get_cache_key.return_value = "test_cache_key"
+        mock_check_cache.return_value = None
+        mock_get_token_url.return_value = ("token", "https://test-url.com")
+        mock_transform.return_value = {"model": "gemini-1.5-pro", "contents": []}
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "name": "new_cache_name",
+            "model": "gemini-1.5-pro",
+        }
+        self.mock_client.post.return_value = mock_response
+
+        tool_choice = ToolConfig(
+            functionCallingConfig=FunctionCallingConfig(mode="ANY")
+        )
+        optional_params = self.sample_optional_params.copy()
+        optional_params["tool_choice"] = tool_choice
+
+        self.context_caching.check_and_create_cache(
+            messages=self.sample_messages,
+            optional_params=optional_params,
+            api_key="test_key",
+            api_base=None,
+            model="gemini-1.5-pro",
+            client=self.mock_client,
+            timeout=30.0,
+            logging_obj=self.mock_logging,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project="test_project",
+            vertex_location="test_location",
+            vertex_auth_header="vertext_test_token",
+        )
+
+        call_args = self.mock_client.post.call_args
+        assert call_args.kwargs["json"]["toolConfig"] == tool_choice
+        assert call_args.kwargs["json"]["toolConfig"] == {
+            "functionCallingConfig": {"mode": "ANY"}
+        }
+        mock_cache_obj.get_cache_key.assert_called_once_with(
+            messages=cached_messages,
+            tools=self.sample_tools,
+            tool_choice=tool_choice,
+            model="gemini-1.5-pro",
+        )
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
     @patch.object(ContextCachingEndpoints, "check_cache")
     def test_check_and_create_cache_distinct_tool_choices_use_distinct_keys(
         self,
