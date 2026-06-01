@@ -5,6 +5,7 @@ import { getGuardrailsList, deleteGuardrailCall } from "./networking";
 import AddGuardrailForm from "./guardrails/add_guardrail_form";
 import GuardrailTable from "./guardrails/guardrail_table";
 import { isAdminRole } from "@/utils/roles";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import GuardrailInfoView from "./guardrails/guardrail_info";
 import GuardrailTestPlayground from "./guardrails/GuardrailTestPlayground";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -17,7 +18,6 @@ import { TeamGuardrailsTab } from "./guardrails/TeamGuardrailsTab";
 
 interface GuardrailsPanelProps {
   accessToken: string | null;
-  userRole?: string;
 }
 
 interface GuardrailItem {
@@ -38,7 +38,8 @@ interface GuardrailsResponse {
   guardrails: Guardrail[];
 }
 
-const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole }) => {
+const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken }) => {
+  const { userRole } = useAuthorized();
   const [guardrailsList, setGuardrailsList] = useState<Guardrail[]>([]);
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
   const [isCustomCodeModalVisible, setIsCustomCodeModalVisible] = useState(false);
