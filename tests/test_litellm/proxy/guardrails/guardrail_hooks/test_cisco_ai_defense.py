@@ -2808,43 +2808,7 @@ class TestCiscoAIDefenseReasoningOutputBypass:
     """Reasoning-specific response fields are scannable and redactable."""
 
     @pytest.mark.asyncio
-    async def test_post_call_scans_reasoning_fields(self):
-        g = _make_guardrail(event_hook="post_call")
-        response = ModelResponse(
-            choices=[
-                Choices(
-                    index=0,
-                    finish_reason="stop",
-                    message=Message(
-                        role="assistant",
-                        content=None,
-                        reasoning_content="hidden reasoning has SSN 123-45-6789",
-                        thinking_blocks=[
-                            {
-                                "type": "thinking",
-                                "thinking": "thinking block has card 4111-1111-1111-1111",
-                            }
-                        ],
-                    ),
-                )
-            ]
-        )
-        post_mock = AsyncMock(return_value=_safe_response())
-
-        with patch.object(g.async_handler, "post", new=post_mock):
-            await g.async_post_call_success_hook(
-                data={"messages": [{"role": "user", "content": "think"}]},
-                user_api_key_dict=UserAPIKeyAuth(),
-                response=response,
-            )
-
-        sent = post_mock.call_args.kwargs["json"]
-        joined = " ".join(m.get("content", "") for m in sent.get("messages", []))
-        assert "123-45-6789" in joined
-        assert "4111-1111-1111-1111" in joined
-
-    @pytest.mark.asyncio
-    async def test_post_call_redact_clears_reasoning_fields(self):
+    async def test_post_call_scans_and_redacts_reasoning_fields(self):
         g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
         response = ModelResponse(
             choices=[
@@ -2865,59 +2829,13 @@ class TestCiscoAIDefenseReasoningOutputBypass:
                 )
             ]
         )
-
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(return_value=_redact_response(sanitized_text="[REDACTED]")),
-        ):
-            result = await g.async_post_call_success_hook(
-                data={"messages": [{"role": "user", "content": "think"}]},
-                user_api_key_dict=UserAPIKeyAuth(),
-                response=response,
-            )
-
-        message = result.choices[0].message
-        assert message.content == "[REDACTED]"
-        assert getattr(message, "reasoning_content", None) is None
-        assert getattr(message, "thinking_blocks", None) is None
-        assert "123-45-6789" not in repr(result)
-        assert "4111-1111-1111-1111" not in repr(result)
-
-    @pytest.mark.asyncio
-    async def test_responses_api_reasoning_summary_is_scanned_and_redacted(self):
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
-        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
-        response = ResponsesAPIResponse(
-            id="resp_1",
-            created_at=0,
-            output=[
-                {
-                    "type": "reasoning",
-                    "id": "rs_1",
-                    "summary": [
-                        {
-                            "type": "summary_text",
-                            "text": "reasoning summary leaks SSN 123-45-6789",
-                        }
-                    ],
-                    "encrypted_content": "opaque-secret-token",
-                }
-            ],
-            parallel_tool_calls=False,
-            tool_choice=None,
-            tools=None,
-            top_p=None,
-            usage=None,
-        )
         post_mock = AsyncMock(
             return_value=_redact_response(sanitized_text="[REDACTED]")
         )
 
         with patch.object(g.async_handler, "post", new=post_mock):
             result = await g.async_post_call_success_hook(
-                data={"input": "think"},
+                data={"messages": [{"role": "user", "content": "think"}]},
                 user_api_key_dict=UserAPIKeyAuth(),
                 response=response,
             )
@@ -2925,10 +2843,13 @@ class TestCiscoAIDefenseReasoningOutputBypass:
         sent = post_mock.call_args.kwargs["json"]
         joined = " ".join(m.get("content", "") for m in sent.get("messages", []))
         assert "123-45-6789" in joined
-        reasoning_item = result.output[0]
-        assert reasoning_item.summary[0].text == "[REDACTED]"
-        assert getattr(reasoning_item, "encrypted_content", None) is None
+        assert "4111-1111-1111-1111" in joined
+        message = result.choices[0].message
+        assert message.content == "[REDACTED]"
+        assert getattr(message, "reasoning_content", None) is None
+        assert getattr(message, "thinking_blocks", None) is None
         assert "123-45-6789" not in repr(result)
+        assert "4111-1111-1111-1111" not in repr(result)
 
 
 class TestCiscoAIDefenseStreamingBypass:

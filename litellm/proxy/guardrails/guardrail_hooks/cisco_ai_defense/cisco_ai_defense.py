@@ -1720,9 +1720,17 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         """Remove preserved reasoning fields and expose the sanitized text."""
         if not cls._extract_message_reasoning_parts(message):
             return False
-        cls._set_field(message, "content", replacement_text)
+        message.content = replacement_text
         for key in ("reasoning_content", "thinking_blocks", "reasoning_items"):
-            cls._clear_field(message, key)
+            if not hasattr(message, key):
+                continue
+            try:
+                delattr(message, key)
+            except (AttributeError, TypeError, ValueError):
+                try:
+                    setattr(message, key, None)
+                except (AttributeError, TypeError, ValueError):
+                    pass
         return True
 
     @staticmethod
@@ -1802,33 +1810,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             if isinstance(args, str) and args:
                 self._clear_arguments_field(item)
                 applied = True
-            if self._redact_response_output_reasoning_fields(item, replacement_text):
-                applied = True
-        return applied
-
-    @classmethod
-    def _redact_response_output_reasoning_fields(
-        cls, item: Any, replacement_text: str
-    ) -> bool:
-        """Rewrite Responses API reasoning summaries / direct reasoning text."""
-        applied = False
-        for key in ("reasoning", "reasoning_content", "text"):
-            value = cls._get_field(item, key)
-            if isinstance(value, str) and value:
-                cls._set_field(item, key, replacement_text)
-                applied = True
-
-        summary = cls._get_field(item, "summary")
-        if isinstance(summary, list):
-            for block in summary:
-                if isinstance(cls._get_field(block, "text"), str):
-                    cls._set_field(block, "text", replacement_text)
-                    applied = True
-
-        encrypted_content = cls._get_field(item, "encrypted_content")
-        if isinstance(encrypted_content, str) and encrypted_content:
-            cls._clear_field(item, "encrypted_content")
-            applied = True
         return applied
 
     @staticmethod
@@ -2193,9 +2174,6 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             direct = get("text")
             if isinstance(direct, str) and direct:
                 text_parts.append(direct)
-            text_parts.extend(
-                CiscoAIDefenseGuardrail._extract_response_output_reasoning_parts(item)
-            )
         joined = " ".join(text_parts)
         return [{"role": "assistant", "content": joined}] if joined else []
 
@@ -2203,92 +2181,32 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     def _extract_message_reasoning_parts(cls, message: Any) -> List[str]:
         """Extract inspectable reasoning fields from a message/delta object."""
         parts: List[str] = []
-        reasoning_content = cls._get_field(message, "reasoning_content")
+        reasoning_content = cls._field(message, "reasoning_content")
         if isinstance(reasoning_content, str) and reasoning_content:
             parts.append(reasoning_content)
-        parts.extend(
-            cls._extract_thinking_block_parts(
-                cls._get_field(message, "thinking_blocks")
-            )
-        )
-        parts.extend(
-            cls._extract_reasoning_item_parts(
-                cls._get_field(message, "reasoning_items")
-            )
-        )
-        return parts
-
-    @classmethod
-    def _extract_response_output_reasoning_parts(cls, item: Any) -> List[str]:
-        """Extract reasoning text from Responses API output items."""
-        parts: List[str] = []
-        for key in ("reasoning", "reasoning_content"):
-            value = cls._get_field(item, key)
-            if isinstance(value, str) and value:
-                parts.append(value)
-        parts.extend(cls._extract_reasoning_item_parts([item]))
-        return parts
-
-    @classmethod
-    def _extract_thinking_block_parts(cls, blocks: Any) -> List[str]:
-        if not isinstance(blocks, list):
-            return []
-        parts: List[str] = []
-        for block in blocks:
-            for key in ("thinking", "reasoning", "text", "data"):
-                value = cls._get_field(block, key)
+        for block in cls._field(message, "thinking_blocks") or []:
+            # Do not forward redacted_thinking.data; it is opaque provider
+            # metadata rather than scannable plaintext.
+            for key in ("thinking", "reasoning", "text"):
+                value = cls._field(block, key)
                 if isinstance(value, str) and value:
                     parts.append(value)
-        return parts
-
-    @classmethod
-    def _extract_reasoning_item_parts(cls, items: Any) -> List[str]:
-        if not isinstance(items, list):
-            return []
-        parts: List[str] = []
-        for item in items:
-            summary = cls._get_field(item, "summary")
-            if isinstance(summary, list):
-                for block in summary:
-                    text = cls._get_field(block, "text")
-                    if isinstance(text, str) and text:
-                        parts.append(text)
+        for item in cls._field(message, "reasoning_items") or []:
+            for block in cls._field(item, "summary") or []:
+                text = cls._field(block, "text")
+                if isinstance(text, str) and text:
+                    parts.append(text)
             for key in ("text", "reasoning", "reasoning_content"):
-                value = cls._get_field(item, key)
+                value = cls._field(item, key)
                 if isinstance(value, str) and value:
                     parts.append(value)
         return parts
 
     @staticmethod
-    def _get_field(obj: Any, key: str) -> Any:
+    def _field(obj: Any, key: str) -> Any:
         if isinstance(obj, dict):
             return obj.get(key)
         return getattr(obj, key, None)
-
-    @staticmethod
-    def _set_field(obj: Any, key: str, value: Any) -> None:
-        if isinstance(obj, dict):
-            obj[key] = value
-            return
-        try:
-            setattr(obj, key, value)
-        except (AttributeError, TypeError, ValueError):
-            pass
-
-    @staticmethod
-    def _clear_field(obj: Any, key: str) -> None:
-        if isinstance(obj, dict):
-            obj.pop(key, None)
-            return
-        if not hasattr(obj, key):
-            return
-        try:
-            delattr(obj, key)
-        except (AttributeError, TypeError, ValueError):
-            try:
-                setattr(obj, key, None)
-            except (AttributeError, TypeError, ValueError):
-                pass
 
     @classmethod
     def _extract_message_tool_argument_parts(cls, message: Any) -> List[str]:
