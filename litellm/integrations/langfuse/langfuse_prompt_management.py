@@ -327,7 +327,7 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             verbose_logger.exception(
                 f"Langfuse Layer Error - Exception occurred while logging success event: {str(e)}"
             )
-            self.handle_callback_failure(callback_name=self.__class__.__name__)
+            self.handle_callback_failure(callback_name="langfuse")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         try:
@@ -363,4 +363,4 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             verbose_logger.exception(
                 f"Langfuse Layer Error - Exception occurred while logging failure event: {str(e)}"
             )
-            self.handle_callback_failure(callback_name=self.__class__.__name__)
+            self.handle_callback_failure(callback_name="langfuse")

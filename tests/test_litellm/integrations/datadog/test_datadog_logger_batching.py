@@ -141,7 +141,8 @@ async def test_async_send_batch_requeues_events_on_exception(datadog_env):
 
     logger.async_send_compressed_data = AsyncMock(side_effect=RuntimeError("boom"))
 
-    await logger.async_send_batch()
+    with pytest.raises(RuntimeError, match="boom"):
+        await logger.async_send_batch()
 
     assert [event["message"] for event in logger.log_queue] == [
         '{"event": 0}',
@@ -196,6 +197,7 @@ async def test_flush_queue_updates_last_flush_time(datadog_env):
 
     async def _successful_send():
         logger.log_queue = []
+        return True
 
     logger.async_send_batch = AsyncMock(side_effect=_successful_send)
 

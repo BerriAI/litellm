@@ -82,7 +82,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         self.message_logging = message_logging
         self.turn_off_message_logging = turn_off_message_logging
-        self.callback_name: Optional[str] = None
+        # Subclasses (e.g. OpenTelemetry) may set callback_name before super().__init__().
+        if not hasattr(self, "callback_name"):
+            self.callback_name = None
         pass
 
     @staticmethod

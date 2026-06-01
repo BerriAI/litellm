@@ -431,7 +431,6 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     callback_name=self._get_callback_failure_name()
                 )
                 self._is_in_failure_state = True
-            self.last_flush_time = time.time()
             return
         self.last_flush_time = time.time()
         self._is_in_failure_state = False

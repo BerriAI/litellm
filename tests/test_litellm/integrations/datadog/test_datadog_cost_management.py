@@ -142,7 +142,9 @@ async def test_async_send_batch(clean_env):
     """
     logger = DatadogCostManagementLogger()
     logger.async_client = AsyncMock()
-    logger.async_client.put.return_value = Response(202, json={"status": "ok"})
+    logger.async_client.put.return_value = Response(
+        202, json={"status": "ok"}, request=_PUT_REQUEST
+    )
 
     # Add logs directly to queue
     logger.log_queue = [
@@ -235,7 +237,8 @@ async def test_async_send_batch_requeues_on_upload_failure(clean_env):
         startTime=time.time(),
     )
     logger.log_queue = [original]
-    await logger.async_send_batch()
+    with pytest.raises(Exception, match="boom"):
+        await logger.async_send_batch()
     assert logger.log_queue == [original]
 
 

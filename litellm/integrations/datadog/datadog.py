@@ -309,7 +309,7 @@ class DataDogLogger(
             )
         return None
 
-    async def async_send_batch(self):
+    async def async_send_batch(self) -> bool:
         """
         Sends the in memory logs queue to datadog api
 
@@ -317,14 +317,18 @@ class DataDogLogger(
 
         DD Ref: https://docs.datadoghq.com/api/latest/logs/
 
+        Returns:
+            True if the in-flight batch was accepted by Datadog, False if there was
+            nothing to send or the batch was requeued (e.g. 413).
+
         Raises:
-            Raises a NON Blocking verbose_logger.exception if an error occurs
+            On terminal send failures after requeueing the batch for retry.
         """
         batch_to_send: list = []
         try:
             if not self.log_queue:
                 verbose_logger.exception("Datadog: log_queue does not exist")
-                return
+                return False
 
             batch_to_send = self.log_queue[:]
             self.log_queue = []
@@ -344,7 +348,7 @@ class DataDogLogger(
             if response.status_code == 413:
                 verbose_logger.exception(DD_ERRORS.DATADOG_413_ERROR.value)
                 self.log_queue = batch_to_send + self.log_queue
-                return
+                return False
 
             response.raise_for_status()
             if response.status_code != 202:
@@ -363,6 +367,8 @@ class DataDogLogger(
                     response.text,
                 )
 
+            return True
+
         except Exception:
             self.log_queue = batch_to_send + self.log_queue
             raise
@@ -377,7 +383,7 @@ class DataDogLogger(
                     "Datadog: Flushing batch of %s events", len(self.log_queue)
                 )
                 try:
-                    await self.async_send_batch()
+                    batch_delivered = await self.async_send_batch()
                 except Exception:
                     verbose_logger.exception(
                         "Datadog Error sending batch API; preserving events for retry"
@@ -388,7 +394,7 @@ class DataDogLogger(
                         )
                         self._is_in_failure_state = True
                     return
-                if not self.log_queue:
+                if batch_delivered:
                     self.last_flush_time = time.time()
                     self._is_in_failure_state = False
 
