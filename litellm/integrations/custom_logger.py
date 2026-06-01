@@ -67,7 +67,8 @@ _BASE64_INLINE_PATTERN = re.compile(
 
 
 class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callback#callback-class
-    # Class variables or attributes
+    callback_name: Optional[str]
+
     def __init__(
         self,
         turn_off_message_logging: bool = False,
