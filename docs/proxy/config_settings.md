@@ -231,6 +231,7 @@ router_settings:
 | Name | Type | Description |
 |------|------|-------------|
 | completion_model | string | The model to use for all completions, overriding any `model` specified in the request |
+| enable_drain_endpoint | boolean | If true, exposes the unauthenticated `GET /health/drain` endpoint used by Kubernetes `preStop` hooks to drain in-flight requests before shutdown. Off by default; only enable it when the health port is reachable solely from inside the cluster, since any caller that reaches it can take the pod out of rotation. See `GRACEFUL_SHUTDOWN_TIMEOUT`. |
 | disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
 | disable_spend_updates | boolean | If true, turns off all spend updates to the DB. Including key/user/team spend updates. |
 | disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
