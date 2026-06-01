@@ -41,6 +41,8 @@ class APISerpentSearchParams:
     pixel_position: Optional[bool] = None
 
     def __post_init__(self) -> None:
+        # num's deep-search floor (NUM_MIN_DEEP) is endpoint-specific and enforced
+        # in the transform layer; here we only bound the absolute range.
         if not NUM_MIN <= self.num <= NUM_MAX:
             raise ValueError(
                 f"num must be between {NUM_MIN} and {NUM_MAX}, got {self.num}"

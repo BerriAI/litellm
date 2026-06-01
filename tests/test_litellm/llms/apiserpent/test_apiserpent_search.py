@@ -3,13 +3,10 @@ Tests for APISerpent search API integration (quick + deep search).
 """
 
 import os
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 from urllib.parse import parse_qs, urlparse
 
 import pytest
-
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.llms.apiserpent.search.defaults import APISerpentSearchParams
@@ -30,7 +27,6 @@ class TestAPISerpentDefaults:
         assert params["country"] == "us"
         assert params["num"] == 10
         assert params["format"] == "full"
-        # None-valued optionals are omitted
         assert "freshness" not in params
         assert "pixel_position" not in params
 
@@ -148,6 +144,33 @@ class TestAPISerpentConfig:
             == "https://apiserpent.com/api/search"
         )
 
+    def test_explicit_api_base_swaps_host_and_keeps_routing(self):
+        config = APISerpentSearchConfig()
+        url = config.get_complete_url(
+            api_base="https://staging.apiserpent.com",
+            optional_params={"deep": True},
+            data={"_apiserpent_params": {"q": "x"}},
+        )
+        parsed = urlparse(url)
+        assert (
+            f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+            == "https://staging.apiserpent.com/api/search"
+        )
+
+    def test_get_complete_url_is_idempotent(self):
+        """The handler re-invokes get_complete_url with the resolved URL as api_base."""
+        config = APISerpentSearchConfig()
+        resolved = config.get_complete_url(
+            api_base=None, optional_params={"deep": True}, data=None
+        )
+        again = config.get_complete_url(
+            api_base=resolved,
+            optional_params={"deep": True},
+            data={"_apiserpent_params": {"q": "x"}},
+        )
+        assert again == "https://apiserpent.com/api/search?q=x"
+        assert "/api/search/api/search" not in again
+
     def test_transform_response_full_format(self):
         raw_response = MagicMock()
         raw_response.json.return_value = {
@@ -186,6 +209,15 @@ class TestAPISerpentConfig:
             raw_response=raw_response, logging_obj=None
         )
         assert len(response.results) == 0
+
+    def test_transform_response_null_results(self):
+        """An error response with `results: null` must not raise."""
+        raw_response = MagicMock()
+        raw_response.json.return_value = {"success": False, "results": None}
+        response = APISerpentSearchConfig().transform_search_response(
+            raw_response=raw_response, logging_obj=None
+        )
+        assert response.results == []
 
 
 class TestAPISerpentSearchIntegration:

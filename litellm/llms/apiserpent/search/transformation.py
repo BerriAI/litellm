@@ -71,19 +71,21 @@ class APISerpentSearchConfig(BaseSearchConfig):
     ) -> str:
         """
         Build the search URL. APISerpent uses GET, so the transformed request is
-        serialized into the query string. The endpoint path is chosen by the
-        ``deep`` param unless an explicit ``api_base`` override is provided.
+        serialized into the query string. The endpoint path (quick vs deep) is
+        always applied; an ``api_base`` / ``APISERPENT_API_BASE`` override only
+        changes the host. The ``endswith`` guard keeps this idempotent, since the
+        handler re-invokes this method with the already-resolved URL as api_base.
         """
-        explicit_base = api_base or get_secret_str("APISERPENT_API_BASE")
-        if explicit_base:
-            base = explicit_base.rstrip("/")
-        else:
-            path = (
-                DEEP_SEARCH_PATH
-                if self._is_deep_search(optional_params)
-                else QUICK_SEARCH_PATH
-            )
-            base = f"{APISERPENT_BASE}{path}"
+        base = (
+            api_base or get_secret_str("APISERPENT_API_BASE") or APISERPENT_BASE
+        ).rstrip("/")
+        path = (
+            DEEP_SEARCH_PATH
+            if self._is_deep_search(optional_params)
+            else QUICK_SEARCH_PATH
+        )
+        if not base.endswith(path):
+            base = f"{base}{path}"
 
         if data and isinstance(data, dict) and APISERPENT_PARAMS_KEY in data:
             query_string = urlencode(data[APISERPENT_PARAMS_KEY], doseq=True)
@@ -155,7 +157,7 @@ class APISerpentSearchConfig(BaseSearchConfig):
         """
         response_json = raw_response.json()
 
-        raw_results = response_json.get("results", {})
+        raw_results = response_json.get("results") or {}
         organic = (
             raw_results.get("organic", [])
             if isinstance(raw_results, dict)
