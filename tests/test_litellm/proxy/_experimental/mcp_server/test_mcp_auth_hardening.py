@@ -67,6 +67,47 @@ def test_is_public_mcp_discovery_route_allows_only_known_families():
     assert not f("/.well-known/oauth-protected-resource/srv/")  # trailing slash
 
 
+@pytest.mark.asyncio
+async def test_public_discovery_anonymous_grant_is_get_only():
+    """The anonymous grant for a discovery-shaped path is GET/HEAD only. A POST
+    (an MCP JSON-RPC tool call smuggled onto a discovery path) must fall through
+    to normal auth instead of receiving an anonymous session."""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    discovery_path = "/.well-known/oauth-authorization-server"
+
+    async def fake_auth(api_key, request):
+        # Distinct marker proving normal auth ran (not the anonymous short-circuit).
+        return UserAPIKeyAuth(user_id="authed-via-normal-path")
+
+    async def run(method):
+        scope = {
+            "type": "http",
+            "method": method,
+            "path": discovery_path,
+            "headers": [],
+        }
+        with patch(
+            "litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp.user_api_key_auth",
+            side_effect=fake_auth,
+        ) as mock_auth:
+            auth_result = (await MCPRequestHandler.process_mcp_request(scope))[0]
+            return auth_result, mock_auth
+
+    # GET → anonymous short-circuit; normal auth is never consulted.
+    get_result, get_mock = await run("GET")
+    assert get_result.user_id is None
+    get_mock.assert_not_called()
+
+    # POST → no anonymous grant; falls through to normal auth.
+    post_result, post_mock = await run("POST")
+    post_mock.assert_called_once()
+    assert post_result.user_id == "authed-via-normal-path"
+
+
 # --------------------------------------------------------------------------- #
 # Anonymous OAuth2 fallback must exclude M2M servers (VERIA-116)
 # --------------------------------------------------------------------------- #

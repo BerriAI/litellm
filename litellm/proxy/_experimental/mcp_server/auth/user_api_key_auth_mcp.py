@@ -124,7 +124,13 @@ class MCPRequestHandler:
         )
 
         request_route = get_request_route(request)
-        if MCPRequestHandler._is_public_mcp_discovery_route(request_route):
+        # Discovery metadata is GET/HEAD only; without the method gate a POST of
+        # an MCP JSON-RPC tool call to a discovery-shaped path would receive an
+        # anonymous session and execute unauthenticated.
+        if request.method in (
+            "GET",
+            "HEAD",
+        ) and MCPRequestHandler._is_public_mcp_discovery_route(request_route):
             validated_user_api_key_auth = UserAPIKeyAuth()
         elif (
             not litellm_api_key
