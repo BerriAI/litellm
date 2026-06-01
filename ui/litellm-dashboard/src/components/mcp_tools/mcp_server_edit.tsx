@@ -69,7 +69,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const currentTokenUrl = Form.useWatch("token_url", form);
   const currentRegistrationUrl = Form.useWatch("registration_url", form);
   const hasExistingToolAllowlist =
-    mcpServer.mcp_info?.tool_allowlist_enforced || (mcpServer.allowed_tools?.length ?? 0) > 0;
+    Boolean(
+      mcpServer.mcp_info &&
+        typeof mcpServer.mcp_info === "object" &&
+        mcpServer.mcp_info.tool_allowlist_enforced,
+    ) || (mcpServer.allowed_tools?.length ?? 0) > 0;
   const existingAllowedTools = hasExistingToolAllowlist ? (mcpServer.allowed_tools ?? []) : null;
 
   const persistEditUiState = () => {
@@ -211,12 +215,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   // Initialize allowed tools and tool overrides from existing server data
   useEffect(() => {
-    if (mcpServer.allowed_tools != null) {
-      setAllowedTools(mcpServer.allowed_tools);
+    if (hasExistingToolAllowlist) {
+      setAllowedTools(mcpServer.allowed_tools ?? []);
     }
     setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
     setToolNameToDescription(mcpServer.tool_name_to_description ?? {});
-  }, [mcpServer]);
+  }, [mcpServer, hasExistingToolAllowlist]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -532,6 +536,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcpServer.alias ||
         "unknown";
 
+      const mcpInfoBase =
+        mcpServer.mcp_info && typeof mcpServer.mcp_info === "object" ? mcpServer.mcp_info : {};
+      const wasAllowlistEnforced = Boolean(mcpInfoBase.tool_allowlist_enforced);
+      const toolAllowlistEnforced = wasAllowlistEnforced || allowedTools.length > 0;
+
       const payload: Record<string, any> = {
         ...restValues,
         ...stdioFields,
@@ -540,20 +549,24 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_json: undefined,
         server_id: mcpServer.server_id,
         mcp_info: {
-          ...(mcpServer.mcp_info && typeof mcpServer.mcp_info === "object" ? mcpServer.mcp_info : {}),
+          ...mcpInfoBase,
           server_name: mcpInfoServerName,
           description: restValues.description,
           logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
-          tool_allowlist_enforced: true,
+          tool_allowlist_enforced: toolAllowlistEnforced,
         },
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         // Include permission management fields
         extra_headers: restValues.extra_headers || [],
-        allowed_tools: allowedTools,
-        tool_name_to_display_name: toolNameToDisplayName,
-        tool_name_to_description: toolNameToDescription,
+        ...(toolAllowlistEnforced
+          ? {
+              allowed_tools: allowedTools,
+              tool_name_to_display_name: toolNameToDisplayName,
+              tool_name_to_description: toolNameToDescription,
+            }
+          : {}),
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
@@ -1112,6 +1125,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 }}
                 allowedTools={allowedTools}
                 existingAllowedTools={existingAllowedTools}
+                isEditMode
                 onAllowedToolsChange={setAllowedTools}
                 toolNameToDisplayName={toolNameToDisplayName}
                 toolNameToDescription={toolNameToDescription}

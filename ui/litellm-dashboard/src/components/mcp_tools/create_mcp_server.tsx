@@ -384,7 +384,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           description: restValues.description,
           logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
-          tool_allowlist_enforced: true,
+          tool_allowlist_enforced: allowedTools.length > 0,
         },
         mcp_access_groups: accessGroups,
         alias: restValues.alias,

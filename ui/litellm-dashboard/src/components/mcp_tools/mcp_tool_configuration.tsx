@@ -28,6 +28,8 @@ interface MCPToolConfigurationProps {
   externalIsLoading?: boolean;
   externalError?: string | null;
   externalCanFetch?: boolean;
+  /** When true, do not auto-select all tools for servers with no stored allowlist. */
+  isEditMode?: boolean;
 }
 
 interface ToolEntry {
@@ -158,6 +160,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   externalIsLoading,
   externalError,
   externalCanFetch,
+  isEditMode = false,
 }) => {
   const previousToolsRef = useRef<ToolEntry[]>([]);
   const [toolSearchTerm, setToolSearchTerm] = useState("");
@@ -264,6 +267,9 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
             availableToolNames.includes(toolName)
           );
           onAllowedToolsChange(validExistingTools);
+        } else if (isEditMode) {
+          // Unrestricted legacy server — do not auto-select before the user chooses tools.
+          onAllowedToolsChange([]);
         } else if (suggestedTools.length > 0) {
           // OpenAPI preset: only enable suggested tools by default
           onAllowedToolsChange(
