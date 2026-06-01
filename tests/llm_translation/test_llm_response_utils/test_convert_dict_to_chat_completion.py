@@ -1597,3 +1597,131 @@ def test_convert_to_model_response_object_with_null_top_logprobs():
     for token_logprob in choice.logprobs.content:
         assert token_logprob.top_logprobs == []
         assert isinstance(token_logprob.top_logprobs, list)
+
+
+class TestMissingChoicesGuard:
+    """
+    Tests for the defense-in-depth guard that raises APIError when a provider
+    returns a response with no 'choices' field.
+
+    See: https://github.com/BerriAI/litellm/issues/29391
+    """
+
+    def test_convert_to_model_response_object_no_choices_raises_api_error(self):
+        """Missing choices in non-streaming path raises APIError, not IndexError."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_model_response_object_empty_choices_raises_api_error(self):
+        """Empty choices list raises APIError."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_model_response_object_null_choices_raises_api_error(self):
+        """choices=None raises APIError."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "choices": None,
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_streaming_response_no_choices_raises_api_error(self):
+        """Missing choices in streaming cache-hit path raises APIError."""
+        from litellm.exceptions import APIError
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_streaming_response,
+        )
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            # convert_to_streaming_response is a generator, must consume it
+            list(convert_to_streaming_response(response_object=response_object))
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_convert_to_streaming_response_async_no_choices_raises_api_error(self):
+        """Missing choices in async streaming path raises APIError."""
+        import asyncio
+
+        from litellm.exceptions import APIError
+        from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+            convert_to_model_response_object,
+        )
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+        }
+
+        # The async streaming path is triggered via stream=True
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+                stream=True,
+            )
+
+        assert "no 'choices'" in exc_info.value.message
+
+    def test_error_message_includes_response_keys(self):
+        """The error message should include the keys present in the response for debugging."""
+        from litellm.exceptions import APIError
+
+        response_object = {
+            "id": "msg_123",
+            "model": "some-model",
+            "usage": {"prompt_tokens": 10, "completion_tokens": 1, "total_tokens": 11},
+            "copilot_usage": {"total_nano_aiu": 9500000},
+        }
+
+        with pytest.raises(APIError) as exc_info:
+            convert_to_model_response_object(
+                response_object=response_object,
+                model_response_object=ModelResponse(),
+            )
+
+        assert "copilot_usage" in exc_info.value.message
