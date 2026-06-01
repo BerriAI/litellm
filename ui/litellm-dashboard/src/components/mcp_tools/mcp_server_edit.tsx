@@ -6,6 +6,7 @@ import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "
 import { updateMCPServer, listMCPTools } from "../networking";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import DelegateAuthUpstreamField from "./DelegateAuthUpstreamField";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
@@ -135,7 +136,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     },
     onTokenReceived: (token) => {
       setOauthAccessToken(token?.access_token ?? null);
-      
+
       if (token?.access_token) {
         const credentials = {
           access_token: token.access_token,
@@ -143,11 +144,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           ...(token.expires_in && { expires_in: token.expires_in }),
           ...(token.scope && { scope: token.scope }),
         };
-        
+
         form.setFieldsValue({ credentials });
-        
+
         NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials."
+          "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
         );
       }
     },
@@ -175,7 +176,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return "";
     }
   }, [mcpServer.env]);
-
 
   // If server has spec_path, show it as "openapi" transport in the UI
   const effectiveTransport = React.useMemo(() => {
@@ -563,12 +563,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
             : false,
         // Include token_validation when it is set (non-null) or when clearing an existing value
-        ...(tokenValidation !== null || mcpServer.token_validation
-          ? { token_validation: tokenValidation }
-          : {}),
+        ...(tokenValidation !== null || mcpServer.token_validation ? { token_validation: tokenValidation } : {}),
       };
 
-      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
+      const includeCredentials =
+        restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
@@ -700,10 +699,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   />
                 </Form.Item>
 
-                <Form.Item
-                  label="Args"
-                  name="args"
-                >
+                <Form.Item label="Args" name="args">
                   <Select
                     mode="tags"
                     size="large"
@@ -916,17 +912,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       }
                       name="token_storage_ttl_seconds"
                     >
-                      <InputNumber
-                        min={1}
-                        placeholder="e.g. 3600"
-                        style={{ width: "100%" }}
-                        className="rounded-lg"
-                      />
+                      <InputNumber min={1} placeholder="e.g. 3600" style={{ width: "100%" }} className="rounded-lg" />
                     </Form.Item>
+                    <DelegateAuthUpstreamField initialValue={mcpServer.delegate_auth_to_upstream ?? false} />
                   </>
                 )}
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
+                  <p className="text-sm text-gray-600">
+                    Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication
+                    value.
+                  </p>
                   <Button
                     variant="secondary"
                     onClick={startOAuthFlow}
@@ -952,7 +947,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               <>
                 <p className="text-sm text-gray-500 mb-2">
                   For MCP servers hosted on AWS Bedrock AgentCore.{" "}
-                  <a href="https://docs.litellm.ai/docs/mcp_aws_sigv4" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                  <a
+                    href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-500 hover:text-blue-700"
+                  >
                     View docs &rarr;
                   </a>
                 </p>
@@ -1098,7 +1098,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   transport: transportType ?? mcpServer.transport,
                   auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type: (currentTokenUrl ?? mcpServer.token_url) ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  oauth_flow_type: currentTokenUrl ?? mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
                   static_headers: currentStaticHeaders ?? mcpServer.static_headers,
                   credentials: currentCredentials,
                   authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
