@@ -596,6 +596,7 @@ router_settings:
 | DD_AGENT_PORT | Port of DataDog agent for log intake. Default is 10518
 | DD_API_KEY | API key for Datadog integration
 | DD_APP_KEY | Application key for Datadog Cost Management integration. Required along with DD_API_KEY for cost metrics
+| DD_BATCH_SIZE | Number of log events buffered before flushing to Datadog. Clamped to [1, 1000]; defaults to 1000. Lower it (e.g. 50) if batches exceed Datadog's 5MB request limit
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
 | DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE | Resource name for Datadog tracing of streaming chunk yields. Default is "streaming.chunk.yield"
