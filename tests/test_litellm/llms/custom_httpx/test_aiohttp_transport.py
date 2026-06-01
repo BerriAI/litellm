@@ -238,6 +238,7 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
             class Resp:
                 status = 200
                 headers = {}
+                raw_headers = ()
 
                 async def __aenter__(self):
                     return self
@@ -260,6 +261,51 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
     await transport.handle_async_request(request)
 
     assert captured["proxy"] == proxy_url
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_preserves_non_ascii_response_headers():
+    """Aiohttp transport should pass raw response header bytes through to httpx."""
+    header_value = "本地化消息"
+
+    class FakeSession:
+        closed = False
+
+        def __init__(self):
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, *args, **kwargs):
+            class Resp:
+                status = 200
+                headers = {"X-Localized-Message": header_value}
+                raw_headers = ((b"X-Localized-Message", header_value.encode("utf-8")),)
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b"ok"
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+    response = await transport.handle_async_request(
+        httpx.Request("GET", "http://example.com/asset")
+    )
+
+    assert response.status_code == 200
+    assert response.headers.get("x-localized-message") == header_value
 
 
 @pytest.mark.asyncio
@@ -295,6 +341,7 @@ async def test_handle_async_request_uses_env_proxy_per_url(monkeypatch):
             class Resp:
                 status = 200
                 headers = {}
+                raw_headers = ()
 
                 async def __aenter__(self):
                     return self
@@ -353,6 +400,7 @@ def _make_mock_response(should_fail=False, fail_count={"count": 0}):
     class MockResp:
         status = 200
         headers = {}
+        raw_headers = ()
 
         async def __aenter__(self):
             if should_fail and fail_count["count"] < 1:
