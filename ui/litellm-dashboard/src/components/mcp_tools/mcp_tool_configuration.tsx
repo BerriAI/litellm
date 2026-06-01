@@ -289,11 +289,18 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
     previousToolsRef.current = tools;
   }, [tools, allowedTools, existingAllowedTools, onAllowedToolsChange, suggestedTools]);
 
+  const isLegacyUnrestrictedEdit = isEditMode && existingAllowedTools === null && allowedTools.length === 0;
+  const effectiveAllowedTools = useMemo(
+    () => (isLegacyUnrestrictedEdit ? tools.map((tool) => tool.name) : allowedTools),
+    [allowedTools, isLegacyUnrestrictedEdit, tools]
+  );
+  const effectiveAllowedToolNames = useMemo(() => new Set(effectiveAllowedTools), [effectiveAllowedTools]);
+
   const handleToolToggle = (toolName: string) => {
-    if (allowedTools.includes(toolName)) {
-      onAllowedToolsChange(allowedTools.filter((name) => name !== toolName));
+    if (effectiveAllowedToolNames.has(toolName)) {
+      onAllowedToolsChange(effectiveAllowedTools.filter((name) => name !== toolName));
     } else {
-      onAllowedToolsChange([...allowedTools, toolName]);
+      onAllowedToolsChange([...effectiveAllowedTools, toolName]);
     }
   };
 
@@ -333,25 +340,27 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
   const handleEnableSuggested = () => {
     // Enable ALL suggested tools (not just the currently filtered subset)
     const suggestedNames = suggestedTools.map((t) => t.name);
-    const others = allowedTools.filter((n) => !suggestedToolNames.has(n));
-    onAllowedToolsChange([...others, ...suggestedNames]);
+    const missingSuggestedNames = suggestedNames.filter((name) => !effectiveAllowedToolNames.has(name));
+    if (missingSuggestedNames.length === 0) return;
+    onAllowedToolsChange([...effectiveAllowedTools, ...missingSuggestedNames]);
   };
 
   const handleDisableSuggested = () => {
     // Disable ALL suggested tools (not just the currently filtered subset)
-    onAllowedToolsChange(allowedTools.filter((n) => !suggestedToolNames.has(n)));
+    onAllowedToolsChange(effectiveAllowedTools.filter((n) => !suggestedToolNames.has(n)));
   };
 
   const handleEnableRest = () => {
     // Enable ALL non-suggested tools (not just the currently filtered subset)
     const restNames = tools.filter((t) => !suggestedToolNames.has(t.name)).map((t) => t.name);
-    const current = new Set(allowedTools);
-    onAllowedToolsChange([...allowedTools, ...restNames.filter((n) => !current.has(n))]);
+    const missingRestNames = restNames.filter((n) => !effectiveAllowedToolNames.has(n));
+    if (missingRestNames.length === 0) return;
+    onAllowedToolsChange([...effectiveAllowedTools, ...missingRestNames]);
   };
 
   const handleDisableRest = () => {
     // Disable ALL non-suggested tools (not just the currently filtered subset)
-    onAllowedToolsChange(allowedTools.filter((n) => suggestedToolNames.has(n)));
+    onAllowedToolsChange(effectiveAllowedTools.filter((n) => suggestedToolNames.has(n)));
   };
 
   // Don't show anything if required fields aren't filled
@@ -452,8 +461,8 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
             <div className="flex items-center gap-2 p-3 bg-green-50 rounded-lg border border-green-200">
               <CheckCircleOutlined className="text-green-600" />
               <Text className="text-green-700 font-medium">
-                {allowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for user
-                access
+                {effectiveAllowedTools.length} of {tools.length} {tools.length === 1 ? "tool" : "tools"} enabled for
+                user access
               </Text>
             </div>
 
@@ -473,11 +482,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               <McpCrudPermissionPanel
                 tools={tools}
                 searchFilter={toolSearchTerm}
-                value={
-                  existingAllowedTools === null && allowedTools.length === 0
-                    ? undefined
-                    : allowedTools
-                }
+                value={isLegacyUnrestrictedEdit ? undefined : allowedTools}
                 onChange={(allowed) => onAllowedToolsChange(allowed)}
               />
             )}
@@ -519,7 +524,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                       <ToolRow
                         key={tool.name}
                         tool={tool}
-                        isEnabled={allowedTools.includes(tool.name)}
+                        isEnabled={effectiveAllowedToolNames.has(tool.name)}
                         isEditExpanded={expandedTools.has(tool.name)}
                         toolNameToDisplayName={toolNameToDisplayName}
                         toolNameToDescription={toolNameToDescription}
@@ -558,7 +563,7 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
                       <ToolRow
                         key={tool.name}
                         tool={tool}
-                        isEnabled={allowedTools.includes(tool.name)}
+                        isEnabled={effectiveAllowedToolNames.has(tool.name)}
                         isEditExpanded={expandedTools.has(tool.name)}
                         toolNameToDisplayName={toolNameToDisplayName}
                         toolNameToDescription={toolNameToDescription}
