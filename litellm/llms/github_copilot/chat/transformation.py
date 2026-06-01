@@ -1,13 +1,11 @@
-from typing import Any, List, Optional, Tuple, Union, cast
+import json
+from typing import Any, List, Optional, Tuple
 
 import os
 
 import httpx
 
 from litellm.exceptions import AuthenticationError
-from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    convert_to_model_response_object,
-)
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -186,27 +184,17 @@ class GithubCopilotConfig(OpenAIConfig):
         json_mode: Optional[bool] = None,
     ) -> "ModelResponse":
         """
-        Override transform_response to handle newer Copilot models (e.g. claude-opus-4.7,
-        claude-opus-4.8) that may return Anthropic-native format responses without
-        the standard OpenAI `choices` array.
+        Handle newer Copilot models (e.g. claude-opus-4.7, claude-opus-4.8) that
+        return Anthropic-native format responses without a `choices` array.
 
-        When `choices` is missing or empty in the response, this method synthesizes
-        a minimal valid `choices` structure from the available Anthropic-native fields
-        (e.g. `content`, `stop_reason`) before delegating to the parent's response
-        conversion logic.
-
-        This prevents IndexError crashes when the response has no choices, which
-        commonly occurs with max_tokens=1 on newer models.
+        Synthesizes the missing `choices` from Anthropic-native fields, then
+        delegates to the parent so all standard post-processing applies.
 
         See: https://github.com/BerriAI/litellm/issues/29391
         """
-        logging_obj.post_call(original_response=raw_response.text)
-        logging_obj.model_call_details["response_headers"] = raw_response.headers
-
         try:
             response_json = raw_response.json()
         except Exception:
-            # If we can't parse JSON, fall back to parent behavior
             return super().transform_response(
                 model=model,
                 raw_response=raw_response,
@@ -221,10 +209,8 @@ class GithubCopilotConfig(OpenAIConfig):
                 json_mode=json_mode,
             )
 
-        # Guard: if choices is missing or empty, synthesize from Anthropic-native fields
         if not response_json.get("choices"):
             content = ""
-            # Try to extract text content from Anthropic-native response format
             if "content" in response_json and isinstance(
                 response_json["content"], list
             ):
@@ -233,15 +219,21 @@ class GithubCopilotConfig(OpenAIConfig):
                         content = block.get("text", "")
                         break
 
-            # Map Anthropic stop_reason to OpenAI finish_reason
-            stop_reason = response_json.get("stop_reason", "max_tokens")
+            stop_reason = response_json.get("stop_reason")
             finish_reason_map = {
                 "end_turn": "stop",
                 "max_tokens": "length",
                 "stop_sequence": "stop",
                 "tool_use": "tool_calls",
             }
-            finish_reason = finish_reason_map.get(stop_reason, "length")
+            # Default to "stop" for responses with content, "length" only when
+            # content is empty and stop_reason is absent/unknown.
+            if stop_reason in finish_reason_map:
+                finish_reason = finish_reason_map[stop_reason]
+            elif content:
+                finish_reason = "stop"
+            else:
+                finish_reason = "length"
 
             response_json["choices"] = [
                 {
@@ -251,7 +243,6 @@ class GithubCopilotConfig(OpenAIConfig):
                 }
             ]
 
-            # Normalize usage fields if in Anthropic format
             if "usage" in response_json:
                 usage = response_json["usage"]
                 if "input_tokens" in usage and "prompt_tokens" not in usage:
@@ -263,14 +254,24 @@ class GithubCopilotConfig(OpenAIConfig):
                         "completion_tokens", 0
                     )
 
-        final_response_obj = cast(
-            ModelResponse,
-            convert_to_model_response_object(
-                response_object=response_json,
-                model_response_object=model_response,
-                hidden_params={"headers": raw_response.headers},
-                _response_headers=dict(raw_response.headers),
-            ),
-        )
+            # Build a patched response so super() sees valid JSON with choices
+            patched = httpx.Response(
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+                content=json.dumps(response_json).encode(),
+            )
+            raw_response = patched
 
-        return final_response_obj
+        return super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )

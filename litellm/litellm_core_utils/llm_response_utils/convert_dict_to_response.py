@@ -536,9 +536,20 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 return convert_to_streaming_response(response_object=response_object)
             choice_list: List[Choices] = []
 
-            assert response_object["choices"] is not None and isinstance(
+            if not response_object.get("choices") or not isinstance(
                 response_object["choices"], Iterable
-            )
+            ):
+                from litellm.exceptions import APIError
+
+                raise APIError(
+                    status_code=500,
+                    message=(
+                        "LiteLLM: provider returned a response with no 'choices'. "
+                        f"Raw keys: {list(response_object.keys())}"
+                    ),
+                    llm_provider="",
+                    model="",
+                )
 
             for idx, choice in enumerate(response_object["choices"]):
                 ## HANDLE JSON MODE - anthropic returns single function call]
