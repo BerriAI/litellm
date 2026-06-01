@@ -258,8 +258,8 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
       if (!hasInitializedRef.current) {
         hasInitializedRef.current = true;
 
-        if (existingAllowedTools && existingAllowedTools.length > 0) {
-          // Edit mode: pre-select tools that match existing allowed tools
+        if (existingAllowedTools !== null) {
+          // Edit mode: honor stored allowlist, including [] (user cleared all tools).
           const validExistingTools = existingAllowedTools.filter((toolName) =>
             availableToolNames.includes(toolName)
           );
@@ -467,7 +467,13 @@ const MCPToolConfiguration: React.FC<MCPToolConfigurationProps> = ({
               <McpCrudPermissionPanel
                 tools={tools}
                 searchFilter={toolSearchTerm}
-                value={allowedTools.length === 0 ? undefined : allowedTools}
+                value={
+                  existingAllowedTools !== null
+                    ? allowedTools
+                    : allowedTools.length === 0
+                      ? undefined
+                      : allowedTools
+                }
                 onChange={(allowed) => onAllowedToolsChange(allowed)}
               />
             )}

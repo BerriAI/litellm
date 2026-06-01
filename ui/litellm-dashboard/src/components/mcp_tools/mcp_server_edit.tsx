@@ -208,7 +208,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   // Initialize allowed tools and tool overrides from existing server data
   useEffect(() => {
-    if (mcpServer.allowed_tools) {
+    if (mcpServer.allowed_tools != null) {
       setAllowedTools(mcpServer.allowed_tools);
     }
     setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
@@ -546,9 +546,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         alias: restValues.alias,
         // Include permission management fields
         extra_headers: restValues.extra_headers || [],
-        allowed_tools: allowedTools.length > 0 ? allowedTools : null,
-        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
-        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
+        allowed_tools: allowedTools,
+        tool_name_to_display_name: toolNameToDisplayName,
+        tool_name_to_description: toolNameToDescription,
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
@@ -1106,7 +1106,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
                 }}
                 allowedTools={allowedTools}
-                existingAllowedTools={mcpServer.allowed_tools || null}
+                existingAllowedTools={mcpServer.allowed_tools ?? null}
                 onAllowedToolsChange={setAllowedTools}
                 toolNameToDisplayName={toolNameToDisplayName}
                 toolNameToDescription={toolNameToDescription}
