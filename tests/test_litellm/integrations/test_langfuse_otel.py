@@ -134,6 +134,66 @@ class TestLangfuseOtelIntegration:
                     mock_span, "langfuse.environment", test_env
                 )
 
+    def test_langfuse_environment_from_dynamic_param(self):
+        """A per-request/per-key `langfuse_environment` dynamic param is written
+        to the langfuse.environment span attribute."""
+        mock_span = MagicMock()
+        mock_kwargs = {
+            "standard_callback_dynamic_params": {"langfuse_environment": "development"}
+        }
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LANGFUSE_TRACING_ENVIRONMENT", None)
+            with patch(
+                "litellm.integrations.arize._utils.safe_set_attribute"
+            ) as mock_safe_set_attribute:
+                LangfuseOtelLogger._set_langfuse_specific_attributes(
+                    mock_span, mock_kwargs, {}
+                )
+
+                mock_safe_set_attribute.assert_called_once_with(
+                    mock_span, "langfuse.environment", "development"
+                )
+
+    def test_langfuse_environment_from_metadata(self):
+        """A per-request `environment` in litellm_params.metadata is written to
+        the langfuse.environment span attribute."""
+        mock_span = MagicMock()
+        mock_kwargs = {"litellm_params": {"metadata": {"environment": "staging"}}}
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LANGFUSE_TRACING_ENVIRONMENT", None)
+            with patch(
+                "litellm.integrations.arize._utils.safe_set_attribute"
+            ) as mock_safe_set_attribute:
+                LangfuseOtelLogger._set_langfuse_specific_attributes(
+                    mock_span, mock_kwargs, {}
+                )
+
+                mock_safe_set_attribute.assert_called_once_with(
+                    mock_span, "langfuse.environment", "staging"
+                )
+
+    def test_langfuse_environment_dynamic_param_overrides_env_var(self):
+        """The per-request dynamic param takes precedence over the
+        LANGFUSE_TRACING_ENVIRONMENT env var fallback."""
+        mock_span = MagicMock()
+        mock_kwargs = {
+            "standard_callback_dynamic_params": {"langfuse_environment": "production"}
+        }
+
+        with patch.dict(os.environ, {"LANGFUSE_TRACING_ENVIRONMENT": "staging"}):
+            with patch(
+                "litellm.integrations.arize._utils.safe_set_attribute"
+            ) as mock_safe_set_attribute:
+                LangfuseOtelLogger._set_langfuse_specific_attributes(
+                    mock_span, mock_kwargs, {}
+                )
+
+                mock_safe_set_attribute.assert_called_once_with(
+                    mock_span, "langfuse.environment", "production"
+                )
+
     def test_extract_langfuse_metadata_basic(self):
         """Ensure metadata is correctly pulled from litellm_params."""
         metadata_in = {"generation_name": "my-gen", "custom": "data"}

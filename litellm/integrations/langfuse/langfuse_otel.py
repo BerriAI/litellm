@@ -232,7 +232,22 @@ class LangfuseOtelLogger(OpenTelemetry):
         from litellm.integrations.arize._utils import safe_set_attribute
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-        langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
+
+        # Resolve the Langfuse environment with precedence:
+        #   per-request dynamic param / metadata -> LANGFUSE_TRACING_ENVIRONMENT.
+        # This mirrors the `langfuse_environment` key wired into the vanilla
+        # Langfuse integration in #11289 (which fixed #10020), so a single proxy
+        # serving multiple deployment environments via separate virtual keys can
+        # tag each trace with the correct environment on the OTEL path too. Falls
+        # back to the existing env var when no per-request value is provided.
+        dynamic_params = kwargs.get("standard_callback_dynamic_params") or {}
+        langfuse_environment = (
+            dynamic_params.get("langfuse_environment")
+            or metadata.get("langfuse_environment")
+            or metadata.get("environment")
+            or os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        )
         if langfuse_environment:
             safe_set_attribute(
                 span,
@@ -240,7 +255,6 @@ class LangfuseOtelLogger(OpenTelemetry):
                 langfuse_environment,
             )
 
-        metadata = LangfuseOtelLogger._extract_langfuse_metadata(kwargs)
         LangfuseOtelLogger._set_metadata_attributes(span=span, metadata=metadata)
 
         messages = kwargs.get("messages")
