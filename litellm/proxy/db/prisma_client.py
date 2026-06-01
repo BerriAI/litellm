@@ -403,9 +403,13 @@ class PrismaWrapper:
             kwargs["http"] = http_client
         if self._recreate_uses_datasource:
             kwargs["datasource"] = {"url": new_db_url}
-        self._original_prisma = Prisma(**kwargs)
+        new_prisma = Prisma(**kwargs)
 
-        await self._original_prisma.connect()
+        # Swap only after connect() succeeds. If connect() raises or is cancelled
+        # (for example under a short auth-path timeout), installing a half-built
+        # client would poison later queries with ClientNotConnectedError.
+        await new_prisma.connect()
+        self._original_prisma = new_prisma
         self._engine_generation += 1
 
         # Let the owner (PrismaClient) re-arm its engine-death watcher on the

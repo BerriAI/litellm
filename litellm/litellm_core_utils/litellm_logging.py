@@ -4963,7 +4963,26 @@ class StandardLoggingPayloadSetup:
             if status_code_attr is None:
                 response_attr = getattr(original_exception, "response", None)
                 status_code_attr = getattr(response_attr, "status_code", None)
-            error_status = str(status_code_attr) if status_code_attr is not None else ""
+            if status_code_attr is not None:
+                error_status = str(status_code_attr)
+            else:
+                # DB transport errors (e.g. ClientNotConnectedError) have no code/status_code.
+                # Map them to 503 so spend logs reflect the correct HTTP semantics.
+                try:
+                    import prisma.errors
+
+                    if isinstance(
+                        original_exception,
+                        (
+                            prisma.errors.ClientNotConnectedError,
+                            prisma.errors.HTTPClientClosedError,
+                        ),
+                    ):
+                        error_status = "503"
+                    else:
+                        error_status = ""
+                except ImportError:
+                    error_status = ""
         error_class: str = str(original_exception.__class__.__name__) if original_exception else ""
         _llm_provider_in_exception = getattr(original_exception, "llm_provider", "")
 
