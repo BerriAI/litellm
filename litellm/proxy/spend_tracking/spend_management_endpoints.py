@@ -21,7 +21,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -1817,7 +1816,10 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         )
 
     try:
-        is_v2 = "/spend/logs/v2" in request.url.path
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+
+        is_v2 = "/spend/logs/v2" in get_request_route(request)
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
         def parse_date(date_str: str) -> datetime:
@@ -3146,18 +3148,12 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
+        router_budget_logger = llm_router._get_router_deployment_budget_limiter()
+        if router_budget_logger is None:
+            raise ValueError("No router budget logger found")
+
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            router_budget_logger = next(
-                (
-                    cb
-                    for cb in (llm_router.optional_callbacks or [])
-                    if isinstance(cb, RouterBudgetLimiting)
-                ),
-                None,
-            )
-            if router_budget_logger is None:
-                raise ValueError("No router budget logger found")
             _provider_spend = (
                 await router_budget_logger._get_current_provider_spend(_provider) or 0.0
             )
@@ -3184,16 +3180,14 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
-    response = await prisma_client.db.query_raw(
-        """
+    response = await prisma_client.db.query_raw("""
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
         SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
         GROUP BY individual_request_tag;
-        """
-    )
+        """)
 
     return response
 

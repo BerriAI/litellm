@@ -19,6 +19,13 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { Team } from "../key_team_helpers/key_list";
 import TeamDropdown from "../common_components/team_dropdown";
 import AgentFormFields from "./agent_form_fields";
+import AgentCardDiscovery, {
+  DiscoveredAgentCardSelection,
+} from "./agent_card_discovery";
+import {
+  buildDiscoveryRequest,
+  overlayDiscoveredCardParams,
+} from "./agent_discovery_utils";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { getDefaultFormValues, buildAgentDataFromForm } from "./agent_config";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -74,6 +81,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const [requireTraceIdOutbound, setRequireTraceIdOutbound] = useState(false);
   const [maxIterations, setMaxIterations] = useState<number | null>(null);
   const [maxBudgetPerSession, setMaxBudgetPerSession] = useState<number | null>(null);
+
+  // Latest upstream card selection from auto-discovery (skills, capabilities,
+  // name, description). Dynamic agent forms don't render Form.Items for those
+  // fields, so we overlay this onto agent_card_params at submit.
+  const [appliedDiscoveredSelection, setAppliedDiscoveredSelection] =
+    useState<DiscoveredAgentCardSelection | null>(null);
 
   // Fetch agent type metadata on mount
   useEffect(() => {
@@ -157,6 +170,30 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     (info) => info.agent_type === agentType
   );
 
+  // Watch every form field so we can recompute the discovery plan whenever
+  // the user types into a relevant credential field below.
+  const watchedFormValues = Form.useWatch([], form);
+
+  // Build the discovery plan for the proxy. Different agent runtimes publish
+  // their cards at different URL shapes:
+  //
+  //   - LangGraph Platform: one well-known endpoint on the base URL,
+  //     ``?assistant_id=<id>`` selects the assistant.
+  //   - Pure A2A (the default): card lives at one of the well-known paths
+  //     on the agent's own base URL.
+  //
+  // Returns undefined when nothing usable is filled in yet, which causes the
+  // component to fall back to a manual URL input.
+  const discoveryRequest = React.useMemo(
+    () =>
+      buildDiscoveryRequest(
+        agentType,
+        watchedFormValues || {},
+        selectedAgentTypeInfo,
+      ),
+    [watchedFormValues, selectedAgentTypeInfo, agentType],
+  );
+
   const handleNext = async () => {
     try {
       if (currentStep === 0) {
@@ -192,10 +229,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           skills: [],
         },
       };
-    } else if (agentType === "a2a") {
-      return buildAgentDataFromForm(values);
+    }
+
+    let agentData: Record<string, any>;
+    if (agentType === "a2a") {
+      agentData = buildAgentDataFromForm(values);
     } else if (selectedAgentTypeInfo?.use_a2a_form_fields) {
-      const agentData = buildAgentDataFromForm(values);
+      agentData = buildAgentDataFromForm(values);
       if (selectedAgentTypeInfo.litellm_params_template) {
         agentData.litellm_params = {
           ...agentData.litellm_params,
@@ -208,11 +248,16 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           agentData.litellm_params[field.key] = value;
         }
       }
-      return agentData;
     } else if (selectedAgentTypeInfo) {
-      return buildDynamicAgentData(values, selectedAgentTypeInfo);
+      agentData = buildDynamicAgentData(values, selectedAgentTypeInfo);
+    } else {
+      return null;
     }
-    return null;
+
+    return overlayDiscoveredCardParams(
+      agentData,
+      appliedDiscoveredSelection?.selected_card,
+    );
   };
 
   const handleCreateAgent = async () => {
@@ -340,6 +385,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     setRequireTraceIdOutbound(false);
     setMaxIterations(null);
     setMaxBudgetPerSession(null);
+    setAppliedDiscoveredSelection(null);
     onClose();
   };
 
@@ -568,6 +614,66 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const handleAgentTypeChange = (value: string) => {
     setAgentType(value);
     form.resetFields();
+    // Discovery selections are tied to a specific agent type's URL shape;
+    // switching types invalidates them.
+    setAppliedDiscoveredSelection(null);
+  };
+
+  // Apply a discovered agent card to the form so the rest of Step 1 (skills,
+  // capabilities, name, description, URL) reflects what the user picked. The
+  // proxy re-applies its own merge at registration; we only seed defaults here.
+  //
+  // AntD's `setFieldsValue` silently ignores keys whose Form.Item isn't
+  // registered, so this is safe across all agent types — A2A forms pick up
+  // every field below; LangGraph and other dynamic forms only pick up the
+  // shared ones (`agent_name`, `description`, plus any credential field whose
+  // key looks URL-ish).
+  const handleApplyDiscoveredCard = (
+    selection: DiscoveredAgentCardSelection | null,
+  ) => {
+    setAppliedDiscoveredSelection(selection);
+    if (!selection) return;
+    const { selected_card, upstream_url } = selection;
+    const skills = (selected_card.skills ?? []).map((s) => ({
+      id: s.id ?? "",
+      name: s.name ?? "",
+      description: s.description ?? "",
+      tags: s.tags ?? [],
+      examples: s.examples ?? [],
+    }));
+
+    const currentAgentName = form.getFieldValue("agent_name");
+    const seededAgentName =
+      currentAgentName || selected_card.name || selected_card.provider?.organization || "";
+
+    const fieldsToSet: Record<string, any> = {
+      agent_name: seededAgentName,
+      name: selected_card.name,
+      description: selected_card.description,
+      url: upstream_url,
+      version: selected_card.version,
+      protocolVersion: selected_card.protocolVersion ?? "1.0",
+      streaming: Boolean(selected_card.capabilities?.streaming),
+      skills,
+      iconUrl: selected_card.iconUrl,
+      documentationUrl: selected_card.documentationUrl,
+    };
+
+    // For dynamic agent types (e.g. LangGraph), the URL lives in a
+    // type-specific credential field. Match on common naming variants so the
+    // user doesn't have to re-paste the URL they already typed above.
+    const urlCredentialKeys = (selectedAgentTypeInfo?.credential_fields ?? [])
+      .map((f) => f.key)
+      .filter((key) => /(^|_)(url|api_base|endpoint)$/i.test(key));
+    for (const key of urlCredentialKeys) {
+      fieldsToSet[key] = upstream_url;
+    }
+
+    form.setFieldsValue(fieldsToSet);
+
+    if (!newKeyName && seededAgentName) {
+      setNewKeyName(`${seededAgentName}-key`);
+    }
   };
 
   const isCustomAgent = agentType === CUSTOM_AGENT_TYPE;
@@ -702,6 +808,21 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         ) : selectedAgentTypeInfo ? (
           <DynamicAgentFormFields agentTypeInfo={selectedAgentTypeInfo} />
         ) : null}
+
+        {/* Discovery sits at the bottom so its URL can be derived from the
+            credential fields the user typed above. The plan (URL + mode +
+            params) is computed from the agent type — LangGraph hits a
+            different shape than pure A2A. Custom agents have no upstream to
+            discover, so we skip them. */}
+        {agentType !== CUSTOM_AGENT_TYPE && (
+          <div className="mt-4">
+            <AgentCardDiscovery
+              accessToken={accessToken}
+              onApply={handleApplyDiscoveredCard}
+              discoveryRequest={discoveryRequest}
+            />
+          </div>
+        )}
       </div>
 
     </>

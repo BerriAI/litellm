@@ -3,6 +3,7 @@ Common utility functions used for translating messages across providers
 """
 
 import io
+import json
 import mimetypes
 import re
 from os import PathLike
@@ -20,6 +21,7 @@ from typing import (
     cast,
 )
 
+import litellm
 from litellm import verbose_logger
 from litellm.router_utils.batch_utils import InMemoryFile
 from litellm.types.llms.openai import (
@@ -131,6 +133,39 @@ def strip_none_values_from_message(message: AllMessageValues) -> AllMessageValue
     return cast(AllMessageValues, {k: v for k, v in message.items() if v is not None})
 
 
+def extract_search_results_text(search_results: object) -> str:
+    """
+    Extract model-visible text from OpenAI tool-message ``search_results``.
+
+    Used by token estimators and TPM limiters so large search result payloads
+    cannot bypass preflight checks via a small ``content`` field.
+
+    Counts every string field forwarded on Bedrock ``SearchResultBlock``:
+    ``source``, ``title``, ``content[].text``, and ``citations``.
+    """
+    if not isinstance(search_results, list):
+        return ""
+    texts = ""
+    for result in search_results:
+        if not isinstance(result, dict):
+            continue
+        for key in ("source", "title"):
+            value = result.get(key)
+            if isinstance(value, str):
+                texts += value
+        content = result.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict):
+                    text = block.get("text")
+                    if isinstance(text, str):
+                        texts += text
+        citations = result.get("citations")
+        if citations is not None:
+            texts += json.dumps(citations, separators=(",", ":"))
+    return texts
+
+
 def convert_content_list_to_str(
     message: Union[AllMessageValues, ChatCompletionResponseMessage],
 ) -> str:
@@ -151,6 +186,7 @@ def convert_content_list_to_str(
         elif message_content is not None and isinstance(message_content, str):
             texts = message_content
 
+    texts += extract_search_results_text(message.get("search_results"))
     return texts
 
 
@@ -1170,9 +1206,16 @@ def migrate_file_to_image_url(
         ChatCompletionImageUrlObject,
     )
 
-    file_id = message["file"].get("file_id")
-    file_data = message["file"].get("file_data")
-    format = message["file"].get("format")
+    file_sub = message.get("file")
+    if file_sub is None:
+        raise litellm.BadRequestError(
+            message="Content block has type='file' but is missing the required 'file' field",
+            model=None,
+            llm_provider=None,
+        )
+    file_id = file_sub.get("file_id")
+    file_data = file_sub.get("file_data")
+    format = file_sub.get("format")
     if not file_id and not file_data:
         raise ValueError("file_id and file_data are both None")
     image_url_object = ChatCompletionImageObject(
@@ -1196,12 +1239,8 @@ def get_last_user_message(messages: List[AllMessageValues]) -> Optional[str]:
         {"role": "assistant", "content": "I'm good, thank you!"},
         {"role": "user", "content": "What is the weather in Tokyo?"},
     ]
-    get_user_prompt(messages) -> "What is the weather in Tokyo?"
+    get_last_user_message(messages) -> "What is the weather in Tokyo?"
     """
-    from litellm.litellm_core_utils.prompt_templates.common_utils import (
-        convert_content_list_to_str,
-    )
-
     if not messages:
         return None
 

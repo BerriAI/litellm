@@ -1,0 +1,153 @@
+{{- if .Values.ingress.enabled -}}
+{{- $gatewayName := include "litellm.gateway.fullname" . -}}
+{{- $backendName := include "litellm.backend.fullname" . -}}
+{{- $uiName := include "litellm.ui.fullname" . -}}
+{{- $gatewayPort := .Values.gateway.service.port -}}
+{{- $backendPort := .Values.backend.service.port -}}
+{{- $uiPort := .Values.ui.service.port -}}
+{{/*
+  Gateway data-plane prefixes — must mirror gateway/routes/allowlist.py.
+  Versioned paths are listed explicitly to avoid routing management routes
+  (e.g. /v1/access_group, /v2/key/info, /v1/tool/*, /v1/agents, /v1/workflows,
+  /v2/user/info, /v2/team/list, /v2/model/info, /v2/login, /v2/guardrails/*,
+  /v1/mcp/*) onto the gateway via a broad /v1 or /v2 prefix.
+*/}}
+{{- $gatewayPrefixes := list
+    "/v1/chat" "/chat" "/v1/completions" "/completions" "/v1/embeddings" "/embeddings"
+    "/v1/moderations" "/moderations" "/v1/audio" "/audio" "/v1/images" "/images"
+    "/v1/files" "/files" "/v1/batches" "/batches" "/v1/fine_tuning" "/fine_tuning"
+    "/v1/fine-tuning" "/fine-tuning" "/v1/responses" "/responses" "/v1/threads" "/threads"
+    "/v1/assistants" "/assistants" "/v1/vector_stores" "/vector_stores" "/v1/indexes"
+    "/v1/models" "/models" "/openai" "/engines"
+    "/v1/messages" "/messages" "/v1/skills" "/v1/a2a"
+    "/v1/rerank" "/v2/rerank" "/rerank" "/v1/ocr" "/ocr" "/v1/rag" "/rag"
+    "/v1/video" "/v1/videos" "/video" "/videos" "/v1/search" "/search"
+    "/v1/containers" "/containers" "/v1/evals" "/v1/memory" "/queue/chat"
+    "/v1beta" "/interactions"
+    "/anthropic" "/azure" "/azure_ai" "/aws" "/bedrock" "/cohere" "/gemini" "/google"
+    "/vertex_ai" "/vertex-ai" "/assemblyai" "/eu.assemblyai" "/langfuse" "/vllm"
+    "/mistral" "/groq" "/voyage" "/cursor" "/milvus" "/openai_passthrough"
+    "/toolset"
+    "/v1/realtime" "/realtime"
+    "/health" "/metrics"
+-}}
+{{/*
+  /test is gateway-only as an EXACT path (GATEWAY_EXACT_PATHS), but its
+  children /test/connection and /test/tools/list are MCP-server management
+  endpoints kept only on the backend ("/test/" in BACKEND_PATH_PREFIXES).
+  A Prefix match here would route /test/* to the gateway, which trims those
+  routes at startup -> 404. So /test is rendered as a standalone Exact path
+  and /test/* falls through to the backend catch-all.
+*/}}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "litellm.fullname" . }}
+  labels:
+    {{- include "litellm.commonLabels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - {{- with .Values.ingress.host }}
+      host: {{ . | quote }}
+      {{- end }}
+      http:
+        paths:
+          # --- UI (Next.js static export) ---
+          - path: /
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          - path: /favicon.ico
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          - path: /litellm-asset-prefix
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          - path: /_next
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          # /ui/* is where the Next.js SPA serves its login + dashboard
+          # routes (e.g. /ui/login). Without this, /ui/* falls into the
+          # catch-all → backend → 404.
+          - path: /ui
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          # Next.js App Router (output: "export", basePath: "") emits the
+          # RSC/flight payload for every route as a ROOT-level <route>.txt
+          # (/index.txt, /teams.txt, /__next._tree.txt, ...). The client
+          # router fetches these on every soft navigation / prefetch as
+          # <route>.txt?_rsc=<hash> (the query string is irrelevant to path
+          # matching). They are not under /ui, /_next, or
+          # /litellm-asset-prefix, so without this rule they fall to the
+          # backend catch-all → 404 → client-side navigation never settles
+          # and the login flow spins in an infinite redirect loop
+          # (/ ⇄ /ui/login). ui/nginx.conf already serves *.txt from the
+          # export; this rule only routes the request to it. Needs an
+          # ingress controller whose ImplementationSpecific path is a
+          # wildcard pattern (AWS ALB: `*` = 0+ chars); this chart targets
+          # the AWS Load Balancer Controller.
+          - path: /*.txt
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: {{ $uiName }}
+                port:
+                  number: {{ $uiPort }}
+          # --- Gateway data plane ---
+          # Exact /test only (see the $gatewayPrefixes comment above);
+          # /test/* MCP management endpoints fall to the backend catch-all.
+          - path: /test
+            pathType: Exact
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+          {{- range $gatewayPrefixes }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $gatewayName }}
+                port:
+                  number: {{ $gatewayPort }}
+          {{- end }}
+          # --- Catch-all → backend (management API: /key/*, /user/*, /team/*, ...) ---
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $backendName }}
+                port:
+                  number: {{ $backendPort }}
+{{- end }}

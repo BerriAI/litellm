@@ -706,6 +706,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_read_input_audio_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_per_audio_token": {"type": "number"},
                 "cache_read_input_image_token_cost": {"type": "number"},
+                "audio_transcription_config": {"type": "string"},
                 "deprecation_date": {"type": "string"},
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
@@ -736,6 +737,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "output_cost_per_token_priority": {"type": "number"},
                 "output_cost_per_token_above_200k_tokens_priority": {"type": "number"},
                 "output_cost_per_token_above_272k_tokens_priority": {"type": "number"},
+                "regional_processing_uplift_multiplier_eu": {"type": "number"},
+                "regional_processing_uplift_multiplier_us": {"type": "number"},
                 "input_cost_per_pixel": {"type": "number"},
                 "input_cost_per_query": {"type": "number"},
                 "input_cost_per_request": {"type": "number"},
@@ -754,6 +757,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_dbu_cost_per_token": {"type": "number"},
                 "annotation_cost_per_page": {"type": "number"},
                 "ocr_cost_per_page": {"type": "number"},
+                "ocr_cost_per_credit": {"type": "number"},
                 "code_interpreter_cost_per_session": {"type": "number"},
                 "inference_geo": {"type": "string"},
                 "litellm_provider": {"type": "string"},
@@ -855,7 +859,11 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_adaptive_thinking": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
-                "tool_use_system_prompt_tokens": {"type": "number"},
+                "supports_output_config": {"type": "boolean"},
+                "bedrock_output_config_effort_ceiling": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max", "xhigh"],
+                },
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
@@ -1136,6 +1144,34 @@ def test_check_provider_match():
     # Test non-matching provider
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
+
+
+def test_check_provider_match_none_value_matches_any_provider():
+    """
+    A ``litellm_provider`` of None must be treated the same as a missing
+    key: both mean "no provider constraint" and should match any
+    ``custom_llm_provider``.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28336.
+    Before the fix, ``register_model`` persisted ``litellm_provider: None``
+    via ``get_model_info`` for deployments registered without a provider
+    (e.g. ``Router.add_deployment``), which caused ``_check_provider_match``
+    to drop custom pricing intermittently.
+    """
+    # Missing key already returned True; None must behave identically.
+    assert litellm.utils._check_provider_match({}, "openai") is True
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "openai")
+        is True
+    )
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, "anthropic")
+        is True
+    )
+    # When custom_llm_provider is also None nothing constrains the match.
+    assert (
+        litellm.utils._check_provider_match({"litellm_provider": None}, None) is True
+    )
 
 
 def test_get_provider_rerank_config():
@@ -3002,7 +3038,7 @@ def test_model_info_for_openrouter_kimi_k2_5():
 
 
 def test_gemini_embedding_2_ga_in_cost_map():
-    """GA gemini-embedding-2 entries align with preview multimodal unit pricing."""
+    """GA and Vertex preview gemini-embedding-2 entries align with multimodal unit pricing."""
     import json
     from pathlib import Path
 
@@ -3013,6 +3049,7 @@ def test_gemini_embedding_2_ga_in_cost_map():
     for key, provider in (
         ("gemini/gemini-embedding-2", "gemini"),
         ("vertex_ai/gemini-embedding-2", "vertex_ai"),
+        ("vertex_ai/gemini-embedding-2-preview", "vertex_ai"),
         ("gemini-embedding-2", "vertex_ai-embedding-models"),
     ):
         info = model_cost.get(key)

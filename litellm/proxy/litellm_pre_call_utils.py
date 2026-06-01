@@ -25,6 +25,10 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.callback_utils import (
+    decrypt_callback_vars,
+    get_metadata_variable_name_from_kwargs,
+)
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 
 # Cache special headers as a frozenset for O(1) lookup performance
@@ -329,8 +333,10 @@ def _get_metadata_variable_name(request: Request) -> str:
 
     For ALL other endpoints we call this "metadata"
     """
-    path = request.url.path
+    # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
+    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
+    path = get_request_route(request)
     if "thread" in path or "assistant" in path:
         return "litellm_metadata"
 
@@ -474,7 +480,7 @@ class KeyAndTeamLoggingSettings:
             user_api_key_dict.metadata is not None
             and "logging" in user_api_key_dict.metadata
         ):
-            return user_api_key_dict.metadata["logging"]
+            return decrypt_callback_vars(user_api_key_dict.metadata).get("logging")
         return None
 
     @staticmethod
@@ -483,7 +489,7 @@ class KeyAndTeamLoggingSettings:
             user_api_key_dict.team_metadata is not None
             and "logging" in user_api_key_dict.team_metadata
         ):
-            return user_api_key_dict.team_metadata["logging"]
+            return decrypt_callback_vars(user_api_key_dict.team_metadata).get("logging")
         return None
 
 
@@ -537,7 +543,7 @@ def _get_dynamic_logging_metadata(
         }
         }
         """
-        team_metadata = user_api_key_dict.team_metadata
+        team_metadata = decrypt_callback_vars(user_api_key_dict.team_metadata)
         callback_settings = team_metadata.get("callback_settings", None) or {}
         callback_settings_obj = TeamCallbackMetadata(**callback_settings)
         verbose_proxy_logger.debug(
@@ -1187,6 +1193,101 @@ class LiteLLMProxyRequestSetup:
 
         return tags
 
+    @staticmethod
+    def apply_key_tags_pre_auth(
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """Merge key metadata tags into request_data before _tag_max_budget_check."""
+        key_metadata = user_api_key_dict.metadata
+        if not key_metadata:
+            return
+
+        key_tags = key_metadata.get("tags")
+        if not key_tags or not isinstance(key_tags, list):
+            return
+
+        _metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
+        metadata = request_data.get(_metadata_variable_name)
+        if isinstance(metadata, str):
+            parsed = safe_json_loads(metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+            request_data[_metadata_variable_name] = metadata
+        elif not isinstance(metadata, dict):
+            metadata = {}
+            request_data[_metadata_variable_name] = metadata
+
+        existing_tags = metadata.get("tags")
+        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=existing_tags if isinstance(existing_tags, list) else None,
+            tags_to_add=key_tags,
+        )
+
+    @staticmethod
+    def apply_client_tag_policy_pre_auth(
+        request: Request,
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Merge ``x-litellm-tags`` header tags into ``request_data`` BEFORE
+        auth budget gates run, so ``_tag_max_budget_check`` (which only
+        inspects ``request_data``) sees them. Without this, header-tagged
+        requests silently bypass per-tag budget enforcement.
+
+        Why: ``add_litellm_data_to_request`` runs the equivalent merge
+        post-auth, after ``_tag_max_budget_check`` has already executed.
+        Header-supplied tags merged there are invisible to that check.
+        Running the merge here closes that gap; the post-auth merge in
+        ``add_litellm_data_to_request`` remains as defense-in-depth.
+
+        How to apply: invoked from the auth chain just before
+        ``common_checks``. Mutates ``request_data`` in place; idempotent
+        when followed by ``add_litellm_data_to_request``.
+        """
+        # No allow_client_tags opt-in: caller-supplied tags always flow
+        # into metadata.tags (see add_litellm_data_to_request). The pre-auth
+        # merge mirrors that so _tag_max_budget_check sees the same tags.
+        headers = _safe_get_request_headers(request=request)
+        raw_header_tags = headers.get("x-litellm-tags")
+        if not raw_header_tags:
+            return
+
+        if isinstance(raw_header_tags, str):
+            header_tags: List[str] = [
+                t.strip() for t in raw_header_tags.split(",") if t.strip()
+            ]
+        elif isinstance(raw_header_tags, list):
+            header_tags = [t for t in raw_header_tags if isinstance(t, str) and t]
+        else:
+            return
+
+        if not header_tags:
+            return
+
+        # Match the metadata key that get_tags_from_request_body will read
+        # from (litellm_metadata vs metadata) so the merged tags are visible
+        # to _tag_max_budget_check.
+        _metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
+        metadata = request_data.get(_metadata_variable_name)
+        # metadata can arrive as a JSON string (multipart/form-data, extra_body).
+        # Parse it so existing tags survive the merge — overwriting the string
+        # with {} would let a caller bypass _tag_max_budget_check on an
+        # over-budget body tag by also sending a within-budget header tag.
+        if isinstance(metadata, str):
+            parsed = safe_json_loads(metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+            request_data[_metadata_variable_name] = metadata
+        elif not isinstance(metadata, dict):
+            metadata = {}
+            request_data[_metadata_variable_name] = metadata
+
+        existing_tags = metadata.get("tags")
+        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=existing_tags if isinstance(existing_tags, list) else None,
+            tags_to_add=header_tags,
+        )
+
 
 async def add_litellm_data_to_request(  # noqa: PLR0915
     data: dict,
@@ -1442,10 +1543,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     # spend_tracking_utils, streaming_iterator) read `body` to audit the
     # request; taking the snapshot here ensures they see cleaned metadata.
     #
-    # Exclude secret_fields (which contains raw_headers with Authorization
-    # tokens) from the snapshot — they must never be persisted in spend logs
-    # or any other audit trail.
-    _body_snapshot = {k: v for k, v in data.items() if k != "secret_fields"}
+    # Exclude:
+    #   - secret_fields: contains raw_headers with Authorization tokens; must
+    #     never be persisted in spend logs or any other audit trail.
+    #   - proxy_server_request: already a key on `data` at this point (set
+    #     earlier in this function); including it would make the snapshot
+    #     self-reference — body.proxy_server_request.body would be the same
+    #     dict as body, producing an infinite traversal loop for any consumer
+    #     that walks the structure.
+    _body_snapshot_exclude = {"secret_fields", "proxy_server_request"}
+    _body_snapshot = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
     data["proxy_server_request"]["body"] = _body_snapshot
 
     # Snapshot the requester-supplied metadata for downstream consumers.
@@ -1583,6 +1690,12 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     )
     data[_metadata_variable_name]["headers"] = _headers
     data[_metadata_variable_name]["endpoint"] = str(request.url)
+    # Carry the proxy-receive instant via metadata (like `endpoint`) so the
+    # OTel layer can compute pre-request latency, including on the failure
+    # path after the logging object is popped.
+    data[_metadata_variable_name]["litellm_received_at"] = getattr(
+        request.state, "litellm_received_at", None
+    )
 
     # OTEL Controls / Tracing
     # Add the OTEL Parent Trace before sending it LiteLLM
