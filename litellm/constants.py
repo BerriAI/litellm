@@ -771,6 +771,7 @@ openai_compatible_endpoints: List = [
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
+    "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
@@ -820,6 +821,7 @@ openai_compatible_providers: List = [
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
+    "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
@@ -855,6 +857,7 @@ openai_text_completion_compatible_providers: List = (
         "moonshot",
         "publicai",
         "synthetic",
+        "tensormesh",
         "apertis",
         "nano-gpt",
         "poe",
