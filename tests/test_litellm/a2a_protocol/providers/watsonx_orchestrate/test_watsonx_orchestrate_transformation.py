@@ -378,7 +378,7 @@ def test_config_manager_returns_wxo_provider():
     assert config.__class__.__name__ == "WatsonxOrchestrateA2AConfig"
 
 
-def test_wxo_cp4d_default_requires_username_in_dashboard_fields():
+def test_wxo_dashboard_auth_fields():
     fields_path = (
         Path(__file__).resolve().parents[5]
         / "litellm/proxy/public_endpoints/agent_create_fields.json"
@@ -390,4 +390,6 @@ def test_wxo_cp4d_default_requires_username_in_dashboard_fields():
     fields_by_key = {field["key"]: field for field in wxo_agent["credential_fields"]}
 
     assert fields_by_key["auth_mode"]["default_value"] == "cp4d"
-    assert fields_by_key["username"]["required"] is True
+    # Username is CP4D-only; UI does not require it so ibm_cloud users are not blocked.
+    assert fields_by_key["username"]["required"] is False
+    assert "cp4d" in fields_by_key["username"]["tooltip"].lower()
