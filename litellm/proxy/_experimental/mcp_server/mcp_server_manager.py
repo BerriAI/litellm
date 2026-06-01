@@ -2428,16 +2428,22 @@ class MCPServerManager:
         """
         Check if the tool is allowed or banned for the given server.
 
-        Matching is case-insensitive to stay consistent with the case-insensitive
-        tool-listing filter (``_tool_name_matches``). Otherwise a denylist entry
-        whose casing differs from the upstream tool name would hide the tool from
-        tools/list yet still slip past this tools/call gate.
+        Denylist matching is case-insensitive: a banned entry whose casing differs
+        from the upstream tool name would otherwise be hidden from tools/list yet
+        still slip past this tools/call gate.
+
+        Allowlist matching is case-sensitive (exact). The allowlist is an
+        authorization boundary and the original-cased ``tool_name`` is what gets
+        forwarded upstream, so lowercasing it would let a caller invoke a
+        different case-sensitive upstream tool whose name differs only by case
+        from an allowed one. Require the exact configured name or the exact
+        server-prefixed form.
         """
-        candidates = {tool_name.lower(), f"{server.name}-{tool_name}".lower()}
         if server.allowed_tools:
-            allowed = {t.lower() for t in server.allowed_tools}
-            return bool(candidates & allowed)
+            exact_candidates = {tool_name, f"{server.name}-{tool_name}"}
+            return bool(exact_candidates & set(server.allowed_tools))
         if server.disallowed_tools:
+            candidates = {tool_name.lower(), f"{server.name}-{tool_name}".lower()}
             disallowed = {t.lower() for t in server.disallowed_tools}
             return not (candidates & disallowed)
         return True

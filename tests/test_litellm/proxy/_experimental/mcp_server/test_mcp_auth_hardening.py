@@ -156,40 +156,46 @@ def test_target_servers_use_oauth2_excludes_m2m(m2m, expected):
 # --------------------------------------------------------------------------- #
 
 
-def test_check_allowed_or_banned_tools_is_case_insensitive():
+def test_check_allowed_or_banned_tools_denylist_case_insensitive_allowlist_exact():
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
+    f = global_mcp_server_manager.check_allowed_or_banned_tools
+
+    # Denylist stays case-insensitive: a camelCase call to a lowercase-banned
+    # tool must still be blocked.
     denied = MCPServer(
         server_id="s1",
         name="srv",
         transport=MCPTransport.http,
-        disallowed_tools=["dangeroustool"],  # lowercase in config
+        disallowed_tools=["dangeroustool"],
     )
-    # camelCase call must still be blocked.
-    assert (
-        global_mcp_server_manager.check_allowed_or_banned_tools("DangerousTool", denied)
-        is False
-    )
-    assert (
-        global_mcp_server_manager.check_allowed_or_banned_tools("other", denied) is True
-    )
+    assert f("DangerousTool", denied) is False
+    assert f("other", denied) is True
 
+    # Allowlist is exact: a case-variant of an allowed tool must be rejected, or a
+    # caller could invoke a different case-sensitive upstream tool whose name
+    # differs only by case (tool allowlist bypass by case collision).
     allowed = MCPServer(
         server_id="s2",
         name="srv",
         transport=MCPTransport.http,
         allowed_tools=["safetool"],
     )
-    assert (
-        global_mcp_server_manager.check_allowed_or_banned_tools("SafeTool", allowed)
-        is True
+    assert f("safetool", allowed) is True  # exact configured name
+    assert f("SafeTool", allowed) is False  # case collision -> rejected
+    assert f("nope", allowed) is False
+
+    # The exact server-prefixed form is accepted; its case-variant is not.
+    prefixed = MCPServer(
+        server_id="s3",
+        name="srv",
+        transport=MCPTransport.http,
+        allowed_tools=["srv-safetool"],
     )
-    assert (
-        global_mcp_server_manager.check_allowed_or_banned_tools("nope", allowed)
-        is False
-    )
+    assert f("safetool", prefixed) is True  # matches the prefixed allowlist entry
+    assert f("SafeTool", prefixed) is False  # case collision on prefixed form
 
 
 # --------------------------------------------------------------------------- #
