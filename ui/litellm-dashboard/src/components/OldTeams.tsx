@@ -198,6 +198,7 @@ const Teams: React.FC<TeamProps> = ({
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [totalTeams, setTotalTeams] = useState(0);
+  const [paginatedTeams, setPaginatedTeams] = useState<Team[] | null>(null);
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
   const [filters, setFilters] = useState<FilterState>({
@@ -240,7 +241,7 @@ const Teams: React.FC<TeamProps> = ({
           sortOrder: sortOrder || null,
         },
       );
-      setTeams(response.teams ?? []);
+      setPaginatedTeams(response.teams ?? []);
       setTotalTeams(response.total ?? 0);
     } catch (err: any) {
       setFetchError(err?.message || "Failed to fetch teams");
@@ -660,7 +661,7 @@ const Teams: React.FC<TeamProps> = ({
           sortOrder: newFilters.sort_order || null,
         },
       );
-      setTeams(response.teams ?? []);
+      setPaginatedTeams(response.teams ?? []);
       setTotalTeams(response.total ?? 0);
     } catch (error) {
       console.error("Error fetching teams:", error);
@@ -863,7 +864,7 @@ const Teams: React.FC<TeamProps> = ({
     },
   ], [userRole, perTeamInfo, organizationsData, organizations]);
 
-  const displayTeams = useMemo(() => teams ?? [], [teams]);
+  const displayTeams = useMemo(() => paginatedTeams ?? [], [paginatedTeams]);
 
   const renderTeamsContent = () => {
     if (isLoading) {
