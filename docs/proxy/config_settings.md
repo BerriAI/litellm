@@ -729,6 +729,7 @@ router_settings:
 | GALILEO_PROJECT_ID | Project ID for Galileo usage
 | GALILEO_USERNAME | Username for Galileo enterprise Observe authentication
 | GOOGLE_SECRET_MANAGER_PROJECT_ID | Project ID for Google Secret Manager
+| GRACEFUL_SHUTDOWN_TIMEOUT | Seconds the proxy waits for in-flight requests to drain on shutdown (SIGTERM or the `/health/drain` preStop hook) before proceeding with teardown. **Default is 30**
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
 | GCS_MOCK | Enable mock mode for GCS integration testing. When set to true, intercepts GCS API calls and returns mock responses without making actual network calls. Default is false
 | GCS_MOCK_LATENCY_MS | Mock latency in milliseconds for GCS API calls when mock mode is enabled. Simulates network round-trip time. Default is 150ms
