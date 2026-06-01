@@ -13,12 +13,62 @@ from pydantic import BaseModel
 import litellm
 from litellm.cost_calculator import (
     completion_cost,
+    cost_per_token,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+
+def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
+    """
+    Router/proxy configs may use deployment ids like openai/openai/<model>. Cost lookup must
+    resolve to model_prices keys (e.g. gpt-5.5), not fail or multiply prefixes.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="openai/openai/gpt-5.5",
+        prompt_tokens=100,
+        completion_tokens=50,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_usd + completion_usd > 0
+
+
+def test_cost_per_token_non_string_model_does_not_hang():
+    """
+    The provider-prefix dedup loop must not spin forever when `model` is a
+    non-string object (e.g. a MagicMock from a mocked transport). It should
+    return or raise promptly instead of looping on a truthy `.startswith()`.
+    """
+    import threading
+    from unittest.mock import MagicMock
+
+    result: dict = {}
+
+    def _run():
+        try:
+            cost_per_token(
+                model=MagicMock(),
+                prompt_tokens=10,
+                completion_tokens=5,
+                custom_llm_provider="anthropic",
+            )
+            result["status"] = "returned"
+        except Exception:
+            result["status"] = "raised"
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive(), "cost_per_token hung on a non-string model"
+    assert result.get("status") in ("returned", "raised")
 
 
 def test_completion_cost_uses_response_model_for_dynamic_routing():
@@ -2059,6 +2109,25 @@ def test_openrouter_gemini_3_1_flash_lite_preview_pricing():
     assert model_info["max_output_tokens"] == 65536
 
 
+def test_gemini_3_1_flash_lite_pricing():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    for model_name in (
+        "gemini-3.1-flash-lite",
+        "gemini/gemini-3.1-flash-lite",
+        "vertex_ai/gemini-3.1-flash-lite",
+    ):
+        model_info = litellm.model_cost.get(model_name)
+        assert model_info is not None, f"Missing model pricing entry: {model_name}"
+        assert model_info["input_cost_per_token"] == 4.5e-07
+        assert model_info["input_cost_per_audio_token"] == 9e-07
+        assert model_info["output_cost_per_token"] == 2.7e-06
+        assert model_info["output_cost_per_reasoning_token"] == 2.7e-06
+        assert model_info["cache_read_input_token_cost"] == 4.5e-08
+        assert model_info["max_input_tokens"] == 1048576
+
+
 def test_custom_pricing_applies_cache_read_input_cost():
     """
     Bug 1 reproduction: custom_cost_per_token with cache_read_input_token_cost
@@ -2371,3 +2440,34 @@ def test_custom_pricing_without_cache_keys_preserves_legacy_behavior():
     expected = 1000 * 0.0000025 + 100 * 0.000015
 
     assert cost == pytest.approx(expected)
+
+
+def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
+    """
+    Test that openrouter/google/gemini-3.1-flash-lite (stable, no -preview suffix)
+    has a pricing entry.
+
+    Google promoted gemini-3.1-flash-lite to GA on 2026-05-07. PR #27933 added the
+    stable pricing for the bare, gemini/, and vertex_ai/ prefixes but missed the
+    openrouter/google/ variant — every other Gemini family in the file has an
+    openrouter/google/ sibling (2.0-flash-001, 2.5-flash, 2.5-pro, 3-flash-preview,
+    3-pro-preview, 3.1-flash-lite-preview, 3.1-pro-preview), so the gap is a
+    consistency issue, not a design choice. Same shape as the preview-variant gap
+    fixed in PR #25610.
+
+    Pricing matches the existing -preview entry one-for-one (input $0.25/M, output
+    $1.50/M, cache-read $0.025/M) — Google did not change costs at the GA cutover.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_name = "openrouter/google/gemini-3.1-flash-lite"
+    model_info = litellm.model_cost.get(model_name)
+
+    assert model_info is not None, f"Missing model pricing entry: {model_name}"
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["input_cost_per_token"] == 2.5e-07
+    assert model_info["output_cost_per_token"] == 1.5e-06
+    assert model_info["cache_read_input_token_cost"] == 2.5e-08
+    assert model_info["max_input_tokens"] == 1048576
+    assert model_info["max_output_tokens"] == 65536

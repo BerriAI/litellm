@@ -45,6 +45,7 @@ import OrganizationDropdown from "./common_components/OrganizationDropdown";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { teamListCall as v2TeamListCall, type TeamsResponse } from "@/app/(dashboard)/hooks/teams/useTeams";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
+import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -104,6 +105,7 @@ interface TeamInfo {
 
 interface PerTeamInfo {
   keys: KeyResponse[];
+  keys_count: number;
   team_info: TeamInfo;
 }
 
@@ -363,6 +365,7 @@ const Teams: React.FC<TeamProps> = ({
         (acc, team) => {
           acc[team.team_id] = {
             keys: team.keys || [],
+            keys_count: team.keys_count ?? team.keys?.length ?? 0,
             team_info: {
               members_with_roles: team.members_with_roles || [],
             },
@@ -744,7 +747,7 @@ const Teams: React.FC<TeamProps> = ({
       render: (_: unknown, record: Team) => {
         const memberCount = perTeamInfo?.[record.team_id]?.team_info?.members_with_roles?.length ?? 0;
         const modelCount = record.models?.length ?? 0;
-        const keyCount = perTeamInfo?.[record.team_id]?.keys?.length ?? 0;
+        const keyCount = perTeamInfo?.[record.team_id]?.keys_count ?? 0;
         return (
           <Flex gap={12} align="center">
             <Tooltip title={`${memberCount} Members`}>
@@ -976,17 +979,23 @@ const Teams: React.FC<TeamProps> = ({
           <DeleteResourceModal
             isOpen={isDeleteModalOpen}
             title="Delete Team?"
-            alertMessage={
-              teamToDelete?.keys?.length === 0
+            alertMessage={(() => {
+              const deleteKeyCount =
+                teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0;
+              return deleteKeyCount === 0
                 ? undefined
-                : `Warning: This team has ${teamToDelete?.keys?.length} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`
-            }
+                : `Warning: This team has ${deleteKeyCount} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`;
+            })()}
             message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
             resourceInformationTitle="Team Information"
             resourceInformation={[
               { label: "Team ID", value: teamToDelete?.team_id, code: true },
               { label: "Team Name", value: teamToDelete?.team_alias },
-              { label: "Keys", value: teamToDelete?.keys?.length },
+              {
+                label: "Keys",
+                value:
+                  teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0,
+              },
               { label: "Members", value: teamToDelete?.members_with_roles?.length },
             ]}
             requiredConfirmation={teamToDelete?.team_alias}
@@ -1445,6 +1454,30 @@ const Teams: React.FC<TeamProps> = ({
                           accessToken={accessToken || ""}
                           placeholder="Select vector stores (optional)"
                         />
+                      </Form.Item>
+                      <Form.Item
+                        label="Allowed Pass Through Routes"
+                        name="allowed_passthrough_routes"
+                        className="mt-8"
+                      >
+                        <Tooltip
+                          title={
+                            !premiumUser
+                              ? "Premium feature - Upgrade to set allowed pass through routes"
+                              : !isProxyAdminRole(userRole || "")
+                                ? "Only proxy admins can set allowed pass through routes"
+                                : ""
+                          }
+                          placement="top"
+                        >
+                          <PassThroughRoutesSelector
+                            onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                            value={form.getFieldValue("allowed_passthrough_routes")}
+                            accessToken={accessToken || ""}
+                            placeholder="Select pass through routes (optional)"
+                            disabled={!premiumUser || !isProxyAdminRole(userRole || "")}
+                          />
+                        </Tooltip>
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>
