@@ -296,6 +296,62 @@ Both the default `google` and `google-beta` configs are inherited by the
 module automatically through the call — declare both in the caller.
 Resource labels are controlled by the module's `labels` input.
 
+**`for_each` shares one provider config.** The module's `versions.tf` declares
+`google` / `google-beta` *without* `configuration_aliases`, so it only ever
+receives the caller's single default (unaliased) `google` / `google-beta`
+providers. That's deliberate — it keeps the one-command path simple — but it
+means a `for_each` over the module runs every instance against the **same
+project, region, and credentials**. Use `for_each` for many tenants in one
+project (distinct `tenant`/`env`); it cannot fan out across projects or regions
+on its own. To deploy into separate projects/regions, give each its own root
+with its own provider config (one `examples/default`-style root per project),
+or fork the module to add `configuration_aliases` and pass per-instance
+`providers = { ... }`.
+
+## Migrating an existing deployment
+
+**Read this before re-applying if you first deployed from `terraform/litellm/gcp/`
+directly** (i.e. before this module-first refactor).
+
+The old layout ran terraform from the stack root, so every resource lived at a
+root-level address (`google_cloud_run_v2_service.gateway`, …). The new entry
+point — `examples/default/` — wraps the stack in a `module "litellm"` block, so
+the same resources now live at `module.litellm.<addr>`. Terraform keys state by
+address, so a plain `terraform plan` from the new root against your **existing
+state** sees the old addresses as "gone" and the prefixed addresses as "new" —
+it will propose a **full destroy-and-recreate of the entire stack** (Cloud SQL,
+load balancer, everything). Do not apply that plan.
+
+Migrate the state once so the addresses line up. From the directory holding
+your existing state:
+
+```bash
+# 1. List the current root-level addresses.
+terraform state list
+
+# 2. Move each one under the module by prefixing it with `module.litellm.`,
+#    keeping any [key]/[index] suffix intact, e.g.:
+terraform state mv 'google_cloud_run_v2_service.gateway' \
+                   'module.litellm.google_cloud_run_v2_service.gateway'
+
+# 3. Confirm the plan is now clean (no destroys/creates).
+terraform plan
+```
+
+A scripted move over the whole list (run from the dir with the state):
+
+```bash
+terraform state list | grep -v '^module\.litellm\.' | while read -r addr; do
+  terraform state mv "$addr" "module.litellm.$addr"
+done
+terraform plan   # expect: No changes
+```
+
+`terraform state mv` only rewrites local state — it never touches live
+infrastructure — and a clean `terraform plan` afterward confirms the addresses
+line up before you apply. If you'd rather not migrate, you can keep calling the
+module from your own root with the same addresses you already have.
+
 ## Storage and database retention
 
 Two opt-in tripwires guard against accidental data loss on

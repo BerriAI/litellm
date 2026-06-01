@@ -231,6 +231,54 @@ Tags: the module threads its own `litellm:stack` / `managed-by` / `var.tags`
 onto every taggable resource. Any `default_tags` on your provider merge on
 top — set org-wide tags there, per-deployment tags via the `tags` input.
 
+## Migrating an existing deployment
+
+**Read this before re-applying if you first deployed from `terraform/litellm/aws/`
+directly** (i.e. before this module-first refactor).
+
+The old layout ran terraform from the stack root, so every resource lived at a
+root-level address (`aws_lb.this`, `aws_ecs_cluster.this`, …). The new entry
+point — `examples/default/` — wraps the stack in a `module "litellm"` block, so
+the same resources now live at `module.litellm.<addr>`. Terraform keys state by
+address, so a plain `terraform plan` from the new root against your **existing
+state** sees the old addresses as "gone" and the prefixed addresses as "new" —
+it will propose a **full destroy-and-recreate of the entire stack** (database,
+ALB, everything). Do not apply that plan.
+
+Migrate the state once so the addresses line up. From the directory holding
+your existing state (`examples/default/` after you've copied your state file
+there, or wherever you run terraform):
+
+```bash
+# 1. List the current root-level addresses.
+terraform state list
+
+# 2. Move each one under the module. Mechanically prefix every address
+#    with `module.litellm.`, e.g.:
+terraform state mv 'aws_lb.this'           'module.litellm.aws_lb.this'
+terraform state mv 'aws_ecs_cluster.this'  'module.litellm.aws_ecs_cluster.this'
+# …repeat for every address from step 1, including indexed/for_each
+# resources (keep the [key]/[index] suffix intact), e.g.:
+terraform state mv 'aws_subnet.private[0]' 'module.litellm.aws_subnet.private[0]'
+
+# 3. Confirm the plan is now clean (no destroys/creates).
+terraform plan
+```
+
+A scripted move over the whole list (run from the dir with the state):
+
+```bash
+terraform state list | grep -v '^module\.litellm\.' | while read -r addr; do
+  terraform state mv "$addr" "module.litellm.$addr"
+done
+terraform plan   # expect: No changes
+```
+
+`terraform state mv` only rewrites local state — it never touches live
+infrastructure — and a clean `terraform plan` afterward confirms the addresses
+line up before you apply. If you'd rather not migrate, you can keep calling the
+module from your own root with the same addresses you already have.
+
 ## Image pulls
 
 The defaults pull from `ghcr.io/berriai/litellm-<component>:v1.86.0-dev`,
@@ -291,7 +339,7 @@ losing the contents.
 | File              | What's in it                                                          |
 | ----------------- | --------------------------------------------------------------------- |
 | `versions.tf`     | Terraform + `required_providers` constraints (module declares no provider config) |
-| `examples/default/` | Thin root: `aws` provider + `default_tags` + a call to the module. The one-command deploy path. |
+| `examples/default/` | Thin root: `aws` provider (with an optional `default_tags` slot for org-wide tags) + a call to the module. The one-command deploy path. |
 | `variables.tf`    | All input variables                                                   |
 | `locals.tf`       | Path-prefix lists for ALB routing (mirror of `helm/.../ingress.yaml`) |
 | `network.tf`      | VPC, subnets, IGW, NAT, route tables, security groups                 |

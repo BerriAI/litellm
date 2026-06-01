@@ -10,9 +10,15 @@
 provider "aws" {
   region = var.region
 
-  default_tags {
-    tags = {
-      "managed-by" = "terraform"
-    }
-  }
+  # Reserve `default_tags` for pure org-wide tags the module shouldn't know
+  # about (cost center, team, compliance scope, …). They propagate through the
+  # module call and merge with the module's own `litellm:stack` / `managed-by`
+  # / var.tags. The module already stamps `managed-by = "terraform"`, so don't
+  # duplicate it here — set per-deployment tags via the module's `tags` input.
+  #
+  # default_tags {
+  #   tags = {
+  #     "cost-center" = "platform"
+  #   }
+  # }
 }

@@ -14,6 +14,12 @@
 #     ...
 #   }
 #
+# Note: the module declares no `configuration_aliases`, so it receives only the
+# caller's single default google/google-beta providers — a `for_each` over it
+# runs every instance against the same project/region/credentials. To fan out
+# across projects or regions, use one root per project. See the GCP README's
+# "Using as a module" section.
+#
 # Knobs not surfaced as variables here (per-component sizing/instances,
 # Cloud SQL tier/edition, Memorystore tier, per-component image overrides)
 # can be set directly on this block — see ../../variables.tf.
