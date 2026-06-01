@@ -9,6 +9,7 @@ import polars as pl
 
 from .schema import FOCUS_NORMALIZED_SCHEMA
 
+
 _TAG_KEYS = (
     "team_id",
     "team_alias",
@@ -95,9 +96,9 @@ class FocusTransformer:
             pl.lit("Usage-Based").alias("ChargeFrequency"),
             fmt(pl.col("ChargePeriodEnd")).alias("ChargePeriodEnd"),
             fmt(pl.col("ChargePeriodStart")).alias("ChargePeriodStart"),
-            dec(pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0)).alias(
-                "ConsumedQuantity"
-            ),
+            dec(
+                pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0)
+            ).alias("ConsumedQuantity"),
             pl.lit("Requests").alias("ConsumedUnit"),
             dec(pl.col("spend").fill_null(0.0)).alias("ContractedCost"),
             none_str.alias("ContractedUnitPrice"),
@@ -109,9 +110,9 @@ class FocusTransformer:
             none_str.alias("AvailabilityZone"),
             pl.lit("USD").alias("PricingCurrency"),
             none_str.alias("PricingCategory"),
-            dec(pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0)).alias(
-                "PricingQuantity"
-            ),
+            dec(
+                pl.col("api_requests").cast(pl.Int64).cast(pl.Float64).fill_null(0.0)
+            ).alias("PricingQuantity"),
             none_dec.alias("PricingCurrencyContractedUnitPrice"),
             dec(pl.col("spend").fill_null(0.0)).alias("PricingCurrencyEffectiveCost"),
             none_dec.alias("PricingCurrencyListUnitPrice"),
