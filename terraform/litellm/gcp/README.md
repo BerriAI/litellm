@@ -344,12 +344,25 @@ A scripted move over the whole list (run from the dir with the state):
 terraform state list | grep -v '^module\.litellm\.' | while read -r addr; do
   terraform state mv "$addr" "module.litellm.$addr"
 done
-terraform plan   # expect: No changes
+terraform plan   # expect: No changes (but see the TLS note below)
 ```
 
+**TLS-enabled stacks expect one cert replacement.** The managed SSL
+certificate is named with a hash of `lb_domains`
+(`<name>-cert-<hash>`) so a domain change rolls the cert safely. If you
+deployed an earlier revision its cert is stored under the old un-hashed
+name, so after the `state mv` above `terraform plan` will show **one**
+`google_compute_managed_ssl_certificate` replacement (a create-then-destroy,
+guarded by `create_before_destroy`) rather than "No changes". That single
+replacement is expected and safe — the new cert is provisioned and attached
+to the LB before the old one is removed. Everything else should report no
+changes; if the plan shows anything beyond that one cert, an address didn't
+line up — re-check step 1.
+
 `terraform state mv` only rewrites local state — it never touches live
-infrastructure — and a clean `terraform plan` afterward confirms the addresses
-line up before you apply. If you'd rather not migrate, you can keep calling the
+infrastructure — and a clean `terraform plan` afterward (modulo the cert
+replacement above for TLS stacks) confirms the addresses line up before you
+apply. If you'd rather not migrate, you can keep calling the
 module from your own root with the same addresses you already have.
 
 ## Storage and database retention
