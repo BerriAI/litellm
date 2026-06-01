@@ -2804,6 +2804,133 @@ class TestCiscoAIDefenseToolCallBypass:
         )
 
 
+class TestCiscoAIDefenseReasoningOutputBypass:
+    """Reasoning-specific response fields are scannable and redactable."""
+
+    @pytest.mark.asyncio
+    async def test_post_call_scans_reasoning_fields(self):
+        g = _make_guardrail(event_hook="post_call")
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        reasoning_content="hidden reasoning has SSN 123-45-6789",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "thinking block has card 4111-1111-1111-1111",
+                            }
+                        ],
+                    ),
+                )
+            ]
+        )
+        post_mock = AsyncMock(return_value=_safe_response())
+
+        with patch.object(g.async_handler, "post", new=post_mock):
+            await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "think"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        sent = post_mock.call_args.kwargs["json"]
+        joined = " ".join(m.get("content", "") for m in sent.get("messages", []))
+        assert "123-45-6789" in joined
+        assert "4111-1111-1111-1111" in joined
+
+    @pytest.mark.asyncio
+    async def test_post_call_redact_clears_reasoning_fields(self):
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
+        response = ModelResponse(
+            choices=[
+                Choices(
+                    index=0,
+                    finish_reason="stop",
+                    message=Message(
+                        role="assistant",
+                        content=None,
+                        reasoning_content="hidden SSN 123-45-6789",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "card 4111-1111-1111-1111",
+                            }
+                        ],
+                    ),
+                )
+            ]
+        )
+
+        with patch.object(
+            g.async_handler,
+            "post",
+            new=AsyncMock(return_value=_redact_response(sanitized_text="[REDACTED]")),
+        ):
+            result = await g.async_post_call_success_hook(
+                data={"messages": [{"role": "user", "content": "think"}]},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        message = result.choices[0].message
+        assert message.content == "[REDACTED]"
+        assert getattr(message, "reasoning_content", None) is None
+        assert getattr(message, "thinking_blocks", None) is None
+        assert "123-45-6789" not in repr(result)
+        assert "4111-1111-1111-1111" not in repr(result)
+
+    @pytest.mark.asyncio
+    async def test_responses_api_reasoning_summary_is_scanned_and_redacted(self):
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
+        response = ResponsesAPIResponse(
+            id="resp_1",
+            created_at=0,
+            output=[
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": "reasoning summary leaks SSN 123-45-6789",
+                        }
+                    ],
+                    "encrypted_content": "opaque-secret-token",
+                }
+            ],
+            parallel_tool_calls=False,
+            tool_choice=None,
+            tools=None,
+            top_p=None,
+            usage=None,
+        )
+        post_mock = AsyncMock(
+            return_value=_redact_response(sanitized_text="[REDACTED]")
+        )
+
+        with patch.object(g.async_handler, "post", new=post_mock):
+            result = await g.async_post_call_success_hook(
+                data={"input": "think"},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=response,
+            )
+
+        sent = post_mock.call_args.kwargs["json"]
+        joined = " ".join(m.get("content", "") for m in sent.get("messages", []))
+        assert "123-45-6789" in joined
+        reasoning_item = result.output[0]
+        assert reasoning_item.summary[0].text == "[REDACTED]"
+        assert getattr(reasoning_item, "encrypted_content", None) is None
+        assert "123-45-6789" not in repr(result)
+
+
 class TestCiscoAIDefenseStreamingBypass:
     """Streaming output is buffered until Cisco returns a verdict."""
 
@@ -2978,6 +3105,65 @@ class TestCiscoAIDefenseStreamingBypass:
 
         assert "123-45-6789" in repr(chunks)
         assert "123-45-6789" not in repr(received)
+
+    @pytest.mark.asyncio
+    async def test_streaming_redact_does_not_replay_reasoning_fields(self):
+        g = _make_guardrail(
+            event_hook=["pre_call", "post_call"], on_flagged_action="monitor"
+        )
+        chunks = [
+            ModelResponseStream(
+                id="resp_1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(
+                            role="assistant",
+                            reasoning_content="hidden SSN 123-45-6789",
+                        ),
+                        finish_reason=None,
+                        index=0,
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            ),
+            ModelResponseStream(
+                id="resp_1",
+                choices=[
+                    StreamingChoices(
+                        delta=Delta(
+                            thinking_blocks=[
+                                {
+                                    "type": "thinking",
+                                    "thinking": "card 4111-1111-1111-1111",
+                                }
+                            ]
+                        ),
+                        finish_reason="stop",
+                        index=0,
+                    )
+                ],
+                created=1234567890,
+                model="gpt-4",
+                object="chat.completion.chunk",
+            ),
+        ]
+
+        received, post_mock = await _streaming_setup(
+            g,
+            chunks,
+            cisco_response=_redact_response(sanitized_text="[REDACTED]"),
+        )
+
+        sent = post_mock.call_args.kwargs["json"]
+        joined = " ".join(m.get("content", "") for m in sent.get("messages", []))
+        assert "123-45-6789" in joined
+        assert "4111-1111-1111-1111" in joined
+        assert "123-45-6789" in repr(chunks)
+        assert "123-45-6789" not in repr(received)
+        assert "4111-1111-1111-1111" not in repr(received)
+        assert "[REDACTED]" in repr(received)
 
     @pytest.mark.asyncio
     async def test_streaming_skipped_for_mcp_mode_guardrail(self):

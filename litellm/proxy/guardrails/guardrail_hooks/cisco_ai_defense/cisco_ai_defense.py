@@ -507,6 +507,14 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             return
 
         response_messages = self._extract_response_messages(assembled)
+        original_stream_text = self._extract_streaming_chunk_scan_text(all_chunks)
+        assembled_text = " ".join(
+            m.get("content", "") for m in response_messages if isinstance(m, dict)
+        )
+        if original_stream_text and original_stream_text not in assembled_text:
+            response_messages.append(
+                {"role": "assistant", "content": original_stream_text}
+            )
         if not response_messages:
             for chunk in all_chunks:
                 yield chunk
@@ -638,6 +646,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 text = getattr(delta, "content", None)
                 if isinstance(text, str):
                     original_text += text
+                reasoning_text = " ".join(cls._extract_message_reasoning_parts(delta))
+                if reasoning_text:
+                    original_text += reasoning_text
                 for tc in getattr(delta, "tool_calls", None) or []:
                     args = cls._extract_tool_call_arguments(tc)
                     if args:
@@ -1658,7 +1669,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
         sanitized_text: Optional[str],
         sanitized_messages: Optional[List[Dict[str, Any]]],
     ) -> bool:
-        """Redact every returned choice, including tool-call arguments."""
+        """Redact every returned choice, including tool-call/reasoning fields."""
         if sanitized_messages:
             applied = False
             msg_iter = iter(sanitized_messages)
@@ -1666,18 +1677,23 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if not isinstance(choice, Choices):
                     continue
                 replacement = next(msg_iter, None)
+                replacement_text = sanitized_text or "[REDACTED]"
                 if replacement is not None:
                     text = CiscoAIDefenseGuardrail._normalize_message_content(
                         replacement.get("content")
                     )
                     if text:
+                        replacement_text = text
                         choice.message.content = text
                         applied = True
                 else:
-                    fallback = sanitized_text or "[REDACTED]"
                     if getattr(choice.message, "content", None):
-                        choice.message.content = fallback
+                        choice.message.content = replacement_text
                         applied = True
+                if CiscoAIDefenseGuardrail._redact_message_reasoning_fields(
+                    choice.message, replacement_text
+                ):
+                    applied = True
                 CiscoAIDefenseGuardrail._clear_tool_call_arguments(choice.message)
             return applied
         if sanitized_text:
@@ -1689,9 +1705,25 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if getattr(msg, "content", None):
                     msg.content = sanitized_text
                     applied = True
+                if CiscoAIDefenseGuardrail._redact_message_reasoning_fields(
+                    msg, sanitized_text
+                ):
+                    applied = True
                 CiscoAIDefenseGuardrail._clear_tool_call_arguments(msg)
             return applied
         return False
+
+    @classmethod
+    def _redact_message_reasoning_fields(
+        cls, message: Any, replacement_text: str
+    ) -> bool:
+        """Remove preserved reasoning fields and expose the sanitized text."""
+        if not cls._extract_message_reasoning_parts(message):
+            return False
+        cls._set_field(message, "content", replacement_text)
+        for key in ("reasoning_content", "thinking_blocks", "reasoning_items"):
+            cls._clear_field(message, key)
+        return True
 
     @staticmethod
     def _clear_arguments_field(obj: Any) -> None:
@@ -1770,6 +1802,33 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             if isinstance(args, str) and args:
                 self._clear_arguments_field(item)
                 applied = True
+            if self._redact_response_output_reasoning_fields(item, replacement_text):
+                applied = True
+        return applied
+
+    @classmethod
+    def _redact_response_output_reasoning_fields(
+        cls, item: Any, replacement_text: str
+    ) -> bool:
+        """Rewrite Responses API reasoning summaries / direct reasoning text."""
+        applied = False
+        for key in ("reasoning", "reasoning_content", "text"):
+            value = cls._get_field(item, key)
+            if isinstance(value, str) and value:
+                cls._set_field(item, key, replacement_text)
+                applied = True
+
+        summary = cls._get_field(item, "summary")
+        if isinstance(summary, list):
+            for block in summary:
+                if isinstance(cls._get_field(block, "text"), str):
+                    cls._set_field(block, "text", replacement_text)
+                    applied = True
+
+        encrypted_content = cls._get_field(item, "encrypted_content")
+        if isinstance(encrypted_content, str) and encrypted_content:
+            cls._clear_field(item, "encrypted_content")
+            applied = True
         return applied
 
     @staticmethod
@@ -1937,9 +1996,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
     # Content-part ``type`` values that should be flattened to text by
     # ``_normalize_message_content``. Covers both Chat Completions
     # (``text``) and the Responses API (``input_text`` for caller-side
-    # parts, ``output_text`` for assistant turns, ``summary_text`` for
-    # reasoning summaries that may appear in conversation history).
-    _TEXT_PART_TYPES = frozenset({"text", "input_text", "output_text", "summary_text"})
+    # parts, ``output_text`` for assistant turns, ``summary_text`` /
+    # ``reasoning_text`` for reasoning summaries that may appear in
+    # conversation history).
+    _TEXT_PART_TYPES = frozenset(
+        {"text", "input_text", "output_text", "summary_text", "reasoning_text"}
+    )
 
     @staticmethod
     def _extract_inspect_messages_from_request(
@@ -2076,9 +2138,9 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
 
         Handles both ``ModelResponse`` (Chat Completions) and
         ``ResponsesAPIResponse`` (``/v1/responses``). On both shapes
-        tool-call / function-call argument strings are included
-        alongside the main text so a model can't bypass the scan by
-        placing content there.
+        tool-call / function-call argument strings and reasoning fields
+        are included alongside the main text so a model can't bypass the
+        scan by placing content there.
         """
         if isinstance(response, ModelResponse):
             result: List[Dict[str, str]] = []
@@ -2093,6 +2155,11 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     parts.append(content)
                 parts.extend(
                     CiscoAIDefenseGuardrail._extract_message_tool_argument_parts(
+                        choice.message
+                    )
+                )
+                parts.extend(
+                    CiscoAIDefenseGuardrail._extract_message_reasoning_parts(
                         choice.message
                     )
                 )
@@ -2116,17 +2183,112 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     if isinstance(part, dict)
                     else (lambda k: getattr(part, k, None))
                 )
-                t = pget("text")
-                if isinstance(t, str) and t:
-                    text_parts.append(t)
+                for key in ("text", "reasoning", "thinking"):
+                    value = pget(key)
+                    if isinstance(value, str) and value:
+                        text_parts.append(value)
             args = get("arguments")
             if isinstance(args, str) and args:
                 text_parts.append(args)
             direct = get("text")
             if isinstance(direct, str) and direct:
                 text_parts.append(direct)
+            text_parts.extend(
+                CiscoAIDefenseGuardrail._extract_response_output_reasoning_parts(item)
+            )
         joined = " ".join(text_parts)
         return [{"role": "assistant", "content": joined}] if joined else []
+
+    @classmethod
+    def _extract_message_reasoning_parts(cls, message: Any) -> List[str]:
+        """Extract inspectable reasoning fields from a message/delta object."""
+        parts: List[str] = []
+        reasoning_content = cls._get_field(message, "reasoning_content")
+        if isinstance(reasoning_content, str) and reasoning_content:
+            parts.append(reasoning_content)
+        parts.extend(
+            cls._extract_thinking_block_parts(
+                cls._get_field(message, "thinking_blocks")
+            )
+        )
+        parts.extend(
+            cls._extract_reasoning_item_parts(
+                cls._get_field(message, "reasoning_items")
+            )
+        )
+        return parts
+
+    @classmethod
+    def _extract_response_output_reasoning_parts(cls, item: Any) -> List[str]:
+        """Extract reasoning text from Responses API output items."""
+        parts: List[str] = []
+        for key in ("reasoning", "reasoning_content"):
+            value = cls._get_field(item, key)
+            if isinstance(value, str) and value:
+                parts.append(value)
+        parts.extend(cls._extract_reasoning_item_parts([item]))
+        return parts
+
+    @classmethod
+    def _extract_thinking_block_parts(cls, blocks: Any) -> List[str]:
+        if not isinstance(blocks, list):
+            return []
+        parts: List[str] = []
+        for block in blocks:
+            for key in ("thinking", "reasoning", "text", "data"):
+                value = cls._get_field(block, key)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+        return parts
+
+    @classmethod
+    def _extract_reasoning_item_parts(cls, items: Any) -> List[str]:
+        if not isinstance(items, list):
+            return []
+        parts: List[str] = []
+        for item in items:
+            summary = cls._get_field(item, "summary")
+            if isinstance(summary, list):
+                for block in summary:
+                    text = cls._get_field(block, "text")
+                    if isinstance(text, str) and text:
+                        parts.append(text)
+            for key in ("text", "reasoning", "reasoning_content"):
+                value = cls._get_field(item, key)
+                if isinstance(value, str) and value:
+                    parts.append(value)
+        return parts
+
+    @staticmethod
+    def _get_field(obj: Any, key: str) -> Any:
+        if isinstance(obj, dict):
+            return obj.get(key)
+        return getattr(obj, key, None)
+
+    @staticmethod
+    def _set_field(obj: Any, key: str, value: Any) -> None:
+        if isinstance(obj, dict):
+            obj[key] = value
+            return
+        try:
+            setattr(obj, key, value)
+        except (AttributeError, TypeError, ValueError):
+            pass
+
+    @staticmethod
+    def _clear_field(obj: Any, key: str) -> None:
+        if isinstance(obj, dict):
+            obj.pop(key, None)
+            return
+        if not hasattr(obj, key):
+            return
+        try:
+            delattr(obj, key)
+        except (AttributeError, TypeError, ValueError):
+            try:
+                setattr(obj, key, None)
+            except (AttributeError, TypeError, ValueError):
+                pass
 
     @classmethod
     def _extract_message_tool_argument_parts(cls, message: Any) -> List[str]:
