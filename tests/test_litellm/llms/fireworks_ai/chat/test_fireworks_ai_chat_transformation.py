@@ -329,3 +329,170 @@ def test_transform_messages_helper_strips_thinking_blocks():
     )
     assert "thinking_blocks" not in out[1]
     assert out[1]["content"] == "I can help."
+
+
+# -----------------------------------------------------------------------------
+# Regression tests for legacy / OpenAPI $ref defs in tool parameters.
+#
+# Fireworks (like Anthropic) only resolves `$defs` (JSON Schema 2020-12). Tools
+# coming from MCP servers (legacy `definitions`) or OpenAPI-derived gateways
+# such as AWS AgentCore (`components.schemas`) used to leave dangling `$ref`
+# pointers, causing upstream "Error resolving schema reference" failures. See
+# https://github.com/BerriAI/litellm/issues/26692.
+# -----------------------------------------------------------------------------
+
+
+def _assert_no_unresolved_refs(parameters: dict) -> None:
+    blob = json.dumps(parameters)
+    assert "$ref" not in blob, f"unresolved $ref in transformed parameters: {blob}"
+
+
+def test_transform_tools_inlines_components_schemas_refs():
+    """OpenAPI `components.schemas` $refs (AgentCore-style) must be inlined."""
+    config = FireworksAIConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "slides_presentations_create",
+                "description": "Create a Google Slides presentation",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "body": {"$ref": "#/components/schemas/Presentation"},
+                    },
+                    "required": ["body"],
+                    "components": {
+                        "schemas": {
+                            "Presentation": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "presentationId": {"type": "string"},
+                                },
+                            }
+                        }
+                    },
+                },
+            },
+        }
+    ]
+
+    out = config._transform_tools(tools)
+
+    params = out[0]["function"]["parameters"]
+    _assert_no_unresolved_refs(params)
+    assert params["properties"]["body"] == {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "presentationId": {"type": "string"},
+        },
+    }
+    assert "components" not in params
+
+
+def test_transform_tools_inlines_legacy_definitions_refs():
+    """Legacy draft-04 `definitions` $refs must be inlined."""
+    config = FireworksAIConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "create_thing",
+                "description": "Create a thing",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"thing": {"$ref": "#/definitions/Thing"}},
+                    "definitions": {
+                        "Thing": {
+                            "type": "object",
+                            "properties": {"id": {"type": "string"}},
+                        }
+                    },
+                },
+            },
+        }
+    ]
+
+    out = config._transform_tools(tools)
+
+    params = out[0]["function"]["parameters"]
+    _assert_no_unresolved_refs(params)
+    assert params["properties"]["thing"] == {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+    }
+    assert "definitions" not in params
+
+
+def test_transform_tools_preserves_native_dollar_defs():
+    """`$defs` is JSON Schema 2020-12 native; Fireworks resolves it itself."""
+    config = FireworksAIConfig()
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "native_defs_tool",
+                "description": "",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"a": {"$ref": "#/$defs/A"}},
+                    "$defs": {"A": {"type": "string"}},
+                },
+            },
+        }
+    ]
+
+    out = config._transform_tools(tools)
+
+    params = out[0]["function"]["parameters"]
+    assert params["$defs"] == {"A": {"type": "string"}}
+    assert params["properties"]["a"] == {"$ref": "#/$defs/A"}
+
+
+def test_transform_tools_skips_non_function_tools():
+    """Non-``function`` tools (e.g. provider-native tool types) must pass
+    through ``_transform_tools`` untouched -- no ``strict`` pop, no $ref
+    inlining, no error.
+    """
+    config = FireworksAIConfig()
+    non_function_tool = {
+        "type": "code_interpreter",
+        "code_interpreter": {"some": "config"},
+    }
+    function_tool = {
+        "type": "function",
+        "function": {
+            "name": "create_thing",
+            "description": "Create a thing",
+            "parameters": {
+                "type": "object",
+                "properties": {"thing": {"$ref": "#/definitions/Thing"}},
+                "definitions": {
+                    "Thing": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                    }
+                },
+            },
+            "strict": True,
+        },
+    }
+
+    out = config._transform_tools([non_function_tool, function_tool])
+
+    # Non-function tool is preserved verbatim.
+    assert out[0] == {
+        "type": "code_interpreter",
+        "code_interpreter": {"some": "config"},
+    }
+    # Function tool still goes through both transformations: `strict` popped
+    # and the legacy $ref inlined.
+    assert "strict" not in out[1]["function"]
+    inlined = out[1]["function"]["parameters"]
+    assert "definitions" not in inlined
+    assert inlined["properties"]["thing"] == {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+    }

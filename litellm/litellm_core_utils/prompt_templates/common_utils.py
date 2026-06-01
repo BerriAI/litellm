@@ -850,7 +850,47 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 # ---------------------------------------------------------------------------
 
 
-def unpack_defs(schema: dict, defs: dict) -> None:
+def _estimate_json_bytes(obj: Any) -> int:
+    """Estimate the JSON-serialised byte size of ``obj`` without materialising
+    JSON. Walks iteratively (no recursion stack risk).
+
+    String length is read via ``len()`` (O(1) on Python ``str``) so a target
+    containing a 100MB description costs ~one walk step, not a 100MB
+    serialisation. Escape sequences are not counted exactly, so this is an
+    approximation -- but always within a small constant factor of the real
+    serialised size, which is what a schema-bomb budget needs.
+    """
+    total = 0
+    stack: list = [obj]
+    while stack:
+        x = stack.pop()
+        if isinstance(x, dict):
+            total += 2  # `{}`
+            for k, v in x.items():
+                total += len(str(k)) + 4  # `"k":,`
+                stack.append(v)
+        elif isinstance(x, list):
+            total += 2  # `[]`
+            total += max(0, len(x) - 1)  # commas between items
+            stack.extend(x)
+        elif isinstance(x, str):
+            total += len(x) + 2
+        elif isinstance(x, bool):  # bool subclasses int -- check first
+            total += 4 if x else 5
+        elif x is None:
+            total += 4
+        elif isinstance(x, (int, float)):
+            total += 24  # generous upper bound for stringified numbers
+        else:
+            total += 24
+    return total
+
+
+def unpack_defs(
+    schema: dict,
+    defs: dict,
+    max_inlined_bytes: Optional[int] = None,
+) -> None:
     """Expand *all* ``$ref`` entries pointing into ``$defs`` / ``definitions``.
 
     This utility walks the entire schema tree (dicts and lists) so it naturally
@@ -860,6 +900,15 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     It mutates *schema* in-place and does **not** return anything.  The helper
     keeps memory overhead low by resolving nodes as it encounters them rather
     than materialising a fully dereferenced copy first.
+
+    ``max_inlined_bytes`` caps the cumulative JSON-byte size of every target
+    that has been inlined and is checked *before* each ``copy.deepcopy``, so
+    an oversized expansion is rejected without first materialising it. A byte
+    bound is the universal measure of expansion -- it simultaneously caps
+    ref-count fan-out, node-count amplification, and scalar-byte amplification
+    (a target containing a large string, ``const``, or ``enum`` entry).
+    Defaults to ``None`` (unbounded) so existing callers are unaffected;
+    raises ``ValueError`` on overflow.
     """
 
     import copy
@@ -879,6 +928,7 @@ def unpack_defs(schema: dict, defs: dict) -> None:
     queue: deque[
         tuple[Any, Union[dict, list, None], Union[str, int, None], dict, set]
     ] = deque([(schema, None, None, root_defs, set())])
+    inlined_bytes = 0
 
     while queue:
         node, parent, key, active_defs, ref_chain = queue.popleft()
@@ -898,6 +948,16 @@ def unpack_defs(schema: dict, defs: dict) -> None:
                 # Unknown reference – leave untouched
                 if target_schema is None:
                     continue
+
+                if max_inlined_bytes is not None:
+                    inlined_bytes += _estimate_json_bytes(target_schema)
+                    if inlined_bytes > max_inlined_bytes:
+                        raise ValueError(
+                            f"unpack_defs: inlined schema exceeded the "
+                            f"{max_inlined_bytes:,}-byte budget. Refusing to "
+                            f"deep-copy further to prevent schema-bomb "
+                            f"resource exhaustion."
+                        )
 
                 # Merge defs from the target to capture nested definitions
                 child_defs = {
@@ -944,6 +1004,61 @@ def unpack_defs(schema: dict, defs: dict) -> None:
             # Add all list items to queue
             for idx, item in enumerate(node):
                 queue.append((item, node, idx, active_defs, ref_chain))
+
+
+def _has_legacy_defs(schema: object) -> bool:
+    if not isinstance(schema, dict):
+        return False
+    components = schema.get("components")
+    return "definitions" in schema or (
+        isinstance(components, dict) and isinstance(components.get("schemas"), dict)
+    )
+
+
+# Schema-bomb budget for ``unpack_legacy_defs``: cap the cumulative JSON-byte
+# size of every inlined target. A byte cap is the universal measure of
+# expansion -- it simultaneously bounds ref-count fan-out, node-count
+# amplification, and scalar-byte amplification (large ``description`` /
+# ``const`` / ``enum`` values). Real-world MCP / OpenAPI-derived tool schemas
+# inline well under 1MB; 10MB sits two orders of magnitude above that, well
+# below memory-pressure territory, and rejects request-supplied bombs before
+# the proxy materialises them.
+_LEGACY_DEFS_MAX_INLINED_BYTES = 10_000_000
+
+
+def unpack_legacy_defs(
+    schema: dict,
+    *,
+    copy: bool = False,
+    max_inlined_bytes: int = _LEGACY_DEFS_MAX_INLINED_BYTES,
+) -> dict:
+    """Inline ``$ref``s backed by draft-04 ``definitions`` / OpenAPI
+    ``components.schemas``. ``$defs`` is left untouched.
+
+    Anthropic and Fireworks tool-schema resolvers only recognise ``$defs``;
+    legacy / OpenAPI def blocks are otherwise silently dropped and leave
+    dangling pointers. See https://github.com/BerriAI/litellm/issues/26692.
+
+    Mutates ``schema`` in place and returns it. Pass ``copy=True`` to deep-copy
+    first (only when there is actually work to do). ``max_inlined_bytes``
+    bounds the cumulative JSON-byte size of inlined targets so request-supplied
+    schemas cannot expand into a schema-bomb before reaching the upstream
+    provider -- raises ``ValueError`` on overflow.
+    """
+    if not _has_legacy_defs(schema):
+        return schema
+    if copy:
+        import copy as _copy
+
+        schema = _copy.deepcopy(schema)
+    # On key collision, ``definitions`` wins over ``components.schemas`` --
+    # ``unpack_defs`` keys refs by last path segment so a single name can only
+    # resolve to one body, and ``definitions`` is the JSON-Schema-native
+    # namespace.
+    defs = schema.pop("components", {}).get("schemas") or {}
+    defs.update(schema.pop("definitions", None) or {})
+    unpack_defs(schema, defs, max_inlined_bytes=max_inlined_bytes)
+    return schema
 
 
 def _get_image_mime_type_from_url(url: str) -> Optional[str]:
