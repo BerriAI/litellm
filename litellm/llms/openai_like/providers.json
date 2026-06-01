@@ -114,5 +114,13 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "skypool": {
+    "base_url": "https://a.skypool.xyz/v1",
+    "api_key_env": "SKYPOOL_API_KEY",
+    "api_base_env": "SKYPOOL_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
