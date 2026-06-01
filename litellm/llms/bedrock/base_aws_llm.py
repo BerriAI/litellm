@@ -1534,10 +1534,9 @@ class BaseAWSLLM:
         )
 
         sigv4 = SigV4Auth(credentials, service_name, aws_region_name)
-        if headers is not None:
-            headers = {"content-type": "application/json", **headers}
-        else:
-            headers = {"content-type": "application/json"}
+        headers = headers or {}
+        if not any(header_name.lower() == "content-type" for header_name in headers):
+            headers = {"Content-Type": "application/json", **headers}
 
         aws_signature_headers = self._filter_headers_for_aws_signature(headers)
         request = AWSRequest(
