@@ -534,7 +534,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         "unknown";
 
       const wasAllowlistEnforced = Boolean(mcpServer.mcp_info?.tool_allowlist_enforced);
-      const toolAllowlistEnforced = wasAllowlistEnforced || allowedTools.length > 0;
+      const toolAllowlistEnforced = hasExistingToolAllowlist || allowedTools.length > 0;
 
       const payload: Record<string, any> = {
         ...restValues,
