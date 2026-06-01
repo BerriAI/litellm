@@ -114,5 +114,11 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "miromind": {
+    "base_url": "https://api.miromind.ai/v1",
+    "api_key_env": "MIROMIND_API_KEY",
+    "api_base_env": "MIROMIND_API_BASE",
+    "supported_endpoints": ["/v1/responses", "/v1/chat/completions"]
   }
 }

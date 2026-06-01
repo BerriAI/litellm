@@ -23993,6 +23993,44 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 8192
     },
+    "miromind/mirothinker-1-7-deepresearch": {
+        "input_cost_per_token": 4e-06,
+        "output_cost_per_token": 2.5e-05,
+        "litellm_provider": "miromind",
+        "mode": "responses",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "supported_endpoints": ["/v1/responses", "/v1/chat/completions"],
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.05,
+            "search_context_size_medium": 0.05,
+            "search_context_size_high": 0.05
+        },
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_web_search": true,
+        "supports_system_messages": true
+    },
+    "miromind/mirothinker-1-7-deepresearch-mini": {
+        "input_cost_per_token": 1.25e-06,
+        "output_cost_per_token": 1e-05,
+        "litellm_provider": "miromind",
+        "mode": "responses",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "supported_endpoints": ["/v1/responses", "/v1/chat/completions"],
+        "search_context_cost_per_query": {
+            "search_context_size_low": 0.05,
+            "search_context_size_medium": 0.05,
+            "search_context_size_high": 0.05
+        },
+        "supports_native_streaming": true,
+        "supports_reasoning": true,
+        "supports_web_search": true,
+        "supports_system_messages": true
+    },
     "mistral.devstral-2-123b": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "bedrock_converse",

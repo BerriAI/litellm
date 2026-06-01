@@ -2508,6 +2508,22 @@
         "responses": true
       }
     },
+    "miromind": {
+      "display_name": "MiroMind (`miromind`)",
+      "url": "https://docs.litellm.ai/docs/providers/miromind",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "pg_vector": {
       "display_name": "PG Vector (`pg_vector`)",
       "url": "https://docs.litellm.ai/docs/providers/pg_vector",
