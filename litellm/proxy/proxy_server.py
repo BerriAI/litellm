@@ -249,6 +249,18 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy._lazy_features import attach_lazy_features
+from litellm.proxy.agent_settings_endpoints.pool_status_endpoints import (
+    router as agent_pool_status_router,
+)
+from litellm.proxy.agent_settings_endpoints.secrets_endpoints import (
+    router as agent_secrets_router,
+)
+from litellm.proxy.agent_settings_endpoints.vm_config_endpoints import (
+    router as agent_vm_config_router,
+)
+from litellm.proxy.agent_settings_endpoints.worker_endpoints import (
+    router as agent_workers_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -970,8 +982,54 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## /v2/agents+sessions cleanup sweeper (Epic A — Cursor SDK).
+    ## Idempotent; safe even if the agent_session_endpoints module never
+    ## sees traffic.
+    try:
+        from litellm.proxy.agent_session_endpoints.cleanup import (
+            start_cleanup_sweeper,
+        )
+
+        start_cleanup_sweeper()
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "agent_session_endpoints cleanup sweeper failed to start: %s", exc
+        )
+
+    ## Warm-pool maintenance loop (LIT-2890 / Epic B2). Refills
+    ## ``LiteLLM_AgentVM`` rows for every team with ``warm_pool_enabled=true``.
+    ## Idempotent; only does work when at least one team has the feature on.
+    try:
+        from litellm.managed_agents.vms.warm_pool.manager import (
+            get_warm_pool_manager,
+        )
+
+        get_warm_pool_manager().start()
+    except Exception as exc:
+        verbose_proxy_logger.warning("warm_pool.manager failed to start: %s", exc)
+
     # End of startup event
     yield
+
+    ## Stop the warm-pool maintenance loop.
+    try:
+        from litellm.managed_agents.vms.warm_pool.manager import (
+            get_warm_pool_manager,
+        )
+
+        await get_warm_pool_manager().stop()
+    except Exception as exc:
+        verbose_proxy_logger.warning("warm_pool.manager failed to stop: %s", exc)
+
+    ## Stop the agent session cleanup sweeper.
+    try:
+        from litellm.proxy.agent_session_endpoints.cleanup import (
+            stop_cleanup_sweeper,
+        )
+
+        stop_cleanup_sweeper()
+    except Exception:
+        pass
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
@@ -15685,8 +15743,52 @@ app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
+# Cloud Agents settings (LIT-2891) — VM config, secrets, self-hosted workers.
+app.include_router(agent_vm_config_router)
+app.include_router(agent_secrets_router)
+app.include_router(agent_workers_router)
+app.include_router(agent_pool_status_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
 app.include_router(google_router)
+
+# /v2/agents, /v2/sessions — Cursor SDK agent runtime (Epic A).
+# Mounted under /v2/ to avoid collision with the existing /v1/agents
+# (A2A registry in litellm/proxy/agent_endpoints/).
+#
+# SECURITY: the daemon JWT secret is a separate credential from the proxy
+# master key. If ``LITELLM_AGENT_JWT_SECRET`` is not set, refuse to mount
+# these routers — silently signing daemon tokens with the master key (or
+# any default) would conflate two distinct auth surfaces and let a
+# captured daemon JWT mint master-key-authority API keys.
+from litellm.proxy.agent_session_endpoints.auth import (
+    is_agent_jwt_secret_configured,
+)
+
+if is_agent_jwt_secret_configured():
+    from litellm.proxy.agent_session_endpoints import (
+        agent_router as agent_session_agent_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        internal_router as agent_session_internal_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        run_router as agent_session_run_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        session_router as agent_session_session_router,
+    )
+
+    app.include_router(agent_session_agent_router)
+    app.include_router(agent_session_session_router)
+    app.include_router(agent_session_run_router)
+    app.include_router(agent_session_internal_router)
+else:
+    verbose_proxy_logger.error(
+        "agent_session_endpoints (/v2/agents, /v2/sessions) NOT mounted: "
+        "LITELLM_AGENT_JWT_SECRET is not set. Set this env var to a "
+        "dedicated random secret (distinct from LITELLM_MASTER_KEY) to "
+        "enable the Cursor SDK agent runtime."
+    )
 
 attach_lazy_features(app)
 app.add_middleware(
