@@ -3822,6 +3822,11 @@ def get_optional_params(
         model=model,
         provider_config=provider_config,
     )
+    # stream_options only applies to streaming requests. OpenAI-compatible backends
+    # (e.g. vLLM) reject it with a 400 when stream is not True, so drop it for
+    # non-streaming requests to match the documented contract. Fixes #29431.
+    if stream is not True:
+        non_default_params.pop("stream_options", None)
     optional_params = pre_process_optional_params(
         passed_params=passed_params,
         non_default_params=non_default_params,

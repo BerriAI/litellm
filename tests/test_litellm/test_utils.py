@@ -4863,3 +4863,40 @@ def test_is_prompt_caching_valid_prompt_explicit_min_token_count_overrides_model
         is_prompt_caching_valid_prompt(model="claude-opus-4-8", messages=PROMPT_CACHE_MESSAGES, min_token_count=8192)
         is False
     )
+
+
+class TestStreamOptionsNonStreaming:
+    """stream_options is only valid for streaming requests; OpenAI-compatible
+    backends (e.g. vLLM) 400 if it's sent without stream=True. See #29431."""
+
+    def test_stream_options_dropped_when_stream_not_set(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="my-model",
+            custom_llm_provider="openai",
+            stream_options={"include_usage": True},
+        )
+        assert "stream_options" not in result
+
+    def test_stream_options_dropped_when_stream_false(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="my-model",
+            custom_llm_provider="openai",
+            stream=False,
+            stream_options={"include_usage": True},
+        )
+        assert "stream_options" not in result
+
+    def test_stream_options_kept_when_streaming(self):
+        from litellm.utils import get_optional_params
+
+        result = get_optional_params(
+            model="my-model",
+            custom_llm_provider="openai",
+            stream=True,
+            stream_options={"include_usage": True},
+        )
+        assert result.get("stream_options") == {"include_usage": True}
