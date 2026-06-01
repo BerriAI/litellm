@@ -27,6 +27,7 @@ from litellm.types.llms.anthropic import ANTHROPIC_ADVISOR_TOOL_TYPE
 ADVISOR_MAX_USES: int = _c.ADVISOR_MAX_USES
 ADVISOR_NATIVE_PROVIDERS: frozenset = _c.ADVISOR_NATIVE_PROVIDERS
 ADVISOR_TOOL_DESCRIPTION: str = _c.ADVISOR_TOOL_DESCRIPTION
+ADVISOR_SYSTEM_PROMPT: str = _c.ADVISOR_SYSTEM_PROMPT
 
 from .base import MessagesInterceptor
 
@@ -171,6 +172,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 stream=False,
                 max_tokens=max_tokens,
                 custom_llm_provider=None,
+                system=ADVISOR_SYSTEM_PROMPT,
                 metadata={
                     **metadata_base,
                     "advisor_sub_call": True,

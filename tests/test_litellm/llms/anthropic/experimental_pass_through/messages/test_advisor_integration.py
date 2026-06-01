@@ -593,8 +593,12 @@ async def test_advisor_subcall_forwards_litellm_metadata_but_not_executor_params
     assert captured_executor_kwargs.get("litellm_metadata") == sentinel_metadata
     assert captured_advisor_kwargs.get("litellm_metadata") == sentinel_metadata
 
-    # Executor keeps its system prompt; the advisor must not inherit it (nor
-    # tool_choice), or it mimics the executor and echoes the call.
+    # The executor keeps its own system prompt. The advisor gets the dedicated
+    # advisor role prompt — NOT the executor's leaked one — and never the
+    # executor's tool_choice; otherwise it mimics the executor and echoes the call.
+    from litellm.constants import ADVISOR_SYSTEM_PROMPT
+
     assert captured_executor_kwargs.get("system") == executor_system
-    assert "system" not in captured_advisor_kwargs
+    assert captured_advisor_kwargs.get("system") == ADVISOR_SYSTEM_PROMPT
+    assert captured_advisor_kwargs.get("system") != executor_system
     assert "tool_choice" not in captured_advisor_kwargs
