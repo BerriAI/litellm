@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from litellm.exceptions import BadRequestError
 from litellm.llms.vertex_ai.vector_stores.search_api.transformation import (
     VertexSearchAPIVectorStoreConfig,
 )
@@ -209,30 +210,37 @@ def test_engine_search_request_forwards_num_results_per_data_store():
 def test_datastore_search_request_rejects_datastorespecs():
     specs = [{"dataStore": "projects/p/.../dataStores/ds-beta"}]
 
-    with pytest.raises(ValueError, match="data store mode"):
+    with pytest.raises(BadRequestError, match="data store mode"):
         _datastore_search_request(extra_body={"dataStoreSpecs": specs})
 
 
 def test_datastore_search_request_rejects_num_results_per_data_store():
-    with pytest.raises(ValueError, match="data store mode"):
+    with pytest.raises(BadRequestError, match="data store mode"):
         _datastore_search_request(extra_body={"numResultsPerDataStore": 3})
 
 
 @pytest.mark.parametrize("field", ["branch", "servingConfig", "entity"])
 def test_search_request_rejects_target_selecting_fields(field):
-    with pytest.raises(ValueError, match="target-selecting"):
+    with pytest.raises(BadRequestError, match="target-selecting"):
         _search_request(extra_body={field: "x"})
 
 
 @pytest.mark.parametrize("field", ["branch", "servingConfig", "entity"])
 def test_datastore_search_request_rejects_target_selecting_fields(field):
-    with pytest.raises(ValueError, match="target-selecting"):
+    with pytest.raises(BadRequestError, match="target-selecting"):
         _datastore_search_request(extra_body={field: "x"})
 
 
 def test_search_request_rejects_unsupported_extra_body_field():
-    with pytest.raises(ValueError, match="Unsupported Vertex AI Search extra_body"):
+    with pytest.raises(BadRequestError, match="Unsupported Vertex AI Search extra_body"):
         _search_request(extra_body={"notARealField": True})
+
+
+def test_rejected_extra_body_raises_http_400():
+    with pytest.raises(BadRequestError) as exc_info:
+        _search_request(extra_body={"notARealField": True})
+
+    assert exc_info.value.status_code == 400
 
 
 def test_search_request_forwards_supported_extra_body_fields():

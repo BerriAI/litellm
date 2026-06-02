@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 
 from litellm import get_model_info
+from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
@@ -85,11 +86,12 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Validate ``extra_body`` against the supported-field allowlist for the
         active serving config (engine/app vs data store).
 
-        Raises ``ValueError`` if the caller includes a target-selecting field
-        (e.g. ``servingConfig``) or any field not supported for the active mode,
-        so the request fails loudly instead of silently searching the wrong
-        target. Engine-only fields (``dataStoreSpecs``, ``numResultsPerDataStore``)
-        are rejected in data-store mode where they are meaningless.
+        Raises ``BadRequestError`` (HTTP 400) if the caller includes a
+        target-selecting field (e.g. ``servingConfig``) or any field not
+        supported for the active mode, so the request fails loudly instead of
+        silently searching the wrong target. Engine-only fields
+        (``dataStoreSpecs``, ``numResultsPerDataStore``) are rejected in
+        data-store mode where they are meaningless.
         """
         supported = cls.get_supported_extra_body_fields(is_engine=is_engine)
         filtered = {
@@ -98,18 +100,26 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         target_selecting = set(filtered) & VERTEX_SEARCH_TARGET_SELECTING_FIELDS
         if target_selecting:
-            raise ValueError(
-                "Vertex AI Search extra_body may not set target-selecting fields "
-                f"{sorted(target_selecting)}: the data store is scoped by "
-                "vector_store_id / vertex_engine_id and cannot be overridden per request."
+            raise BadRequestError(
+                message=(
+                    "Vertex AI Search extra_body may not set target-selecting fields "
+                    f"{sorted(target_selecting)}: the data store is scoped by "
+                    "vector_store_id / vertex_engine_id and cannot be overridden per request."
+                ),
+                model="vertex_ai/search_api",
+                llm_provider="vertex_ai",
             )
 
         unsupported = set(filtered) - supported
         if unsupported:
             mode = "engine/app" if is_engine else "data store"
-            raise ValueError(
-                f"Unsupported Vertex AI Search extra_body fields {sorted(unsupported)} "
-                f"for {mode} mode. Supported fields: {sorted(supported)}."
+            raise BadRequestError(
+                message=(
+                    f"Unsupported Vertex AI Search extra_body fields {sorted(unsupported)} "
+                    f"for {mode} mode. Supported fields: {sorted(supported)}."
+                ),
+                model="vertex_ai/search_api",
+                llm_provider="vertex_ai",
             )
 
         return filtered
