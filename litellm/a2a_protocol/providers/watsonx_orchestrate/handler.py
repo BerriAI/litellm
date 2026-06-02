@@ -310,6 +310,7 @@ class WatsonxOrchestrateHandler:
         auth_headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
+            "Accept": "text/event-stream, application/json",
         }
         text = WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
         body = WatsonxOrchestrateTransformation.build_wxo_run_body(
