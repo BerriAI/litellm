@@ -928,19 +928,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     elif "function" not in nested and "name" in nested:
                         # Flat format: {type, name, description, parameters, ...}.
                         # Normalize to OpenAI-wrapped format before mapping.
-                        wrapped = {
-                            "type": nested.get("type", "function"),
-                            "function": {
-                                k: v for k, v in nested.items() if k != "type"
+                        wrapped = cast(
+                            ChatCompletionToolParam,
+                            {
+                                "type": nested.get("type", "function"),
+                                "function": {
+                                    k: v for k, v in nested.items() if k != "type"
+                                },
                             },
-                        }
+                        )
                         nested_tool, nested_mcp = self._map_tool_helper(wrapped)
                         if nested_tool is not None:
                             anthropic_tools.append(nested_tool)
                         if nested_mcp is not None:
                             mcp_servers.append(nested_mcp)
-                    else:
-                        nested_tool, nested_mcp = self._map_tool_helper(nested)
+                    elif "function" in nested:
+                        nested_tool, nested_mcp = self._map_tool_helper(
+                            cast(ChatCompletionToolParam, nested)
+                        )
                         if nested_tool is not None:
                             anthropic_tools.append(nested_tool)
                         if nested_mcp is not None:
