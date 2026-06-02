@@ -31,8 +31,10 @@ from litellm.integrations.otel.model.metadata import (
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPToolCallSpanData,
     ServiceSpanData,
     SpanError,
+    is_mcp_tool_call,
 )
 from litellm.integrations.otel.plumbing.providers import (
     build_tracer_provider,
@@ -43,7 +45,10 @@ from litellm.integrations.otel.model.spans import SpanRole, span_role_for_servic
 from litellm.integrations.otel.model.utils import to_ns
 
 if TYPE_CHECKING:
-    from litellm.types.utils import StandardLoggingGuardrailInformation
+    from litellm.types.utils import (
+        StandardLoggingGuardrailInformation,
+        StandardLoggingPayload,
+    )
 
 LITELLM_TRACER_NAME = "litellm"
 
@@ -200,10 +205,52 @@ class OpenTelemetryV2(CustomLogger):
             self._open_llm_calls.popitem(last=False)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if self._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return
         self._close_llm_call(kwargs, start_time, end_time)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if self._emit_mcp_tool_call(kwargs, start_time, end_time):
+            return
         self._close_llm_call(kwargs, start_time, end_time)
+
+    def _emit_mcp_tool_call(
+        self,
+        kwargs: Mapping[str, Any],
+        start_time: datetime | float | None,
+        end_time: datetime | float | None,
+    ) -> bool:
+        """Emit an MCP tool-call span when the closed request was a tool call.
+
+        MCP tool calls reach the success/failure callbacks like any other request
+        (with ``call_type`` ``call_mcp_tool``), but they are not LLM calls and have
+        no ``pre_call`` carrier — so they get their own CLIENT span here, parented
+        to the request's server span. Returns whether it handled the event, so the
+        caller skips the LLM-call path. The whole span is emitted at once (there is
+        no boundary to open it at), deduped on the call id by the emitter.
+        """
+        raw_payload = kwargs.get("standard_logging_object")
+        if not raw_payload or not is_mcp_tool_call(
+            cast(Mapping[str, object], raw_payload)
+        ):
+            return False
+        payload = cast("StandardLoggingPayload", raw_payload)
+        data = MCPToolCallSpanData.from_standard_logging_payload(
+            payload, capture_content=self.config.capture_span_content
+        )
+        # A stray LLM carrier from a ``pre_call`` that mis-fired for this id would
+        # otherwise linger until evicted; drop it so it's neither leaked nor closed
+        # as a phantom LLM span.
+        if data.identity.call_id:
+            self._open_llm_calls.pop(data.identity.call_id, None)
+        self._emitter.emit(
+            SpanRole.MCP_TOOL_CALL,
+            data,
+            parent_context=resolve_request_span_context(),
+            start_time_ns=to_ns(start_time),
+            end_time_ns=to_ns(end_time),
+        )
+        return True
 
     def _close_llm_call(
         self,
