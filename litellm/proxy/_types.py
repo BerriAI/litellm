@@ -2534,6 +2534,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
+    disable_budget_reservation: Optional[bool] = Field(
+        None,
+        description="If True, disables the optimistic per-request budget reservation (the v1.84.0 Redis pre-charge) and falls back to read-time budget enforcement only. Budgets are still enforced.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
