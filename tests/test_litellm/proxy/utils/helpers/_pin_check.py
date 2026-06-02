@@ -9,7 +9,7 @@ For each identifier in the pin list, asserts that this directory contains:
      OR uses pytest.raises / a with-raises context manager).
 
 Status-only and "did not raise"-only tests do not satisfy the happy-path
-requirement. ``_harness_smoke_test.py`` is ignored.
+requirement.
 
 Exits 0 on PASS, non-zero on FAIL.
 """
@@ -91,8 +91,6 @@ def _has_strong_assertion(node: ast.AST) -> bool:
 def collect_test_functions(test_dir: Path) -> List[TestFunction]:
     funcs: List[TestFunction] = []
     for path in sorted(test_dir.glob("test_*.py")):
-        if path.name == "_harness_smoke_test.py":
-            continue
         source = path.read_text()
         try:
             tree = ast.parse(source)
@@ -132,8 +130,17 @@ def _looks_like_error_test(tf: TestFunction, pin: str = "") -> bool:
     return False
 
 
+_PIN_REFERENCE_CACHE: Dict[str, re.Pattern[str]] = {}
+
+
 def _references_pin(tf: TestFunction, pin: str) -> bool:
-    return pin in tf.source
+    pattern = _PIN_REFERENCE_CACHE.get(pin)
+    if pattern is None:
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_])" + re.escape(pin) + r"(?![A-Za-z0-9_])"
+        )
+        _PIN_REFERENCE_CACHE[pin] = pattern
+    return pattern.search(tf.source) is not None
 
 
 def check(pin_list: List[str], funcs: List[TestFunction]) -> Tuple[bool, List[str]]:
@@ -171,8 +178,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--list",
-        required=True,
-        help="Path to pin list file (markdown bullets in `- ` + backtick form)",
+        default=str(HERE / "pin_list.txt"),
+        help="Path to pin list file (markdown bullets in `- ` + backtick form). "
+        "Defaults to pin_list.txt alongside this script.",
     )
     parser.add_argument(
         "--test-dir",
