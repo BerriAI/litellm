@@ -909,13 +909,17 @@ class JWTAuthManager:
         if role_based_models is None or model is None:
             return True
 
-        if model not in role_based_models:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
-            )
+        if model in role_based_models or any(
+            fnmatch.fnmatch(model, pattern)
+            for pattern in role_based_models
+            if "*" in pattern
+        ):
+            return True
 
-        return True
+        raise HTTPException(
+            status_code=403,
+            detail=f"Role={rbac_role} not allowed to call model={model}. Allowed models={role_based_models}",
+        )
 
     @staticmethod
     def check_scope_based_access(

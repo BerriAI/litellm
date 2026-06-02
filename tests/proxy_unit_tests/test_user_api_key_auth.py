@@ -1081,6 +1081,42 @@ def test_can_rbac_role_call_model_no_role_permissions():
     )
 
 
+def test_can_rbac_role_call_model_wildcard():
+    """Wildcard patterns in role_permissions.models should match model names."""
+    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.proxy._types import RoleBasedPermissions
+
+    roles_based_permissions = [
+        RoleBasedPermissions(
+            role=LitellmUserRoles.INTERNAL_USER,
+            models=["bedrock-claude-*"],
+        ),
+        RoleBasedPermissions(
+            role=LitellmUserRoles.PROXY_ADMIN,
+            models=["*"],
+        ),
+    ]
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.INTERNAL_USER,
+        general_settings={"role_permissions": roles_based_permissions},
+        model="bedrock-claude-draft-rep-sonnet",
+    )
+
+    assert JWTAuthManager.can_rbac_role_call_model(
+        rbac_role=LitellmUserRoles.PROXY_ADMIN,
+        general_settings={"role_permissions": roles_based_permissions},
+        model="any-model-name",
+    )
+
+    with pytest.raises(HTTPException):
+        JWTAuthManager.can_rbac_role_call_model(
+            rbac_role=LitellmUserRoles.INTERNAL_USER,
+            general_settings={"role_permissions": roles_based_permissions},
+            model="openai-gpt-4",
+        )
+
+
 @pytest.mark.parametrize(
     "route, request_data, expected_model",
     [
