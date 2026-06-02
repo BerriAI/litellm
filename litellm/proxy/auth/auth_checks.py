@@ -3472,7 +3472,7 @@ def _coerce_budget_limit_window_for_check(window: Any) -> Optional[Dict[str, Any
         return None
     budget_duration = w.get("budget_duration")
     max_budget = w.get("max_budget")
-    if budget_duration is None or max_budget is None:
+    if not budget_duration or max_budget is None:
         return None
     try:
         max_budget_float = float(max_budget)

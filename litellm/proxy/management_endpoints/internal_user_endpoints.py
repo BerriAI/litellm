@@ -1142,7 +1142,7 @@ def _initialize_budget_limits_for_update(
     preserved = _existing_reset_at_by_duration(existing_user_row)
     initialized = []
     for window in new_windows:
-        w = {**window} if isinstance(window, dict) else dict(window)
+        w = {**window} if isinstance(window, dict) else window.model_dump()
         duration = w["budget_duration"]
         w["reset_at"] = (
             preserved.get(duration)

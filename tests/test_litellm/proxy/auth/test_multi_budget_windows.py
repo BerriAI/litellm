@@ -10,6 +10,7 @@ from fastapi import Request
 import litellm
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
+    _coerce_budget_limit_window_for_check,
     _user_multi_budget_check,
     _virtual_key_multi_budget_check,
     common_checks,
@@ -187,6 +188,40 @@ async def test_user_budget_limits_over_window_raises():
     assert err.status_code == 429
     assert "User=user-budget-window" in str(err)
     assert "1d" in str(err)
+
+
+@pytest.mark.parametrize("empty_duration", ["", None])
+def test_coerce_skips_window_with_empty_budget_duration(empty_duration):
+    """
+    Regression: the auth check and the budget-reservation path must agree on
+    what counts as a missing budget_duration. The reservation path rejects with
+    `if not budget_duration`, so an empty-string duration must be rejected here
+    too — otherwise the auth check builds a counter key ending in `:window:` that
+    never accumulates spend, silently disabling the window instead of enforcing it.
+    """
+    assert (
+        _coerce_budget_limit_window_for_check(
+            window={"budget_duration": empty_duration, "max_budget": 10.0}
+        )
+        is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_budget_duration_window_is_skipped_not_queried():
+    """A window with an empty-string duration must be skipped entirely, never
+    turned into a malformed `spend:key:...:window:` counter lookup."""
+    token = _make_valid_token(
+        budget_limits=[{"budget_duration": "", "max_budget": 1.0, "reset_at": None}]
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+    ) as mock_get_spend:
+        await _virtual_key_multi_budget_check(valid_token=token)
+
+    mock_get_spend.assert_not_awaited()
 
 
 def _make_team(team_id: str = "team-xyz") -> LiteLLM_TeamTable:
