@@ -67,7 +67,11 @@ def test_update_model_cost_via_completion():
 
 def test_no_test_invocation_at_module_scope():
     tree = ast.parse(Path(__file__).read_text())
-    defined = {node.name for node in tree.body if isinstance(node, ast.FunctionDef)}
+    defined = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
     invoked = [
         node.value.func.id
         for node in tree.body
