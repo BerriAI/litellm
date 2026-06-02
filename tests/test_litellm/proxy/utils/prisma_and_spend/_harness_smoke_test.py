@@ -1,7 +1,6 @@
 """Self-tests for the prisma_and_spend test harness fixtures.
 
-This file is excluded from ``_pin_check.py``; it only verifies the
-fixtures themselves do what their docstrings claim.
+Verifies the fixtures themselves do what their docstrings claim.
 """
 
 from __future__ import annotations
