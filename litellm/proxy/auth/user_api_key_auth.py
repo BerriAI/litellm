@@ -2103,6 +2103,7 @@ async def _run_centralized_common_checks(  # noqa: PLR0915
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         skip_budget_checks=skip_budget_checks,
+        general_settings=general_settings,
     )
 
 
@@ -2123,11 +2124,14 @@ async def _reserve_budget_after_common_checks(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     skip_budget_checks: bool,
+    general_settings: dict,
     end_user_id: Optional[str] = None,
     end_user_object: Optional[LiteLLM_EndUserTable] = None,
 ) -> None:
     user_api_key_auth_obj.budget_reservation = None
     if skip_budget_checks:
+        return
+    if general_settings.get("disable_budget_reservation") is True:
         return
 
     from litellm.proxy.spend_tracking.budget_reservation import (
