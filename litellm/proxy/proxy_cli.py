@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import click
 import httpx
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 import litellm
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
@@ -28,7 +28,7 @@ config_filename = "litellm.secrets"
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
-    load_dotenv()
+    load_dotenv(find_dotenv(usecwd=True))
 from enum import Enum
 
 telemetry = None
