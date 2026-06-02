@@ -26,12 +26,12 @@ class TestHunyuanGptMaasImageGenerationConfig:
         self.cfg = HunyuanGptMaasImageGenerationConfig()
 
     def test_get_complete_url_default(self):
-        url = self.cfg.get_complete_url(None, None, "custom-textmodel-gt", {}, {})
+        url = self.cfg.get_complete_url(None, None, "gpt-image-2", {}, {})
         assert url == "https://tokenhub.tencentmaas.com/v1/aiart/gttext"
 
     def test_get_complete_url_custom_base(self):
         url = self.cfg.get_complete_url(
-            "https://custom.api.com", None, "custom-textmodel-gt", {}, {}
+            "https://custom.api.com", None, "gpt-image-2", {}, {}
         )
         assert url == "https://custom.api.com/v1/aiart/gttext"
 
@@ -39,7 +39,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test-123"
         headers = self.cfg.validate_environment(
             headers={},
-            model="custom-textmodel-gt",
+            model="gpt-image-2",
             messages=[],
             optional_params={},
             litellm_params={},
@@ -50,7 +50,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
     def test_validate_environment_explicit_key(self):
         headers = self.cfg.validate_environment(
             headers={},
-            model="custom-textmodel-gt",
+            model="gpt-image-2",
             messages=[],
             optional_params={},
             litellm_params={},
@@ -64,7 +64,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
             with pytest.raises(ValueError, match="HUNYUAN_GPT_MAAS_API_KEY is not set"):
                 self.cfg.validate_environment(
                     headers={},
-                    model="custom-textmodel-gt",
+                    model="gpt-image-2",
                     messages=[],
                     optional_params={},
                     litellm_params={},
@@ -74,7 +74,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
                 os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = env_backup
 
     def test_get_supported_openai_params(self):
-        params = self.cfg.get_supported_openai_params("custom-textmodel-gt")
+        params = self.cfg.get_supported_openai_params("gpt-image-2")
         assert "n" in params
         assert "quality" in params
         assert "size" in params
@@ -83,7 +83,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
         result = self.cfg.map_openai_params(
             non_default_params={"quality": "high", "size": "1024x1024"},
             optional_params={},
-            model="custom-textmodel-gt",
+            model="gpt-image-2",
             drop_params=False,
         )
         assert result["quality"] == "high"
@@ -94,7 +94,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
             self.cfg.map_openai_params(
                 non_default_params={"unsupported_param": "value"},
                 optional_params={},
-                model="custom-textmodel-gt",
+                model="gpt-image-2",
                 drop_params=False,
             )
 
@@ -102,21 +102,21 @@ class TestHunyuanGptMaasImageGenerationConfig:
         result = self.cfg.map_openai_params(
             non_default_params={"unsupported_param": "value"},
             optional_params={},
-            model="custom-textmodel-gt",
+            model="gpt-image-2",
             drop_params=True,
         )
         assert "unsupported_param" not in result
 
     def test_transform_image_generation_request(self):
         body = self.cfg.transform_image_generation_request(
-            model="custom-textmodel-gt",
+            model="gpt-image-2",
             prompt="A dancing dog",
             optional_params={"quality": "high", "size": "1024x1024"},
             litellm_params={},
             headers={},
         )
         assert body["prompt"] == "A dancing dog"
-        assert body["model"] == "custom-textmodel-gt"
+        assert body["model"] == "gpt-image-2"
         assert body["quality"] == "high"
         assert body["size"] == "1024x1024"
 
@@ -128,7 +128,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
             litellm_params={},
             headers={},
         )
-        assert body["model"] == "custom-textmodel-gt"
+        assert body["model"] == "gpt-image-2"
 
     def test_transform_image_generation_response_success(self):
         class MockResponse:
@@ -146,7 +146,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
         model_response = ImageResponse()
         model_response.data = []
         result = self.cfg.transform_image_generation_response(
-            model="custom-textmodel-gt",
+            model="gpt-image-2",
             raw_response=MockResponse(),
             model_response=model_response,
             logging_obj=MagicMock(),
@@ -177,7 +177,7 @@ class TestHunyuanGptMaasImageGenerationConfig:
 
         with pytest.raises(BaseLLMException, match="FailedOperation.InnerError"):
             self.cfg.transform_image_generation_response(
-                model="custom-textmodel-gt",
+                model="gpt-image-2",
                 raw_response=MockResponse(),
                 model_response=model_response,
                 logging_obj=MagicMock(),
@@ -220,7 +220,7 @@ class TestHunyuanGptMaasImageGenerationHandler:
             return_value=mock_client,
         ):
             result = self.handler.image_generation(
-                model="custom-textmodel-gt",
+                model="gpt-image-2",
                 prompt="A simple blue circle",
                 model_response=ImageResponse(),
                 optional_params={"size": "1024x1024"},
@@ -245,7 +245,7 @@ class TestHunyuanGptMaasImageGenerationHandler:
             return_value=mock_client,
         ):
             self.handler.image_generation(
-                model="custom-textmodel-gt",
+                model="gpt-image-2",
                 prompt="test",
                 model_response=ImageResponse(),
                 optional_params={},
@@ -269,7 +269,7 @@ class TestHunyuanGptMaasImageGenerationHandler:
             return_value=mock_client,
         ):
             self.handler.image_generation(
-                model="custom-textmodel-gt",
+                model="gpt-image-2",
                 prompt="test prompt",
                 model_response=ImageResponse(),
                 optional_params={},
@@ -295,7 +295,7 @@ class TestHunyuanGptMaasImageGenerationHandler:
             return_value=mock_client,
         ):
             self.handler.image_generation(
-                model="custom-textmodel-gt",
+                model="gpt-image-2",
                 prompt="test",
                 model_response=ImageResponse(),
                 optional_params={},
@@ -318,7 +318,7 @@ def test_hunyuan_gpt_maas_image_generation_singleton():
 
 def test_provider_config_manager_returns_hunyuan_gpt_maas_config():
     config = ProviderConfigManager.get_provider_image_generation_config(
-        "custom-textmodel-gt", LlmProviders.HUNYUAN_GPT_MAAS
+        "gpt-image-2", LlmProviders.HUNYUAN_GPT_MAAS
     )
     assert isinstance(config, HunyuanGptMaasImageGenerationConfig)
 
@@ -329,5 +329,5 @@ def test_hunyuan_gpt_maas_in_llm_providers():
 
 
 def test_get_hunyuan_gpt_maas_image_generation_config_factory():
-    config = get_hunyuan_gpt_maas_image_generation_config("custom-textmodel-gt")
+    config = get_hunyuan_gpt_maas_image_generation_config("gpt-image-2")
     assert isinstance(config, HunyuanGptMaasImageGenerationConfig)

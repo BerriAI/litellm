@@ -123,7 +123,7 @@ class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
     ) -> dict:
         request_body: Dict[str, Any] = {
             "prompt": prompt,
-            "model": model or "custom-textmodel-gt",
+            "model": model or "gpt-image-2",
         }
         for k, v in optional_params.items():
             request_body[k] = v
@@ -153,10 +153,8 @@ class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
 
         status = response_data.get("status", "")
         if status == "failed":
-            error_code = response_data.get("error_code", "UnknownError")
-            error_message = response_data.get("error_message", "Unknown error")
             raise self.get_error_class(
-                error_message=f"Hunyuan GPT-Maas image generation failed [{error_code}]: {error_message}",
+                error_message=f"Hunyuan GPT-Maas image generation failed: {response_data}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )

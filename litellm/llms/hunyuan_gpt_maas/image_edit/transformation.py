@@ -198,11 +198,9 @@ class HunyuanGptMaasImageEditConfig(BaseImageEditConfig):
 
         status = response_data.get("status", "")
         if status == "failed":
-            error_code = response_data.get("error_code", "UnknownError")
-            error_message = response_data.get("error_message", "Unknown error")
             raise BaseLLMException(
                 status_code=raw_response.status_code,
-                message=f"Hunyuan GPT-Maas image edit failed [{error_code}]: {error_message}",
+                message=f"Hunyuan GPT-Maas image edit failed: {response_data}",
             )
 
         image_objects = [
