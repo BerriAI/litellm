@@ -854,7 +854,12 @@ def convert_to_model_response_object(  # noqa: PLR0915
                 model_response_object.results = response_object["results"]
 
             return model_response_object
-    except Exception:
+    except Exception as e:
+        from litellm.exceptions import APIError
+
+        if isinstance(e, APIError):
+            raise
+
         received_args = dict(
             response_object=response_object,
             model_response_object=model_response_object,

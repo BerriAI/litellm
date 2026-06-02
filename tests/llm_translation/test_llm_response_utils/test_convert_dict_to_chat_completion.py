@@ -2261,7 +2261,13 @@ class TestConvertToModelResponseObjectAudioTranscription:
 
         response_object = {
             "text": "Hi",
-            "usage": {"type": "tokens", "prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            "usage": {
+                "type": "tokens",
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "input_token_details": {"audio_tokens": 4, "text_tokens": 6},
+            },
         }
 
         result = convert_to_model_response_object(
@@ -2270,7 +2276,9 @@ class TestConvertToModelResponseObjectAudioTranscription:
             response_type="audio_transcription",
         )
         assert result.text == "Hi"
-        assert result.usage.prompt_tokens == 10
+        assert result.usage.input_tokens == 10
+        assert result.usage.output_tokens == 5
+        assert result.usage.input_token_details.audio_tokens == 4
 
 
 class TestConvertToModelResponseObjectRerank:
