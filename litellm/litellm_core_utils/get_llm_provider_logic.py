@@ -1,3 +1,4 @@
+import re
 from typing import Optional, Tuple
 from urllib.parse import urlparse
 
@@ -69,6 +70,25 @@ def _is_azure_claude_model(model: str) -> bool:
         return "claude" in model_lower or model_lower.startswith("claude")
     except Exception:
         return False
+
+
+_CLAUDE_PATTERN = re.compile(r"^claude-[a-z]+-\d+-\d+(?:-\d{8})?$", re.IGNORECASE)
+
+
+def _matches_claude_model_pattern(model: str) -> bool:
+    """
+    Check if a model string matches the Claude model naming pattern.
+
+    Matches patterns like:
+    - claude-opus-4-7
+    - claude-sonnet-4-6
+    - claude-haiku-4-5
+    - claude-opus-5-1-20270101 (with optional date suffix)
+
+    This allows future Claude models to be routed to the Anthropic provider
+    without requiring updates to model_prices_and_context_window.json.
+    """
+    return _CLAUDE_PATTERN.match(model) is not None
 
 
 def handle_cohere_chat_model_custom_llm_provider(
@@ -398,6 +418,9 @@ def get_llm_provider(  # noqa: PLR0915
                 custom_llm_provider = "anthropic_text"
             else:
                 custom_llm_provider = "anthropic"
+        ## anthropic - pattern-based matching for future Claude models
+        elif _matches_claude_model_pattern(model):
+            custom_llm_provider = "anthropic"
         ## cohere
         elif model in litellm.cohere_models or model in litellm.cohere_embedding_models:
             custom_llm_provider = "cohere"
