@@ -13921,6 +13921,39 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/kling-video/v2.5-turbo/pro/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.07,
+        "source": "https://fal.ai/pricing",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ]
+    },
+    "fal_ai/fal-ai/veo3.1/fast/text-to-video": {
+        "litellm_provider": "fal_ai",
+        "mode": "video_generation",
+        "output_cost_per_video_per_second": 0.1,
+        "source": "https://fal.ai/models/fal-ai/veo3.1/fast",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video"
+        ],
+        "metadata": {
+            "comment": "Listed price is for 720p/1080p video without audio"
+        }
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,

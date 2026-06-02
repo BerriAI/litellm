@@ -11,6 +11,7 @@ from .image_generation import (
     FalAIStableDiffusionConfig,
     get_fal_ai_image_generation_config,
 )
+from .videos import FalAIVideoConfig
 
 __all__ = [
     "cost_calculator",
@@ -23,5 +24,6 @@ __all__ = [
     "FalAIFluxProV11UltraConfig",
     "FalAIFluxSchnellConfig",
     "FalAIStableDiffusionConfig",
+    "FalAIVideoConfig",
     "get_fal_ai_image_generation_config",
 ]
