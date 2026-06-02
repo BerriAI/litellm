@@ -160,6 +160,38 @@ class TestBedrockMantleResponsesRegistry:
         )
         assert cfg is None
 
+    def test_registry_returns_none_for_gpt_oss_safeguard(self):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="openai.gpt-oss-safeguard-20b",
+        )
+        assert cfg is None
+
+    def test_registry_returns_config_for_future_frontier_model(self):
+        # Forward-compatibility: an unseen frontier model (e.g. gpt-6) must get the
+        # native Responses config without a code change, since frontier models on
+        # Mantle are Responses-only. The gate excludes gpt-oss, not allow-lists gpt-5.
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="openai.gpt-6",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+
+    def test_registry_returns_none_when_model_is_none(self):
+        # By-id operations (delete/get/cancel) call with model=None; keep returning
+        # None so those paths are unchanged.
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model=None,
+        )
+        assert cfg is None
+
 
 @pytest.fixture
 def local_cost_map(monkeypatch):

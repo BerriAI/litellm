@@ -8866,10 +8866,15 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Only gpt-5.x are Responses-only on Mantle's /openai/v1/responses path.
-            # gpt-oss falls through to None so it keeps the working chat-completions
-            # emulation (see litellm/responses/main.py, the "config is None" branch).
-            if model and "gpt-5" in model.lower():
+            # gpt-oss is the legacy family that also speaks chat-completions, so it
+            # falls through to None to keep the working chat-completions emulation
+            # (see litellm/responses/main.py, the "config is None" branch). Every
+            # other (frontier) OpenAI model on Mantle is Responses-only on the
+            # /openai/v1/responses path, so default to the native Responses config;
+            # this is forward-compatible with future frontier models (gpt-6, etc.).
+            if model and "gpt-oss" in model.lower():
+                return None
+            if model:
                 return litellm.BedrockMantleResponsesAPIConfig()
             return None
         return None
