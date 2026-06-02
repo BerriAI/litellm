@@ -51,6 +51,7 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     UpdateUsefulLinksRequest,
 )
 from litellm.types.router import (
+    SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
     DeploymentTypedDict,
     LiteLLMParamsTypedDict,
@@ -130,6 +131,32 @@ def update_db_model(
             updated_patch.model_info.model_dump(exclude_none=True)
         )
 
+    # Honor explicit-null clears LAST, after both merges, so a model_info blob the UI
+    # passes through (which today re-sends the OLD pricing on every save) cannot
+    # silently undo a litellm_params clear via .update().
+    #
+    # Restricted to SPECIAL_MODEL_INFO_PARAMS (input/output cost per token/character
+    # and cache read/write costs) so this path cannot be used to null out privileged
+    # model_info fields like team_id or access groups. SPECIAL_MODEL_INFO_PARAMS are
+    # mirrored between litellm_params and model_info by Deployment.__init__, so the
+    # clear propagates to both blobs.
+    if updated_patch.litellm_params:
+        for field in updated_patch.litellm_params.model_fields_set:
+            if (
+                field in SPECIAL_MODEL_INFO_PARAMS
+                and getattr(updated_patch.litellm_params, field) is None
+            ):
+                merged_deployment_dict["litellm_params"].pop(field, None)  # type: ignore
+                merged_deployment_dict.get("model_info", {}).pop(field, None)
+    if updated_patch.model_info:
+        for field in updated_patch.model_info.model_fields_set:
+            if (
+                field in SPECIAL_MODEL_INFO_PARAMS
+                and getattr(updated_patch.model_info, field) is None
+            ):
+                merged_deployment_dict["model_info"].pop(field, None)  # type: ignore
+                merged_deployment_dict.get("litellm_params", {}).pop(field, None)  # type: ignore
+
     # convert to prisma compatible format
 
     prisma_compatible_model_dict = PrismaCompatibleUpdateDBModel()
@@ -149,6 +176,9 @@ def update_db_model(
             if isinstance(value, datetime.datetime):
                 model_info[key] = value.isoformat()
         prisma_compatible_model_dict["model_info"] = json.dumps(model_info)
+
+    if updated_patch.blocked is not None:
+        prisma_compatible_model_dict["blocked"] = updated_patch.blocked
 
     return prisma_compatible_model_dict
 
@@ -229,6 +259,20 @@ async def patch_model(
             prisma_client=prisma_client,
             premium_user=premium_user,
         )
+
+        # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
+        # passed the auth check above for team-scoped models, but they must not
+        # be able to unblock (or block) a model their proxy admin has paused.
+        if (
+            patch_data.blocked is not None
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
+            raise ProxyException(
+                message="Only proxy admins can change a model's blocked flag.",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param="blocked",
+            )
 
         # Handle team model updates with proper alias management
         update_data = await _update_team_model_in_db(
@@ -529,7 +573,7 @@ async def _update_existing_team_model_assignment(
     """
 
     def _get_team_public_model_name(
-        model_info: Optional[Union[dict, str]]
+        model_info: Optional[Union[dict, str]],
     ) -> Optional[str]:
         if isinstance(model_info, dict):
             value = model_info.get("team_public_model_name")
@@ -711,11 +755,15 @@ class ModelManagementAuthChecks:
                 premium_user=premium_user,
             )
         ## Check non-team model auth
-        elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        elif user_api_key_dict.user_role not in (
+            LitellmUserRoles.PROXY_ADMIN,
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.ORG_ADMIN,
+        ):
             raise HTTPException(
                 status_code=403,
                 detail={
-                    "error": "User does not have permission to make this model call. Your role={}. You can only make model calls if you are a PROXY_ADMIN or if you are a team admin, by specifying a team_id in the model_info.".format(
+                    "error": "User does not have permission to test this model connection. Your role={}. You must be a PROXY_ADMIN, INTERNAL_USER, or ORG_ADMIN, or a team admin with a team_id specified in model_info.".format(
                         user_api_key_dict.user_role
                     )
                 },
