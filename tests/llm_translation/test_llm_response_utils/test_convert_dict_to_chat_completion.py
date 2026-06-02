@@ -1414,10 +1414,11 @@ def test_error_message_includes_function_args():
     Test that when an exception occurs, the error message includes
     the function arguments for debugging (deferred locals() - Opt 2).
     """
-    # Pass a response_object that will cause an error inside the try block
-    # (e.g. choices is not iterable)
+    # Pass a response_object whose choices survive the missing-choices guard
+    # but raise inside the conversion loop (the choice lacks a "message" key),
+    # so the generic debugging handler builds the received_args message.
     response_object = {
-        "choices": None,  # will fail the assert
+        "choices": [{"index": 0}],
     }
 
     with pytest.raises(Exception) as exc_info:
