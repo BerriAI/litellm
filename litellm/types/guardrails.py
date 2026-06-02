@@ -99,6 +99,7 @@ class SupportedGuardrailIntegrations(Enum):
     BLOCK_CODE_EXECUTION = "block_code_execution"
     AKTO = "akto"
     MCP_JWT_SIGNER = "mcp_jwt_signer"
+    RESEMBLE = "resemble"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
@@ -448,6 +449,71 @@ class LassoGuardrailConfigModel(BaseModel):
     )
 
 
+class ResembleGuardrailParamsConfigModel(BaseModel):
+    """Configuration parameters for the Resemble AI Detect guardrail"""
+
+    resemble_threshold: Optional[float] = Field(
+        default=0.5,
+        description=(
+            "Aggregated score above which media is treated as fake (0.0-1.0). "
+            "Default 0.5."
+        ),
+    )
+    resemble_audio_source_tracing: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Identify which TTS vendor generated the audio when it is flagged as fake."
+        ),
+    )
+    resemble_use_reverse_search: Optional[bool] = Field(
+        default=False,
+        description=(
+            "For image detections, search the web for matching images to improve accuracy."
+        ),
+    )
+    resemble_zero_retention_mode: Optional[bool] = Field(
+        default=False,
+        description=(
+            "Automatically delete submitted media after detection completes. "
+            "URLs are redacted and filenames are tokenized."
+        ),
+    )
+    resemble_metadata_key: Optional[str] = Field(
+        default="mediaUrl",
+        description=(
+            "Key in request metadata to read the media URL from when it is not "
+            "present in message content. Default: mediaUrl."
+        ),
+    )
+    resemble_max_media_urls: Optional[int] = Field(
+        default=10,
+        ge=1,
+        description=(
+            "Maximum number of distinct media URLs Resemble will scan per request. "
+            "Requests above this limit are rejected before any Resemble API call. "
+            "Default 10."
+        ),
+    )
+    resemble_poll_interval_seconds: Optional[float] = Field(
+        default=2.0,
+        description="How often to poll Resemble for the detection result. Default 2s.",
+    )
+    resemble_poll_timeout_seconds: Optional[float] = Field(
+        default=60.0,
+        description=(
+            "Maximum time in seconds to wait for a detection result before "
+            "failing open. Default 60s."
+        ),
+    )
+    resemble_fail_closed: Optional[bool] = Field(
+        default=False,
+        description=(
+            "If true, Resemble API errors block the request. If false, errors "
+            "are logged and the request passes through."
+        ),
+    )
+
+
 class PillarGuardrailConfigModel(BaseModel):
     """Configuration parameters for the Pillar Security guardrail"""
 
@@ -788,6 +854,7 @@ class LitellmParams(
     IBMGuardrailsBaseConfigModel,
     QualifireGuardrailConfigModel,
     BlockCodeExecutionGuardrailConfigModel,
+    ResembleGuardrailParamsConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
 ):
