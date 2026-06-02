@@ -1612,12 +1612,21 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
         ) as mock_cache_team,
     ):
-        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-            return_value=existing_team
-        )
+        if endpoint_name == "team_model_add":
+            # team_model_add calls find_unique twice: first for auth check
+            # (returns existing_team), then after execute_raw for cache
+            # refresh (returns updated_team).
+            mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+                side_effect=[existing_team, updated_team]
+            )
+        else:
+            mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+                return_value=existing_team
+            )
         mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
             return_value=updated_team
         )
+        mock_prisma_client.db.execute_raw = AsyncMock(return_value=None)
         mock_cache_team.return_value = None
 
         if endpoint_name == "team_model_add":
@@ -1663,12 +1672,19 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             "allowed-tool-A"
         ]
         # Pin the Prisma call shape too — the regression is in *what the
-        # update returns*, so the contract that the update asks for
+        # query returns*, so the contract that the query asks for
         # `object_permission` belongs in this test.
-        update_call_kwargs = (
-            mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
-        )
-        assert update_call_kwargs.get("include", {}).get("object_permission") is True
+        if endpoint_name == "team_model_add":
+            # team_model_add uses execute_raw + find_unique (atomic append)
+            find_call_kwargs = (
+                mock_prisma_client.db.litellm_teamtable.find_unique.call_args_list[-1].kwargs
+            )
+            assert find_call_kwargs.get("include", {}).get("object_permission") is True
+        else:
+            update_call_kwargs = (
+                mock_prisma_client.db.litellm_teamtable.update.call_args.kwargs
+            )
+            assert update_call_kwargs.get("include", {}).get("object_permission") is True
 
 
 @pytest.mark.asyncio

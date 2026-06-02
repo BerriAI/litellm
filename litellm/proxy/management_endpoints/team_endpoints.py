@@ -1303,30 +1303,35 @@ async def _update_model_table(
     litellm_proxy_admin_name: str,
 ) -> Optional[str]:
     """
-    Upsert model table and return the model id
+    Upsert model table and return the model id.
+
+    When model_id already exists, uses an atomic jsonb merge at the database
+    level so that concurrent BYOK model creates do not overwrite each other.
     """
-    ## UPSERT MODEL TABLE
     _model_id = model_id
     if data.model_aliases is not None and isinstance(data.model_aliases, dict):
-        litellm_modeltable = LiteLLM_ModelTable(
-            model_aliases=json.dumps(data.model_aliases),
-            created_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-            updated_by=user_api_key_dict.user_id or litellm_proxy_admin_name,
-        )
+        updated_by = user_api_key_dict.user_id or litellm_proxy_admin_name
         if model_id is None:
+            litellm_modeltable = LiteLLM_ModelTable(
+                model_aliases=json.dumps(data.model_aliases),
+                created_by=updated_by,
+                updated_by=updated_by,
+            )
             model_dict = await prisma_client.db.litellm_modeltable.create(
                 data={**litellm_modeltable.json(exclude_none=True)}  # type: ignore
             )
+            _model_id = model_dict.id
         else:
-            model_dict = await prisma_client.db.litellm_modeltable.upsert(
-                where={"id": model_id},
-                data={
-                    "update": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
-                    "create": {**litellm_modeltable.json(exclude_none=True)},  # type: ignore
-                },
-            )  # type: ignore
-
-        _model_id = model_dict.id
+            await prisma_client.db.execute_raw(
+                'UPDATE "LiteLLM_ModelTable" '
+                "SET aliases = COALESCE(aliases, '{}'::jsonb) || $1::jsonb, "
+                "updated_by = $2, updated_at = NOW() "
+                "WHERE id = $3",
+                json.dumps(data.model_aliases),
+                updated_by,
+                model_id,
+            )
+            _model_id = model_id
 
     return _model_id
 
@@ -4683,15 +4688,29 @@ async def team_model_add(
             detail={"error": "Only proxy admin or team admin can modify team models"},
         )
 
-    updated_models = add_new_models_to_team(team_obj=team_obj, new_models=data.models)
-    # Update team. `include` mirrors the relations the auth path consumes
-    # off the cached team object so that `_refresh_cached_team` doesn't
-    # null them out — see object_permission_utils.validate_key_search_tools_against_team
-    # and the MCP/agent authz paths, which treat a missing object_permission
-    # as "no team-level restriction".
-    updated_team = await prisma_client.db.litellm_teamtable.update(
+    # Atomic array append with dedup at the database level so concurrent
+    # BYOK model creates don't overwrite each other's team.models entries.
+    # When the team currently has models=[] (unrestricted access), the
+    # CASE expression inserts the 'all-proxy-models' sentinel first.
+    models_to_add = list(data.models)
+    await prisma_client.db.execute_raw(
+        'UPDATE "LiteLLM_TeamTable" '
+        "SET models = ("
+        "  SELECT ARRAY(SELECT DISTINCT unnest("
+        "    CASE WHEN cardinality(COALESCE(models, ARRAY[]::text[])) = 0 "
+        "         THEN ARRAY['all-proxy-models']::text[] "
+        "         ELSE models "
+        "    END || $1::text[]"
+        "  ))"
+        ") "
+        "WHERE team_id = $2",
+        models_to_add,
+        data.team_id,
+    )
+    # Re-fetch the updated row for cache refresh. `include` mirrors the
+    # relations the auth path consumes off the cached team object.
+    updated_team = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": data.team_id},
-        data={"models": updated_models},
         include={"object_permission": True},  # type: ignore
     )
 
