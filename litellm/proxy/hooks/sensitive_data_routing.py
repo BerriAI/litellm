@@ -65,7 +65,15 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
                     key=cache_key
                 )
                 if result is not None:
-                    return str(result)
+                    routed_model = str(result)
+                    await self.internal_usage_cache.async_set_cache(
+                        key=cache_key,
+                        value=routed_model,
+                        ttl=self.ttl,
+                        litellm_parent_otel_span=None,
+                        local_only=True,
+                    )
+                    return routed_model
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "SensitiveDataRoutingHandler: Redis GET failed, falling back to in-memory: %s",

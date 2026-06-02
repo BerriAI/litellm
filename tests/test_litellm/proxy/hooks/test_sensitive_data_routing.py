@@ -505,6 +505,27 @@ class TestRedisCache:
         assert result == "redis-model"
 
     @pytest.mark.asyncio
+    async def test_get_routed_model_backfills_in_memory_after_redis_hit(
+        self, handler_with_redis
+    ):
+        cache_key = "{sensitive_route:hashed-key:session-123}:model"
+        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
+            return_value="on-premise-model"
+        )
+
+        first = await handler_with_redis._get_routed_model("session-123", "hashed-key")
+        assert first == "on-premise-model"
+        assert handler_with_redis.internal_usage_cache._cache[cache_key] == (
+            "on-premise-model"
+        )
+
+        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
+            side_effect=Exception("Redis went down")
+        )
+        second = await handler_with_redis._get_routed_model("session-123", "hashed-key")
+        assert second == "on-premise-model"
+
+    @pytest.mark.asyncio
     async def test_get_routed_model_redis_fallback_on_error(self, handler_with_redis):
         handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
             side_effect=Exception("Redis connection error")
