@@ -534,6 +534,15 @@ async def common_checks(  # noqa: PLR0915
         request_query_params=_safe_get_request_query_params(request=request),
     )
 
+    # Model-discovery / info routes (e.g. GET /v1/models, /models, /model/info) perform no
+    # inference and incur no spend, so a budget must never block them. `_global_proxy_budget_check`
+    # already exempts /v1/models and /models; mirror that here so the entity-level budget checks
+    # (team / key / org / user / end-user / project) stay consistent and OpenAI-compatible clients
+    # (Open WebUI, Cursor, Aider, etc.) can still discover models after a budget is exhausted.
+    # See https://github.com/BerriAI/litellm/issues/27923
+    if RouteChecks.is_info_route(route=route):
+        skip_budget_checks = True
+
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
         raise Exception(
