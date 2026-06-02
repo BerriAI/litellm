@@ -15,6 +15,8 @@ When adding new features, add meaningful tests. Don't add tests that don't check
 
 Same thing for bug fixes. The tests should make it so that this specific bug can never happen again without failing tests (i.e., regression)
 
+`tests/test_litellm/` mirrors `litellm/` (see `tests/test_litellm/readme.md`). For provider work, each `*_transformation.py` under `litellm/llms/{provider}/...` ideally has a matching `test_*_transformation.py` in the parallel path (e.g. `litellm/llms/anthropic/chat/transformation.py` and `tests/test_litellm/llms/anthropic/chat/test_anthropic_chat_transformation.py`). For bug fixes, do not create a new test file; add or extend a regression test in the existing mapped test file for the code you changed. Only create a new test file when adding a new feature (new provider, endpoint, or transformation module) that does not already have a mapped test file. One focused regression test is better than many shallow ones.
+
 When creating PRs, don't set base to `main`. `litellm_internal_staging` serves that purpose
 
 Always use @.github/pull_request_template.md as a guide for your PR body
