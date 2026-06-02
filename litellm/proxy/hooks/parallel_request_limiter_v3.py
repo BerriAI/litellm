@@ -1375,6 +1375,79 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
 
+    def _add_mcp_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the API key, if a limit is
+        configured for the server being called.
+
+        MCP tool calls have no token usage, so only requests_per_unit is set;
+        tokens_per_unit stays None so the TPM reservation path is never engaged.
+        """
+        from litellm.proxy.auth.auth_utils import get_key_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.api_key:
+            return
+
+        mcp_rpm_limit = get_key_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_key",
+                value=f"{user_api_key_dict.api_key}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
+    def _add_mcp_per_team_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the team, if a limit is
+        configured for the server being called.
+        """
+        from litellm.proxy.auth.auth_utils import get_team_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.team_id:
+            return
+
+        mcp_rpm_limit = get_team_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_team",
+                value=f"{user_api_key_dict.team_id}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
     def _should_enforce_rate_limit(
         self,
         limit_type: Optional[str],
@@ -1650,6 +1723,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self._add_model_per_key_rate_limit_descriptor(
             user_api_key_dict=user_api_key_dict,
             requested_model=requested_model,
+            descriptors=descriptors,
+        )
+
+        # Per-MCP-server rate limits
+        mcp_server_name = data.get("mcp_server_name", None)
+        self._add_mcp_per_key_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
+            mcp_server_name=mcp_server_name,
+            descriptors=descriptors,
+        )
+        self._add_mcp_per_team_rate_limit_descriptor(
+            user_api_key_dict=user_api_key_dict,
+            mcp_server_name=mcp_server_name,
             descriptors=descriptors,
         )
 
