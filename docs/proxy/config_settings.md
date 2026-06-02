@@ -235,6 +235,7 @@ router_settings:
 |------|------|-------------|
 | completion_model | string | The model to use for all completions, overriding any `model` specified in the request |
 | enable_drain_endpoint | boolean | If true, exposes the unauthenticated `GET /health/drain` endpoint used by Kubernetes `preStop` hooks to drain in-flight requests before shutdown. Off by default; only enable it when the health port is reachable solely from inside the cluster, since any caller that reaches it can take the pod out of rotation. See `GRACEFUL_SHUTDOWN_TIMEOUT`. |
+| drain_endpoint_token | string | Shared secret for the `/health/drain` endpoint. When set, drain calls must carry a matching `X-Drain-Token` header (compared with `secrets.compare_digest`) or are rejected with 401; the kubelet supplies it from the preStop `httpGet.httpHeaders`. Also settable via the `DRAIN_ENDPOINT_TOKEN` env var. |
 | disable_spend_logs | boolean | If true, turns off writing each transaction to the database |
 | disable_spend_updates | boolean | If true, turns off all spend updates to the DB. Including key/user/team spend updates. |
 | disable_master_key_return | boolean | If true, turns off returning master key on UI. (checked on '/user/info' endpoint) |
@@ -594,6 +595,7 @@ router_settings:
 | DAYS_IN_A_MONTH | Days in a month for calculation purposes. Default is 28
 | DAYS_IN_A_WEEK | Days in a week for calculation purposes. Default is 7
 | DAYS_IN_A_YEAR | Days in a year for calculation purposes. Default is 365
+| DRAIN_ENDPOINT_TOKEN | Shared secret required on the `X-Drain-Token` header to call the `/health/drain` endpoint. When set (here or via `general_settings.drain_endpoint_token`), drain calls without the matching token are rejected with 401; when unset the endpoint keeps its opt-in-only behavior. Have the kubelet send it from the preStop `httpGet.httpHeaders`. |
 | DYNAMOAI_API_KEY | API key for DynamoAI Guardrails service
 | DYNAMOAI_API_BASE | Base URL for DynamoAI API. Default is https://api.dynamo.ai
 | DYNAMOAI_MODEL_ID | Model ID for DynamoAI tracking/logging purposes
