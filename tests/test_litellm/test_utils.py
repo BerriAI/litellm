@@ -4143,3 +4143,23 @@ class TestValidateAndFixThinkingParam:
         validate_and_fix_thinking_param(thinking=thinking)
         assert "budgetTokens" in thinking
         assert "budget_tokens" not in thinking
+
+
+def test_shorten_message_content_never_grows():
+    """Regression test: shorten_message_to_fit_limit must never make content longer.
+
+    When half_length==0, content[-0:] == content[0:] (entire string) due to
+    Python's -0 == 0 identity, making trimmed content longer than the original.
+    Regression: https://github.com/BerriAI/litellm/issues/28128
+    """
+    from litellm.utils import shorten_message_to_fit_limit
+
+    content = "hello world this is a moderately long message"
+    message = {"role": "user", "content": content}
+    original_len = len(content)
+
+    result = shorten_message_to_fit_limit(message, tokens_needed=1, model=None)
+    assert len(result["content"]) <= original_len, (
+        f"Content grew from {original_len} to {len(result['content'])} chars — "
+        "half_length==0 guard is missing or broken"
+    )

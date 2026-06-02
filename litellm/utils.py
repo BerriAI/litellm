@@ -7289,10 +7289,12 @@ def shorten_message_to_fit_limit(
         new_length = max(0, new_length)
 
         half_length = new_length // 2
-        left_half = content[:half_length]
-        right_half = content[-half_length:]
-
-        trimmed_content = left_half + ".." + right_half
+        if half_length == 0:
+            trimmed_content = content[:new_length]
+        else:
+            left_half = content[:half_length]
+            right_half = content[-half_length:]
+            trimmed_content = left_half + ".." + right_half
         message["content"] = trimmed_content
         verbose_logger.debug(f"trimmed_content: {trimmed_content}")
         content = trimmed_content

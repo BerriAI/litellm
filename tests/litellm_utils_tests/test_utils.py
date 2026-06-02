@@ -287,6 +287,22 @@ def test_trimming_with_model_cost_max_input_tokens(model):
     )
 
 
+def test_shorten_message_content_never_grows():
+    """Regression test: shorten_message_to_fit_limit must never make content longer."""
+    # Regression: https://github.com/BerriAI/litellm/issues/28128
+    from litellm.utils import shorten_message_to_fit_limit
+
+    content = "hello world this is a moderately long message"
+    message = {"role": "user", "content": content}
+    original_len = len(content)
+
+    result = shorten_message_to_fit_limit(message, tokens_needed=1, model=None)
+    assert len(result["content"]) <= original_len, (
+        f"Content grew from {original_len} to {len(result['content'])} chars — "
+        "half_length==0 guard is missing or broken"
+    )
+
+
 def test_trimming_with_untokenizable_field(caplog: pytest.LogCaptureFixture) -> None:
     from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
 
