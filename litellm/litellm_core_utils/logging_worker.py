@@ -3,6 +3,7 @@
 
 import asyncio
 import contextvars
+import logging
 from typing import Coroutine, Optional
 import atexit
 from typing_extensions import TypedDict
@@ -488,6 +489,8 @@ class LoggingWorker:
         # Create a new event loop since the original is closed
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        previous_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = False
 
         try:
             # Process remaining queue items with time limit
@@ -526,6 +529,7 @@ class LoggingWorker:
             )
 
         finally:
+            logging.raiseExceptions = previous_raise_exceptions
             loop.close()
 
 
