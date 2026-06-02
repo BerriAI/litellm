@@ -118,6 +118,20 @@ def test_langflow_config_transform_request_includes_session_id():
     assert request["session_id"] == "sess-abc"
 
 
+def test_langflow_config_rejects_tweaks_from_request_params():
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
+
+    config = LangFlowConfig()
+    with pytest.raises(LangFlowError):
+        config.transform_request(
+            model="langflow/my-flow-id",
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"tweaks": {"HttpComponent": {"url": "http://attacker"}}},
+            litellm_params={},
+            headers={},
+        )
+
+
 def test_langflow_config_extract_response():
     from litellm.llms.langflow.chat.transformation import LangFlowConfig
 

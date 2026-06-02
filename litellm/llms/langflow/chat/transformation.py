@@ -151,6 +151,15 @@ class LangFlowConfig(BaseConfig):
             "session_id": "<session_id>"
         }
         """
+        if optional_params.get("tweaks") is not None:
+            raise LangFlowError(
+                status_code=400,
+                message=(
+                    "tweaks cannot be set via request parameters; they would "
+                    "override the operator-configured LangFlow flow components"
+                ),
+            )
+
         input_value = self._get_last_user_message(messages)
 
         payload: Dict[str, Any] = {
@@ -162,10 +171,6 @@ class LangFlowConfig(BaseConfig):
         session_id = optional_params.get("session_id")
         if session_id:
             payload["session_id"] = session_id
-
-        # Allow callers to pass tweaks (LangFlow component overrides)
-        if "tweaks" in optional_params:
-            payload["tweaks"] = optional_params["tweaks"]
 
         verbose_logger.debug(f"LangFlow request payload: {payload}")
         return payload
