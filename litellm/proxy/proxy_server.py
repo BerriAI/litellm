@@ -1265,7 +1265,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     headers = exc.headers
     error_dict = exc.to_dict()
     status_code = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
-    _close_dangling_otel_server_span(request, status_code)
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
     return JSONResponse(
         status_code=status_code,
         content={"error": error_dict},
@@ -1273,7 +1273,9 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     )
 
 
-def _close_dangling_otel_server_span(request: Request, status_code: int) -> None:
+def _close_dangling_otel_server_span(
+    request: Request, status_code: int, exc: Optional[Exception] = None
+) -> None:
     parent_otel_span = getattr(request.state, "parent_otel_span", None)
     if parent_otel_span is None:
         return
@@ -1296,6 +1298,10 @@ def _close_dangling_otel_server_span(request: Request, status_code: int) -> None
         open_telemetry_logger.set_response_status_code_attribute(
             parent_otel_span, status_code
         )
+        if status_code >= 400:
+            open_telemetry_logger.record_error_attributes_on_span(
+                parent_otel_span, exc, status_code
+            )
         parent_otel_span.set_status(
             Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK)
         )
@@ -1312,7 +1318,7 @@ def _close_dangling_otel_server_span(request: Request, status_code: int) -> None
 async def otel_request_validation_exception_handler(
     request: Request, exc: RequestValidationError
 ):
-    _close_dangling_otel_server_span(request, 422)
+    _close_dangling_otel_server_span(request, 422, exc=exc)
     return JSONResponse(
         status_code=422,
         content={"detail": jsonable_encoder(exc.errors())},
@@ -1326,7 +1332,7 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     verbose_proxy_logger.exception(
         "Unhandled exception in request: %s", type(exc).__name__
     )
-    _close_dangling_otel_server_span(request, 500)
+    _close_dangling_otel_server_span(request, 500, exc=exc)
     return JSONResponse(
         status_code=500,
         content={
