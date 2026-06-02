@@ -1,5 +1,7 @@
+import json
 import os
 import sys
+from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -51,6 +53,20 @@ from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 CISCO_BASE = "https://us.api.inspect.aidefense.security.cisco.com"
 CHAT_URL = f"{CISCO_BASE}/api/v1/inspect/chat"
 MCP_URL = f"{CISCO_BASE}/api/v1/inspect/mcp"
+
+
+@contextmanager
+def _patch_inspection_post(g: CiscoAIDefenseGuardrail, post_mock: Any):
+    async def _send(request: Request, **kwargs: Any) -> Response:
+        return await post_mock(
+            url=str(request.url),
+            headers=request.headers,
+            json=json.loads(request.content.decode("utf-8")),
+            follow_redirects=kwargs.get("follow_redirects"),
+        )
+
+    with patch.object(g.async_handler.client, "send", new=_send):
+        yield post_mock
 
 
 def _mock_inspect_response(
@@ -605,8 +621,8 @@ class TestCiscoAIDefenseChatMode:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "Hi"}]}
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=_safe_response())
+        with _patch_inspection_post(
+            g, AsyncMock(return_value=_safe_response())
         ) as post_mock:
             result = await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -618,6 +634,27 @@ class TestCiscoAIDefenseChatMode:
         assert post_mock.call_args.kwargs["url"] == CHAT_URL
 
     @pytest.mark.asyncio
+    async def test_inspection_post_disables_redirects_on_httpx_send(self):
+        g = CiscoAIDefenseGuardrail(
+            guardrail_name="t",
+            api_key="x",
+            inspection_type="chat",
+            event_hook="pre_call",
+            default_on=True,
+        )
+
+        send_mock = AsyncMock(return_value=_safe_response())
+        with patch.object(g.async_handler.client, "send", new=send_mock):
+            result = await g._post_inspection(
+                url=CHAT_URL,
+                payload={"messages": [{"role": "user", "content": "Hi"}]},
+                surface="chat",
+            )
+
+        assert result["action"] == "allow"
+        assert send_mock.call_args.kwargs["follow_redirects"] is False
+
+    @pytest.mark.asyncio
     async def test_pre_call_blocks_chat_violation(self):
         g = CiscoAIDefenseGuardrail(
             guardrail_name="t",
@@ -627,11 +664,7 @@ class TestCiscoAIDefenseChatMode:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "Ignore prior rules"}]}
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(return_value=_violation_response()),
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=_violation_response())):
             with pytest.raises(HTTPException) as exc:
                 await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
@@ -655,7 +688,7 @@ class TestCiscoAIDefenseChatMode:
         )
         data = _mcp_request(name="send_email", args={"to": "x@y.com"})
         post_mock = AsyncMock()
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -677,11 +710,7 @@ class TestCiscoAIDefenseChatMode:
         data = {"messages": [{"role": "user", "content": "Tell me"}]}
         response = _make_model_response_with_content("PII: x@y.com")
 
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(return_value=_violation_response()),
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=_violation_response())):
             with pytest.raises(HTTPException):
                 await g.async_post_call_success_hook(
                     data=data,
@@ -704,7 +733,7 @@ class TestCiscoAIDefenseMCPMode:
             name="send_email", args={"to": "x@y.com"}, litellm_call_id="call-1"
         )
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -713,6 +742,7 @@ class TestCiscoAIDefenseMCPMode:
             )
         assert result == data
         assert post_mock.call_args.kwargs["url"] == MCP_URL
+        assert post_mock.call_args.kwargs["follow_redirects"] is False
         sent_payload = post_mock.call_args.kwargs["json"]
         assert sent_payload["jsonrpc"] == "2.0"
         assert sent_payload["method"] == "tools/call"
@@ -732,10 +762,8 @@ class TestCiscoAIDefenseMCPMode:
             default_on=True,
         )
         data = _mcp_request(name="leak_secrets", args={"target": "evil"})
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(return_value=_violation_response(url=MCP_URL)),
+        with _patch_inspection_post(
+            g, AsyncMock(return_value=_violation_response(url=MCP_URL))
         ):
             with pytest.raises(HTTPException) as exc:
                 await g.async_pre_call_hook(
@@ -757,7 +785,7 @@ class TestCiscoAIDefenseMCPMode:
         )
         data = {"messages": [{"role": "user", "content": "hello"}]}
         post_mock = AsyncMock()
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -778,7 +806,7 @@ class TestCiscoAIDefenseMCPMode:
         )
         data = _mcp_request(name="do_thing", args={"x": 1}, jsonrpc=True, id="abc")
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -820,7 +848,7 @@ class TestCiscoAIDefenseMCPMode:
             "mcp_server_name": "vault",
             "litellm_call_id": "call-42",
         }
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs=kwargs,
                 response_obj=response_obj,
@@ -873,7 +901,7 @@ class TestCiscoAIDefenseMCPMode:
         )
 
         post_mock = AsyncMock(return_value=_violation_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "leak", "arguments": {}},
                 response_obj=response_obj,
@@ -909,7 +937,7 @@ class TestCiscoAIDefenseMCPMode:
         )
 
         post_mock = AsyncMock()
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "tool", "arguments": {}},
                 response_obj=response_obj,
@@ -933,7 +961,7 @@ class TestCiscoAIDefenseMCPMode:
         response = _make_model_response_with_content("fine")
 
         post_mock = AsyncMock()
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -963,7 +991,7 @@ class TestCiscoAIDefenseMCPMode:
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "lookup", "arguments": {}},
                 response_obj=response_obj,
@@ -1019,7 +1047,7 @@ class TestCiscoAIDefenseMCPMode:
             "mcp_server_name": "vault",
             "litellm_call_id": "call-raw-list",
         }
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs=kwargs,
                 response_obj=response_obj,
@@ -1103,7 +1131,7 @@ class TestCiscoAIDefenseMCPMode:
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={
                     "name": "leak_tool",
@@ -1155,7 +1183,7 @@ class TestCiscoAIDefenseMCPMode:
         response_obj = _mcp_response([{"type": "text", "text": "tool output"}])
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={
                     "litellm_call_id": "metadata-call",
@@ -1229,7 +1257,7 @@ async def _streaming_setup(
     if request_data is None:
         request_data = {"messages": [{"role": "user", "content": "hi"}]}
     received: list = []
-    with patch.object(g.async_handler, "post", new=post_mock):
+    with _patch_inspection_post(g, post_mock):
         async for chunk in g.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
             response=stream_source,
@@ -1290,7 +1318,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
         response = self._make_responses_api_response("Your SSN is 123-45-6789.")
 
         post_mock = AsyncMock(return_value=_safe_response())
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1344,7 +1372,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
         )
 
         post_mock = AsyncMock(return_value=_safe_response())
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1369,9 +1397,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
         data = {"input": [{"role": "user", "content": "ask"}]}
         response = self._make_responses_api_response("sensitive PII payload")
 
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=_violation_response())
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=_violation_response())):
             with pytest.raises(HTTPException) as exc:
                 await g.async_post_call_success_hook(
                     data=data,
@@ -1422,9 +1448,7 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
             sanitized_messages=sanitized_messages,
             rules=({"rule_name": "PII"},),
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             result = await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1522,9 +1546,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
             rules=({"rule_name": "PII"},),
             **cisco_kwargs,
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -1548,9 +1570,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
             rules=({"rule_name": "PII"},),
         )
 
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -1570,9 +1590,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
             rules=({"rule_name": "PII"},),
         )
 
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -1594,9 +1612,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
             rules=({"rule_name": "PII"},),
         )
 
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             with pytest.raises(HTTPException):
                 await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
@@ -1663,11 +1679,10 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                     )
                 ]
             )
-            get_args = (
-                lambda result: result.choices[0]
-                .message.tool_calls[0]
-                .function.arguments
-            )
+
+            def get_args(result):
+                return result.choices[0].message.tool_calls[0].function.arguments
+
         else:
             from litellm.types.llms.openai import ResponsesAPIResponse
             from litellm.types.responses.main import OutputFunctionToolCall
@@ -1691,7 +1706,9 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 top_p=None,
                 usage=None,
             )
-            get_args = lambda result: result.output[0].arguments or ""
+
+            def get_args(result):
+                return result.output[0].arguments or ""
 
         cisco_resp = _mock_inspect_response(
             {
@@ -1703,9 +1720,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 "sanitized_text": "[REDACTED]",
             }
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             result = await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1781,9 +1796,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 "sanitized_text": "[REDACTED]",
             },
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             result = await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1859,9 +1872,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 ],
             },
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             result = await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -1921,7 +1932,10 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                     )
                 ]
             )
-            get_text = lambda result: result.choices[0].message.content or ""
+
+            def get_text(result):
+                return result.choices[0].message.content or ""
+
         else:
             from litellm.types.llms.openai import ResponsesAPIResponse
             from litellm.types.responses.main import (
@@ -1953,7 +1967,9 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 top_p=None,
                 usage=None,
             )
-            get_text = lambda result: result.output[0].content[0].text
+
+            def get_text(result):
+                return result.output[0].content[0].text
 
         cisco_resp = _mock_inspect_response(
             {
@@ -1969,9 +1985,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 ],
             }
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             result = await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -2030,9 +2044,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
 
         violation = _violation_response(url=url)
         if transport == "http_input":
-            with patch.object(
-                g.async_handler, "post", new=AsyncMock(return_value=violation)
-            ):
+            with _patch_inspection_post(g, AsyncMock(return_value=violation)):
                 with pytest.raises(HTTPException) as exc:
                     if surface == "chat":
                         await g.async_pre_call_hook(
@@ -2051,9 +2063,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
             payload = exc.value.detail
         elif transport == "http_output":
             response = _make_model_response_with_content("leak")
-            with patch.object(
-                g.async_handler, "post", new=AsyncMock(return_value=violation)
-            ):
+            with _patch_inspection_post(g, AsyncMock(return_value=violation)):
                 with pytest.raises(HTTPException) as exc:
                     await g.async_post_call_success_hook(
                         data={"messages": [{"role": "user", "content": "x"}]},
@@ -2063,9 +2073,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
             payload = exc.value.detail
         elif transport == "mcp_envelope":
             if direction == "input":
-                with patch.object(
-                    g.async_handler, "post", new=AsyncMock(return_value=violation)
-                ):
+                with _patch_inspection_post(g, AsyncMock(return_value=violation)):
                     with pytest.raises(HTTPException) as exc:
                         await g.async_pre_call_hook(
                             user_api_key_dict=UserAPIKeyAuth(),
@@ -2076,9 +2084,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 payload = exc.value.detail
             else:
                 response_obj = _mcp_response([{"type": "text", "text": "leaked"}])
-                with patch.object(
-                    g.async_handler, "post", new=AsyncMock(return_value=violation)
-                ):
+                with _patch_inspection_post(g, AsyncMock(return_value=violation)):
                     result = await g.async_post_mcp_tool_call_hook(
                         kwargs={"name": "leak", "arguments": {}},
                         response_obj=response_obj,
@@ -2090,9 +2096,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
                 payload = _json.loads(text)
         else:  # sse_event
             chunks = _make_streaming_chunks(["leak SSN 123-45-6789"])
-            with patch.object(
-                g.async_handler, "post", new=AsyncMock(return_value=violation)
-            ):
+            with _patch_inspection_post(g, AsyncMock(return_value=violation)):
                 received = []
                 async for chunk in g.async_post_call_streaming_iterator_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
@@ -2163,7 +2167,7 @@ class TestCiscoAIDefenseEdgeCases:
         ]
 
         post_mock = AsyncMock()
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             yielded = []
             async for chunk in g.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -2206,7 +2210,7 @@ class TestCiscoAIDefenseEdgeCases:
         ]
 
         post_mock = AsyncMock()
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             yielded = []
             async for chunk in g.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -2257,9 +2261,7 @@ class TestCiscoAIDefenseEdgeCases:
             url=MCP_URL,
         )
 
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -2301,9 +2303,7 @@ class TestCiscoAIDefenseEdgeCases:
             recorded.append(kwargs.get("event_type"))
 
         with (
-            patch.object(
-                g.async_handler, "post", new=AsyncMock(side_effect=Exception("boom"))
-            ),
+            _patch_inspection_post(g, AsyncMock(side_effect=Exception("boom"))),
             patch.object(
                 g,
                 "add_standard_logging_guardrail_information_to_request_data",
@@ -2368,7 +2368,7 @@ class TestCiscoAIDefenseEdgeCases:
         )
 
         post_mock = AsyncMock(return_value=_safe_response(url=MCP_URL))
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "lookup", "arguments": {}},
                 response_obj=response_obj,
@@ -2420,7 +2420,7 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
         data = {"messages": [{"role": "user", "content": "hi"}]}
 
         post_mock = AsyncMock(return_value=_safe_response())
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -2433,6 +2433,7 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
             "ValueError for the CiscoAIDefenseRule Pydantic shape, "
             "and the exception bubbled out of _build_chat_payload."
         )
+        assert post_mock.call_args.kwargs["follow_redirects"] is False
         sent = post_mock.call_args.kwargs["json"]
         config = sent.get("config") or {}
         rules = config.get("enabled_rules") or []
@@ -2517,10 +2518,8 @@ class TestCiscoAIDefenseRedactListShape:
         content, get_text = getattr(self, factory_name)()
         response_obj = _mcp_response(content)
 
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(return_value=self._violation_with_redact_response()),
+        with _patch_inspection_post(
+            g, AsyncMock(return_value=self._violation_with_redact_response())
         ):
             result = await g.async_post_mcp_tool_call_hook(
                 kwargs={"name": "leak", "arguments": {}},
@@ -2593,7 +2592,7 @@ class TestCiscoAIDefenseResponsesAPIBypass:
         )
         data = {"input": input_value}
         post_mock = AsyncMock(return_value=_safe_response())
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -2618,7 +2617,7 @@ class TestCiscoAIDefenseResponsesAPIBypass:
         }
         post_mock = AsyncMock(return_value=_safe_response())
 
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -2659,7 +2658,7 @@ class TestCiscoAIDefenseToolCallBypass:
         g = _make_guardrail(event_hook="pre_call")
         post_mock = AsyncMock(return_value=_safe_response())
 
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -2687,9 +2686,7 @@ class TestCiscoAIDefenseToolCallBypass:
         g = _make_guardrail(event_hook="pre_call", on_flagged_action="block")
         cisco_resp = _redact_response(sanitized_text="redacted")
 
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_resp)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_resp)):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -2784,7 +2781,7 @@ class TestCiscoAIDefenseToolCallBypass:
         data = {"messages": [{"role": "user", "content": "anything"}]}
 
         post_mock = AsyncMock(return_value=_safe_response())
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             await g.async_post_call_success_hook(
                 data=data,
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -2833,7 +2830,7 @@ class TestCiscoAIDefenseReasoningOutputBypass:
             return_value=_redact_response(sanitized_text="[REDACTED]")
         )
 
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             result = await g.async_post_call_success_hook(
                 data={"messages": [{"role": "user", "content": "think"}]},
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -2921,7 +2918,7 @@ class TestCiscoAIDefenseStreamingBypass:
             order_log.append(("inspect_called", post_calls))
             return _safe_response()
 
-        with patch.object(g.async_handler, "post", new=_fake_post):
+        with _patch_inspection_post(g, _fake_post):
             yielded = 0
             async for _ in g.async_post_call_streaming_iterator_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
@@ -3239,7 +3236,7 @@ class TestCiscoAIDefenseSurfaceBypass:
         )
 
         post_mock = AsyncMock(return_value=_safe_response())
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             if hook == "pre_call":
                 await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
@@ -3302,7 +3299,7 @@ class TestCiscoAIDefenseMCPBlockingContract:
 
         post_mock = AsyncMock(return_value=_violation_response(url=MCP_URL))
         captured: Dict[str, Any] = {}
-        with patch.object(g.async_handler, "post", new=post_mock):
+        with _patch_inspection_post(g, post_mock):
             try:
                 captured["result"] = await g.async_post_mcp_tool_call_hook(
                     kwargs={
@@ -3398,11 +3395,7 @@ class TestCiscoAIDefenseEventTypeDirection:
         recorded, _spy = self._spy_event_types(g)
 
         with (
-            patch.object(
-                g.async_handler,
-                "post",
-                new=AsyncMock(return_value=_safe_response(url=url)),
-            ),
+            _patch_inspection_post(g, AsyncMock(return_value=_safe_response(url=url))),
             patch.object(
                 g,
                 "add_standard_logging_guardrail_information_to_request_data",
@@ -3457,9 +3450,7 @@ class TestCiscoAIDefenseErrorHandling:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "x"}]}
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(side_effect=Exception("boom"))
-        ):
+        with _patch_inspection_post(g, AsyncMock(side_effect=Exception("boom"))):
             with pytest.raises(HTTPException) as exc:
                 await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
@@ -3480,9 +3471,7 @@ class TestCiscoAIDefenseErrorHandling:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "x"}]}
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(side_effect=Exception("boom"))
-        ):
+        with _patch_inspection_post(g, AsyncMock(side_effect=Exception("boom"))):
             result = await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -3535,10 +3524,9 @@ class TestCiscoAIDefenseRedactAction:
                 {"role": "user", "content": "my email is alice@example.com"},
             ]
         }
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(
+        with _patch_inspection_post(
+            g,
+            AsyncMock(
                 return_value=self._redact_response(
                     sanitized_text="my email is [REDACTED]"
                 )
@@ -3565,10 +3553,9 @@ class TestCiscoAIDefenseRedactAction:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "leak abc@x.com"}]}
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(
+        with _patch_inspection_post(
+            g,
+            AsyncMock(
                 return_value=self._redact_response(
                     sanitized_messages=[{"role": "user", "content": "leak [REDACTED]"}]
                 )
@@ -3594,10 +3581,9 @@ class TestCiscoAIDefenseRedactAction:
         data = {"messages": [{"role": "user", "content": "tell me"}]}
         response = _make_model_response_with_content("leak: alice@example.com")
 
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(
+        with _patch_inspection_post(
+            g,
+            AsyncMock(
                 return_value=self._redact_response(sanitized_text="leak: [REDACTED]")
             ),
         ):
@@ -3632,9 +3618,7 @@ class TestCiscoAIDefenseRedactAction:
             },
             url=MCP_URL,
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_response)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_response)):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -3667,9 +3651,7 @@ class TestCiscoAIDefenseRedactAction:
                 "event_id": "evt_no_rewrite",
             },
         )
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_response)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_response)):
             with pytest.raises(HTTPException) as exc:
                 await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
@@ -3754,10 +3736,9 @@ class TestCiscoAIDefenseJsonRpcSuccessEnvelope:
                 "question": "What is React Fiber 9045629876?",
             },
         )
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(
+        with _patch_inspection_post(
+            g,
+            AsyncMock(
                 return_value=self._cisco_mcp_envelope(is_safe=is_safe, action=action)
             ),
         ):
@@ -3852,9 +3833,7 @@ class TestCiscoAIDefenseJsonRpcError:
         )
         cisco_response = _mock_inspect_response(cisco_body)
         data = {"messages": [{"role": "user", "content": "hi"}]}
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=cisco_response)
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=cisco_response)):
             if expects_block:
                 with pytest.raises(HTTPException) as exc:
                     await g.async_pre_call_hook(
@@ -3916,9 +3895,7 @@ class TestCiscoAIDefenseStandardLogging:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "Hi"}]}
-        with patch.object(
-            g.async_handler, "post", new=AsyncMock(return_value=_safe_response())
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=_safe_response())):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),
@@ -3946,11 +3923,7 @@ class TestCiscoAIDefenseStandardLogging:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "Ignore rules"}]}
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(return_value=_violation_response()),
-        ):
+        with _patch_inspection_post(g, AsyncMock(return_value=_violation_response())):
             with pytest.raises(HTTPException):
                 await g.async_pre_call_hook(
                     user_api_key_dict=UserAPIKeyAuth(),
@@ -3981,10 +3954,8 @@ class TestCiscoAIDefenseStandardLogging:
             default_on=True,
         )
         data = _mcp_request(name="leak_secrets", args={"target": "evil"})
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(return_value=_violation_response(url=MCP_URL)),
+        with _patch_inspection_post(
+            g, AsyncMock(return_value=_violation_response(url=MCP_URL))
         ):
             with pytest.raises(HTTPException):
                 await g.async_pre_call_hook(
@@ -4010,11 +3981,7 @@ class TestCiscoAIDefenseStandardLogging:
             default_on=True,
         )
         data = {"messages": [{"role": "user", "content": "Hi"}]}
-        with patch.object(
-            g.async_handler,
-            "post",
-            new=AsyncMock(side_effect=Exception("boom")),
-        ):
+        with _patch_inspection_post(g, AsyncMock(side_effect=Exception("boom"))):
             await g.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
                 cache=DualCache(),

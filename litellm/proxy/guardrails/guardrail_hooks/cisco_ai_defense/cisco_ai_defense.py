@@ -877,11 +877,16 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
             url,
         )
         try:
-            response = await self.async_handler.post(
-                url=url,
+            request = self.async_handler.client.build_request(
+                "POST",
+                url,
                 headers=headers,
                 json=payload,
                 timeout=self.timeout,
+            )
+            response = await self.async_handler.client.send(
+                request,
+                follow_redirects=False,
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
