@@ -15845,6 +15845,8 @@ async def _mcp_forward_as_path(path_segment: str, request: Request):
     )
 
     scope = dict(request.scope)
+    # Preserve the public request path for OAuth challenge URL selection.
+    scope["_original_path"] = scope.get("path", "")
     scope["path"] = f"/mcp/{path_segment}"
     return await _stream_mcp_asgi_response(
         handle_streamable_http_mcp, scope, request.receive
@@ -15992,6 +15994,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             )
             if toolset is not None:
                 scope = dict(request.scope)
+                scope["_original_path"] = scope.get("path", "")
                 scope["path"] = "/mcp"
                 token = _mcp_active_toolset_id.set(toolset.toolset_id)
                 try:

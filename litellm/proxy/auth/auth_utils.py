@@ -522,14 +522,20 @@ def get_request_route(request: Request) -> str:
         if not isinstance(scope, dict):
             return str(request.url.path)
         raw_path: str = str(scope.get("path", request.url.path))
-        root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
+        root_path: str = str(
+            scope.get("app_root_path", scope.get("root_path", ""))
+        ).rstrip("/")
         if not isinstance(raw_path, str):
             return str(request.url.path)
-        # Only strip root_path when it is a meaningful prefix (not bare "/").
-        # Stripping bare "/" would remove the leading slash from every path
-        # e.g. "/team/new" → "team/new", breaking route matching.
-        if root_path and root_path != "/" and raw_path.startswith(root_path):
-            return raw_path[len(root_path) :]
+        # Strip root_path only when it matches whole path segments — guarding
+        # against sibling paths like "/apifoo" being truncated under
+        # root_path="/api". Trailing slashes on root_path are stripped above,
+        # so bare "/" or "/prefix/" still leave the leading "/" intact.
+        if root_path and (
+            raw_path == root_path or raw_path.startswith(root_path + "/")
+        ):
+            stripped = raw_path[len(root_path) :]
+            return stripped or "/"
         return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
