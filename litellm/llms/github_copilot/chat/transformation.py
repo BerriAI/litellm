@@ -1,10 +1,14 @@
-from typing import List, Optional, Tuple
+import json
+from typing import Any, List, Optional, Tuple
 
 import os
+
+import httpx
 
 from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import ModelResponse
 
 from ..authenticator import Authenticator
 from ..common_utils import (
@@ -164,3 +168,110 @@ class GithubCopilotConfig(OpenAIConfig):
                         if content_type == "image_url":
                             return True
         return False
+
+    def transform_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: "ModelResponse",
+        logging_obj: Any,
+        request_data: dict,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> "ModelResponse":
+        """
+        Handle newer Copilot models (e.g. claude-opus-4.7, claude-opus-4.8) that
+        return Anthropic-native format responses without a `choices` array.
+
+        Synthesizes the missing `choices` from Anthropic-native fields, then
+        delegates to the parent so all standard post-processing applies.
+
+        See: https://github.com/BerriAI/litellm/issues/29391
+        """
+        try:
+            response_json = raw_response.json()
+        except Exception:
+            return super().transform_response(
+                model=model,
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                request_data=request_data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+                api_key=api_key,
+                json_mode=json_mode,
+            )
+
+        if not response_json.get("choices"):
+            content = ""
+            if "content" in response_json and isinstance(
+                response_json["content"], list
+            ):
+                for block in response_json["content"]:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        content = block.get("text", "")
+                        break
+
+            stop_reason = response_json.get("stop_reason")
+            finish_reason_map = {
+                "end_turn": "stop",
+                "max_tokens": "length",
+                "stop_sequence": "stop",
+                "tool_use": "tool_calls",
+            }
+            # Default to "stop" for responses with content, "length" only when
+            # content is empty and stop_reason is absent/unknown.
+            if stop_reason in finish_reason_map:
+                finish_reason = finish_reason_map[stop_reason]
+            elif content:
+                finish_reason = "stop"
+            else:
+                finish_reason = "length"
+
+            response_json["choices"] = [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": content},
+                    "finish_reason": finish_reason,
+                }
+            ]
+
+            if "usage" in response_json:
+                usage = response_json["usage"]
+                if "input_tokens" in usage and "prompt_tokens" not in usage:
+                    usage["prompt_tokens"] = usage["input_tokens"]
+                if "output_tokens" in usage and "completion_tokens" not in usage:
+                    usage["completion_tokens"] = usage["output_tokens"]
+                if "total_tokens" not in usage:
+                    usage["total_tokens"] = usage.get("prompt_tokens", 0) + usage.get(
+                        "completion_tokens", 0
+                    )
+
+            # Build a patched response so super() sees valid JSON with choices
+            patched = httpx.Response(
+                status_code=raw_response.status_code,
+                headers=raw_response.headers,
+                content=json.dumps(response_json).encode(),
+            )
+            raw_response = patched
+
+        return super().transform_response(
+            model=model,
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=logging_obj,
+            request_data=request_data,
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            encoding=encoding,
+            api_key=api_key,
+            json_mode=json_mode,
+        )
