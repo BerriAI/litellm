@@ -888,6 +888,7 @@ async def oauth_protected_resource_mcp(
 def _build_oauth_authorization_server_response(
     request: Request,
     mcp_server_name: Optional[str],
+    issuer: Optional[str] = None,
 ) -> dict:
     """
     Build OAuth authorization server metadata response.
@@ -895,6 +896,7 @@ def _build_oauth_authorization_server_response(
     Args:
         request: FastAPI Request object
         mcp_server_name: Name of the MCP server
+        issuer: Optional issuer value for OIDC Discovery aliases
 
     Returns:
         OAuth authorization server metadata dict
@@ -930,7 +932,7 @@ def _build_oauth_authorization_server_response(
         )
 
     return {
-        "issuer": request_base_url,  # point to your proxy
+        "issuer": issuer or request_base_url,
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
@@ -988,9 +990,17 @@ async def oauth_authorization_server_mcp(
 
 
 # Alias for standard OpenID discovery
+@router.get("/{mcp_server_name}/.well-known/openid-configuration")
 @router.get("/.well-known/openid-configuration")
-async def openid_configuration(request: Request):
-    response = await oauth_authorization_server_mcp(request)
+async def openid_configuration(request: Request, mcp_server_name: Optional[str] = None):
+    issuer = None
+    if mcp_server_name is not None:
+        issuer = f"{get_request_base_url(request)}/{mcp_server_name}"
+    response = _build_oauth_authorization_server_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+        issuer=issuer,
+    )
 
     # If MCPJWTSigner is active, augment the discovery doc with JWKS fields so
     # MCP servers and gateways (e.g. AWS Bedrock AgentCore Gateway) can resolve

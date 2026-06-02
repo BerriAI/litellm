@@ -165,8 +165,13 @@ LAZY_FEATURES: Tuple[LazyFeature, ...] = (
             "/callback",
             "/register",
         ),
-        # Catches the /{mcp_server_name}/authorize|token|register variants.
-        path_suffixes=("/authorize", "/token", "/register"),
+        # Catches leading-server routes that prefix matching cannot see.
+        path_suffixes=(
+            "/authorize",
+            "/token",
+            "/register",
+            "/.well-known/openid-configuration",
+        ),
     ),
     LazyFeature(
         name="mcp_rest",
