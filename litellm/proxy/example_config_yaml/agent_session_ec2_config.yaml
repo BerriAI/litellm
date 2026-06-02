@@ -1,0 +1,41 @@
+# Example: agent_session VM provider with EC2 (BYOC AWS).
+#
+# Provisions one EC2 per agent session in the *team's* AWS account.
+# Per-team overrides (creds, subnet, IAM profile, AMI, instance type) live in
+# `LiteLLM_AgentVMConfig`, populated via Settings UI (Epic G).
+#
+# See:
+#   litellm/proxy/agent_session_endpoints/vm_providers/ec2.py
+#   infra/ami/README.md  (how to build the AMI)
+
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+agent_settings:
+  vm_provider: ec2  # or `noop` for environments without AWS
+  sweep_interval_seconds: 30  # bootstrap/heartbeat/max-session sweepers tick
+
+  ec2:
+    # Defaults applied when a team's `LiteLLM_AgentVMConfig` row leaves the
+    # field NULL. Captured from the B0 spike.
+    default_region: us-west-2
+    # Baked by `infra/ami/litellm-agent-runtime.pkr.hcl`. The value below is
+    # the BYOC PoC account's AMI built from this PR; rebuild for your own
+    # account and replace.
+    default_ami_id: ami-074a518157fe137b4
+    default_instance_type: t3.large
+    use_spot: true
+    max_session_minutes: 120
+    bootstrap_timeout_seconds: 180
+    heartbeat_timeout_seconds: 120
+
+  warm_pool:
+    enabled: false  # B2 (LIT-2890) implements the warm-pool path
+    size: 2
+    max_idle_minutes: 30
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

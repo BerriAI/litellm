@@ -5,10 +5,13 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// `output: "export"` is intentionally omitted here. Static export is incompatible
+// with `dynamicParams: true` (the App Router default), which broke routes like
+// /agents/[agent_id] and /agents/[agent_id]/sessions/[session_id]. The proxy
+// production build is produced by `npm run build` separately when needed; in
+// dev (`pnpm dev`) and standard server builds, dynamic routes work normally.
+// See https://nextjs.org/docs/app/building-your-application/deploying/static-exports
 const nextConfig = {
-  output: "export",
-  // Required with output: "export" — default image optimizer runs only in server mode.
-  // See https://nextjs.org/docs/messages/export-image-api
   images: {
     unoptimized: true,
   },
