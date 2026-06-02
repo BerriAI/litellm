@@ -417,6 +417,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -972,6 +973,11 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     # End of startup event
     yield
+
+    # Shutdown event - drain in-flight requests before tearing down dependencies
+    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+    GracefulShutdownManager.start_shutdown()
+    await GracefulShutdownManager.wait_for_drain()
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
