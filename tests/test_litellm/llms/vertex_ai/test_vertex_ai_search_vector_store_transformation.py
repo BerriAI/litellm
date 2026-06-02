@@ -135,13 +135,35 @@ _ENGINE_BASE = (
     "collections/default_collection/engines/app-2/servingConfigs/default_serving_config"
 )
 
+_DATASTORE_BASE = (
+    "https://discoveryengine.googleapis.com/v1/projects/p/locations/global/"
+    "collections/default_collection/dataStores/ds-1/servingConfigs/default_config"
+)
+
 
 def _search_request(**overrides):
+    """Engine/app-mode search request (vertex_engine_id set)."""
     kwargs = dict(
         vector_store_id="vs",
         query="hello",
         vector_store_search_optional_params={},
         api_base=_ENGINE_BASE,
+        litellm_logging_obj=SimpleNamespace(model_call_details={}),
+        litellm_params={"vertex_engine_id": "app-2"},
+    )
+    kwargs.update(overrides)
+    return VertexSearchAPIVectorStoreConfig().transform_search_vector_store_request(
+        **kwargs
+    )
+
+
+def _datastore_search_request(**overrides):
+    """Data-store-mode search request (no vertex_engine_id)."""
+    kwargs = dict(
+        vector_store_id="ds-1",
+        query="hello",
+        vector_store_search_optional_params={},
+        api_base=_DATASTORE_BASE,
         litellm_logging_obj=SimpleNamespace(model_call_details={}),
         litellm_params={},
     )
@@ -166,23 +188,46 @@ def test_search_request_maps_max_num_results_to_pagesize():
     assert body["pageSize"] == 25
 
 
-def test_search_request_rejects_datastorespecs_in_extra_body():
+def test_engine_search_request_forwards_datastorespecs():
     specs = [
         {
             "dataStore": "projects/p/locations/global/collections/default_collection/dataStores/ds-beta"
         }
     ]
 
-    with pytest.raises(ValueError, match="target-selecting"):
-        _search_request(extra_body={"dataStoreSpecs": specs})
+    _, body = _search_request(extra_body={"dataStoreSpecs": specs})
+
+    assert body["dataStoreSpecs"] == specs
 
 
-@pytest.mark.parametrize(
-    "field", ["dataStoreSpecs", "branch", "servingConfig", "entity"]
-)
+def test_engine_search_request_forwards_num_results_per_data_store():
+    _, body = _search_request(extra_body={"numResultsPerDataStore": 3})
+
+    assert body["numResultsPerDataStore"] == 3
+
+
+def test_datastore_search_request_rejects_datastorespecs():
+    specs = [{"dataStore": "projects/p/.../dataStores/ds-beta"}]
+
+    with pytest.raises(ValueError, match="data store mode"):
+        _datastore_search_request(extra_body={"dataStoreSpecs": specs})
+
+
+def test_datastore_search_request_rejects_num_results_per_data_store():
+    with pytest.raises(ValueError, match="data store mode"):
+        _datastore_search_request(extra_body={"numResultsPerDataStore": 3})
+
+
+@pytest.mark.parametrize("field", ["branch", "servingConfig", "entity"])
 def test_search_request_rejects_target_selecting_fields(field):
     with pytest.raises(ValueError, match="target-selecting"):
         _search_request(extra_body={field: "x"})
+
+
+@pytest.mark.parametrize("field", ["branch", "servingConfig", "entity"])
+def test_datastore_search_request_rejects_target_selecting_fields(field):
+    with pytest.raises(ValueError, match="target-selecting"):
+        _datastore_search_request(extra_body={field: "x"})
 
 
 def test_search_request_rejects_unsupported_extra_body_field():
@@ -201,6 +246,14 @@ def test_search_request_forwards_supported_extra_body_fields():
     assert body["filter"] == 'category: ANY("docs")'
     assert body["boostSpec"] == {"conditionBoostSpecs": []}
     assert body["query"] == "hello"
+
+
+def test_datastore_search_request_forwards_supported_extra_body_fields():
+    _, body = _datastore_search_request(
+        extra_body={"filter": 'category: ANY("docs")'}
+    )
+
+    assert body["filter"] == 'category: ANY("docs")'
 
 
 def test_search_request_ignores_none_valued_extra_body_fields():

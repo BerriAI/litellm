@@ -16,6 +16,8 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
     VectorStoreSearchResult,
+    VertexSearchDataStoreExtraBody,
+    VertexSearchEngineExtraBody,
 )
 
 if TYPE_CHECKING:
@@ -26,49 +28,28 @@ else:
     LiteLLMLoggingObj = Any
 
 
+# Fields that select which data store / serving config to search. These are
+# always determined by the request URL path (vector_store_id / vertex_engine_id),
+# so allowing them per request could silently redirect the search to a different
+# target. Rejected in both data-store and engine/app modes.
 VERTEX_SEARCH_TARGET_SELECTING_FIELDS = frozenset(
     {
-        "dataStoreSpecs",
         "branch",
         "servingConfig",
         "entity",
     }
 )
 
-VERTEX_SEARCH_SUPPORTED_EXTRA_BODY_FIELDS = frozenset(
-    {
-        "query",
-        "pageSize",
-        "pageToken",
-        "offset",
-        "oneBoxPageSize",
-        "numResultsPerDataStore",
-        "pageCategories",
-        "imageQuery",
-        "filter",
-        "canonicalFilter",
-        "orderBy",
-        "userInfo",
-        "languageCode",
-        "facetSpecs",
-        "boostSpec",
-        "params",
-        "queryExpansionSpec",
-        "spellCorrectionSpec",
-        "userPseudoId",
-        "contentSearchSpec",
-        "rankingExpression",
-        "rankingExpressionBackend",
-        "safeSearch",
-        "userLabels",
-        "naturalLanguageQueryUnderstandingSpec",
-        "searchAsYouTypeSpec",
-        "displaySpec",
-        "crowdingSpecs",
-        "relevanceThreshold",
-        "relevanceScoreSpec",
-        "customRankingParams",
-    }
+# Allowlists of native Discovery Engine SearchRequest fields callers may forward
+# via extra_body, derived from the TypedDicts so the type is the source of truth.
+# Engine/app mode is a superset (adds dataStoreSpecs, numResultsPerDataStore),
+# since an app fans out across multiple member data stores.
+VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS = frozenset(
+    VertexSearchDataStoreExtraBody.__annotations__
+)
+
+VERTEX_SEARCH_ENGINE_EXTRA_BODY_FIELDS = frozenset(
+    VertexSearchEngineExtraBody.__annotations__
 )
 
 
@@ -83,20 +64,34 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         super().__init__()
 
     @staticmethod
-    def get_supported_extra_body_fields() -> frozenset:
-        """Native SearchRequest fields callers may forward via ``extra_body``."""
-        return VERTEX_SEARCH_SUPPORTED_EXTRA_BODY_FIELDS
+    def get_supported_extra_body_fields(is_engine: bool = False) -> frozenset:
+        """
+        Native SearchRequest fields callers may forward via ``extra_body``.
+
+        The set depends on which serving config the request targets:
+        - engine/app mode (``is_engine=True``): includes multi-store fields such
+          as ``dataStoreSpecs`` and ``numResultsPerDataStore``.
+        - data-store mode: the engine-only fields are excluded.
+        """
+        if is_engine:
+            return VERTEX_SEARCH_ENGINE_EXTRA_BODY_FIELDS
+        return VERTEX_SEARCH_DATASTORE_EXTRA_BODY_FIELDS
 
     @classmethod
-    def _filter_extra_body(cls, extra_body: Dict[str, Any]) -> Dict[str, Any]:
+    def _filter_extra_body(
+        cls, extra_body: Dict[str, Any], is_engine: bool = False
+    ) -> Dict[str, Any]:
         """
-        Validate ``extra_body`` against the supported-field allowlist.
+        Validate ``extra_body`` against the supported-field allowlist for the
+        active serving config (engine/app vs data store).
 
         Raises ``ValueError`` if the caller includes a target-selecting field
-        (e.g. ``dataStoreSpecs``) or any field not on the allowlist, so the
-        request fails loudly instead of silently searching the wrong store.
+        (e.g. ``servingConfig``) or any field not supported for the active mode,
+        so the request fails loudly instead of silently searching the wrong
+        target. Engine-only fields (``dataStoreSpecs``, ``numResultsPerDataStore``)
+        are rejected in data-store mode where they are meaningless.
         """
-        supported = cls.get_supported_extra_body_fields()
+        supported = cls.get_supported_extra_body_fields(is_engine=is_engine)
         filtered = {
             key: value for key, value in extra_body.items() if value is not None
         }
@@ -111,9 +106,10 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
         unsupported = set(filtered) - supported
         if unsupported:
+            mode = "engine/app" if is_engine else "data store"
             raise ValueError(
-                f"Unsupported Vertex AI Search extra_body fields {sorted(unsupported)}. "
-                f"Supported fields: {sorted(supported)}."
+                f"Unsupported Vertex AI Search extra_body fields {sorted(unsupported)} "
+                f"for {mode} mode. Supported fields: {sorted(supported)}."
             )
 
         return filtered
@@ -223,21 +219,29 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         callers can send native Discovery Engine tuning fields such as filter,
         boostSpec, or contentSearchSpec.
 
-        Target-selecting fields (e.g. dataStoreSpecs, branch) are rejected: the
-        data store is scoped by the URL path (vector_store_id / vertex_engine_id)
-        and must not be overridable per request.
+        The allowlist depends on the serving config: engine/app mode (when
+        `vertex_engine_id` is set) additionally accepts multi-store fields like
+        `dataStoreSpecs` and `numResultsPerDataStore`, while data-store mode
+        rejects them. Target-selecting fields (e.g. servingConfig, branch) are
+        rejected in both modes: the target is scoped by the URL path
+        (vector_store_id / vertex_engine_id) and must not be overridable per
+        request.
         """
         if isinstance(query, list):
             query = " ".join(query)
 
         url = f"{api_base}:search"
 
+        is_engine = bool(litellm_params.get("vertex_engine_id"))
+
         request_body: Dict[str, Any] = {"query": query, "pageSize": 10}
         max_num_results = vector_store_search_optional_params.get("max_num_results")
         if max_num_results is not None:
             request_body["pageSize"] = max_num_results
         if isinstance(extra_body, dict):
-            request_body.update(self._filter_extra_body(extra_body))
+            request_body.update(
+                self._filter_extra_body(extra_body, is_engine=is_engine)
+            )
 
         litellm_logging_obj.model_call_details["query"] = request_body.get(
             "query", query
