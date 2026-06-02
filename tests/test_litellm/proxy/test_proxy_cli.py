@@ -354,11 +354,29 @@ class TestProxyInitializationHelpers:
         assert ProxyInitializationHelpers._is_port_in_use(8000) is False
 
     def test_get_loop_type(self):
-        # Test on Windows
         with patch("sys.platform", "win32"):
             assert ProxyInitializationHelpers._get_loop_type() is None
 
-        # Test on Linux
+        with patch("sys.platform", "linux"):
+            assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
+
+    @patch.dict(os.environ, {"LITELLM_DISABLE_UVLOOP": "1"})
+    def test_get_loop_type_disable_uvloop_numeric(self):
+        with patch("sys.platform", "linux"):
+            assert ProxyInitializationHelpers._get_loop_type() == "asyncio"
+
+    @patch.dict(os.environ, {"LITELLM_DISABLE_UVLOOP": "true"})
+    def test_get_loop_type_disable_uvloop_string(self):
+        with patch("sys.platform", "linux"):
+            assert ProxyInitializationHelpers._get_loop_type() == "asyncio"
+
+    @patch.dict(os.environ, {"LITELLM_DISABLE_UVLOOP": "yes"})
+    def test_get_loop_type_disable_uvloop_yes(self):
+        with patch("sys.platform", "linux"):
+            assert ProxyInitializationHelpers._get_loop_type() == "asyncio"
+
+    @patch.dict(os.environ, {"LITELLM_DISABLE_UVLOOP": "0"})
+    def test_get_loop_type_disable_uvloop_false(self):
         with patch("sys.platform", "linux"):
             assert ProxyInitializationHelpers._get_loop_type() == "uvloop"
 
