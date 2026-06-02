@@ -6,6 +6,7 @@ LiteLLM MCP Server Routes
 
 import asyncio
 import contextlib
+import contextvars
 import hashlib
 import json
 import time
@@ -123,6 +124,46 @@ try:
         GetPromptResult,
         ResourceTemplate,
         TextResourceContents,
+        Tool,
+    )
+    from mcp.server.session import ServerSession as _McpServerSession
+    import weakref
+
+    # Storage for session-specific auth context to avoid fragile monkey-patching
+    # and context-leakage between concurrent SSE sessions.
+    _session_auth_storage: "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]" = (
+        weakref.WeakKeyDictionary()
+    )
+    _session_id_auth_storage: Dict[uuid.UUID, "MCPAuthenticatedUser"] = {}
+
+    # Robust auth lookup keyed by session_object.
+    _session_obj_auth_storage: (
+        "weakref.WeakKeyDictionary[Any, MCPAuthenticatedUser]"
+    ) = weakref.WeakKeyDictionary()
+
+    _captured_session_id_container_var: contextvars.ContextVar[
+        Optional[Dict[str, uuid.UUID]]
+    ] = contextvars.ContextVar("captured_session_id_container", default=None)
+
+    class _SessionIdCapturingDict(dict):
+        """Intercepts __setitem__ on SSE transport's _read_stream_writers dict
+        to capture the session-ID assigned by the MCP SDK."""
+
+        def __setitem__(self, key, value):
+            container = _captured_session_id_container_var.get()
+            if container is not None:
+                container["session_id"] = key
+            else:
+                verbose_logger.warning(
+                    "_SessionIdCapturingDict.__setitem__: "
+                    "_captured_session_id_container_var is None — "
+                    "session ID %s was NOT captured.",
+                    key,
+                )
+            super().__setitem__(key, value)
+
+    active_mcp_session_var: contextvars.ContextVar[Optional[_McpServerSession]] = (
+        contextvars.ContextVar("active_mcp_session", default=None)
     )
 except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
@@ -467,10 +508,17 @@ if MCP_AVAILABLE:
     ########################################################
 
     @server.list_tools()
-    async def list_tools() -> List[MCPTool]:
+    async def handle_list_tools() -> List[Tool]:
         """
-        List all available tools
+        List all available tools.
+        Also captures the active session for propagation to callbacks.
         """
+        from mcp.server.lowlevel.server import request_ctx
+
+        req_ctx = request_ctx.get(None)
+        if req_ctx:
+            active_mcp_session_var.set(req_ctx.session)
+
         try:
             # Get user authentication from context variable
             (
@@ -481,7 +529,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
                 _client_ip,
-            ) = get_auth_context()
+            ) = await get_or_extract_auth_context()
             verbose_logger.debug(
                 f"MCP list_tools - User API Key Auth from context: {user_api_key_auth}"
             )
@@ -514,27 +562,29 @@ if MCP_AVAILABLE:
             return []
 
     @server.call_tool()
-    async def mcp_server_tool_call(
-        name: str, arguments: Optional[Dict[str, Any]]
+    async def mcp_server_tool_call(  # noqa: PLR0915
+        name: str, arguments: Dict[str, Any] | None
     ) -> CallToolResult:
         """
         Call a specific tool with the provided arguments
-
         Args:
             name (str): Name of the tool to call
             arguments (Dict[str, Any] | None): Arguments to pass to the tool
-
         Returns:
             List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]: Tool execution results
-
         Raises:
             HTTPException: If tool not found or arguments missing
         """
         from fastapi import Request
-
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
         from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
         from litellm.proxy.proxy_server import proxy_config
+        from mcp.types import CallToolResult
+        from mcp.server.lowlevel.server import request_ctx
+
+        req_ctx = request_ctx.get(None)
+        if req_ctx:
+            active_mcp_session_var.set(req_ctx.session)
 
         # Validate arguments
         (
@@ -545,7 +595,10 @@ if MCP_AVAILABLE:
             oauth2_headers,
             raw_headers,
             _client_ip,
-        ) = get_auth_context()
+        ) = await get_or_extract_auth_context()
+        verbose_logger.debug(
+            f"MCP mcp_server_tool_call - user_api_key_auth={user_api_key_auth}, user_role={getattr(user_api_key_auth, 'user_role', 'N/A')}"
+        )
 
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
@@ -658,6 +711,12 @@ if MCP_AVAILABLE:
         """
         List all available prompts
         """
+        from mcp.server.lowlevel.server import request_ctx
+
+        req_ctx = request_ctx.get(None)
+        if req_ctx:
+            active_mcp_session_var.set(req_ctx.session)
+
         try:
             # Get user authentication from context variable
             (
@@ -668,7 +727,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
                 _client_ip,
-            ) = get_auth_context()
+            ) = await get_or_extract_auth_context()
             verbose_logger.debug(
                 f"MCP list_prompts - User API Key Auth from context: {user_api_key_auth}"
             )
@@ -714,6 +773,12 @@ if MCP_AVAILABLE:
         """
 
         # Validate arguments
+        from mcp.server.lowlevel.server import request_ctx
+
+        req_ctx = request_ctx.get(None)
+        if req_ctx:
+            active_mcp_session_var.set(req_ctx.session)
+
         (
             user_api_key_auth,
             mcp_auth_header,
@@ -722,7 +787,7 @@ if MCP_AVAILABLE:
             oauth2_headers,
             raw_headers,
             _client_ip,
-        ) = get_auth_context()
+        ) = await get_or_extract_auth_context()
 
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
@@ -741,6 +806,12 @@ if MCP_AVAILABLE:
     @server.list_resources()
     async def list_resources() -> List[Resource]:
         """List all available resources."""
+        from mcp.server.lowlevel.server import request_ctx
+
+        req_ctx = request_ctx.get(None)
+        if req_ctx:
+            active_mcp_session_var.set(req_ctx.session)
+
         try:
             (
                 user_api_key_auth,
@@ -750,7 +821,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
                 _client_ip,
-            ) = get_auth_context()
+            ) = await get_or_extract_auth_context()
             verbose_logger.debug(
                 f"MCP list_resources - User API Key Auth from context: {user_api_key_auth}"
             )
@@ -780,6 +851,12 @@ if MCP_AVAILABLE:
     @server.list_resource_templates()
     async def list_resource_templates() -> List[ResourceTemplate]:
         """List all available resource templates."""
+        from mcp.server.lowlevel.server import request_ctx
+
+        req_ctx = request_ctx.get(None)
+        if req_ctx:
+            active_mcp_session_var.set(req_ctx.session)
+
         try:
             (
                 user_api_key_auth,
@@ -789,7 +866,7 @@ if MCP_AVAILABLE:
                 oauth2_headers,
                 raw_headers,
                 _client_ip,
-            ) = get_auth_context()
+            ) = await get_or_extract_auth_context()
             verbose_logger.debug(
                 f"MCP list_resource_templates - User API Key Auth from context: {user_api_key_auth}"
             )
@@ -821,6 +898,12 @@ if MCP_AVAILABLE:
 
     @server.read_resource()
     async def read_resource(url: AnyUrl) -> list[ReadResourceContents]:
+        from mcp.server.lowlevel.server import request_ctx
+
+        req_ctx = request_ctx.get(None)
+        if req_ctx:
+            active_mcp_session_var.set(req_ctx.session)
+
         (
             user_api_key_auth,
             mcp_auth_header,
@@ -829,7 +912,7 @@ if MCP_AVAILABLE:
             oauth2_headers,
             raw_headers,
             _client_ip,
-        ) = get_auth_context()
+        ) = await get_or_extract_auth_context()
 
         read_resource_result = await mcp_read_resource(
             url=url,
@@ -3855,6 +3938,148 @@ if MCP_AVAILABLE:
                 auth_user.client_ip,
             )
         return None, None, None, None, None, None, None
+
+    def _get_current_session():
+        try:
+            return request_ctx.get().session
+        except LookupError:
+            return None
+
+    def _cache_auth_context_lazily(user_api_key_auth: UserAPIKeyAuth):
+        session = _get_current_session()
+        if session is None:
+            return
+        try:
+            if session in _session_obj_auth_storage:
+                return
+        except TypeError:
+            verbose_logger.debug(
+                "_cache_auth_context_lazily: session object is unhashable "
+                "(type=%s), cannot cache auth context",
+                type(session).__name__,
+            )
+            return
+
+        read_stream = getattr(session, "_read_stream", None)
+        existing_auth = (
+            _session_auth_storage.get(read_stream) if read_stream is not None else None
+        )
+        if existing_auth is not None:
+            try:
+                _session_obj_auth_storage[session] = existing_auth
+            except TypeError:
+                verbose_logger.debug(
+                    "_cache_auth_context_lazily: could not store auth via "
+                    "session identity — session object is unhashable"
+                )
+        else:
+            auth = auth_context_var.get()
+            if auth and isinstance(auth, MCPAuthenticatedUser):
+                try:
+                    _session_obj_auth_storage[session] = auth
+                except TypeError:
+                    verbose_logger.debug(
+                        "_cache_auth_context_lazily: could not store auth via "
+                        "session identity (contextvar path) — session object is unhashable"
+                    )
+
+    def _recover_auth_from_session() -> Optional[MCPAuthenticatedUser]:
+        session = _get_current_session()
+        if session is None:
+            return None
+
+        stored: Optional[MCPAuthenticatedUser] = None
+        try:
+            stored = _session_obj_auth_storage.get(session)
+        except TypeError:
+            verbose_logger.debug(
+                "_recover_auth_from_session: session object is unhashable "
+                "(type=%s), skipping _session_obj_auth_storage lookup",
+                type(session).__name__,
+            )
+
+        if stored is None:
+            read_stream = getattr(session, "_read_stream", None)
+            if read_stream is not None:
+                stored = _session_auth_storage.get(read_stream)
+                if stored is not None:
+                    verbose_logger.debug(
+                        "get_or_extract_auth_context: recovered auth via "
+                        "legacy _read_stream lookup — consider upgrading SDK"
+                    )
+                    try:
+                        _session_obj_auth_storage[session] = stored
+                    except TypeError:
+                        verbose_logger.debug(
+                            "_recover_auth_from_session: could not promote "
+                            "auth to _session_obj_auth_storage — session "
+                            "object is unhashable"
+                        )
+        return stored
+
+    async def get_or_extract_auth_context() -> Tuple[
+        Optional[UserAPIKeyAuth],
+        Optional[str],
+        Optional[List[str]],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+        Optional[str],
+    ]:
+        """
+        Get auth context from ContextVar first, then fall back to session
+        storage (which survives cross-task boundaries in the MCP SDK).
+        """
+        (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+            _client_ip,
+        ) = get_auth_context()
+
+        if user_api_key_auth is not None:
+            _cache_auth_context_lazily(user_api_key_auth)
+        else:
+            stored = _recover_auth_from_session()
+
+            if stored:
+                user_api_key_auth = stored.user_api_key_auth
+                mcp_auth_header = stored.mcp_auth_header
+                mcp_servers = stored.mcp_servers
+                mcp_server_auth_headers = stored.mcp_server_auth_headers
+                oauth2_headers = stored.oauth2_headers
+                raw_headers = stored.raw_headers
+                _client_ip = stored.client_ip
+        return (
+            user_api_key_auth,
+            mcp_auth_header,
+            mcp_servers,
+            mcp_server_auth_headers,
+            oauth2_headers,
+            raw_headers,
+            _client_ip,
+        )
+
+    def get_active_mcp_session() -> Optional[_McpServerSession]:
+        """Return the active MCP session captured during handler execution."""
+        session = active_mcp_session_var.get()
+        if session is not None:
+            return session
+        return _get_current_session()
+
+    def get_active_auth_context() -> Optional[MCPAuthenticatedUser]:
+        """Return auth context from ContextVar or session storage."""
+        auth = auth_context_var.get()
+        if auth and isinstance(auth, MCPAuthenticatedUser):
+            return auth
+
+        stored = _recover_auth_from_session()
+        if stored is not None:
+            return stored
+        return None
 
     ########################################################
     ############ End of Auth Context Functions #############

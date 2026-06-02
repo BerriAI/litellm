@@ -48,6 +48,12 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.elicitation_handler import (
+    MCP_ELICITATION_AVAILABLE,
+)
+from litellm.proxy._experimental.mcp_server.sampling_handler import (
+    MCP_SAMPLING_AVAILABLE,
+)
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -189,6 +195,82 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     else:
         # Already a dictionary
         return data
+
+
+def _create_sampling_callback(user_api_key_auth: Optional[Any] = None):
+    """
+    Create a sampling callback for MCP ClientSession.
+    Returns a callable that handles sampling/createMessage requests from
+    upstream MCP servers by routing them through litellm.acompletion().
+    """
+    if not MCP_SAMPLING_AVAILABLE:
+        return None
+
+    async def _sampling_callback(context, params):
+        from litellm.proxy._experimental.mcp_server.sampling_handler import (
+            handle_sampling_create_message,
+        )
+        import litellm
+        from litellm.proxy._experimental.mcp_server.server import (
+            get_active_auth_context,
+        )
+
+        auth_context = get_active_auth_context()
+        resolved_auth = user_api_key_auth or (
+            auth_context.user_api_key_auth if auth_context else None
+        )
+        # Forward original HTTP headers and client IP so that
+        # header-dependent guardrails, tag-based routing, trace
+        # correlation, and forward_llm_provider_auth_headers work
+        # correctly for sampling sub-calls.
+        _raw_headers = getattr(auth_context, "raw_headers", None)
+        _client_ip = getattr(auth_context, "client_ip", None)
+
+        return await handle_sampling_create_message(
+            context=context,
+            params=params,
+            default_model=getattr(litellm, "default_mcp_sampling_model", None),
+            user_api_key_auth=resolved_auth,
+            raw_headers=_raw_headers,
+            client_ip=_client_ip,
+        )
+
+    return _sampling_callback
+
+
+def _create_elicitation_callback():
+    """
+    Create an elicitation callback for MCP ClientSession.
+    Returns a callable that handles elicitation/create requests from
+    upstream MCP servers. In gateway mode, this relays to the downstream
+    client; in tool bridge mode, it returns a decline response.
+    """
+    if not MCP_ELICITATION_AVAILABLE:
+        return None
+
+    async def _elicitation_callback(context, params):
+        from litellm.proxy._experimental.mcp_server.elicitation_handler import (
+            handle_elicitation_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import get_active_mcp_session
+
+        # In Gateway mode, we relay the elicitation request to the downstream client
+        # that triggered the current operation.
+        downstream_session = get_active_mcp_session()
+        downstream_capabilities = (
+            getattr(downstream_session, "capabilities", None)
+            if downstream_session
+            else None
+        )
+
+        return await handle_elicitation_request(
+            context=context,
+            params=params,
+            downstream_session=downstream_session,
+            downstream_capabilities=downstream_capabilities,
+        )
+
+    return _elicitation_callback
 
 
 class MCPServerManager:
@@ -600,8 +682,7 @@ class MCPServerManager:
             )
 
             verbose_logger.debug(
-                f"Using headers for OpenAPI tools (excluding sensitive values): "
-                f"{list(headers.keys())}"
+                f"Using headers for OpenAPI tools (excluding sensitive values): {list(headers.keys())}"
             )
 
             # Extract and register tools from OpenAPI paths
@@ -1394,6 +1475,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         stdio_env: Optional[Dict[str, str]] = None,
         subject_token: Optional[str] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -1410,6 +1492,7 @@ class MCPServerManager:
             extra_headers: Additional headers to forward.
             stdio_env: Environment variables for stdio transport.
             subject_token: Optional user JWT for token exchange (OBO) flow.
+            user_api_key_auth: Optional auth context for sampling callbacks.
 
         Returns:
             Configured MCP client instance.
@@ -1420,23 +1503,38 @@ class MCPServerManager:
 
         transport = server.transport or MCPTransport.sse
 
+        # Create sampling and elicitation callbacks for this client
+        sampling_cb = _create_sampling_callback(user_api_key_auth=user_api_key_auth)
+        elicitation_cb = _create_elicitation_callback()
+
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             resolved_env = (
-                stdio_env if stdio_env is not None else dict(server.env or {})
+                stdio_env
+                if stdio_env is not None
+                else (dict(server.env) if server.env is not None else None)
             )
 
             # Ensure npm-based STDIO MCP servers have a writable cache dir.
             # In containers the default (~/.npm or /app/.npm) may not exist
             # or be read-only, causing npx to fail with ENOENT.
-            if "NPM_CONFIG_CACHE" not in resolved_env:
+            if resolved_env is not None and "NPM_CONFIG_CACHE" not in resolved_env:
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             # Defense-in-depth: block commands not in the allowlist.
             # The Pydantic validator blocks new servers; this catches legacy
             # config/DB records predating the allowlist.
             if server.command:
                 base_command = os.path.basename(server.command)
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                # Strip .exe/.cmd/.bat/.com suffix for Windows compatibility
+                base_command_no_ext = base_command.lower()
+                for ext in [".exe", ".cmd", ".bat", ".com"]:
+                    if base_command.lower().endswith(ext):
+                        base_command_no_ext = base_command[: -len(ext)].lower()
+                        break
+                if (
+                    base_command.lower() not in MCP_STDIO_ALLOWED_COMMANDS
+                    and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
+                ):
                     raise HTTPException(
                         status_code=403,
                         detail=f"MCP stdio command '{server.command}' is not in the allowlist ({sorted(MCP_STDIO_ALLOWED_COMMANDS)}). "
@@ -1459,6 +1557,8 @@ class MCPServerManager:
                 timeout=MCP_CLIENT_TIMEOUT,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
+                sampling_callback=sampling_cb,
+                elicitation_callback=elicitation_cb,
             )
         else:
             # For HTTP/SSE transports
@@ -1485,6 +1585,8 @@ class MCPServerManager:
                 timeout=MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
+                sampling_callback=sampling_cb,
+                elicitation_callback=elicitation_cb,
             )
 
     async def _get_tools_from_server(
@@ -1568,6 +1670,7 @@ class MCPServerManager:
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                user_api_key_auth=user_api_key_auth,
             )
 
             ## HANDLE OPENAPI TOOLS
@@ -2768,6 +2871,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[Any] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2888,6 +2992,7 @@ class MCPServerManager:
             extra_headers=extra_headers,
             stdio_env=stdio_env,
             subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         call_tool_params = MCPCallToolRequestParams(
@@ -3118,7 +3223,6 @@ class MCPServerManager:
                 )
             )
         else:
-            # For regular MCP servers, use the MCP client
             return await self._call_regular_mcp_tool(
                 mcp_server=mcp_server,
                 original_tool_name=name,
@@ -3131,6 +3235,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
