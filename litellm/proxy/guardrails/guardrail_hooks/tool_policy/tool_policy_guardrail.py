@@ -126,6 +126,11 @@ class ToolPolicyGuardrail(CustomGuardrail):
         """
         Enforce input_policy and output_policy trust chain on request tools / response tool_calls.
         """
+        from litellm.proxy.db.tool_registry_writer import is_tool_policy_enabled
+
+        if not is_tool_policy_enabled():
+            return inputs
+
         if input_type == "request":
             tools = inputs.get("tools") or []
             tool_names = [

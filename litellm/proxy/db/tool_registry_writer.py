@@ -5,6 +5,7 @@ Tools are auto-discovered from LLM responses and upserted here.
 Admins use the management endpoints to read and update input_policy / output_policy.
 """
 
+import os
 import uuid
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
@@ -21,6 +22,17 @@ from litellm.types.tool_management import (
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
+
+
+def is_tool_policy_enabled() -> bool:
+    """Return True only when LITELLM_TOOL_POLICY_ENABLED=true is set.
+
+    Defaults to false — the sync and guardrail are expensive no-ops when no
+    policies are configured, so they are opt-in.
+    """
+    from litellm.secret_managers.main import str_to_bool
+
+    return str_to_bool(os.getenv("LITELLM_TOOL_POLICY_ENABLED", "false")) is True
 
 
 def _row_to_model(row: Union[dict, Any]) -> LiteLLM_ToolTableRow:

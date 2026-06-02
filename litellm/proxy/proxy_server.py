@@ -6311,7 +6311,13 @@ class ProxyConfig:
         Initialize tool policy from database into the in-memory registry.
         Synced periodically by add_deployment -> _init_non_llm_objects_in_db.
         """
-        from litellm.proxy.db.tool_registry_writer import get_tool_policy_registry
+        from litellm.proxy.db.tool_registry_writer import (
+            get_tool_policy_registry,
+            is_tool_policy_enabled,
+        )
+
+        if not is_tool_policy_enabled():
+            return
 
         try:
             registry = get_tool_policy_registry()
