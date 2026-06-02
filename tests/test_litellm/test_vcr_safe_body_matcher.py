@@ -287,6 +287,32 @@ def test_tolerant_path_normalizes_bedrock_managed_s3_file_uuid():
     _tolerant_path_matcher(a, b)
 
 
+def test_tolerant_path_normalizes_bedrock_batch_s3_file_uuid():
+    from vcr.request import Request
+
+    a = Request(
+        method="PUT",
+        uri=(
+            "https://s3.us-west-2.amazonaws.com/litellm-proxy-test/"
+            "litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-"
+            "a48e9ec2-5594-45e3-bdbb-44f5d71c06f3.jsonl"
+        ),
+        body=b"",
+        headers={},
+    )
+    b = Request(
+        method="PUT",
+        uri=(
+            "https://s3.us-west-2.amazonaws.com/litellm-proxy-test/"
+            "litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-"
+            "123e4567-e89b-12d3-a456-426614174000.jsonl"
+        ),
+        body=b"",
+        headers={},
+    )
+    _tolerant_path_matcher(a, b)
+
+
 def test_tolerant_path_still_rejects_different_regular_paths():
     from vcr.request import Request
 

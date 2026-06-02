@@ -1063,7 +1063,7 @@ def _tolerant_query_matcher(r1, r2) -> None:
 
 
 _BEDROCK_MANAGED_S3_PATH_RE = re.compile(
-    r"(?P<prefix>(?:^|/)litellm-bedrock-files/[^/?#]+-)"
+    r"(?P<prefix>(?:^|/)(?:litellm-bedrock-files/[^/?#]+-|litellm-bedrock-files-[^/?#]+-))"
     r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
     r"(?P<suffix>\.jsonl)"
 )
@@ -1097,9 +1097,11 @@ def _tolerant_path_matcher(r1, r2) -> None:
     """vcrpy's ``path`` matcher, plus LiteLLM-managed Bedrock S3 upload UUIDs.
 
     Bedrock batch file uploads use object keys like
-    ``litellm-bedrock-files/{model}-{uuid}.jsonl``. The UUID is generated
-    client-side before the S3 PUT, so strict path matching makes every replay
-    miss even when the JSONL body and all provider semantics are identical.
+    ``litellm-bedrock-files-{model}-{uuid}.jsonl`` (and older cassettes may
+    contain ``litellm-bedrock-files/{model}-{uuid}.jsonl``). The UUID is
+    generated client-side before the S3 PUT, so strict path matching makes
+    every replay miss even when the JSONL body and all provider semantics are
+    identical.
     """
     path1 = _normalize_volatile_path(_request_path_for_matcher(r1))
     path2 = _normalize_volatile_path(_request_path_for_matcher(r2))
