@@ -8865,6 +8865,8 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
+            return litellm.BedrockMantleResponsesAPIConfig()
         return None
 
     @staticmethod

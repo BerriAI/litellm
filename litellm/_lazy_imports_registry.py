@@ -219,6 +219,7 @@ LLM_CONFIG_NAMES = (
     "OpenAITextCompletionConfig",
     "GroqChatConfig",
     "BedrockMantleChatConfig",
+    "BedrockMantleResponsesAPIConfig",
     "A2AConfig",
     "GenAIHubOrchestrationConfig",
     "VoyageEmbeddingConfig",
@@ -885,6 +886,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "BedrockMantleChatConfig": (
         ".llms.bedrock_mantle.chat.transformation",
         "BedrockMantleChatConfig",
+    ),
+    "BedrockMantleResponsesAPIConfig": (
+        ".llms.bedrock_mantle.responses.transformation",
+        "BedrockMantleResponsesAPIConfig",
     ),
     "A2AConfig": (".llms.a2a.chat.transformation", "A2AConfig"),
     "GenAIHubOrchestrationConfig": (

@@ -3,7 +3,7 @@ Amazon Bedrock Mantle - OpenAI-compatible inference engine in Amazon Bedrock.
 
 API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 
-Base URL: https://bedrock-mantle.{region}.api.aws/v1
+Base URL: https://bedrock-mantle.{region}.api.aws/openai/v1
 Auth: AWS Bedrock API key as Bearer token (set via BEDROCK_MANTLE_API_KEY env var)
       or region-aware key via BEDROCK_MANTLE_{REGION}_API_KEY.
 """
@@ -43,7 +43,7 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         api_base = (
             api_base
             or get_secret_str("BEDROCK_MANTLE_API_BASE")
-            or f"https://bedrock-mantle.{region}.api.aws/v1"
+            or f"https://bedrock-mantle.{region}.api.aws/openai/v1"
         )
         dynamic_api_key = api_key or get_secret_str("BEDROCK_MANTLE_API_KEY")
         return api_base, dynamic_api_key

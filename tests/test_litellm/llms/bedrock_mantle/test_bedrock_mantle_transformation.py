@@ -14,7 +14,11 @@ import pytest
 
 import litellm
 from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
+from litellm.llms.bedrock_mantle.responses.transformation import (
+    BedrockMantleResponsesAPIConfig,
+)
 from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 
 class TestBedrockMantleProviderRegistration:
@@ -50,7 +54,7 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
         cfg = BedrockMantleChatConfig()
         api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
-        assert api_base == "https://bedrock-mantle.eu-west-1.api.aws/v1"
+        assert api_base == "https://bedrock-mantle.eu-west-1.api.aws/openai/v1"
 
     def test_default_api_base_uses_aws_region(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -58,7 +62,7 @@ class TestBedrockMantleConfig:
         monkeypatch.setenv("AWS_REGION", "ap-northeast-1")
         cfg = BedrockMantleChatConfig()
         api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
-        assert api_base == "https://bedrock-mantle.ap-northeast-1.api.aws/v1"
+        assert api_base == "https://bedrock-mantle.ap-northeast-1.api.aws/openai/v1"
 
     def test_default_api_base_fallback_to_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
@@ -66,10 +70,10 @@ class TestBedrockMantleConfig:
         monkeypatch.delenv("AWS_REGION", raising=False)
         cfg = BedrockMantleChatConfig()
         api_base, _ = cfg._get_openai_compatible_provider_info(None, None)
-        assert api_base == "https://bedrock-mantle.us-east-1.api.aws/v1"
+        assert api_base == "https://bedrock-mantle.us-east-1.api.aws/openai/v1"
 
     def test_custom_api_base_overrides_default(self, monkeypatch):
-        custom_base = "https://bedrock-mantle.us-west-2.api.aws/v1"
+        custom_base = "https://bedrock-mantle.us-west-2.api.aws/openai/v1"
         cfg = BedrockMantleChatConfig()
         api_base, _ = cfg._get_openai_compatible_provider_info(custom_base, None)
         assert api_base == custom_base
@@ -94,6 +98,21 @@ class TestBedrockMantleConfig:
         assert "temperature" in params
         assert "stream" in params
         assert "max_tokens" in params
+
+
+class TestBedrockMantleResponsesConfig:
+    def test_responses_complete_url(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-1")
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(api_base=None, litellm_params={})
+        assert url == "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+
+    def test_provider_config_manager_registers_responses(self):
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="gpt-5.5",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
 
 
 class TestBedrockMantleProviderResolution:

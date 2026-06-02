@@ -1680,6 +1680,9 @@ if TYPE_CHECKING:
     from .llms.bedrock_mantle.chat.transformation import (
         BedrockMantleChatConfig as BedrockMantleChatConfig,
     )
+    from .llms.bedrock_mantle.responses.transformation import (
+        BedrockMantleResponsesAPIConfig as BedrockMantleResponsesAPIConfig,
+    )
     from .llms.a2a.chat.transformation import A2AConfig as A2AConfig
     from .llms.voyage.embedding.transformation import (
         VoyageEmbeddingConfig as VoyageEmbeddingConfig,
