@@ -382,6 +382,11 @@ async def test_mcp_http_transport_tool_not_found():
         }
     )
 
+    # Mapping populated for this server but not for the requested tool
+    test_manager.tool_name_to_mcp_server_name_mapping["gmail_send_email"] = (
+        "test_http_server"
+    )
+
     # Try to call a tool that doesn't exist in mapping
     with pytest.raises(ValueError, match="Tool nonexistent_tool not found"):
         await test_manager.call_tool(
@@ -395,11 +400,11 @@ async def test_mcp_http_transport_tool_not_found():
 @pytest.mark.asyncio
 async def test_streamable_http_mcp_handler_mock():
     """Test the streamable HTTP MCP handler functionality"""
-    from litellm.proxy._types import UserAPIKeyAuth
-
-    # Mock the session manager and its methods
-    mock_session_manager = AsyncMock()
-    mock_session_manager.handle_request = AsyncMock()
+    # Mock streamable HTTP session managers and their methods
+    mock_session_manager_stateless = AsyncMock()
+    mock_session_manager_stateless.handle_request = AsyncMock()
+    mock_session_manager_stateful = AsyncMock()
+    mock_session_manager_stateful.handle_request = AsyncMock()
 
     # Mock scope, receive, send with proper ASGI scope format
     mock_scope = {
@@ -411,7 +416,7 @@ async def test_streamable_http_mcp_handler_mock():
         "server": ("localhost", 8000),
         "scheme": "http",
     }
-    mock_receive = AsyncMock()
+    mock_receive = AsyncMock(return_value={"body": b"{}", "more_body": False})
     mock_send = AsyncMock()
 
     # Mock extract_mcp_auth_context to bypass auth checks in the handler
@@ -423,8 +428,12 @@ async def test_streamable_http_mcp_handler_mock():
             True,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server.session_manager",
-            mock_session_manager,
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateless",
+            mock_session_manager_stateless,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.session_manager_stateful",
+            mock_session_manager_stateful,
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
@@ -441,8 +450,9 @@ async def test_streamable_http_mcp_handler_mock():
         # Call the handler
         await handle_streamable_http_mcp(mock_scope, mock_receive, mock_send)
 
-        # Verify session manager handle_request was called
-        mock_session_manager.handle_request.assert_called_once()
+        # Verify stateless session manager handle_request was called
+        mock_session_manager_stateless.handle_request.assert_called_once()
+        mock_session_manager_stateful.handle_request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -881,6 +891,7 @@ async def test_get_tools_from_mcp_servers():
                 extra_headers=None,
                 add_prefix=False,
                 raw_headers=None,
+                user_api_key_auth=None,
             ):
                 if server.server_id == "server1_id":
                     return [mock_tool_1]
@@ -1494,6 +1505,7 @@ async def test_add_update_server_with_alias():
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
     mock_mcp_server.instructions = None
+    mock_mcp_server.source_url = None
     mock_mcp_server.approval_status = "active"
 
     # Add server to manager
@@ -1552,6 +1564,7 @@ async def test_add_update_server_without_alias():
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
     mock_mcp_server.instructions = None
+    mock_mcp_server.source_url = None
     mock_mcp_server.approval_status = "active"
 
     # Add server to manager
@@ -1611,6 +1624,7 @@ async def test_add_update_server_fallback_to_server_id():
     mock_mcp_server.created_at = None
     mock_mcp_server.updated_at = None
     mock_mcp_server.instructions = None
+    mock_mcp_server.source_url = None
     mock_mcp_server.approval_status = "active"
     # Add server to manager
     await test_manager.add_server(mock_mcp_server)
@@ -1764,6 +1778,26 @@ def test_get_server_auth_header_fallback_to_default():
     assert result == "Bearer default_token"
 
 
+def test_get_server_auth_header_hyphenated_alias_sanitized_header_key():
+    """Header keys use sanitized alias; lookup must match legacy hyphenated aliases."""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_server_auth_header,
+    )
+
+    mock_server = MagicMock()
+    mock_server.alias = "GitHub-MCP"
+    mock_server.server_name = "github_mcp_server"
+
+    mcp_server_auth_headers = {
+        "github_mcp": {"Authorization": "Bearer github-mcp-token"},
+    }
+
+    result = _get_server_auth_header(
+        mock_server, mcp_server_auth_headers, "Bearer default_token"
+    )
+    assert result == {"Authorization": "Bearer github-mcp-token"}
+
+
 def test_get_server_auth_header_no_auth_headers():
     """Test _get_server_auth_header function with no auth headers."""
     from litellm.proxy._experimental.mcp_server.rest_endpoints import (
@@ -1828,9 +1862,11 @@ async def test_get_tools_for_single_server():
     )
     from mcp.types import Tool as MCPTool
 
-    # Create a mock server
+    # Create a mock server (pin allowlist fields; MagicMock auto-attrs are truthy)
     mock_server = MagicMock()
     mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = None
 
     # Create mock tools
     mock_tools = [
@@ -1856,12 +1892,51 @@ async def test_get_tools_for_single_server():
             extra_headers=None,
             add_prefix=False,
             raw_headers=None,
+            user_api_key_auth=None,
         )
 
         # Verify the result
         assert len(result) == 1
         assert result[0].name == "send_email"
         assert result[0].mcp_info == {"server_name": "zapier"}
+
+
+@pytest.mark.asyncio
+async def test_get_tools_for_single_server_applies_disallowed_tools_without_allowlist():
+    """REST listing must honor disallowed_tools even when no allowlist is set."""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_tools_for_single_server,
+    )
+    from mcp.types import Tool as MCPTool
+
+    mock_server = MagicMock()
+    mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.name = "zapier"
+    mock_server.server_id = "zapier"
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = ["send_email"]
+
+    mock_tools = [
+        MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="read_email",
+            description="Read an email",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+
+        result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
+
+    assert [tool.name for tool in result] == ["read_email"]
 
 
 @pytest.mark.asyncio

@@ -10,10 +10,12 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
     convert_to_gemini_tool_call_result,
+    make_valid_bedrock_tool_name,
     ollama_pt,
     sanitize_messages_for_tool_calling,
 )
@@ -89,6 +91,81 @@ async def test_anthropic_bedrock_thinking_blocks_with_none_content():
         result[1]["content"][0]["reasoningContent"]["reasoningText"]["text"]
         == "This is a test thinking block"
     )
+
+
+def test_bedrock_converse_assistant_with_empty_thinking_block_and_tool_calls():
+    """
+    Regression: Claude Code (with extended thinking enabled) replays prior
+    assistant turns that include an empty thinking block alongside tool_use
+    blocks, e.g.
+
+        content=[
+            {"type": "text", "text": ""},
+            {"type": "thinking", "thinking": "", "signature": ""},
+            {"type": "tool_use", ...},
+        ]
+
+    After the Anthropic→OpenAI adapter, this becomes assistant message with
+    content="" and thinking_blocks=[{thinking:"", signature:""}] plus
+    tool_calls. The Bedrock Converse fallback for unsigned reasoning content
+    was emitting `BedrockContentBlock(text="")`, which Bedrock rejects with:
+
+        "The text field in the ContentBlock object at messages.X.content.0
+         is blank."
+
+    Verify no blank-text ContentBlocks are produced.
+    """
+    messages = [
+        {"role": "user", "content": "tell me about this repo"},
+        {
+            "role": "assistant",
+            "content": "",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "", "signature": ""},
+            ],
+            "tool_calls": [
+                {
+                    "id": "tooluse_aC8Izm8kl5DqVkgLA4XqcH",
+                    "type": "function",
+                    "function": {"name": "Bash", "arguments": '{"command": "ls"}'},
+                },
+                {
+                    "id": "tooluse_31BEsgAjDwZxsUofwmdVPS",
+                    "type": "function",
+                    "function": {"name": "Bash", "arguments": '{"command": "pwd"}'},
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_aC8Izm8kl5DqVkgLA4XqcH",
+            "content": "file1\nfile2",
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "tooluse_31BEsgAjDwZxsUofwmdVPS",
+            "content": "/repo",
+        },
+    ]
+
+    result = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="us.anthropic.claude-opus-4-7",
+        llm_provider="bedrock",
+    )
+
+    assistant_blocks = [m for m in result if m["role"] == "assistant"]
+    assert len(assistant_blocks) == 1
+    for block in assistant_blocks[0]["content"]:
+        if "text" in block:
+            assert block[
+                "text"
+            ].strip(), (
+                f"Bedrock Converse rejects blank-text ContentBlocks; got {block!r}"
+            )
+    # toolUse blocks must still be present
+    tool_use_blocks = [b for b in assistant_blocks[0]["content"] if "toolUse" in b]
+    assert len(tool_use_blocks) == 2
 
 
 def test_convert_to_azure_openai_messages():
@@ -2005,6 +2082,90 @@ def test_bedrock_tool_call_invoke_non_dict_arguments():
     result = _convert_to_bedrock_tool_call_invoke(tool_calls)
     assert len(result) == 1
     assert result[0]["toolUse"]["input"] == {}
+
+
+def test_make_valid_bedrock_tool_name_preserves_hyphens():
+    assert make_valid_bedrock_tool_name("my-tool") == "my-tool"
+    assert (
+        make_valid_bedrock_tool_name(
+            "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
+        )
+        == "CreateCaseKnowledgeArticle_foTWsqR6yDt-OnSsvR5e6Q"
+    )
+
+
+def test_bedrock_tool_name_sanitized_consistently_in_tools_and_tool_use():
+    """toolSpec and toolUse names must match after sanitization (issue #5007)."""
+    raw_name = "foo@bar"
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": raw_name,
+                "description": "test",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    tool_spec_name = _bedrock_tools_pt(tools)[0]["toolSpec"]["name"]
+
+    tool_calls = [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": raw_name, "arguments": "{}"},
+        }
+    ]
+    tool_use_name = _convert_to_bedrock_tool_call_invoke(tool_calls)[0]["toolUse"][
+        "name"
+    ]
+
+    assert tool_spec_name == "foo_bar"
+    assert tool_use_name == tool_spec_name
+
+
+def test_bedrock_converse_messages_pt_tool_use_matches_tool_spec_hyphen_name():
+    """Hyphenated tool names are preserved and consistent in multi-turn history."""
+    tool_name = "my-tool"
+    messages = [
+        {"role": "user", "content": "call the tool"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_hyphen",
+                    "type": "function",
+                    "function": {"name": tool_name, "arguments": "{}"},
+                }
+            ],
+        },
+    ]
+    translated = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+    tool_use_blocks = [
+        block
+        for msg in translated
+        for block in msg.get("content", [])
+        if "toolUse" in block
+    ]
+    assert len(tool_use_blocks) == 1
+    assert tool_use_blocks[0]["toolUse"]["name"] == tool_name
+
+    tool_spec_name = _bedrock_tools_pt(
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": "test",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+    )[0]["toolSpec"]["name"]
+    assert tool_spec_name == tool_name
 
 
 def test_bedrock_tool_call_invoke_multiple_normal_tools():

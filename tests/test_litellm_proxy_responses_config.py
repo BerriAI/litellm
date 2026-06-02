@@ -15,7 +15,7 @@ def test_litellm_proxy_responses_api_config():
     )
 
     config = ProviderConfigManager.get_provider_responses_api_config(
-        model="litellm_proxy/gpt-4",
+        model="litellm_proxy/gpt-5.5",
         provider=LlmProviders.LITELLM_PROXY,
     )
     print(f"config: {config}")

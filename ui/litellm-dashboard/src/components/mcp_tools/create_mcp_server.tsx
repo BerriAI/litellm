@@ -3,6 +3,7 @@ import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { createMCPServer, registerMCPServer } from "../networking";
+import { setToken } from "@/utils/mcpTokenStore";
 import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
@@ -24,6 +25,7 @@ export const mcpLogoImg = `${asset_logos_folder}mcp_logo.png`;
 
 interface CreateMCPServerProps {
   userRole: string;
+  userID?: string | null;
   accessToken: string | null;
   onCreateSuccess: (newMcpServer: MCPServer) => void;
   isModalVisible: boolean;
@@ -47,6 +49,7 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
 };
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
+  userID,
   userRole,
   accessToken,
   onCreateSuccess,
@@ -66,6 +69,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
@@ -103,6 +107,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           transportType,
           costConfig,
           allowedTools,
+          hasToolAllowlistInteraction,
           searchValue,
           aliasManuallyEdited,
           logoUrl,
@@ -201,6 +206,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       if (parsed.allowedTools) {
         setAllowedTools(parsed.allowedTools);
       }
+      if (typeof parsed.hasToolAllowlistInteraction === "boolean") {
+        setHasToolAllowlistInteraction(parsed.hasToolAllowlistInteraction);
+      }
       if (parsed.searchValue) {
         setSearchValue(parsed.searchValue);
       }
@@ -284,6 +292,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
         available_on_public_internet: availableOnPublicInternetRaw,
+        delegate_auth_to_upstream: delegateAuthToUpstreamRaw,
         token_validation_json: rawTokenValidationJson,
         ...restValues
       } = values;
@@ -380,14 +389,16 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           description: restValues.description,
           logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
+          tool_allowlist_enforced: hasToolAllowlistInteraction || allowedTools.length > 0,
         },
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
-        allowed_tools: allowedTools.length > 0 ? allowedTools : null,
-        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
-        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
+        allowed_tools: allowedTools,
+        tool_name_to_display_name: toolNameToDisplayName,
+        tool_name_to_description: toolNameToDescription,
         allow_all_keys: Boolean(allowAllKeysRaw),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
+        delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         static_headers: staticHeaders,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
@@ -407,6 +418,21 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? await createMCPServer(accessToken, payload)
           : await registerMCPServer(accessToken, payload);
 
+        // Cache the OAuth token in sessionStorage so the Tools tab can use it
+        // immediately without re-authenticating.  No backend DB write.
+        if (oauthTokenResponse?.access_token && response?.server_id) {
+          setToken(
+            response.server_id,
+            {
+              access_token: oauthTokenResponse.access_token,
+              expires_in: oauthTokenResponse.expires_in,
+              refresh_token: oauthTokenResponse.refresh_token,
+              token_type: oauthTokenResponse.token_type,
+            },
+            userID,
+          );
+        }
+
         NotificationsManager.success(
           isAdmin
             ? "MCP Server created successfully"
@@ -416,6 +442,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setCostConfig({});
         clearTools();
         setAllowedTools([]);
+        setHasToolAllowlistInteraction(false);
         setAliasManuallyEdited(false);
         setLogoUrl(undefined);
         setModalVisible(false);
@@ -437,6 +464,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setCostConfig({});
     clearTools();
     setAllowedTools([]);
+    setHasToolAllowlistInteraction(false);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
     setModalVisible(false);
@@ -1020,6 +1048,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               allowedTools={allowedTools}
               existingAllowedTools={null}
               onAllowedToolsChange={setAllowedTools}
+              hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+              onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
               toolNameToDisplayName={toolNameToDisplayName}
               toolNameToDescription={toolNameToDescription}
               onToolNameToDisplayNameChange={setToolNameToDisplayName}

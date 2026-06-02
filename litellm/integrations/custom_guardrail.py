@@ -43,7 +43,11 @@ if TYPE_CHECKING:
 dc = DualCache()
 
 
-from litellm.exceptions import ModifyResponseException as ModifyResponseException
+from litellm.exceptions import (
+    BlockedPiiEntityError,
+    GuardrailRaisedException,
+    ModifyResponseException,
+)
 
 
 class CustomGuardrail(CustomLogger):
@@ -737,11 +741,14 @@ class CustomGuardrail(CustomLogger):
         (this was logged previously as an API failure - guardrail_failed_to_respond).
 
         Guardrails signal intentional blocks by raising:
+        - GuardrailRaisedException (generic guardrail API, tool permission)
+        - BlockedPiiEntityError (Presidio PII detection)
         - HTTPException with status 400 (content policy violation)
         - ModifyResponseException (passthrough mode violation)
         """
-
         if isinstance(e, ModifyResponseException):
+            return True
+        if isinstance(e, (GuardrailRaisedException, BlockedPiiEntityError)):
             return True
         if (
             HTTPException is not None
@@ -888,6 +895,15 @@ def log_guardrail_information(func):
         - pre_call
         - during_call
         - post_call
+
+    Some guardrails (e.g. ``block_code_execution``) call
+    ``add_standard_logging_guardrail_information_to_request_data`` directly
+    from inside the wrapped function so they can record a richer payload
+    (structured detections, tracing detail) than this decorator's
+    "allow"/"mask"/raw-response default. To avoid double-recording in that
+    case (which would emit two spans, two Datadog records, two spend-log
+    entries, etc.), snapshot the entry count before invocation: if the
+    wrapped function already appended its own entry, skip the auto-record.
     """
     import functools
     import inspect
@@ -907,6 +923,16 @@ def log_guardrail_information(func):
             return GuardrailEventHooks.post_call
         return None
 
+    def _count_recorded_guardrail_entries(request_data: dict) -> int:
+        total = 0
+        for container_key in ("metadata", "litellm_metadata"):
+            container = request_data.get(container_key)
+            if isinstance(container, dict):
+                entries = container.get("standard_logging_guardrail_information")
+                if isinstance(entries, list):
+                    total += len(entries)
+        return total
+
     @functools.wraps(func)
     async def async_wrapper(*args, **kwargs):
         start_time = datetime.now()  # Move start_time inside the wrapper
@@ -919,8 +945,11 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
+        entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = await func(*args, **kwargs)
+            if _count_recorded_guardrail_entries(request_data) > entries_before:
+                return response
             return self._process_response(
                 response=response,
                 request_data=request_data,
@@ -931,6 +960,8 @@ def log_guardrail_information(func):
                 original_inputs=original_inputs,
             )
         except Exception as e:
+            if _count_recorded_guardrail_entries(request_data) > entries_before:
+                raise
             return self._process_error(
                 e=e,
                 request_data=request_data,
@@ -952,8 +983,11 @@ def log_guardrail_information(func):
         if func.__name__ == "apply_guardrail" and "inputs" in kwargs:
             original_inputs = kwargs.get("inputs")
 
+        entries_before = _count_recorded_guardrail_entries(request_data)
         try:
             response = func(*args, **kwargs)
+            if _count_recorded_guardrail_entries(request_data) > entries_before:
+                return response
             return self._process_response(
                 response=response,
                 request_data=request_data,
@@ -962,6 +996,8 @@ def log_guardrail_information(func):
                 original_inputs=original_inputs,
             )
         except Exception as e:
+            if _count_recorded_guardrail_entries(request_data) > entries_before:
+                raise
             return self._process_error(
                 e=e,
                 request_data=request_data,
