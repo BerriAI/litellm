@@ -712,6 +712,145 @@ class TestGithubCopilotTransformResponse:
         assert result.choices[0].message.content == ""
         assert result.choices[0].finish_reason == "length"
 
+    def test_transform_response_anthropic_native_tool_use(self):
+        """tool_use blocks must be converted to OpenAI tool_calls on the message."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_tool",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.8",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01ABC",
+                    "name": "get_weather",
+                    "input": {"location": "Boston, MA"},
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "What's the weather?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].message.tool_calls is not None
+        assert len(result.choices[0].message.tool_calls) == 1
+        assert result.choices[0].message.tool_calls[0]["id"] == "toolu_01ABC"
+        assert (
+            result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+        )
+        assert (
+            '"Boston, MA"'
+            in result.choices[0].message.tool_calls[0]["function"]["arguments"]
+        )
+
+    def test_transform_response_anthropic_native_multiple_text_blocks(self):
+        """All text blocks must be concatenated, not only the first."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_multi_text",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.7",
+            "content": [
+                {"type": "text", "text": "Hello "},
+                {"type": "text", "text": "world!"},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3,
+                "total_tokens": 8,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.7",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "Hello world!"
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_transform_response_anthropic_native_thinking_then_text(self):
+        """Thinking blocks are preserved; following text is still extracted."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_thinking",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.8",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me reason about this.",
+                    "signature": "sig123",
+                },
+                {"type": "text", "text": "The answer is 42."},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "total_tokens": 30,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "What is the answer?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "The answer is 42."
+        assert result.choices[0].message.thinking_blocks is not None
+        assert len(result.choices[0].message.thinking_blocks) == 1
+        assert result.choices[0].finish_reason == "stop"
+
     def test_transform_response_invalid_json_falls_through_to_super(self):
         """
         When raw_response.json() raises an exception (e.g. non-JSON body),

@@ -6,8 +6,9 @@ import os
 import httpx
 
 from litellm.exceptions import AuthenticationError
+from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.openai.openai import OpenAIConfig
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import ModelResponse
 
 from ..authenticator import Authenticator
@@ -169,6 +170,30 @@ class GithubCopilotConfig(OpenAIConfig):
                             return True
         return False
 
+    @staticmethod
+    def _parse_anthropic_native_content(
+        content_blocks: List[Any],
+    ) -> Tuple[str, List[ChatCompletionToolCallChunk], Optional[List[Any]]]:
+        """
+        Parse Anthropic-native content blocks into OpenAI-compatible fields.
+
+        Concatenates all text blocks, extracts tool_use blocks as tool_calls, and
+        preserves thinking blocks when present.
+        """
+        (
+            text_content,
+            _citations,
+            thinking_blocks,
+            _reasoning_content,
+            tool_calls,
+            _web_search_results,
+            _tool_results,
+            _compaction_blocks,
+        ) = AnthropicConfig().extract_response_content(
+            completion_response={"content": content_blocks}
+        )
+        return text_content, tool_calls, thinking_blocks
+
     def transform_response(
         self,
         model: str,
@@ -211,13 +236,16 @@ class GithubCopilotConfig(OpenAIConfig):
 
         if not response_json.get("choices"):
             content = ""
+            tool_calls: List[ChatCompletionToolCallChunk] = []
+            thinking_blocks: Optional[List[Any]] = None
             if "content" in response_json and isinstance(
                 response_json["content"], list
             ):
-                for block in response_json["content"]:
-                    if isinstance(block, dict) and block.get("type") == "text":
-                        content = block.get("text", "")
-                        break
+                content, tool_calls, thinking_blocks = (
+                    self._parse_anthropic_native_content(response_json["content"])
+                )
+            elif isinstance(response_json.get("content"), str):
+                content = response_json["content"]
 
             stop_reason = response_json.get("stop_reason")
             finish_reason_map = {
@@ -226,19 +254,29 @@ class GithubCopilotConfig(OpenAIConfig):
                 "stop_sequence": "stop",
                 "tool_use": "tool_calls",
             }
-            # Default to "stop" for responses with content, "length" only when
-            # content is empty and stop_reason is absent/unknown.
-            if stop_reason in finish_reason_map:
+            # Prefer tool_calls when blocks were extracted; otherwise map stop_reason.
+            if tool_calls:
+                finish_reason = "tool_calls"
+            elif stop_reason in finish_reason_map:
                 finish_reason = finish_reason_map[stop_reason]
             elif content:
                 finish_reason = "stop"
             else:
                 finish_reason = "length"
 
+            message: dict = {
+                "role": "assistant",
+                "content": content if content or not tool_calls else None,
+            }
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+            if thinking_blocks:
+                message["thinking_blocks"] = thinking_blocks
+
             response_json["choices"] = [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": content},
+                    "message": message,
                     "finish_reason": finish_reason,
                 }
             ]
