@@ -734,44 +734,77 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             max_parallel_requests_limit = rate_limit.get("max_parallel_requests")
             window_size = rate_limit.get("window_size") or self.window_size
 
-            window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
-
             rate_limit_set = False
             if requests_limit is not None:
                 rpm_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, "requests"
                 )
-                keys_to_fetch.extend([window_key, rpm_key])
+                rpm_window_key = f"{{{descriptor_key}:{descriptor_value}}}:window:requests"
+                keys_to_fetch.extend([rpm_window_key, rpm_key])
                 rate_limit_set = True
             if tokens_limit is not None:
                 tpm_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, "tokens"
                 )
-                keys_to_fetch.extend([window_key, tpm_key])
+                tpm_window_key = f"{{{descriptor_key}:{descriptor_value}}}:window:tokens"
+                keys_to_fetch.extend([tpm_window_key, tpm_key])
                 rate_limit_set = True
             if max_parallel_requests_limit is not None:
                 max_parallel_requests_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, "max_parallel_requests"
                 )
-                keys_to_fetch.extend([window_key, max_parallel_requests_key])
+                mpr_window_key = f"{{{descriptor_key}:{descriptor_value}}}:window:max_parallel_requests"
+                keys_to_fetch.extend([mpr_window_key, max_parallel_requests_key])
                 rate_limit_set = True
 
             if not rate_limit_set:
                 continue
 
-            key_metadata[window_key] = {
-                "requests_limit": (
-                    int(requests_limit) if requests_limit is not None else None
-                ),
-                "tokens_limit": int(tokens_limit) if tokens_limit is not None else None,
-                "max_parallel_requests_limit": (
-                    int(max_parallel_requests_limit)
-                    if max_parallel_requests_limit is not None
-                    else None
-                ),
-                "window_size": int(window_size),
-                "descriptor_key": descriptor_key,
-            }
+            # Build per-window metadata keyed by the type-specific window key
+            # so the batch rate-limiter Lua script and in-memory sliding
+            # window correctly reset each counter independently.
+            per_window_meta: list[tuple[str, dict]] = []
+            if requests_limit is not None:
+                per_window_meta.append(
+                    (
+                        f"{{{descriptor_key}:{descriptor_value}}}:window:requests",
+                        {
+                            "requests_limit": int(requests_limit),
+                            "tokens_limit": None,
+                            "max_parallel_requests_limit": None,
+                            "window_size": int(window_size),
+                            "descriptor_key": descriptor_key,
+                        },
+                    )
+                )
+            if tokens_limit is not None:
+                per_window_meta.append(
+                    (
+                        f"{{{descriptor_key}:{descriptor_value}}}:window:tokens",
+                        {
+                            "requests_limit": None,
+                            "tokens_limit": int(tokens_limit),
+                            "max_parallel_requests_limit": None,
+                            "window_size": int(window_size),
+                            "descriptor_key": descriptor_key,
+                        },
+                    )
+                )
+            if max_parallel_requests_limit is not None:
+                per_window_meta.append(
+                    (
+                        f"{{{descriptor_key}:{descriptor_value}}}:window:max_parallel_requests",
+                        {
+                            "requests_limit": None,
+                            "tokens_limit": None,
+                            "max_parallel_requests_limit": int(max_parallel_requests_limit),
+                            "window_size": int(window_size),
+                            "descriptor_key": descriptor_key,
+                        },
+                    )
+                )
+            for wk, meta in per_window_meta:
+                key_metadata[wk] = meta
 
         ## CHECK IN-MEMORY CACHE
         cache_values = await self.internal_usage_cache.async_batch_get_cache(
@@ -930,7 +963,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptor.get("rate_limit") or RateLimitDescriptorRateLimitObject()
         )
         window_size = rate_limit.get("window_size") or self.window_size
-        window_key = f"{{{descriptor_key}:{descriptor_value}}}:window"
 
         keys: List[str] = []
         args: List[Any] = []
@@ -951,13 +983,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             counter_key = self.create_rate_limit_keys(
                 descriptor_key, descriptor_value, rlt
             )
+            # Each rate limit type gets its own window key so the Lua
+            # atomic script resets each counter independently. Without
+            # this, sharing one window across RPM and TPM causes the
+            # second counter to never reset when the window rolls over.
+            type_window_key = f"{{{descriptor_key}:{descriptor_value}}}:window:{rlt}"
             # Counter-key TTL and window_size are conceptually distinct
             # ("how long the counter Redis key lives" vs "how long the
             # sliding window is"). Kept as separate values so a future
             # custom-TTL descriptor doesn't reintroduce a silent expiry bug.
             ttl_seconds = int(window_size)
             window_size_seconds = int(window_size)
-            keys.extend([window_key, counter_key])
+            keys.extend([type_window_key, counter_key])
             # 4-tuple matches the Lua ARGV layout:
             #   [limit, increment, ttl_seconds, window_size_seconds].
             args.extend(
@@ -968,7 +1005,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "descriptor_key": descriptor_key,
                     "current_limit": int(limit_value),
                     "rate_limit_type": rlt,
-                    "window_key": window_key,
+                    "window_key": type_window_key,
                     "counter_key": counter_key,
                     "increment": inc_amount,
                     "ttl": ttl_seconds,
