@@ -278,7 +278,7 @@ class CustomGuardrail(CustomLogger):
         else:
             raise GuardrailRaisedException(
                 message=f"Sensitive data detected by {self.guardrail_name}",
-                source="guardrail",
+                guardrail_name=self.guardrail_name,
             )
 
     @staticmethod
