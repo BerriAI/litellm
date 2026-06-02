@@ -154,7 +154,7 @@ class LangFuseLogger:
             self.langfuse_client = create_mock_langfuse_client()
             self.is_mock_mode = True
         else:
-            http_client = _get_httpx_client()
+            http_client = _get_httpx_client(params={"ssl_verify": litellm.ssl_verify})
             self.langfuse_client = http_client.client
             self.is_mock_mode = False
 
