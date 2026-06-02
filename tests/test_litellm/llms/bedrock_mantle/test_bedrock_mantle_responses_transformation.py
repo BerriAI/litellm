@@ -159,3 +159,46 @@ class TestBedrockMantleResponsesRegistry:
             model="openai.gpt-oss-120b",
         )
         assert cfg is None
+
+
+@pytest.fixture
+def local_cost_map(monkeypatch):
+    """Force the bundled backup cost map and re-derive the provider model sets.
+
+    ``litellm.model_cost`` is populated once at import time (here, from the
+    network-fetched ``main`` copy, which lags this branch). ``add_known_models``
+    only re-buckets whatever is already in ``model_cost``, so the cost map must
+    first be reloaded from the local backup before the new keys appear.
+    """
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    litellm.add_known_models()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+class TestBedrockMantleResponsesPricing:
+    def test_gpt_5_5_pricing_and_mode(self, local_cost_map):
+        info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.5")
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(5.5e-06)
+        assert info["output_cost_per_token"] == pytest.approx(3.3e-05)
+        assert info["cache_read_input_token_cost"] == pytest.approx(5.5e-07)
+        assert info["max_input_tokens"] == 272000
+
+    def test_gpt_5_4_pricing_and_mode(self, local_cost_map):
+        info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.4")
+        assert info["mode"] == "responses"
+        assert info["input_cost_per_token"] == pytest.approx(2.75e-06)
+        assert info["output_cost_per_token"] == pytest.approx(1.65e-05)
+        assert info["cache_read_input_token_cost"] == pytest.approx(2.75e-07)
+        assert info["max_input_tokens"] == 272000
+
+    def test_models_registered(self, local_cost_map):
+        assert "bedrock_mantle/openai.gpt-5.5" in litellm.bedrock_mantle_models
+        assert "bedrock_mantle/openai.gpt-5.4" in litellm.bedrock_mantle_models
