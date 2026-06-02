@@ -5,7 +5,21 @@ import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdat
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import PageVisibilitySettings from "./PageVisibilitySettings";
-import { Alert, Card, Divider, Skeleton, Space, Switch, Typography } from "antd";
+import { useEffect, useState } from "react";
+import { Alert, Button, Card, Divider, Input, Select, Skeleton, Space, Switch, Typography } from "antd";
+
+const USER_BANNER_TYPE_OPTIONS = [
+  { label: "Info", value: "info" },
+  { label: "Success", value: "success" },
+  { label: "Warning", value: "warning" },
+  { label: "Error", value: "error" },
+] as const;
+
+type UserBannerType = (typeof USER_BANNER_TYPE_OPTIONS)[number]["value"];
+
+const isUserBannerType = (value: unknown): value is UserBannerType => {
+  return USER_BANNER_TYPE_OPTIONS.some((option) => option.value === value);
+};
 
 export default function UISettings() {
   const { accessToken } = useAuthorized();
@@ -27,11 +41,27 @@ export default function UISettings() {
   const allowVectorStoresTeamAdminsProperty = schema?.properties?.allow_vector_stores_for_team_admins;
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
+  const userBannerEnabledProperty = schema?.properties?.user_banner_enabled;
+  const userBannerMessageProperty = schema?.properties?.user_banner_message;
+  const userBannerTypeProperty = schema?.properties?.user_banner_type;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
   const isAgentsDisabled = Boolean(values.disable_agents_for_internal_users);
   const isVectorStoresDisabled = Boolean(values.disable_vector_stores_for_internal_users);
+  const [userBannerEnabled, setUserBannerEnabled] = useState(false);
+  const [userBannerMessage, setUserBannerMessage] = useState("");
+  const [userBannerType, setUserBannerType] = useState<UserBannerType>("info");
+
+  useEffect(() => {
+    setUserBannerEnabled(Boolean(values.user_banner_enabled));
+    setUserBannerMessage(
+      typeof values.user_banner_message === "string" ? values.user_banner_message : "",
+    );
+    setUserBannerType(
+      isUserBannerType(values.user_banner_type) ? values.user_banner_type : "info",
+    );
+  }, [values.user_banner_enabled, values.user_banner_message, values.user_banner_type]);
 
   const handleToggle = (checked: boolean) => {
     updateSettings(
@@ -213,6 +243,24 @@ export default function UISettings() {
     );
   };
 
+  const handleSaveUserBanner = () => {
+    updateSettings(
+      {
+        user_banner_enabled: userBannerEnabled,
+        user_banner_message: userBannerMessage,
+        user_banner_type: userBannerType,
+      },
+      {
+        onSuccess: () => {
+          NotificationManager.success("User banner settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
   return (
     <Card title="UI Settings">
       {isLoading ? (
@@ -236,6 +284,72 @@ export default function UISettings() {
               description={updateError instanceof Error ? updateError.message : undefined}
             />
           )}
+
+          <Card
+            size="small"
+            title="User banner"
+            style={{ width: "100%" }}
+          >
+            <Space direction="vertical" size="middle" style={{ width: "100%" }}>
+              <Space align="start" size="middle">
+                <Switch
+                  checked={userBannerEnabled}
+                  disabled={isUpdating}
+                  loading={isUpdating}
+                  onChange={setUserBannerEnabled}
+                  aria-label="Publish user banner"
+                />
+                <Space direction="vertical" size={4}>
+                  <Typography.Text strong>Publish user banner</Typography.Text>
+                  <Typography.Text type="secondary">
+                    {userBannerEnabledProperty?.description ??
+                      "If true, shows the configured banner message to dashboard users."}
+                  </Typography.Text>
+                </Space>
+              </Space>
+
+              <Space direction="vertical" size={4} style={{ width: "100%" }}>
+                <Typography.Text strong>User banner message</Typography.Text>
+                {userBannerMessageProperty?.description && (
+                  <Typography.Text type="secondary">{userBannerMessageProperty.description}</Typography.Text>
+                )}
+                <Input.TextArea
+                  aria-label="User banner message"
+                  value={userBannerMessage}
+                  disabled={isUpdating}
+                  rows={3}
+                  onChange={(event) => setUserBannerMessage(event.target.value)}
+                  placeholder="Enter a dashboard announcement for users"
+                />
+              </Space>
+
+              <Space direction="vertical" size={4}>
+                <Typography.Text strong>User banner style</Typography.Text>
+                {userBannerTypeProperty?.description && (
+                  <Typography.Text type="secondary">{userBannerTypeProperty.description}</Typography.Text>
+                )}
+                <Select
+                  aria-label="User banner style"
+                  value={userBannerType}
+                  disabled={isUpdating}
+                  options={[...USER_BANNER_TYPE_OPTIONS]}
+                  style={{ width: 200 }}
+                  onChange={setUserBannerType}
+                />
+              </Space>
+
+              <Button
+                type="primary"
+                loading={isUpdating}
+                disabled={isUpdating}
+                onClick={handleSaveUserBanner}
+              >
+                Save user banner
+              </Button>
+            </Space>
+          </Card>
+
+          <Divider />
 
           <Space align="start" size="middle">
             <Switch

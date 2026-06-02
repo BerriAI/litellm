@@ -873,6 +873,9 @@ class TestProxySettingEndpoints:
         mock_db_record.ui_settings = {
             "disable_model_add_for_internal_users": True,
             "require_auth_for_public_ai_hub": True,
+            "user_banner_enabled": True,
+            "user_banner_message": "Scheduled maintenance tonight.",
+            "user_banner_type": "warning",
             "unexpected_flag": True,
         }
         mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(
@@ -886,11 +889,15 @@ class TestProxySettingEndpoints:
         data = response.json()
         assert data["values"]["disable_model_add_for_internal_users"] is True
         assert data["values"]["require_auth_for_public_ai_hub"] is True
+        assert data["values"]["user_banner_enabled"] is True
+        assert data["values"]["user_banner_message"] == "Scheduled maintenance tonight."
+        assert data["values"]["user_banner_type"] == "warning"
         assert "unexpected_flag" not in data["values"]
         assert (
             "disable_model_add_for_internal_users" in data["field_schema"]["properties"]
         )
         assert "require_auth_for_public_ai_hub" in data["field_schema"]["properties"]
+        assert "user_banner_message" in data["field_schema"]["properties"]
         mock_prisma.db.litellm_uisettings.find_unique.assert_called_once_with(
             where={"id": "ui_settings"}
         )
@@ -1113,6 +1120,87 @@ class TestProxySettingEndpoints:
         call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
         stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
         assert stored_settings["require_auth_for_public_ai_hub"] is True
+
+    def test_update_ui_settings_persists_user_banner_config(
+        self, mock_auth, monkeypatch
+    ):
+        """User banner config must be allowlisted and persisted to litellm_uisettings."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        payload = {
+            "user_banner_enabled": True,
+            "user_banner_message": "Scheduled maintenance tonight.",
+            "user_banner_type": "warning",
+        }
+
+        try:
+            response = client.patch("/update/ui_settings", json=payload)
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "success"
+        assert data["settings"]["user_banner_enabled"] is True
+        assert (
+            data["settings"]["user_banner_message"] == "Scheduled maintenance tonight."
+        )
+        assert data["settings"]["user_banner_type"] == "warning"
+
+        call_args = mock_prisma.db.litellm_uisettings.upsert.call_args
+        stored_settings = json.loads(call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored_settings["user_banner_enabled"] is True
+        assert (
+            stored_settings["user_banner_message"] == "Scheduled maintenance tonight."
+        )
+        assert stored_settings["user_banner_type"] == "warning"
+
+    def test_update_ui_settings_rejects_invalid_user_banner_type(
+        self, mock_auth, monkeypatch
+    ):
+        """User banner type must be one of the Ant Design alert types."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy._types import UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_uisettings.upsert = AsyncMock()
+        mock_prisma.db.litellm_uisettings.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+
+        try:
+            response = client.patch(
+                "/update/ui_settings",
+                json={"user_banner_type": "critical"},
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        mock_prisma.db.litellm_uisettings.upsert.assert_not_called()
 
     def test_update_ui_settings_persists_forward_llm_provider_auth_headers(
         self, mock_auth, monkeypatch

@@ -36,6 +36,7 @@ import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
 import Usage from "@/components/usage";
 import UserDashboard from "@/components/user_dashboard";
+import { UserBanner } from "@/components/UserBanner";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
@@ -383,6 +384,7 @@ function CreateKeyPageContent() {
                   sidebarCollapsed={sidebarCollapsed}
                   onToggleSidebar={toggleSidebar}
                 />
+                <UserBanner />
                 <div className="flex flex-1">
                   <div className="mt-2">
                   <SidebarProvider setPage={updatePage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
