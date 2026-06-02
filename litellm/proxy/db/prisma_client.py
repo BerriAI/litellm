@@ -382,6 +382,18 @@ class PrismaWrapper:
             )
             return False
 
+        kwargs: dict[str, Any] = {}
+        if http_client is not None:
+            kwargs["http"] = http_client
+        if self._recreate_uses_datasource:
+            kwargs["datasource"] = {"url": new_db_url}
+        new_prisma = Prisma(**kwargs)
+
+        # Connect the new client BEFORE touching the old one. The old client
+        # keeps serving requests with no error window. If connect() raises or is
+        # cancelled, _original_prisma is never updated so there is no poisoning.
+        await new_prisma.connect()
+
         old_engine_pid = self._get_engine_pid()
         if old_engine_pid > 0:
             # Record BEFORE the kill so the engine-death watcher, which may
@@ -396,19 +408,8 @@ class PrismaWrapper:
             if len(self._expected_engine_deaths) >= 64:
                 self._expected_engine_deaths.clear()
             self._expected_engine_deaths.add(old_engine_pid)
-            await self._kill_engine_process(old_engine_pid)
 
-        kwargs: dict[str, Any] = {}
-        if http_client is not None:
-            kwargs["http"] = http_client
-        if self._recreate_uses_datasource:
-            kwargs["datasource"] = {"url": new_db_url}
-        new_prisma = Prisma(**kwargs)
-
-        # Swap only after connect() succeeds. If connect() raises or is cancelled
-        # (for example under a short auth-path timeout), installing a half-built
-        # client would poison later queries with ClientNotConnectedError.
-        await new_prisma.connect()
+        # Atomic swap -- new client is live from this line onward.
         self._original_prisma = new_prisma
         self._engine_generation += 1
 
@@ -417,6 +418,11 @@ class PrismaWrapper:
         # can't stall the refresh while we hold the reconnection lock.
         if self.on_engine_replaced is not None:
             self.on_engine_replaced()
+
+        # Retire the old query engine after the swap without calling Prisma's
+        # blocking disconnect().
+        if old_engine_pid > 0:
+            await self._kill_engine_process(old_engine_pid)
 
         return True
 
