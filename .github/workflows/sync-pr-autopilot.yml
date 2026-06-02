@@ -20,9 +20,10 @@ on:
         default: false
 
 permissions:
-  contents: write
-  pull-requests: write
-  actions: write
+  contents: write # merge the sync PR and delete its branch
+  pull-requests: write # mark ready, comment, merge
+  issues: write # create/apply the sync-held and autopilot-rerun-N labels (the re-run cap relies on these persisting)
+  actions: write # re-run failed CI runs
   checks: read
   statuses: read
 
