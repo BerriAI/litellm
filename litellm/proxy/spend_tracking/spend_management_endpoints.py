@@ -21,7 +21,6 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
@@ -37,9 +36,18 @@ router = APIRouter()
     dependencies=[Depends(user_api_key_auth)],
     include_in_schema=False,
 )
-async def spend_key_fn():
+async def spend_key_fn(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
-    View all keys created, ordered by spend
+    View keys created, ordered by spend.
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every key in
+      the database.
+    - All other callers (INTERNAL_USER / INTERNAL_USER_VIEW_ONLY, etc.) are
+      scoped to keys they own (``user_id == caller``). A caller with no
+      ``user_id`` has no scope and receives an empty list rather than the
+      full table.
 
     Example Request:
     ```
@@ -56,8 +64,17 @@ async def spend_key_fn():
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        key_info = await prisma_client.get_data(table_name="key", query_type="find_all")
-        return key_info
+        if _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            return await prisma_client.get_data(table_name="key", query_type="find_all")
+
+        caller_user_id = user_api_key_dict.user_id
+        if not caller_user_id:
+            return []
+        return await prisma_client.get_data(
+            table_name="key",
+            query_type="find_all",
+            user_id=caller_user_id,
+        )
 
     except Exception as e:
         raise HTTPException(
@@ -86,9 +103,19 @@ async def spend_user_fn(
         default=None,
         description="Get User Table row for user_id",
     ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    View all users created, ordered by spend
+    View users created, ordered by spend.
+
+    - Admin callers (PROXY_ADMIN / PROXY_ADMIN_VIEW_ONLY) see every user, or
+      a specific user when ``user_id`` is supplied.
+    - All other callers may only read their own row. If they supply a
+      ``user_id`` query parameter that does not match their authenticated
+      ``user_id`` the request is rejected with HTTP 403; supplying their
+      own id (or none at all) returns just their row. A caller with no
+      ``user_id`` on their key has no scope and receives an empty list
+      rather than the full table.
 
     Example Request:
     ```
@@ -110,6 +137,17 @@ async def spend_user_fn(
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
+        if not _is_admin_view_safe(user_api_key_dict=user_api_key_dict):
+            caller_user_id = user_api_key_dict.user_id
+            if not caller_user_id:
+                return []
+            if user_id is not None and user_id != caller_user_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={"error": "Not authorized to view spend for another user."},
+                )
+            user_id = caller_user_id
+
         if user_id is not None:
             user_info = await prisma_client.get_data(
                 table_name="user", query_type="find_unique", user_id=user_id
@@ -124,6 +162,8 @@ async def spend_user_fn(
         _strip_password_from_users(result)
         return result
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -3149,18 +3189,12 @@ async def provider_budgets() -> ProviderBudgetResponse:
                 "No provider budget config found. Please set a provider budget config in the router settings. https://docs.litellm.ai/docs/proxy/provider_budget_routing"
             )
 
+        router_budget_logger = llm_router._get_router_deployment_budget_limiter()
+        if router_budget_logger is None:
+            raise ValueError("No router budget logger found")
+
         provider_budget_response_dict: Dict[str, ProviderBudgetResponseObject] = {}
         for _provider, _budget_info in provider_budget_config.items():
-            router_budget_logger = next(
-                (
-                    cb
-                    for cb in (llm_router.optional_callbacks or [])
-                    if isinstance(cb, RouterBudgetLimiting)
-                ),
-                None,
-            )
-            if router_budget_logger is None:
-                raise ValueError("No router budget logger found")
             _provider_spend = (
                 await router_budget_logger._get_current_provider_spend(_provider) or 0.0
             )
