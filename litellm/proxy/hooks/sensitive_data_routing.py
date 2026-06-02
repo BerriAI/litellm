@@ -66,12 +66,15 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
 
         return None
 
-    def _make_cache_key(self, session_id: str) -> str:
-        return f"{{{SENSITIVE_ROUTING_CACHE_PREFIX}:{session_id}}}:model"
+    def _make_cache_key(self, session_id: str, api_key: Optional[str]) -> str:
+        tenant = api_key or "default"
+        return f"{{{SENSITIVE_ROUTING_CACHE_PREFIX}:{tenant}:{session_id}}}:model"
 
-    async def _get_routed_model(self, session_id: str) -> Optional[str]:
+    async def _get_routed_model(
+        self, session_id: str, api_key: Optional[str]
+    ) -> Optional[str]:
         """Get the model this session should be routed to, if any."""
-        cache_key = self._make_cache_key(session_id)
+        cache_key = self._make_cache_key(session_id, api_key)
 
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             try:
@@ -99,15 +102,17 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         self,
         session_id: str,
         model: str,
+        api_key: Optional[str] = None,
         guardrail_name: Optional[str] = None,
     ) -> None:
         """
         Store a routing override for a session.
 
         Called by guardrails when they detect sensitive data and want to
-        route the session to a specific model.
+        route the session to a specific model. The override is scoped to the
+        requesting API key so sessions from different tenants cannot collide.
         """
-        cache_key = self._make_cache_key(session_id)
+        cache_key = self._make_cache_key(session_id, api_key)
 
         verbose_proxy_logger.info(
             "SensitiveDataRoutingHandler: Setting session routing session_id=%s model=%s guardrail=%s ttl=%s",
@@ -153,7 +158,8 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         if session_id is None:
             return None
 
-        routed_model = await self._get_routed_model(session_id)
+        api_key = user_api_key_dict.api_key if user_api_key_dict is not None else None
+        routed_model = await self._get_routed_model(session_id, api_key)
         if routed_model is None:
             return None
 

@@ -1523,7 +1523,9 @@ class ProxyLogging:
 
             return data
         except SensitiveDataRouteException as e:
-            data = await self._handle_sensitive_data_route_exception(e, data)
+            data = await self._handle_sensitive_data_route_exception(
+                e, data, user_api_key_dict
+            )
             if data is not None:
                 self._process_guardrail_metadata(data)
             return data
@@ -1534,31 +1536,40 @@ class ProxyLogging:
         self,
         exc: SensitiveDataRouteException,
         data: Optional[dict],
+        user_api_key_dict: UserAPIKeyAuth,
     ) -> Optional[dict]:
         """
-        Handle SensitiveDataRouteException by:
-        1. Storing the routing decision in session cache
-        2. Modifying the request's model field
+        Handle SensitiveDataRouteException by rerouting the current request to
+        the target model and, when sticky_session_routing is enabled, persisting
+        the session override so subsequent requests reuse the same model.
         """
         if data is None:
             return None
 
         verbose_proxy_logger.info(
-            "SensitiveDataRouteException caught: session_id=%s route_to_model=%s guardrail=%s",
+            "SensitiveDataRouteException caught: session_id=%s route_to_model=%s guardrail=%s sticky=%s",
             exc.session_id,
             exc.route_to_model,
             exc.guardrail_name,
+            exc.sticky_session_routing,
         )
 
-        sensitive_routing_hook = self.get_proxy_hook("sensitive_data_routing")
-        if sensitive_routing_hook is not None and isinstance(
-            sensitive_routing_hook, _PROXY_SensitiveDataRoutingHandler
-        ):
-            await sensitive_routing_hook.set_session_routing(
-                session_id=exc.session_id,
-                model=exc.route_to_model,
-                guardrail_name=exc.guardrail_name,
-            )
+        if exc.sticky_session_routing:
+            sensitive_routing_hook = self.get_proxy_hook("sensitive_data_routing")
+            if isinstance(sensitive_routing_hook, _PROXY_SensitiveDataRoutingHandler):
+                await sensitive_routing_hook.set_session_routing(
+                    session_id=exc.session_id,
+                    model=exc.route_to_model,
+                    api_key=user_api_key_dict.api_key,
+                    guardrail_name=exc.guardrail_name,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "SensitiveDataRouteException requested sticky routing for session_id=%s "
+                    "but the 'sensitive_data_routing' hook is not registered. Only this request "
+                    "will be rerouted; subsequent requests will not be sticky.",
+                    exc.session_id,
+                )
 
         original_model = data.get("model")
         data["model"] = exc.route_to_model

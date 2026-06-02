@@ -1073,8 +1073,8 @@ class SensitiveDataRouteException(Exception):
 
     The proxy catches this exception and:
     1. Reroutes the current request to the specified model
-    2. Stores the routing decision in session cache for sticky routing
-    3. All subsequent requests in the same session are routed to the same model
+    2. When sticky_session_routing is True, stores the routing decision in session
+       cache so all subsequent requests in the same session are routed to the same model
     """
 
     def __init__(
@@ -1084,11 +1084,13 @@ class SensitiveDataRouteException(Exception):
         guardrail_name: Optional[str] = None,
         detection_info: Optional[Dict[str, Any]] = None,
         message: Optional[str] = None,
+        sticky_session_routing: bool = True,
     ):
         self.route_to_model = route_to_model
         self.session_id = session_id
         self.guardrail_name = guardrail_name
         self.detection_info = detection_info or {}
+        self.sticky_session_routing = sticky_session_routing
         self.message = (
             message
             or f"Sensitive data detected by {guardrail_name}. Routing to model: {route_to_model}"

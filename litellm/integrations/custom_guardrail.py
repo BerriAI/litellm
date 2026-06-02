@@ -191,10 +191,9 @@ class CustomGuardrail(CustomLogger):
         Use this when sensitive data is detected and the guardrail is configured
         to route to an on-premise model instead of blocking.
 
-        The exception will:
-        1. Reroute this request to the specified model
-        2. Store the routing decision in session cache
-        3. Route all subsequent requests in this session to the same model
+        The exception will reroute this request to the specified model. When
+        sticky_session_routing is enabled (the default), it also stores the
+        routing decision so subsequent requests in this session reuse the model.
 
         Args:
             route_to_model: The model to route this request (and session) to
@@ -216,6 +215,7 @@ class CustomGuardrail(CustomLogger):
             session_id=session_id,
             guardrail_name=self.guardrail_name,
             detection_info=detection_info,
+            sticky_session_routing=self.sticky_session_routing,
         )
 
     def _get_session_id_from_request_data(
