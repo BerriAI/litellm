@@ -129,6 +129,13 @@ class TestBedrockMantleResponsesAuth:
         cfg = BedrockMantleResponsesAPIConfig()
         assert cfg.custom_llm_provider == LlmProviders.BEDROCK_MANTLE
 
+    def test_native_websocket_disabled(self):
+        # Mantle Responses has no realtime/websocket transport, so the config
+        # must opt out; otherwise realtime routing would try a socket Mantle
+        # does not serve.
+        cfg = BedrockMantleResponsesAPIConfig()
+        assert cfg.supports_native_websocket() is False
+
 
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self):
