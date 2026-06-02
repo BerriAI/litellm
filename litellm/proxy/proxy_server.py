@@ -15,7 +15,7 @@ import threading
 import time
 import traceback
 import warnings
-from collections.abc import Mapping
+from collections.abc import Mapping, Set as AbstractSet
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
@@ -2515,10 +2515,10 @@ async def increment_spend_counters(
 async def _increment_entity_window_spend_counters(
     entity_type: str,
     entity_id: str,
-    entity_obj: Any,
+    entity_obj: object,
     counter_key_prefix: str,
     response_cost: float,
-    reserved_counter_keys: Set[str],
+    reserved_counter_keys: AbstractSet[str],
 ) -> None:
     if entity_obj is None:
         return

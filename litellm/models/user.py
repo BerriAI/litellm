@@ -6,6 +6,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 """
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -39,7 +40,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     rpm_limit: Optional[int] = None
     budget_duration: Optional[str] = None
     budget_reset_at: Optional[datetime] = None
-    budget_limits: Optional[List[BudgetLimitEntry]] = None
+    budget_limits: Sequence[BudgetLimitEntry] | None = None
     allowed_cache_controls: List[str] = []
     policies: List[str] = []
     model_spend: Optional[Dict] = {}

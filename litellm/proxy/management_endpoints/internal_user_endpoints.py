@@ -15,7 +15,7 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from typing import Any, Optional, cast
 
@@ -1084,37 +1084,60 @@ def _process_keys_for_user_info(
     return returned_keys
 
 
+def _existing_reset_at_entry(existing_window: object) -> tuple[str, str] | None:
+    window = existing_window.model_dump() if isinstance(existing_window, BaseModel) else existing_window
+    if not isinstance(window, Mapping):
+        return None
+    duration = window.get("budget_duration")
+    reset_at = window.get("reset_at")
+    if not isinstance(duration, str) or not duration or reset_at is None:
+        return None
+    if isinstance(reset_at, datetime):
+        return duration, reset_at.isoformat()
+    if isinstance(reset_at, str) and reset_at:
+        return duration, reset_at
+    return None
+
+
 def _existing_reset_at_by_duration(
     existing_user_row: BaseModel | None,
-) -> Dict[str, str]:
+) -> tuple[tuple[str, str], ...]:
     if existing_user_row is None:
-        return {}
+        return ()
     existing_limits = getattr(existing_user_row, "budget_limits", None)
     if isinstance(existing_limits, str):
         try:
             existing_limits = json.loads(existing_limits)
         except (ValueError, TypeError):
-            return {}
+            return ()
     if not isinstance(existing_limits, list):
-        return {}
-    out: Dict[str, str] = {}
-    for ew in existing_limits:
-        if isinstance(ew, BaseModel):
-            ew = ew.model_dump()
-        if not isinstance(ew, dict):
-            continue
-        ed = ew.get("budget_duration")
-        er = ew.get("reset_at")
-        if not ed or not er:
-            continue
-        if isinstance(er, datetime):
-            er = er.isoformat()
-        out[ed] = er
-    return out
+        return ()
+    return tuple(
+        entry for existing_window in existing_limits if (entry := _existing_reset_at_entry(existing_window)) is not None
+    )
+
+
+def _initialize_budget_limit_window(
+    window: BudgetLimitEntry | Mapping[str, object],
+    preserved: Sequence[tuple[str, str]],
+) -> Mapping[str, object]:
+    window_data = {**window} if isinstance(window, Mapping) else window.model_dump()
+    duration = window_data["budget_duration"]
+    if not isinstance(duration, str):
+        raise ValueError("budget_duration must be a string")
+    existing_reset_at = next(
+        (reset_at for existing_duration, reset_at in reversed(preserved) if existing_duration == duration),
+        None,
+    )
+    if existing_reset_at is None:
+        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+        existing_reset_at = get_budget_reset_time(budget_duration=duration).isoformat()
+    return {**window_data, "reset_at": existing_reset_at}
 
 
 def _initialize_budget_limits_for_update(
-    new_windows: List[Any],
+    new_windows: Sequence[BudgetLimitEntry | Mapping[str, object]],
     existing_user_row: BaseModel | None,
 ) -> str:
     """
@@ -1123,15 +1146,8 @@ def _initialize_budget_limits_for_update(
     `max_budget`) does not silently restart the user's budget clock and let
     them spend a fresh window immediately. New durations get a fresh reset.
     """
-    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
     preserved = _existing_reset_at_by_duration(existing_user_row)
-    initialized = []
-    for window in new_windows:
-        w = {**window} if isinstance(window, dict) else dict(window)
-        duration = w["budget_duration"]
-        w["reset_at"] = preserved.get(duration) or get_budget_reset_time(budget_duration=duration).isoformat()
-        initialized.append(w)
+    initialized = tuple(_initialize_budget_limit_window(window=window, preserved=preserved) for window in new_windows)
     return json.dumps(initialized)
 
 
@@ -1268,6 +1284,18 @@ async def _invalidate_user_spend_counter_if_changed(
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
 
 
+async def _invalidate_user_cache(user_id: str | None) -> None:
+    if user_id is None:
+        return
+
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    try:
+        await user_api_key_cache.async_delete_cache(key=user_id)
+    except Exception as e:  # noqa: BLE001  # Cache failures must not fail a completed database update
+        verbose_proxy_logger.warning("Failed to invalidate user cache for %s: %s", user_id, e)
+
+
 async def _update_single_user_helper(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1383,6 +1411,10 @@ async def _update_single_user_helper(
             response = await prisma_client.insert_data(data=non_default_values, table_name="user")
 
     if response is not None:
+        updated_user_id = non_default_values.get("user_id")
+        if isinstance(updated_user_id, str):
+            await _invalidate_user_cache(updated_user_id)
+
         await _schedule_user_update_audit_log(
             response=response,
             existing_user_row=existing_user_row,
@@ -1700,6 +1732,7 @@ async def bulk_user_update(
                 where={},
                 data=non_default_values,  # Update all users
             )
+            await asyncio.gather(*(_invalidate_user_cache(user.user_id) for user in all_users_in_db))
 
             # Create individual success results
             for user in all_users_in_db:

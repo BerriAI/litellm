@@ -807,9 +807,9 @@ class ResetBudgetJob:
                 if changed:
                     await self.prisma_client.db.litellm_usertable.update(
                         where={"user_id": row["user_id"]},
-                        data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
+                        data={"budget_limits": json.dumps(windows)},  # pyright: ignore[reportArgumentType]  # Prisma Json field accepts serialized budget windows
                     )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # Keep user window failures isolated from other reset jobs
             verbose_proxy_logger.exception("Failed to reset budget windows for users: %s", e)
 
     @staticmethod

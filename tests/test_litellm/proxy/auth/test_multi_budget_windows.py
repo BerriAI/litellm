@@ -2,6 +2,7 @@
 Unit tests for multi-budget-window enforcement on API keys.
 """
 
+from datetime import datetime, timezone
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +11,8 @@ from fastapi import Request
 import litellm
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
 from litellm.proxy.auth.auth_checks import (
+    _coerce_budget_limit_window_for_check,
+    _team_multi_budget_check,
     _user_multi_budget_check,
     _virtual_key_multi_budget_check,
     common_checks,
@@ -73,9 +76,7 @@ async def test_over_first_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -105,9 +106,7 @@ async def test_over_second_window_raises():
         call_count += 1
         return val
 
-    with patch(
-        "litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend
-    ):
+    with patch("litellm.proxy.proxy_server.get_current_spend", side_effect=fake_get_spend):
         with pytest.raises(litellm.BudgetExceededError) as exc_info:
             await _virtual_key_multi_budget_check(valid_token=token)
 
@@ -191,6 +190,79 @@ async def test_user_budget_limits_over_window_raises():
     assert err.status_code == 429
     assert "User=user-budget-window" in str(err)
     assert "1d" in str(err)
+
+
+@pytest.mark.asyncio
+async def test_team_budget_limits_use_typed_window():
+    team = LiteLLM_TeamTable(
+        team_id="team-budget-window",
+        budget_limits=[
+            {"budget_duration": "1d", "max_budget": 10.0, "reset_at": None},
+        ],
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+        return_value=1.0,
+    ) as mock_get_spend:
+        await _team_multi_budget_check(team_object=team)
+
+    mock_get_spend.assert_awaited_once_with(
+        counter_key="spend:team:team-budget-window:window:1d",
+        fallback_spend=0.0,
+        max_budget=10.0,
+        window_entity_type="Team",
+        window_entity_id="team-budget-window",
+        window_start=ANY,
+    )
+
+
+@pytest.mark.parametrize("empty_duration", ["", None])
+def test_coerce_skips_window_with_empty_budget_duration(empty_duration):
+    """
+    Regression: the auth check and the budget-reservation path must agree on
+    what counts as a missing budget_duration. The reservation path rejects with
+    `if not budget_duration`, so an empty-string duration must be rejected here
+    too — otherwise the auth check builds a counter key ending in `:window:` that
+    never accumulates spend, silently disabling the window instead of enforcing it.
+    """
+    assert _coerce_budget_limit_window_for_check(window={"budget_duration": empty_duration, "max_budget": 10.0}) is None
+
+
+def test_coerce_preserves_reset_at():
+    reset_at = datetime(2026, 7, 30, tzinfo=timezone.utc)
+
+    window = _coerce_budget_limit_window_for_check(
+        window={"budget_duration": "1d", "max_budget": 10.0, "reset_at": reset_at}
+    )
+
+    assert window is not None
+    assert window.reset_at == reset_at
+
+
+def test_coerce_invalid_reset_at_does_not_disable_window():
+    window = _coerce_budget_limit_window_for_check(
+        window={"budget_duration": "1d", "max_budget": 10.0, "reset_at": "invalid"}
+    )
+
+    assert window is not None
+    assert window.reset_at == "invalid"
+
+
+@pytest.mark.asyncio
+async def test_empty_budget_duration_window_is_skipped_not_queried():
+    """A window with an empty-string duration must be skipped entirely, never
+    turned into a malformed `spend:key:...:window:` counter lookup."""
+    token = _make_valid_token(budget_limits=[{"budget_duration": "", "max_budget": 1.0, "reset_at": None}])
+
+    with patch(
+        "litellm.proxy.proxy_server.get_current_spend",
+        new_callable=AsyncMock,
+    ) as mock_get_spend:
+        await _virtual_key_multi_budget_check(valid_token=token)
+
+    mock_get_spend.assert_not_awaited()
 
 
 def _make_team(team_id: str = "team-xyz") -> LiteLLM_TeamTable:
