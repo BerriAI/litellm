@@ -8394,6 +8394,10 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langgraph_config(),
                 False,
             ),
+            LlmProviders.LANGFLOW: (
+                lambda: ProviderConfigManager._get_langflow_config(),
+                False,
+            ),
         }
 
     @staticmethod
@@ -8464,6 +8468,13 @@ class ProviderConfigManager:
         from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
         return LangGraphConfig()
+
+    @staticmethod
+    def _get_langflow_config() -> BaseConfig:
+        """Get LangFlow config."""
+        from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+        return LangFlowConfig()
 
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915

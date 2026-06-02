@@ -4503,6 +4503,39 @@ def completion(  # type: ignore # noqa: PLR0915
                 client=client,
             )
 
+        elif custom_llm_provider == "langflow":
+            # LangFlow - Visual AI Agent Platform
+            from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+            (
+                api_base,
+                api_key,
+            ) = LangFlowConfig()._get_openai_compatible_provider_info(
+                api_base=api_base or litellm.api_base,
+                api_key=api_key or litellm.api_key,
+            )
+
+            headers = headers or litellm.headers
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider

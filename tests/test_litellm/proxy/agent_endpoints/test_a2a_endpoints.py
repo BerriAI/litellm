@@ -246,3 +246,105 @@ async def test_invoke_agent_a2a_handles_none_agent_card_params():
         assert body["jsonrpc"] == "2.0"
         assert body["error"]["code"] == -32000
         assert "no URL configured" in body["error"]["message"]
+
+
+@pytest.mark.asyncio
+async def test_invoke_agent_a2a_injects_authenticated_key_hash_for_bridge():
+    """Completion-bridge agents must receive the authenticated key hash in
+    litellm_params so provider configs (e.g. LangFlow) can scope provider-side
+    session memory per key. Regression for cross-key A2A session bleed."""
+    from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+        A2A_USER_API_KEY_HASH_PARAM,
+    )
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    captured = {}
+
+    async def mock_add_litellm_data(data, **kwargs):
+        data["proxy_server_request"] = {
+            "url": "http://localhost:4000/a2a/lf-agent",
+            "method": "POST",
+            "headers": {},
+            "body": {},
+        }
+        data.setdefault("metadata", {})
+        return data
+
+    async def capture_asend_message(**kwargs):
+        captured.update(kwargs)
+        resp = MagicMock()
+        resp.model_dump.return_value = {"jsonrpc": "2.0", "id": "test-id", "result": {}}
+        return resp
+
+    mock_agent = MagicMock()
+    mock_agent.agent_id = "lf-agent"
+    mock_agent.agent_name = "lf-agent"
+    # No URL: the bridge derives the endpoint from the LangFlow agent config.
+    mock_agent.agent_card_params = {"name": "LF Agent"}
+    mock_agent.litellm_params = {
+        "custom_llm_provider": "langflow",
+        "model": "langflow/flow-1",
+    }
+    mock_agent.static_headers = None
+    mock_agent.extra_headers = None
+
+    mock_request = MagicMock()
+    mock_request.headers = {}
+    mock_request.json = AsyncMock(
+        return_value={
+            "jsonrpc": "2.0",
+            "id": "test-id",
+            "method": "message/send",
+            "params": {
+                "message": {
+                    "role": "user",
+                    "parts": [{"kind": "text", "text": "hi"}],
+                    "messageId": "msg-1",
+                    "contextId": "ctx-1",
+                }
+            },
+        }
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-hashed-123",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.a2a_endpoints._get_agent",
+            return_value=mock_agent,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+            side_effect=mock_add_litellm_data,
+        ),
+        patch(
+            "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+            new=AsyncMock(return_value=True),
+        ),
+        patch(
+            "litellm.a2a_protocol.asend_message",
+            new=AsyncMock(side_effect=capture_asend_message),
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
+        patch("litellm.proxy.proxy_server.version", "1.0.0"),
+        patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True),
+        patch.dict(sys.modules, {"a2a": MagicMock(), "a2a.types": MagicMock()}),
+    ):
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        await invoke_agent_a2a(
+            agent_id="lf-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+    assert (
+        captured.get("litellm_params", {}).get(A2A_USER_API_KEY_HASH_PARAM)
+        == mock_user_api_key_dict.api_key
+    ), "authenticated key hash was not forwarded to the completion bridge"

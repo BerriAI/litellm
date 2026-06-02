@@ -389,6 +389,19 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         litellm_params = agent.litellm_params or {}
         custom_llm_provider = litellm_params.get("custom_llm_provider")
 
+        # Hand the authenticated key hash to the completion bridge so provider
+        # configs can scope provider-side session state per key (e.g. LangFlow
+        # session memory) instead of trusting the client-supplied A2A contextId.
+        if custom_llm_provider and user_api_key_dict.api_key:
+            from litellm.a2a_protocol.litellm_completion_bridge.handler import (
+                A2A_USER_API_KEY_HASH_PARAM,
+            )
+
+            litellm_params = {
+                **litellm_params,
+                A2A_USER_API_KEY_HASH_PARAM: user_api_key_dict.api_key,
+            }
+
         # URL is required unless using completion bridge with a provider that derives endpoint from model
         # (e.g., bedrock/agentcore derives endpoint from ARN in model string)
         if not agent_url and not custom_llm_provider:
