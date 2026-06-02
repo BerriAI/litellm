@@ -667,6 +667,41 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return stream
 
 
+def _carry_guardrail_logging_info(
+    request_data: dict, guardrail_data: Optional[dict]
+) -> None:
+    """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
+
+    Post-call guardrails run against a throwaway ``hook_data`` dict (its
+    ``metadata`` is what ``_init_kwargs_for_pass_through_endpoint`` already
+    stripped off ``_parsed_body``), so a block records the
+    ``standard_logging_guardrail_information`` there and not on the dict the
+    failure handler forwards to ``post_call_failure_hook``. Without this the
+    otel guardrail span is emitted on allow but missing on block. Carry the
+    entries over so the failure path matches the unified path.
+    """
+    if guardrail_data is None:
+        return
+    source_metadata = guardrail_data.get("metadata")
+    if not isinstance(source_metadata, dict):
+        return
+    entries = source_metadata.get("standard_logging_guardrail_information")
+    if not entries:
+        return
+
+    metadata = request_data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        request_data["metadata"] = metadata
+    existing = metadata.get("standard_logging_guardrail_information")
+    if isinstance(existing, list):
+        for entry in entries:
+            if entry not in existing:
+                existing.append(entry)
+    else:
+        metadata["standard_logging_guardrail_information"] = entries
+
+
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
     target: str,
@@ -718,6 +753,9 @@ async def pass_through_request(  # noqa: PLR0915
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: Optional[dict] = None
     logging_obj: Optional[Logging] = None
+    # the dict post-call guardrails wrote their logging info into; the failure
+    # handler reuses it so a guardrail block still surfaces its span/logs
+    post_call_guardrail_data: Optional[dict] = None
 
     #########################################################
     try:
@@ -1160,6 +1198,7 @@ async def pass_through_request(  # noqa: PLR0915
                 **existing_metadata,
                 "guardrails": guardrails_to_run,
             }
+            post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,
                 user_api_key_dict=user_api_key_dict,
@@ -1342,6 +1381,8 @@ async def pass_through_request(  # noqa: PLR0915
             request_payload["model"] = _parsed_body.get("model", "")
         if "custom_llm_provider" not in request_payload and custom_llm_provider:
             request_payload["custom_llm_provider"] = custom_llm_provider
+
+        _carry_guardrail_logging_info(request_payload, post_call_guardrail_data)
 
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
