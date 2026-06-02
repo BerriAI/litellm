@@ -2132,9 +2132,15 @@ def _paginating_window_job(monkeypatch, pages_by_table: Dict[str, List[List[Dict
     calls: List[Dict[str, Any]] = []
 
     async def fake_query_raw(query: str, *args, **kwargs):
-        table = "key" if '"LiteLLM_VerificationToken"' in query else "team"
+        table = (
+            "key"
+            if '"LiteLLM_VerificationToken"' in query
+            else "user"
+            if '"LiteLLM_UserTable"' in query
+            else "team"
+        )
         calls.append({"table": table, "sql": query, "cursor": args[0], "limit": args[1]})
-        pages = remaining[table]
+        pages = remaining.get(table, [])
         return pages.pop(0) if pages else []
 
     prisma_client.db.query_raw = AsyncMock(side_effect=fake_query_raw)
@@ -2272,6 +2278,8 @@ def _cursor_paginating_window_job(monkeypatch, key_rows: List[Dict[str, Any]]):
 
     async def fake_query_raw(query: str, *args, **kwargs):
         if '"LiteLLM_TeamTable"' in query:
+            return []
+        if '"LiteLLM_UserTable"' in query:
             return []
         cursor, limit = args[0], args[1]
         page = [row for row in ordered if row["token"] > cursor][:limit]

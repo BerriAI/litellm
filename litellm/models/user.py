@@ -5,9 +5,10 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+import json
 from datetime import datetime
 
-from pydantic import ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
@@ -52,6 +53,14 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     @model_validator(mode="before")
     @classmethod
     def set_model_info(cls, values):
+        if isinstance(values, BaseModel):
+            values = values.model_dump()
+        budget_limits = values.get("budget_limits")
+        if isinstance(budget_limits, str):
+            try:
+                values["budget_limits"] = json.loads(budget_limits)
+            except json.JSONDecodeError as exc:
+                raise ValueError("Field budget_limits should be valid JSON") from exc
         if values.get("spend") is None:
             values.update({"spend": 0.0})
         if values.get("models") is None:

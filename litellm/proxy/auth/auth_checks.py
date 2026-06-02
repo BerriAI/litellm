@@ -14,11 +14,12 @@ import math
 import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, cast
 
 from fastapi import HTTPException, Request, status
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -4323,24 +4324,24 @@ async def _virtual_key_max_budget_check(
             )
 
 
-def _coerce_budget_limit_window_for_check(window: Any) -> Optional[Dict[str, Any]]:
-    if isinstance(window, dict):
-        w = window
-    elif hasattr(window, "model_dump"):
-        w = window.model_dump()
-    else:
-        return None
-    budget_duration = w.get("budget_duration")
-    max_budget = w.get("max_budget")
-    if budget_duration is None or max_budget is None:
-        return None
+class _BudgetLimitWindowForCheck(BaseModel):
+    budget_duration: str
+    max_budget: float
+    reset_at: datetime | str | None = None
+
+
+_BUDGET_LIMIT_WINDOW_ADAPTER = TypeAdapter(_BudgetLimitWindowForCheck)
+
+
+def _coerce_budget_limit_window_for_check(window: object) -> _BudgetLimitWindowForCheck | None:
+    raw_window = window.model_dump() if isinstance(window, BaseModel) else window
     try:
-        max_budget_float = float(max_budget)
-    except (TypeError, ValueError):
+        budget_limit = _BudgetLimitWindowForCheck.model_validate(raw_window)
+    except ValidationError:
         return None
-    if not math.isfinite(max_budget_float):
+    if not budget_limit.budget_duration or not math.isfinite(budget_limit.max_budget):
         return None
-    return {"budget_duration": budget_duration, "max_budget": max_budget_float}
+    return budget_limit
 
 
 async def _virtual_key_multi_budget_check(
@@ -4359,26 +4360,30 @@ async def _virtual_key_multi_budget_check(
 
     from litellm.proxy.proxy_server import get_current_spend
 
-    for window in valid_token.budget_limits:
-        w = _coerce_budget_limit_window_for_check(window=window)
-        if w is None:
+    for raw_window in valid_token.budget_limits:
+        try:
+            window = _BUDGET_LIMIT_WINDOW_ADAPTER.validate_python(raw_window)
+        except ValidationError:
             continue
-        counter_key = f"spend:key:{valid_token.token}:window:{w['budget_duration']}"
+        if not window.budget_duration or not math.isfinite(window.max_budget):
+            continue
+        w = window
+        counter_key = f"spend:key:{valid_token.token}:window:{w.budget_duration}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
-            max_budget=w["max_budget"],
+            max_budget=w.max_budget,
             window_entity_type="Key",
             window_entity_id=valid_token.token,
             window_start=get_budget_window_start(w),
         )
-        if window_spend >= w["max_budget"]:
+        if window_spend >= w.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
-                max_budget=w["max_budget"],
+                max_budget=w.max_budget,
                 message=(
-                    f"ExceededBudget: Key over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                    f"ExceededBudget: Key over {w.budget_duration} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w.max_budget:.2f}"
                 ),
                 entity_type=Litellm_EntityType.KEY.value,
                 entity_id=valid_token.token,
@@ -4386,7 +4391,7 @@ async def _virtual_key_multi_budget_check(
 
 
 async def _user_multi_budget_check(
-    user_object: Optional[LiteLLM_UserTable],
+    user_object: LiteLLM_UserTable | None,
 ):
     """
     Raises BudgetExceededError if any budget window in user_object.budget_limits is exceeded.
@@ -4405,22 +4410,22 @@ async def _user_multi_budget_check(
         w = _coerce_budget_limit_window_for_check(window=window)
         if w is None:
             continue
-        counter_key = f"spend:user:{user_object.user_id}:window:{w['budget_duration']}"
+        counter_key = f"spend:user:{user_object.user_id}:window:{w.budget_duration}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
-            max_budget=w["max_budget"],
+            max_budget=w.max_budget,
             window_entity_type="User",
             window_entity_id=user_object.user_id,
             window_start=get_budget_window_start(w),
         )
-        if window_spend >= w["max_budget"]:
+        if window_spend >= w.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
-                max_budget=w["max_budget"],
+                max_budget=w.max_budget,
                 message=(
-                    f"ExceededBudget: User={user_object.user_id} over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                    f"ExceededBudget: User={user_object.user_id} over {w.budget_duration} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w.max_budget:.2f}"
                 ),
                 entity_type=Litellm_EntityType.USER.value,
                 entity_id=user_object.user_id,
@@ -4780,22 +4785,22 @@ async def _team_multi_budget_check(
         w = _coerce_budget_limit_window_for_check(window=window)
         if w is None:
             continue
-        counter_key = f"spend:team:{team_object.team_id}:window:{w['budget_duration']}"
+        counter_key = f"spend:team:{team_object.team_id}:window:{w.budget_duration}"
         window_spend = await get_current_spend(
             counter_key=counter_key,
             fallback_spend=0.0,
-            max_budget=w["max_budget"],
+            max_budget=w.max_budget,
             window_entity_type="Team",
             window_entity_id=team_object.team_id,
             window_start=get_budget_window_start(w),
         )
-        if window_spend >= w["max_budget"]:
+        if window_spend >= w.max_budget:
             raise litellm.BudgetExceededError(
                 current_cost=window_spend,
-                max_budget=w["max_budget"],
+                max_budget=w.max_budget,
                 message=(
-                    f"ExceededBudget: Team={team_object.team_id} over {w['budget_duration']} budget. "
-                    f"Spend=${window_spend:.4f}, Limit=${w['max_budget']:.2f}"
+                    f"ExceededBudget: Team={team_object.team_id} over {w.budget_duration} budget. "
+                    f"Spend=${window_spend:.4f}, Limit=${w.max_budget:.2f}"
                 ),
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,

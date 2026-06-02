@@ -1218,22 +1218,30 @@ def _initialize_budget_limits_for_update(
     if not new_windows:
         return "[]"
 
-    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
     preserved = _existing_reset_at_by_duration(existing_user_row)
     initialized = tuple(
-        {
-            **(window if isinstance(window, dict) else window.model_dump()),
-            "reset_at": preserved.get(
-                window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            )
-            or get_budget_reset_time(
-                budget_duration=window["budget_duration"] if isinstance(window, dict) else window.budget_duration
-            ).isoformat(),
-        }
+        _initialize_budget_limit_window(window=window, preserved=preserved)
         for window in new_windows
     )
     return json.dumps(initialized)
+
+
+def _initialize_budget_limit_window(
+    window: object,
+    preserved: Mapping[str, str],
+) -> dict[str, object]:
+    window_data = window if isinstance(window, dict) else window.model_dump()
+    duration = window_data.get("budget_duration")
+    if not isinstance(duration, str):
+        raise ValueError("budget_duration must be a string")
+    validate_budget_duration(duration)
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    return {
+        **window_data,
+        "reset_at": preserved.get(duration)
+        or get_budget_reset_time(budget_duration=duration).isoformat(),
+    }
 
 
 def _update_internal_user_params(
@@ -1370,6 +1378,17 @@ async def _invalidate_user_spend_counter_if_changed(
         from litellm.proxy.proxy_server import _invalidate_spend_counter
 
         await _invalidate_spend_counter(counter_key=f"spend:user:{non_default_values['user_id']}")
+
+
+async def _invalidate_user_cache(user_id: str | None) -> None:
+    if user_id is None:
+        return
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    try:
+        await user_api_key_cache.async_delete_cache(key=user_id)
+    except Exception as e:  # noqa: BLE001
+        verbose_proxy_logger.warning("Failed to invalidate user cache for %s: %s", user_id, e)
 
 
 def _clears_object_permission(user_request: UpdateUserRequest) -> bool:
@@ -1545,6 +1564,7 @@ async def _update_single_user_helper(
             response = await prisma_client.insert_data(data=non_default_values, table_name="user")
 
     if response is not None:
+        await _invalidate_user_cache(non_default_values.get("user_id"))
         await _schedule_user_update_audit_log(
             response=response,
             existing_user_row=existing_user_row,
@@ -1809,7 +1829,7 @@ async def bulk_user_update(
     }'
     ```
     """
-    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client
 
     if prisma_client is None:
         raise HTTPException(
@@ -1885,9 +1905,7 @@ async def bulk_user_update(
                 data=non_default_values,  # Update all users
             )
 
-            for user in all_users_in_db:
-                await user_api_key_cache.async_delete_cache(key=user.user_id)
-                await user_api_key_cache.async_delete_cache(key=f"{user.user_id}_user_api_key_user_id")
+            await asyncio.gather(*(_invalidate_user_cache(user.user_id) for user in all_users_in_db))
 
             # Create individual success results
             for user in all_users_in_db:

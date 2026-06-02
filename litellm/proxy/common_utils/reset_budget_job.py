@@ -44,11 +44,11 @@ from litellm.repositories.table_repositories import (
     TeamMembershipRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.unit_of_work import (
     budget_cascade_unit_of_work,
     spend_reset_unit_of_work,
 )
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -1193,7 +1193,10 @@ class ResetBudgetJob:
             lambda: self.prisma_client.db.query_raw(source.page_query(), cursor, RESET_BUDGET_JOB_BATCH_SIZE),
             reason=f"reset_budget_read_{source.retry_subject}_windows_failure",
         )
-        for row in rows:
+        source_rows: Final = tuple(row for row in rows if source.id_column in row)
+        if not source_rows:
+            return None
+        for row in source_rows:
             raw = row["budget_limits"]
             if not raw:
                 continue
@@ -1216,9 +1219,9 @@ class ResetBudgetJob:
                     reason=f"reset_budget_write_{source.retry_subject}_windows_failure",
                 )
 
-        if len(rows) < RESET_BUDGET_JOB_BATCH_SIZE:
+        if len(source_rows) < RESET_BUDGET_JOB_BATCH_SIZE:
             return None
-        return rows[-1][source.id_column]
+        return source_rows[-1][source.id_column]
 
     @staticmethod
     async def _reset_budget_common(
