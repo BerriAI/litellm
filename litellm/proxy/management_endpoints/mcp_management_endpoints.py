@@ -2135,6 +2135,8 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
+        payload_fields_set = set(payload.fields_set())
+
         # Validate and normalize payload fields
         validate_and_normalize_mcp_server_payload(payload)
 
@@ -2154,6 +2156,7 @@ if MCP_AVAILABLE:
             prisma_client,
             payload,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+            fields_set=payload_fields_set,
         )
 
         if mcp_server_record_updated is None:

@@ -8,6 +8,7 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm._uuid import uuid
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy._types import (  # key request types; user request types; team request types; customer request types
@@ -458,6 +459,12 @@ async def _emit_management_endpoint_otel_span(
     if open_telemetry_logger is None:
         return
 
+    # Under V2 OTel, management endpoints are ordinary FastAPI routes already
+    # spanned by the mounted instrumentor — there is no management hook to fire, so
+    # skip the payload build entirely. The legacy logger still needs the hook.
+    if is_otel_v2_enabled():
+        return
+
     http_request: Optional[Request] = kwargs.get("http_request")
     if http_request is not None:
         # Inline import — auth_utils participates in a proxy import cycle.
@@ -568,14 +575,22 @@ def management_endpoint_wrapper(func):
             )
             parent_otel_span = getattr(user_api_key_dict, "parent_otel_span", None)
             if parent_otel_span is not None:
-                await _emit_management_endpoint_otel_span(
-                    func=func,
-                    kwargs=kwargs,
-                    parent_otel_span=parent_otel_span,
-                    start_time=start_time,
-                    end_time=end_time,
-                    exception=e,
-                )
+                try:
+                    await _emit_management_endpoint_otel_span(
+                        func=func,
+                        kwargs=kwargs,
+                        parent_otel_span=parent_otel_span,
+                        start_time=start_time,
+                        end_time=end_time,
+                        exception=e,
+                    )
+                except Exception as otel_exc:
+                    # Non-Blocking Exception - never let OTEL failures swallow
+                    # the original management-endpoint exception.
+                    verbose_logger.debug(
+                        "Error emitting OTEL span in management endpoint wrapper failure path: %s",
+                        str(otel_exc),
+                    )
 
             raise e
 

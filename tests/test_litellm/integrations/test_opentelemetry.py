@@ -23,6 +23,7 @@ from litellm.integrations.opentelemetry import (
     OpenTelemetry,
     OpenTelemetryConfig,
     OTELSemconvCategory,
+    _normalize_team_metadata_keys,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -5142,3 +5143,171 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
+    """team_metadata, http.route, and both model names (the user-facing
+    model_group alias and the dispatched provider model) must land on the
+    inference span via set_attributes."""
+
+    def _span(self):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        return tracer.start_span("litellm_request"), exporter
+
+    def _attr(self, span, exporter):
+        span.end()
+        return exporter.get_finished_spans()[0].attributes
+
+    def _kwargs(self):
+        return {
+            "model": "gpt-4o",
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "azure",
+                "metadata": {
+                    "user_api_key_team_metadata": {
+                        "tier": "gold",
+                        "cost_center": "42",
+                    }
+                },
+            },
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_request_route": "/v1/chat/completions",
+                    "user_api_key_team_id": "team-1",
+                },
+                "call_type": "completion",
+                "model_group": "gpt-4o",
+                "model": "azure/my-deployment",
+                "hidden_params": {"litellm_model_name": "azure/my-deployment"},
+                "id": "req-1",
+                "litellm_call_id": "call-1",
+            },
+        }
+
+    def _otel_with_team_metadata_keys(self, keys):
+        return OpenTelemetry(
+            config=OpenTelemetryConfig(baggage_team_metadata_keys=keys)
+        )
+
+    def test_all_identity_attributes_stamped(self):
+        otel = self._otel_with_team_metadata_keys(["tier", "cost_center"])
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        attrs = self._attr(span, exp)
+
+        assert attrs["http.route"] == "/v1/chat/completions"
+        assert json.loads(attrs["litellm.team.metadata"]) == {
+            "tier": "gold",
+            "cost_center": "42",
+        }
+        assert attrs["litellm.model_group"] == "gpt-4o"
+        assert attrs["litellm.provider.model"] == "azure/my-deployment"
+
+    def test_team_metadata_defaults_to_none_stamped(self):
+        """With no allowlist configured (the default), a team's metadata must
+        never be stamped, even when present on the request."""
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        assert "litellm.team.metadata" not in self._attr(span, exp)
+
+    def test_only_allowlisted_team_metadata_keys_stamped(self):
+        """Sub-keys outside the allowlist are excluded from the stamped value."""
+        otel = self._otel_with_team_metadata_keys(["tier"])
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {
+            "tier": "gold"
+        }
+
+    def test_team_metadata_allowlist_from_config_yaml_kwarg(self):
+        """callback_settings.otel.baggage_team_metadata_keys arrives as a kwarg
+        and must drive the allowlist."""
+        otel = OpenTelemetry(baggage_team_metadata_keys=["cost_center"])
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        assert json.loads(self._attr(span, exp)["litellm.team.metadata"]) == {
+            "cost_center": "42"
+        }
+
+    def test_provider_model_falls_back_to_payload_model(self):
+        """Without hidden_params.litellm_model_name the dispatched model is
+        the payload model (the SDK path, where no router renaming happened)."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        kwargs["standard_logging_object"]["hidden_params"] = {}
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert self._attr(span, exp)["litellm.provider.model"] == "azure/my-deployment"
+
+    def test_empty_team_metadata_is_dropped(self):
+        """An empty team_metadata dict must not stamp a useless '{}'."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        kwargs["litellm_params"]["metadata"]["user_api_key_team_metadata"] = {}
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert "litellm.team.metadata" not in self._attr(span, exp)
+
+    def test_missing_route_is_dropped(self):
+        """An SDK request has no route; http.route must be absent, not empty."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        del kwargs["standard_logging_object"]["metadata"]["user_api_key_request_route"]
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert "http.route" not in self._attr(span, exp)
+
+    def test_team_metadata_json_helper(self):
+        keys = ["a", "b"]
+        assert OpenTelemetry._team_metadata_json(None, keys) is None
+        assert OpenTelemetry._team_metadata_json("not-a-dict", keys) is None
+        assert OpenTelemetry._team_metadata_json({}, keys) is None
+        # empty allowlist -> nothing stamped, even with data present
+        assert OpenTelemetry._team_metadata_json({"a": 1}, []) is None
+        # no allowlisted key present -> dropped, not a useless "{}"
+        assert OpenTelemetry._team_metadata_json({"c": 1}, keys) is None
+        # only allowlisted sub-keys survive
+        assert json.loads(
+            OpenTelemetry._team_metadata_json({"a": 1, "c": 2}, keys)
+        ) == {"a": 1}
+
+
+class TestOpenTelemetryTeamMetadataKeysConfig(unittest.TestCase):
+    def test_normalize_from_csv_string(self):
+        # comma-separated env var: strip whitespace and drop empties
+        assert _normalize_team_metadata_keys("tier, cost_center , ,") == [
+            "tier",
+            "cost_center",
+        ]
+
+    def test_normalize_from_list(self):
+        assert _normalize_team_metadata_keys(["tier", " cost_center ", ""]) == [
+            "tier",
+            "cost_center",
+        ]
+
+    def test_normalize_none(self):
+        assert _normalize_team_metadata_keys(None) == []
+
+    def test_config_reads_csv_env_var(self):
+        with patch.dict(
+            "os.environ",
+            {"LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS": "tier, cost_center"},
+        ):
+            assert OpenTelemetryConfig().baggage_team_metadata_keys == [
+                "tier",
+                "cost_center",
+            ]
+
+    def test_explicit_keys_win_over_env_var(self):
+        with patch.dict(
+            "os.environ",
+            {"LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS": "from_env"},
+        ):
+            cfg = OpenTelemetryConfig(baggage_team_metadata_keys=["from_arg"])
+            assert cfg.baggage_team_metadata_keys == ["from_arg"]
