@@ -81,6 +81,29 @@ model LiteLLM_AgentsTable {
   updated_by String
 }
 
+// BYOC AWS config for the agent-session VM provider.
+// One row per team. `aws_creds_enc` is a JSON blob with each field
+// individually encrypted via `encrypt_value_helper` (see
+// litellm/proxy/agent_session_endpoints/vm_providers/team_config.py).
+// Owned by Epic G's Settings UI; consumed by Epic B's EC2 provider.
+model LiteLLM_AgentVMConfig {
+  team_id              String   @id
+  aws_creds_enc        String?
+  region               String?
+  subnet_id            String?
+  security_group_id    String?
+  iam_instance_profile String?
+  ami_id               String?
+  instance_type        String?
+  use_spot             Boolean  @default(true)
+  warm_pool_size       Int      @default(0)
+  network_access       Json?
+  created_at           DateTime @default(now()) @map("created_at")
+  created_by           String
+  updated_at           DateTime @default(now()) @updatedAt @map("updated_at")
+  updated_by           String
+}
+
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
     organization_alias  String
@@ -1375,4 +1398,209 @@ model LiteLLM_WorkflowMessage {
 
   @@unique([run_id, sequence_number])
   @@index([run_id])
+}
+
+// Per-team Cloud Agent VM provider configuration. Holds AWS BYOC creds
+// (encrypted via the same nacl/SecretBox path as virtual keys), provisioning
+// defaults, warm-pool settings, and the network egress allowlist that gets
+// pushed to the daemon at hydrate time.
+model LiteLLM_AgentVMConfig {
+  team_id              String   @id
+  provider             String   @default("disabled") // "ec2" | "self_hosted" | "disabled"
+  aws_auth_method      String?  // "access_keys" | "iam_role" | "instance_metadata"
+  aws_access_key_id_enc String?  // encrypted
+  aws_secret_access_key_enc String? // encrypted
+  aws_role_arn_enc     String?  // encrypted (cross-account role mode)
+  aws_region           String?
+  ami_id               String?
+  instance_type        String?
+  subnet_id            String?
+  security_group_id    String?
+  iam_instance_profile String?
+  use_spot             Boolean  @default(true)
+  max_session_minutes  Int      @default(120)
+  warm_pool_enabled    Boolean  @default(false)
+  warm_pool_size       Int      @default(0)
+  max_idle_minutes     Int      @default(30)
+  hydrate_transport    String   @default("auto") // "auto" | "ssm" | "long_poll"
+  network_access       Json     @default("{\"mode\":\"allow_all\",\"allowlist\":[]}")
+  self_hosted_enabled  Boolean  @default(false)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @default(now()) @updatedAt
+}
+
+// Per-team encrypted secrets injected into agent VMs at session start. Value
+// is ALWAYS write-only: GET endpoints must never return value_enc decrypted.
+// Scope is "all" or a list of repo full_name strings; the proxy joins on
+// session.repos at hydrate time.
+model LiteLLM_AgentSecret {
+  id          String   @id @default(uuid())
+  team_id     String
+  name        String
+  value_enc   String   // base64-encoded, nacl.SecretBox encrypted, write-only
+  scope       Json     @default("\"all\"") // "all" | string[]
+  type        String   @default("env") // "env" | "file"
+  file_path   String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now()) @updatedAt
+  created_by  String?
+
+  @@unique([team_id, name])
+  @@index([team_id])
+}
+
+// Self-hosted worker registrations. Each worker holds a long-lived JWT and
+// long-polls for hydrate. status is best-effort heartbeat tracking.
+model LiteLLM_AgentWorker {
+  id            String   @id @default(uuid())
+  team_id       String
+  hostname      String
+  status        String   @default("offline") // "online" | "offline"
+  last_seen_at  DateTime?
+  cpu_pct       Float?
+  mem_gb        Float?
+  active_sessions Int    @default(0)
+  worker_jwt_hash String // sha256 of issued JWT — never store raw JWT
+  created_at    DateTime @default(now())
+
+  @@index([team_id, status])
+  @@index([worker_jwt_hash])
+}
+
+// Single-use 15-minute pairing tokens that workers exchange for a long-lived
+// worker JWT during the install flow.
+model LiteLLM_AgentWorkerPairingToken {
+  token_hash  String   @id // sha256 of the raw token (raw token never persisted)
+  team_id     String
+  created_by  String
+  expires_at  DateTime
+  used_at     DateTime?
+  created_at  DateTime @default(now())
+
+  @@index([team_id])
+}
+
+// ===========================================================================
+// Agent Sessions / Runs (Cursor SDK on LiteLLM)
+//
+// Three-level hierarchy:
+//   Agent      — definition (model, system prompt, default repos, tools)
+//   Session    — VM-backed conversation, owned by an Agent
+//   Run        — single turn within a Session
+//   RunEvent   — append-only event log per run (for resumable SSE)
+// ===========================================================================
+
+model LiteLLM_Agent {
+  id                String   @id  // "agent_<uuid>"
+  name              String
+  user_api_key_hash String
+  team_id           String?
+  model             String
+  system_prompt     String?
+  default_repos     Json?
+  default_env_vars  Json?
+  tools_config      Json?
+  metadata          Json?
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+
+  sessions LiteLLM_AgentSession[]
+
+  @@index([user_api_key_hash])
+  @@index([team_id])
+}
+
+model LiteLLM_AgentSession {
+  id                String   @id  // "sess_<uuid>"
+  agent_id          String
+  user_api_key_hash String
+  team_id           String?
+  vm_id             String?
+  vm_provider       String?
+  repos             Json
+  env_vars          Json?
+  status            String   @default("provisioning")
+  daemon_token_hash String?
+  expires_at        DateTime
+  last_heartbeat_at DateTime?
+  idempotency_key   String?
+  created_at        DateTime  @default(now())
+  updated_at        DateTime  @updatedAt
+  terminated_at     DateTime?
+
+  agent LiteLLM_Agent     @relation(fields: [agent_id], references: [id], onDelete: Cascade)
+  runs  LiteLLM_AgentRun[]
+
+  @@unique([user_api_key_hash, idempotency_key])
+  @@index([agent_id])
+  @@index([status, expires_at])
+  @@index([user_api_key_hash])
+}
+
+model LiteLLM_AgentRun {
+  id              String   @id  // "run_<uuid>"
+  session_id      String
+  parent_run_id   String?
+  status          String   @default("queued")
+  prompt          Json
+  result          String?
+  git_branches    Json?
+  idempotency_key String?
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+  started_at      DateTime?
+  terminated_at   DateTime?
+
+  session LiteLLM_AgentSession   @relation(fields: [session_id], references: [id], onDelete: Cascade)
+  events  LiteLLM_AgentRunEvent[]
+
+  @@unique([session_id, idempotency_key])
+  @@index([session_id, status])
+  @@index([session_id, created_at])
+}
+
+model LiteLLM_AgentRunEvent {
+  id         String   @id @default(uuid())
+  run_id     String
+  seq        Int
+  event_type String
+  payload    Json
+  created_at DateTime @default(now())
+
+  run LiteLLM_AgentRun @relation(fields: [run_id], references: [id], onDelete: Cascade)
+
+  @@unique([run_id, seq])
+  @@index([run_id, seq])
+}
+
+// ===========================================================================
+// Warm pool VM tracking (LIT-2890 / Epic B2)
+//
+// Tracks the lifecycle of pre-provisioned EC2 (or other provider) VMs used
+// for instant session attach. Each row maps to one underlying instance.
+//
+// State machine:
+//   provisioning → warm → hydrating → attached → terminating → terminated
+//
+// On session end, the VM is terminated (NOT recycled) — security boundary.
+// The maintenance loop refills `warm` slots; rows in `terminated` are kept
+// for audit until pruned.
+// ===========================================================================
+model LiteLLM_AgentVM {
+  id                  String   @id  // EC2 instance id (e.g. "i-0abcd...")
+  provider            String   // "ec2" | "noop" | "self_hosted"
+  region              String?
+  state               String   // provisioning|warm|hydrating|attached|terminating|terminated
+  team_id             String   // owner team — pool is per-team
+  pool_id             String   // logical pool key (currently == team_id)
+  attached_session_id String?  // FK to LiteLLM_AgentSession.id when state=attached
+  created_at          DateTime @default(now())
+  warmed_at           DateTime?
+  last_hydrate_at     DateTime?
+  terminated_at       DateTime?
+  metadata            Json?    // public_ip, private_ip, ssm_status, etc.
+
+  @@index([state, pool_id])
+  @@index([team_id, state])
+  @@index([attached_session_id])
 }
