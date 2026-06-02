@@ -179,6 +179,10 @@ def get_supported_openai_params(  # noqa: PLR0915
         return litellm.CodestralTextCompletionConfig().get_supported_openai_params(
             model=model
         )
+    elif custom_llm_provider == "text-completion-inception":
+        return litellm.InceptionTextCompletionConfig().get_supported_openai_params(
+            model=model
+        )
     elif custom_llm_provider == "sambanova":
         if request_type == "embeddings":
             litellm.SambaNovaEmbeddingConfig().get_supported_openai_params(model=model)

@@ -3294,6 +3294,8 @@ class LlmProviders(str, Enum):
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
+    INCEPTION = "inception"
+    TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
