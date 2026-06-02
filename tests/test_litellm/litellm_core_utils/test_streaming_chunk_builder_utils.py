@@ -613,3 +613,76 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     assert (
         response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
     )
+
+
+def test_get_combined_tool_content_without_id():
+    """A streamed tool call that carries a name and arguments but no id must
+    still be reassembled (id auto-generated), not silently dropped."""
+    chunks = [
+        ModelResponseStream(
+            id="chatcmpl-no-id",
+            created=1744771912,
+            model="some-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id=None,
+                                function=Function(
+                                    arguments='{"location": "Berlin"',
+                                    name="get_current_weather",
+                                ),
+                                type="function",
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+        ModelResponseStream(
+            id="chatcmpl-no-id",
+            created=1744771912,
+            model="some-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        role="assistant",
+                        content=None,
+                        tool_calls=[
+                            ChatCompletionDeltaToolCall(
+                                id=None,
+                                function=Function(
+                                    arguments=', "unit": "metric"}',
+                                    name=None,
+                                ),
+                                type=None,
+                                index=0,
+                            )
+                        ],
+                    ),
+                )
+            ],
+        ),
+    ]
+    chunk_processor = ChunkProcessor(chunks=chunks)
+
+    tool_calls_list = chunk_processor.get_combined_tool_content(chunks)
+
+    assert len(tool_calls_list) == 1
+    tool_call = tool_calls_list[0]
+    assert tool_call.function.name == "get_current_weather"
+    assert json.loads(tool_call.function.arguments) == {
+        "location": "Berlin",
+        "unit": "metric",
+    }
+    assert tool_call.id
