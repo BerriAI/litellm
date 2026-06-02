@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
+from litellm.integrations.custom_guardrail import get_session_id_from_request_data
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -47,24 +48,6 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
                 DEFAULT_SENSITIVE_ROUTING_TTL,
             )
         )
-
-    def _get_session_id(self, data: dict) -> Optional[str]:
-        """Extract session_id from request metadata."""
-        session_id = data.get("litellm_session_id")
-        if session_id:
-            return str(session_id)
-
-        metadata = data.get("metadata") or {}
-        session_id = metadata.get("session_id")
-        if session_id:
-            return str(session_id)
-
-        litellm_metadata = data.get("litellm_metadata") or {}
-        session_id = litellm_metadata.get("session_id")
-        if session_id:
-            return str(session_id)
-
-        return None
 
     def _make_cache_key(self, session_id: str, api_key: Optional[str]) -> str:
         tenant = api_key or "default"
@@ -154,7 +137,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         Before each LLM call, check if this session has a routing override.
         If so, modify the request's model field.
         """
-        session_id = self._get_session_id(data)
+        session_id = get_session_id_from_request_data(data)
         if session_id is None:
             return None
 

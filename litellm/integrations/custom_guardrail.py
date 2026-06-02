@@ -51,6 +51,25 @@ from litellm.exceptions import (
 )
 
 
+def get_session_id_from_request_data(request_data: Dict[str, Any]) -> Optional[str]:
+    """Extract session_id from request data (litellm_session_id or metadata)."""
+    session_id = request_data.get("litellm_session_id")
+    if session_id:
+        return str(session_id)
+
+    metadata = request_data.get("metadata") or {}
+    session_id = metadata.get("session_id")
+    if session_id:
+        return str(session_id)
+
+    litellm_metadata = request_data.get("litellm_metadata") or {}
+    session_id = litellm_metadata.get("session_id")
+    if session_id:
+        return str(session_id)
+
+    return None
+
+
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
     use_native_during_call_hook: ClassVar[bool] = False
@@ -198,7 +217,9 @@ class CustomGuardrail(CustomLogger):
         Args:
             route_to_model: The model to route this request (and session) to
             request_data: The original request data dictionary
-            detection_info: Optional dictionary with detection metadata
+            detection_info: Optional non-sensitive detection metadata (e.g. matched
+                entity types, rule ids, scores). This is surfaced in request metadata
+                and logs, so it must not contain the raw detected sensitive values.
 
         Raises:
             SensitiveDataRouteException: Always raises to trigger rerouting
@@ -222,21 +243,7 @@ class CustomGuardrail(CustomLogger):
         self, request_data: Dict[str, Any]
     ) -> Optional[str]:
         """Extract session_id from request data."""
-        session_id = request_data.get("litellm_session_id")
-        if session_id:
-            return str(session_id)
-
-        metadata = request_data.get("metadata") or {}
-        session_id = metadata.get("session_id")
-        if session_id:
-            return str(session_id)
-
-        litellm_metadata = request_data.get("litellm_metadata") or {}
-        session_id = litellm_metadata.get("session_id")
-        if session_id:
-            return str(session_id)
-
-        return None
+        return get_session_id_from_request_data(request_data)
 
     def should_route_on_sensitive_data(self) -> bool:
         """
@@ -261,14 +268,14 @@ class CustomGuardrail(CustomLogger):
 
         Args:
             request_data: The request data dictionary
-            detection_info: Optional detection metadata
+            detection_info: Optional non-sensitive detection metadata. When routing,
+                this is surfaced in request metadata and logs, so it must not contain
+                the raw detected sensitive values.
 
         Raises:
             SensitiveDataRouteException: When configured to route
             GuardrailRaisedException: When configured to block (default)
         """
-        from litellm.exceptions import GuardrailRaisedException
-
         if self.should_route_on_sensitive_data():
             self.raise_sensitive_data_route_exception(
                 route_to_model=self.sensitive_data_route_to_model,  # type: ignore

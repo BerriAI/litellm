@@ -14,7 +14,10 @@ import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.exceptions import SensitiveDataRouteException
-from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.integrations.custom_guardrail import (
+    CustomGuardrail,
+    get_session_id_from_request_data,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.sensitive_data_routing import (
     _PROXY_SensitiveDataRoutingHandler,
@@ -58,22 +61,19 @@ class TestSensitiveDataRoutingHandler:
         routed_model = await handler._get_routed_model("test-session-123", "hashed-key")
         assert routed_model == "on-premise-model"
 
-    @pytest.mark.asyncio
-    async def test_get_session_id_from_metadata(self, handler):
+    def test_get_session_id_from_metadata(self):
         data = {"metadata": {"session_id": "session-from-metadata"}}
-        session_id = handler._get_session_id(data)
+        session_id = get_session_id_from_request_data(data)
         assert session_id == "session-from-metadata"
 
-    @pytest.mark.asyncio
-    async def test_get_session_id_from_litellm_metadata(self, handler):
+    def test_get_session_id_from_litellm_metadata(self):
         data = {"litellm_metadata": {"session_id": "session-from-litellm-metadata"}}
-        session_id = handler._get_session_id(data)
+        session_id = get_session_id_from_request_data(data)
         assert session_id == "session-from-litellm-metadata"
 
-    @pytest.mark.asyncio
-    async def test_get_session_id_from_litellm_session_id(self, handler):
+    def test_get_session_id_from_litellm_session_id(self):
         data = {"litellm_session_id": "session-direct"}
-        session_id = handler._get_session_id(data)
+        session_id = get_session_id_from_request_data(data)
         assert session_id == "session-direct"
 
     @pytest.mark.asyncio
