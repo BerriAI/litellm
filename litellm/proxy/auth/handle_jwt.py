@@ -17,7 +17,7 @@ from typing import Any, List, Literal, Optional, Set, Tuple, Union, cast
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
-from fastapi import HTTPException
+from fastapi import HTTPException, status
 import jwt
 from jwt.api_jwk import PyJWK
 
@@ -1059,7 +1059,12 @@ class JWTHandler:
                 disable_audience_validation=issuer_config.disable_audience_validation,
             )
         except jwt.ExpiredSignatureError:
-            raise Exception("Token Expired")
+            raise ProxyException(
+                message="Token Expired",
+                type=ProxyErrorTypes.expired_key,
+                param=None,
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
         except Exception as e:
             raise Exception(f"Validation fails: {str(e)}")
 
@@ -1103,8 +1108,12 @@ class JWTHandler:
                 }
 
             except jwt.ExpiredSignatureError:
-                # the token is expired, do something to refresh it
-                raise Exception("Token Expired")
+                raise ProxyException(
+                    message="Token Expired",
+                    type=ProxyErrorTypes.expired_key,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                )
             except Exception as e:
                 raise Exception(f"Validation fails: {str(e)}")
 

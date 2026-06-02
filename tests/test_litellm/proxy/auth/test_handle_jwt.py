@@ -3181,6 +3181,84 @@ def test_build_decode_kwargs_no_warning_when_scoped(
     assert matching == []
 
 
+@pytest.mark.asyncio
+async def test_auth_jwt_expired_token_raises_401_jwk_path():
+    """An expired JWT (access token) decoded via the JWK/dict public-key path
+    must raise a ProxyException carrying a 401 status code so the status is
+    preserved end-to-end (client response + OTel traces).
+    """
+    import jwt as jwt_lib
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    with (
+        patch.object(
+            jwt_handler, "get_public_key", new_callable=AsyncMock
+        ) as mock_get_public_key,
+        patch(
+            "litellm.proxy.auth.handle_jwt.jwt.get_unverified_header",
+            return_value={"kid": "test-kid"},
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.PyJWK.from_dict",
+            return_value=MagicMock(key="fake-key"),
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.jwt.decode",
+            side_effect=jwt_lib.ExpiredSignatureError("Signature has expired"),
+        ),
+    ):
+        mock_get_public_key.return_value = {"kty": "RSA", "kid": "test-kid"}
+
+        with pytest.raises(ProxyException) as exc_info:
+            await jwt_handler.auth_jwt(token="expired.jwt.token")
+
+        assert exc_info.value.code == str(401)
+        assert exc_info.value.type == ProxyErrorTypes.expired_key.value
+        assert "Token Expired" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_expired_token_raises_401_pem_cert_path():
+    """Same as above but for the PEM-certificate (string public-key) decode path."""
+    import jwt as jwt_lib
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    mock_cert = MagicMock()
+    mock_cert.public_key.return_value.public_bytes.return_value = b"fake-key"
+
+    with (
+        patch.object(
+            jwt_handler, "get_public_key", new_callable=AsyncMock
+        ) as mock_get_public_key,
+        patch(
+            "litellm.proxy.auth.handle_jwt.jwt.get_unverified_header",
+            return_value={"kid": "test-kid"},
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.x509.load_pem_x509_certificate",
+            return_value=mock_cert,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.jwt.decode",
+            side_effect=jwt_lib.ExpiredSignatureError("Signature has expired"),
+        ),
+    ):
+        mock_get_public_key.return_value = (
+            "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----"
+        )
+
+        with pytest.raises(ProxyException) as exc_info:
+            await jwt_handler.auth_jwt(token="expired.jwt.token")
+
+        assert exc_info.value.code == str(401)
+        assert exc_info.value.type == ProxyErrorTypes.expired_key.value
+        assert "Token Expired" in exc_info.value.message
+
+
 def _base64url_encode_int(value: int) -> str:
     import base64
 
@@ -3389,6 +3467,44 @@ async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
     assert jwt_handler.get_team_id(token=claims, default_value=None) == (
         "example-org/litellm-fork"
     )
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_issuer_path_expired_token_raises_401(monkeypatch):
+    """An expired JWT validated through the issuer-scoped path
+    (_auth_jwt_with_issuer) must raise a ProxyException carrying a 401 so the
+    status is preserved end-to-end, just like the non-issuer path.
+    """
+    import time
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    kid = "expired-kid"
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid=kid)
+
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[{"issuer": issuer, "jwks_url": jwks_url, "audience": "my-audience"}],
+        keys_by_url={jwks_url: [jwk]},
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="my-audience",
+        kid=kid,
+        extra_claims={"exp": int(time.time()) - 100},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await jwt_handler.auth_jwt(token=token)
+
+    assert exc_info.value.code == str(401)
+    assert exc_info.value.type == ProxyErrorTypes.expired_key.value
+    assert "Token Expired" in exc_info.value.message
 
 
 @pytest.mark.asyncio
