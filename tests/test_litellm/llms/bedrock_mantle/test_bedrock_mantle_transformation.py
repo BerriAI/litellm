@@ -107,6 +107,14 @@ class TestBedrockMantleResponsesConfig:
         url = cfg.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
 
+    def test_responses_complete_url_bare_api_base(self, monkeypatch):
+        monkeypatch.setenv(
+            "BEDROCK_MANTLE_API_BASE", "https://bedrock-mantle.us-east-1.api.aws"
+        )
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(api_base=None, litellm_params={})
+        assert url == "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
+
     def test_provider_config_manager_registers_responses(self):
         cfg = ProviderConfigManager.get_provider_responses_api_config(
             provider="bedrock_mantle",
