@@ -802,6 +802,7 @@ const sidebars = {
             "search/searxng",
             "search/linkup",
             "search/serper",
+            "search/apiserpent",
           ]
         },
         "skills",
