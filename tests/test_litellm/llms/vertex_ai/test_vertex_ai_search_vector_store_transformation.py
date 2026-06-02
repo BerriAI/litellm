@@ -194,3 +194,16 @@ def test_search_request_joins_list_query():
     _, body = _search_request(query=["foo", "bar"])
 
     assert body["query"] == "foo bar"
+
+
+def test_search_request_logs_effective_query_when_extra_body_overrides_query():
+    log = SimpleNamespace(model_call_details={})
+
+    _, body = _search_request(
+        query="original",
+        extra_body={"query": "from-extra-body"},
+        litellm_logging_obj=log,
+    )
+
+    assert body["query"] == "from-extra-body"
+    assert log.model_call_details["query"] == "from-extra-body"

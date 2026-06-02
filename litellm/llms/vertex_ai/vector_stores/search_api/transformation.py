@@ -152,7 +152,9 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         if isinstance(extra_body, dict):
             request_body.update(extra_body)
 
-        litellm_logging_obj.model_call_details["query"] = query
+        litellm_logging_obj.model_call_details["query"] = request_body.get(
+            "query", query
+        )
 
         return url, request_body
 
