@@ -918,7 +918,34 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         anthropic_tools = []
         mcp_servers = []
         for tool in tools:
-            if "input_schema" in tool:  # assume in anthropic format
+            if tool.get("type") == "namespace":
+                # Namespace is a grouping container (e.g. codex's multi_agent_v1).
+                # Extract its nested tools and map them individually.
+                for nested in tool.get("tools") or []:
+                    if "input_schema" in nested:
+                        # Already in Anthropic format.
+                        anthropic_tools.append(nested)
+                    elif "function" not in nested and "name" in nested:
+                        # Flat format: {type, name, description, parameters, ...}.
+                        # Normalize to OpenAI-wrapped format before mapping.
+                        wrapped = {
+                            "type": nested.get("type", "function"),
+                            "function": {
+                                k: v for k, v in nested.items() if k != "type"
+                            },
+                        }
+                        nested_tool, nested_mcp = self._map_tool_helper(wrapped)
+                        if nested_tool is not None:
+                            anthropic_tools.append(nested_tool)
+                        if nested_mcp is not None:
+                            mcp_servers.append(nested_mcp)
+                    else:
+                        nested_tool, nested_mcp = self._map_tool_helper(nested)
+                        if nested_tool is not None:
+                            anthropic_tools.append(nested_tool)
+                        if nested_mcp is not None:
+                            mcp_servers.append(nested_mcp)
+            elif "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
                 new_tool, mcp_server_tool = self._map_tool_helper(tool)
@@ -1978,6 +2005,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
+        optional_params.pop("client_metadata", None)
 
         data = {
             "model": model,
