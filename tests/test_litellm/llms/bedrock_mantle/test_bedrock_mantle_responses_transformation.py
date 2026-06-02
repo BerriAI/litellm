@@ -128,3 +128,34 @@ class TestBedrockMantleResponsesAuth:
     def test_custom_llm_provider(self):
         cfg = BedrockMantleResponsesAPIConfig()
         assert cfg.custom_llm_provider == LlmProviders.BEDROCK_MANTLE
+
+
+class TestBedrockMantleResponsesRegistry:
+    def test_registry_returns_config_for_gpt_5_5(self):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="openai.gpt-5.5",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+
+    def test_registry_returns_config_for_gpt_5_4_enum(self):
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider=LlmProviders.BEDROCK_MANTLE,
+            model="openai.gpt-5.4",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+
+    def test_registry_returns_none_for_gpt_oss(self):
+        # Regression guard: gpt-oss must NOT get the native Responses config; it
+        # keeps the chat-completions emulation path (responses/main.py ~line 1109).
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="openai.gpt-oss-120b",
+        )
+        assert cfg is None
