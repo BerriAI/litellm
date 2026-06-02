@@ -2910,13 +2910,14 @@ def _find_descriptor(descriptors, key):
     return next((d for d in descriptors if d["key"] == key), None)
 
 
-def _build_mcp_descriptors(handler, user_api_key_dict, data):
+def _build_mcp_descriptors(handler, user_api_key_dict, data, call_type="call_mcp_tool"):
     return handler._create_rate_limit_descriptors(
         user_api_key_dict=user_api_key_dict,
         data=data,
         rpm_limit_type=None,
         tpm_limit_type=None,
         model_has_failures=False,
+        call_type=call_type,
     )
 
 
@@ -2956,13 +2957,21 @@ def test_mcp_per_key_descriptor_skipped_for_non_matching_server_v3():
 
 
 def test_mcp_descriptor_skipped_for_non_mcp_request_v3():
+    """A non-MCP request must not create an MCP descriptor even if the caller
+    injects mcp_server_name in the body; otherwise an LLM call could consume a
+    target server's MCP quota and 429 legitimate tool calls."""
     handler, _ = _make_mcp_handler()
     user_api_key_dict = UserAPIKeyAuth(
         api_key=hash_token("sk-mcp-key"),
         metadata={"mcp_rpm_limit": {"github": 5}},
     )
 
-    descriptors = _build_mcp_descriptors(handler, user_api_key_dict, {"model": "gpt-4"})
+    descriptors = _build_mcp_descriptors(
+        handler,
+        user_api_key_dict,
+        {"model": "gpt-4", "mcp_server_name": "github"},
+        call_type="completion",
+    )
 
     assert _find_descriptor(descriptors, "mcp_per_key") is None
 

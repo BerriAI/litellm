@@ -36,7 +36,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import CallTypes, ModelResponse, Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -1606,6 +1606,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rpm_limit_type: Optional[str],
         tpm_limit_type: Optional[str],
         model_has_failures: bool,
+        call_type: Optional[str] = None,
     ) -> List[RateLimitDescriptor]:
         """
         Create all rate limit descriptors for the request.
@@ -1726,18 +1727,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        # Per-MCP-server rate limits
-        mcp_server_name = data.get("mcp_server_name", None)
-        self._add_mcp_per_key_rate_limit_descriptor(
-            user_api_key_dict=user_api_key_dict,
-            mcp_server_name=mcp_server_name,
-            descriptors=descriptors,
-        )
-        self._add_mcp_per_team_rate_limit_descriptor(
-            user_api_key_dict=user_api_key_dict,
-            mcp_server_name=mcp_server_name,
-            descriptors=descriptors,
-        )
+        # Per-MCP-server rate limits. Only honor mcp_server_name on actual MCP
+        # tool calls; otherwise a normal LLM request could inject it in its body
+        # to consume another server's MCP quota and 429 legitimate tool calls.
+        if call_type == CallTypes.call_mcp_tool.value:
+            mcp_server_name = data.get("mcp_server_name", None)
+            self._add_mcp_per_key_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+            self._add_mcp_per_team_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
 
         if (
             get_team_model_rpm_limit(user_api_key_dict) is not None
@@ -2069,6 +2073,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rpm_limit_type=rpm_limit_type,
             tpm_limit_type=tpm_limit_type,
             model_has_failures=model_has_failures,
+            call_type=call_type,
         )
 
         # Add team model rate limits from team_metadata
