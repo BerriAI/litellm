@@ -10,17 +10,7 @@ LiteLLM ships new releases regularly with new provider support, performance impr
 
 ## Latest Release
 
-### [v1.86.0 — Weighted-Routing Failover, Native Web-Search Citations & OTel-Standard Tracing](/release_notes/v1.86.0/v1-86-0)
-
-_May 16, 2026_
-
-Weighted-Routing Failover (retry the same model group on a different deployment while still respecting configured weights), native `web_search_tool_result` blocks for Anthropic clients so Claude Desktop and Cowork render web-search citations correctly, OTel-standard server-span attributes (`http.response.status_code`, `http.route`, `url.path`, `litellm.preprocessing.duration_ms`) plus opt-in OTEL GenAI semconv support, an additive componentized deployment scaffold (`gateway` / `backend` / `ui` Dockerfiles + Helm chart + Terraform stacks), and a critical fix for the v3 rate limiter that was leaking internal reservation keys into upstream provider request bodies on every virtual key with a `tpm_limit` or `rpm_limit` set.
-
----
-
-## Latest Release Candidate
-
-### [v1.87.0rc1 — OCI Generative AI Provider, Gemini 3.5 Flash Day-0, MCP UI for OAuth Servers](/release_notes/v1.87.0rc1/v1-87-0-rc-1)
+### [v1.87.0 — OCI Generative AI Provider, Gemini 3.5 Flash Day-0, MCP UI for OAuth Servers](/release_notes/v1.87.0/v1-87-0)
 
 _May 23, 2026_
 
@@ -32,6 +22,7 @@ OCI Generative AI as a first-class provider (chat, embeddings, streaming, reason
 
 | Version                             | Date         | Highlights                                                 |
 | ----------------------------------- | ------------ | ---------------------------------------------------------- |
+| [v1.87.0](/release_notes/v1.87.0/v1-87-0)   | May 23, 2026 | OCI Generative AI provider, Gemini 3.5 Flash day-0, MCP UI for OAuth servers |
 | [v1.86.0](/release_notes/v1.86.0/v1-86-0)   | May 16, 2026 | Weighted-Routing Failover, native Anthropic web-search citations, OTel-standard server spans |
 | [v1.85.1](/release_notes/v1.85.1/v1-85-1)   | May 20, 2026 | Patch — Gemini 3.5 Flash day-0 + cross-pod spend fix       |
 | [v1.84.1](/release_notes/v1.84.1/v1-84-1)   | May 20, 2026 | Patch — Gemini 3.5 Flash day-0 + cross-pod spend fix       |

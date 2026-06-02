@@ -1,6 +1,6 @@
 ---
-title: "v1.87.0rc1 - OCI Generative AI Provider, Gemini 3.5 Flash Day-0, MCP UI for OAuth Servers"
-slug: "v1-87-0-rc-1"
+title: "v1.87.0 - OCI Generative AI Provider, Gemini 3.5 Flash Day-0, MCP UI for OAuth Servers"
+slug: "v1-87-0"
 date: 2026-05-23T16:35:00
 authors:
   - name: Krrish Dholakia
@@ -31,14 +31,14 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:1.87.0-rc.1
+docker.litellm.ai/berriai/litellm:1.87.0
 ```
 
 </TabItem>
 <TabItem value="pip" label="Pip">
 
 ```bash
-pip install litellm==1.87.0rc1
+pip install litellm==1.87.0
 ```
 
 </TabItem>
@@ -275,11 +275,11 @@ PRs by ownership area (total: 93)
 - @ro31337 made their first contribution in [#28280](https://github.com/BerriAI/litellm/pull/28280)
 - @withomasmicrosoft made their first contribution in [#28490](https://github.com/BerriAI/litellm/pull/28490)
 
-**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.86.0-rc.1...v1.87.0-rc.1
+**Full Changelog**: https://github.com/BerriAI/litellm/compare/v1.86.0...v1.87.0
 
 ---
 
-## 05/23/2026 (`v1.87.0rc1`)
+## 05/23/2026 (`v1.87.0`)
 
 * New Providers: 1
 * New Models / Updated Models: 17
