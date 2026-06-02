@@ -768,6 +768,98 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
     assert control_field not in snapshot_body
 
 
+def _strip_request_mock():
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {"Content-Type": "application/json"}
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+    return request_mock
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "control_field,value",
+    [
+        ("success_callback", ["https://attacker.example"]),  # dynamic-callback exfil
+        ("failure_callback", ["https://attacker.example"]),
+        ("cache_key", "victim-predicted-key"),  # cross-tenant cache poisoning
+        ("model_group_retry_policy", {"RateLimitErrorRetries": 100000}),  # retry DoS
+        ("deployment_id", "premium-deployment"),  # post-auth model override
+        ("model_id", "premium-bedrock-model"),
+    ],
+)
+async def test_add_litellm_data_to_request_strips_new_root_control_fields(
+    control_field, value
+):
+    """Routing/cache/retry/callback control fields supplied in the request body
+    bypass authorization, poison the cache, or amplify retries; none has a
+    documented per-request client use, so all are stripped at the boundary."""
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}],
+            control_field: value,
+        },
+        request=_strip_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert control_field not in updated
+    assert control_field not in updated["proxy_server_request"]["body"]
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_new_metadata_control_fields():
+    """Spend/guardrail/rate-limiter sentinels injected via client metadata corrupt
+    analytics, spoof guardrail verdicts, or refund another tenant's TPM
+    reservation on the failure path; strip them at ingestion."""
+    malicious_metadata = {
+        "usage_object": {"total_tokens": 0},
+        "standard_logging_guardrail_information": {"status": "success"},
+        "_litellm_tpm_reserved_tokens": 999999,
+        "_litellm_tpm_reserved_model": "victim",
+        "_litellm_tpm_reserved_scopes": ["victim"],
+        "_litellm_tpm_reservation_released": True,
+        "_litellm_rate_limit_descriptors": [{"key": "victim"}],
+        "safe_user_metadata": "kept",
+    }
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hi"}],
+        "metadata": copy.deepcopy(malicious_metadata),
+        "litellm_metadata": copy.deepcopy(malicious_metadata),
+    }
+    updated = await add_litellm_data_to_request(
+        data=data,
+        request=_strip_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    stripped = {
+        "usage_object",
+        "standard_logging_guardrail_information",
+        "_litellm_tpm_reserved_tokens",
+        "_litellm_tpm_reserved_model",
+        "_litellm_tpm_reserved_scopes",
+        "_litellm_tpm_reservation_released",
+        "_litellm_rate_limit_descriptors",
+    }
+    for metadata_key in ("metadata", "litellm_metadata"):
+        cleaned = updated.get(metadata_key) or {}
+        for key in stripped:
+            assert key not in cleaned
+        assert cleaned.get("safe_user_metadata") == "kept"
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_allows_client_mock_response_with_admin_opt_in():
     request_mock = MagicMock(spec=Request)
@@ -1765,12 +1857,12 @@ def test_get_num_retries_from_request():
     result = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_zero)
     assert result == 0
 
-    # Test case 5: Header present with large number
+    # Test case 5: large number is clamped to the cap (no retry amplification)
     headers_with_large_number = {"x-litellm-num-retries": "100"}
     result = LiteLLMProxyRequestSetup._get_num_retries_from_request(
         headers_with_large_number
     )
-    assert result == 100
+    assert result == 5
 
     # Test case 6: Multiple headers with num retries header
     headers_multiple = {
@@ -1781,22 +1873,26 @@ def test_get_num_retries_from_request():
     result = LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_multiple)
     assert result == 5
 
-    # Test case 7: Header present with invalid value (should raise ValueError when int() is called)
+    # Test case 7: invalid value is ignored (treated as unset), not applied
     headers_with_invalid = {"x-litellm-num-retries": "invalid"}
-    with pytest.raises(ValueError):
+    assert (
         LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_invalid)
+        is None
+    )
 
-    # Test case 8: Header present with float string (should raise ValueError when int() is called)
+    # Test case 8: float string is ignored (treated as unset)
     headers_with_float = {"x-litellm-num-retries": "3.5"}
-    with pytest.raises(ValueError):
+    assert (
         LiteLLMProxyRequestSetup._get_num_retries_from_request(headers_with_float)
+        is None
+    )
 
-    # Test case 9: Header present with negative number
+    # Test case 9: negative number is clamped to 0
     headers_with_negative = {"x-litellm-num-retries": "-1"}
     result = LiteLLMProxyRequestSetup._get_num_retries_from_request(
         headers_with_negative
     )
-    assert result == -1
+    assert result == 0
 
 
 def test_add_user_api_key_auth_to_request_metadata():

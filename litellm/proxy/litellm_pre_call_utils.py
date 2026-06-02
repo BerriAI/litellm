@@ -140,6 +140,25 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     "service_callback",
     "logger_fn",
     "litellm_disabled_callbacks",
+    # ``success_callback`` / ``failure_callback`` from the request body register
+    # a dynamic logging callback (e.g. a Langsmith/Langfuse base_url the proxy
+    # then POSTs prompts+responses to) — request-payload exfil. The legitimate
+    # values are set from key/team config later in this pipeline, so the
+    # client-supplied ones are stripped here.
+    "success_callback",
+    "failure_callback",
+    # ``cache_key`` lets a caller pin the cache slot and write an attacker
+    # response under another tenant's predictable key (cross-tenant poisoning).
+    # The proxy derives the key deterministically; a client must not supply it.
+    "cache_key",
+    # ``model_group_retry_policy`` is coerced into a RetryPolicy with unbounded
+    # retry counts → request amplification / cost drain. Config-only.
+    "model_group_retry_policy",
+    # ``deployment_id`` (Azure) / ``model_id`` (Bedrock) override the resolved
+    # target after the model-name authorization ran against ``model``; routing
+    # by them bypasses that gate, so a client must not supply them.
+    "deployment_id",
+    "model_id",
 )
 
 _UNTRUSTED_METADATA_CONTROL_FIELDS = (
@@ -161,6 +180,22 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     "secret_fields",
     "_guardrail_pipelines",
     "_pipeline_managed_guardrails",
+    # ``standard_logging_guardrail_information`` in client metadata spoofs the
+    # recorded guardrail verdict (makes a blocked request look allowed in logs).
+    "standard_logging_guardrail_information",
+    # ``usage_object`` overwrites the server-computed token counts, corrupting
+    # spend/analytics aggregates (and a non-dict value silently drops the row).
+    "usage_object",
+    # Internal rate-limiter stash sentinels (mirrors STASH_KEYS in
+    # litellm/proxy/hooks/parallel_request_limiter_v3.py). A client that injects
+    # these into metadata, then errors before the pre-call hook strips them, has
+    # the failure hook refund/replay another tenant's TPM reservation. Stripping
+    # at ingestion closes every channel, not just the pre-call path.
+    "_litellm_tpm_reserved_tokens",
+    "_litellm_tpm_reserved_model",
+    "_litellm_tpm_reserved_scopes",
+    "_litellm_tpm_reservation_released",
+    "_litellm_rate_limit_descriptors",
 )
 
 _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
@@ -173,6 +208,10 @@ _ALLOW_CLIENT_MOCK_RESPONSE_METADATA_KEY = "allow_client_mock_response"
 _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY = (
     "allow_client_message_redaction_opt_out"
 )
+
+# Upper bound on a client-supplied ``x-litellm-num-retries``. Applied verbatim,
+# a large value amplifies one request into many upstream calls (cost/DoS).
+_MAX_CLIENT_NUM_RETRIES = 5
 
 # Per-request pricing parameters mutate cost-tracking output and (via
 # ``litellm.completion`` → ``register_model``) the process-wide
@@ -662,11 +701,20 @@ class LiteLLMProxyRequestSetup:
     def _get_num_retries_from_request(headers: dict) -> Optional[int]:
         """
         Workaround for client request from Vercel's AI SDK.
+
+        Clamped to ``[0, _MAX_CLIENT_NUM_RETRIES]``: the value was applied
+        verbatim, so a client could set ``x-litellm-num-retries`` to a huge
+        number and amplify one request into hundreds of thousands of upstream
+        calls (cost drain / DoS). A malformed (non-integer) value is ignored.
         """
         num_retries_header = headers.get("x-litellm-num-retries", None)
-        if num_retries_header is not None:
-            return int(num_retries_header)
-        return None
+        if num_retries_header is None:
+            return None
+        try:
+            requested = int(num_retries_header)
+        except (TypeError, ValueError):
+            return None
+        return max(0, min(requested, _MAX_CLIENT_NUM_RETRIES))
 
     @staticmethod
     def _get_spend_logs_metadata_from_request_headers(headers: dict) -> Optional[dict]:
