@@ -4750,11 +4750,12 @@ class PrismaClient:
             self._db_health_watchdog_loop()
         )
         verbose_proxy_logger.info(
-            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss)",
+            "Started Prisma DB health watchdog (interval=%ss, reconnect_cooldown=%ss, probe_timeout=%ss, reconnect_timeout=%ss, failures_before_reconnect=%s)",
             self._db_health_watchdog_interval_seconds,
             self._db_reconnect_cooldown_seconds,
             self._db_health_watchdog_probe_timeout_seconds,
             self._db_watchdog_reconnect_timeout_seconds,
+            self._watchdog_failures_before_reconnect,
         )
         await self._start_engine_watcher()
 
