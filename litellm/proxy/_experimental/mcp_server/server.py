@@ -145,6 +145,19 @@ _SESSION_MANAGERS_INITIALIZED = False
 _INITIALIZATION_LOCK = asyncio.Lock()
 
 
+def _mcp_session_id_from_headers(
+    raw_headers: Optional[Dict[str, str]],
+) -> Optional[str]:
+    """The ``mcp-session-id`` of a stateful MCP session, read case-insensitively
+    from the request headers. ``None`` for stateless calls (no such header)."""
+    if not raw_headers:
+        return None
+    for key, value in raw_headers.items():
+        if isinstance(key, str) and key.lower() == "mcp-session-id":
+            return value or None
+    return None
+
+
 if MCP_AVAILABLE:
     from mcp.server import Server
     from mcp.server.lowlevel.server import NotificationOptions
@@ -2324,6 +2337,7 @@ if MCP_AVAILABLE:
                 name=original_tool_name,  # Use original name for logging
                 arguments=arguments,
                 server_name=server_name,
+                session_id=_mcp_session_id_from_headers(raw_headers),
             )
         )
         litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
@@ -2695,8 +2709,10 @@ if MCP_AVAILABLE:
         name: str,
         arguments: Dict[str, Any],
         server_name: Optional[str],
+        session_id: Optional[str] = None,
     ) -> StandardLoggingMCPToolCall:
         mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)
+        namespaced_tool_name = f"{server_name}/{name}" if server_name else name
         if mcp_server:
             mcp_info = mcp_server.mcp_info or {}
             return StandardLoggingMCPToolCall(
@@ -2704,13 +2720,15 @@ if MCP_AVAILABLE:
                 arguments=arguments,
                 mcp_server_name=mcp_info.get("server_name"),
                 mcp_server_logo_url=mcp_info.get("logo_url"),
-                namespaced_tool_name=f"{server_name}/{name}" if server_name else name,
+                namespaced_tool_name=namespaced_tool_name,
+                mcp_session_id=session_id,
             )
         else:
             return StandardLoggingMCPToolCall(
                 name=name,
                 arguments=arguments,
-                namespaced_tool_name=f"{server_name}/{name}" if server_name else name,
+                namespaced_tool_name=namespaced_tool_name,
+                mcp_session_id=session_id,
             )
 
     async def _handle_managed_mcp_tool(

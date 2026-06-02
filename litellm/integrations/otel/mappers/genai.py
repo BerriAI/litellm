@@ -14,10 +14,18 @@ from litellm.integrations.otel.mappers.utils import collect, drop_none
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPToolCallSpanData,
     ServiceSpanData,
     ToolDefinition,
 )
-from litellm.integrations.otel.model.semconv import DB, Error, GenAI, LiteLLM, Server
+from litellm.integrations.otel.model.semconv import (
+    DB,
+    MCP,
+    Error,
+    GenAI,
+    LiteLLM,
+    Server,
+)
 from litellm.integrations.otel.model.spans import db_system
 
 
@@ -64,6 +72,18 @@ class GenAIMapper:
         "parameters": lambda t: t.parameters_json or None,
     }
 
+    _MCP_ATTRS: dict[str, Callable[[MCPToolCallSpanData], AttrValue | None]] = {
+        GenAI.OPERATION_NAME: lambda d: d.operation.value,
+        MCP.METHOD_NAME: lambda d: d.method,
+        MCP.SESSION_ID: lambda d: d.session_id,
+        GenAI.TOOL_NAME: lambda d: d.tool_name or None,
+        GenAI.TOOL_CALL_ARGUMENTS: lambda d: d.arguments_json,
+        GenAI.TOOL_CALL_RESULT: lambda d: d.result_json,
+        LiteLLM.MCP_SERVER_NAME: lambda d: d.server_name,
+        LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
+        f"{LiteLLM.COST_PREFIX}total": lambda d: d.response_cost,
+    }
+
     _GUARDRAIL_ATTRS: dict[str, Callable[[GuardrailSpanData], AttrValue | None]] = {
         LiteLLM.GUARDRAIL_NAME: lambda d: d.guardrail_name,
         LiteLLM.GUARDRAIL_MODE: lambda d: d.mode,
@@ -92,6 +112,8 @@ class GenAIMapper:
         match data:
             case LLMCallSpanData():
                 return self._llm_call(data)
+            case MCPToolCallSpanData():
+                return collect(self._MCP_ATTRS, data)
             case GuardrailSpanData():
                 return self._guardrail(data)
             case ServiceSpanData():
