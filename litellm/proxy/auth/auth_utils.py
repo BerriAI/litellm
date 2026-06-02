@@ -105,9 +105,15 @@ def check_complete_credentials(request_body: dict) -> bool:
 
 def check_regex_or_str_match(request_body_value: Any, regex_str: str) -> bool:
     """
-    Check if request_body_value matches the regex_str or is equal to param
+    Check if request_body_value matches the regex_str or is equal to param.
+
+    Uses ``re.fullmatch`` (not ``re.match``): an unanchored match lets an
+    admin allowlist entry like ``https://api\\.openai\\.com`` accept
+    ``https://api.openai.com.attacker.com/...`` (the regex only had to match a
+    prefix), turning the clientside-``api_base`` opt-in into an SSRF /
+    credential-exfil bypass. The full value must match.
     """
-    if re.match(regex_str, request_body_value) or regex_str == request_body_value:
+    if re.fullmatch(regex_str, request_body_value) or regex_str == request_body_value:
         return True
     return False
 
@@ -177,7 +183,15 @@ def _allow_model_level_clientside_configurable_parameters(
 # ``extra_body.aws_web_identity_token``) without re-validating, so the
 # banned-key check has to descend into it the same way it descends into
 # ``litellm_embedding_config``.
-_NESTED_CONFIG_KEYS: Tuple[str, ...] = ("litellm_embedding_config", "extra_body")
+_NESTED_CONFIG_KEYS: Tuple[str, ...] = (
+    "litellm_embedding_config",
+    "extra_body",
+    # Merged into the outbound request by the Gemini/Vertex Agents endpoints
+    # (``data.pop("litellm_params_template")`` spread over ``data`` for any key
+    # not already present), so an ``api_base`` smuggled here reaches the
+    # handler unvalidated the same way ``extra_body`` does.
+    "litellm_params_template",
+)
 
 # Metadata containers that carry per-request configuration consumed by the
 # observability callbacks. The same banned-param list applies — a value
@@ -279,6 +293,30 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "s3_endpoint_url",
     "sagemaker_base_url",
     "deployment_url",
+    # Routing / credential-selection / config-shaped fields a client must not
+    # supply: each retargets the request to another tenant's deployment, swaps
+    # in a server-side credential, or smuggles config past the model-authz layer.
+    #  - ``model_list``: array of deployment dicts (own ``litellm_params``/
+    #    ``api_base``) processed by batch_completion, smuggling arbitrary
+    #    deployments past authorization (only the root ``model`` is authorized).
+    #  - ``vertex_ai_credentials``: alias of the already-banned
+    #    ``vertex_credentials``; the ``external_account`` ``executable``
+    #    credential source is an RCE sink.
+    #  - ``vertex_project``: selects the GCP project the proxy SA acts on
+    #    (cross-tenant impersonation).
+    #  - ``litellm_credential_name``: resolves a globally-stored credential by
+    #    name with no ownership model.
+    #  - ``aws_profile_name``: selects a server-side AWS profile/credential.
+    #  - ``base_model``: redirects the cost-lookup model (spend spoofing).
+    #  - ``oci_key_file``: a server file path the OCI handler opens and reads
+    #    unbounded (arbitrary-file-path DoS).
+    "model_list",
+    "vertex_ai_credentials",
+    "vertex_project",
+    "litellm_credential_name",
+    "aws_profile_name",
+    "base_model",
+    "oci_key_file",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration
@@ -368,6 +406,18 @@ def is_request_body_safe(
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
             _check_banned_params(metadata, general_settings, llm_router, model)
+    # Each entry in ``tools`` is a caller-supplied dict; provider integrations
+    # (e.g. the Advisor orchestration tool) read endpoint/credential fields
+    # straight off the tool object (``tool["api_base"]``) without re-validating,
+    # so an ``api_base`` smuggled here is an SSRF / master-key-exfil primitive.
+    # Check each tool object the same way — one level, no descent into the
+    # JSON-schema ``function.parameters`` where an ``api_base`` is just data.
+    tools = request_body.get("tools")
+    if isinstance(tools, list):
+        for tool in tools:
+            tool_dict = _coerce_metadata_to_dict(tool)
+            if tool_dict is not None:
+                _check_banned_params(tool_dict, general_settings, llm_router, model)
     return True
 
 

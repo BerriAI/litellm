@@ -94,3 +94,110 @@ def test_banned_param_under_stringified_extra_body_is_rejected():
             llm_router=None,
             model="bedrock/anthropic.claude-v2",
         )
+
+
+# --- Cluster: nested-container + alias + regex-anchor hardening ---
+
+from litellm.proxy.auth.auth_utils import check_regex_or_str_match  # noqa: E402
+
+
+@pytest.mark.parametrize(
+    "banned_param",
+    [
+        "model_list",  # deployment-dict smuggling past model authz
+        "vertex_ai_credentials",  # alias of vertex_credentials (executable-cred RCE sink)
+        "vertex_project",  # cross-tenant project impersonation
+        "litellm_credential_name",  # globally-stored credential by name, no ownership
+        "aws_profile_name",  # server-side AWS profile selection
+        "base_model",  # cost-lookup model spoofing
+        "oci_key_file",  # arbitrary server file path read (DoS)
+    ],
+)
+def test_newly_banned_root_param_is_rejected(banned_param):
+    body = {
+        "model": "openai/gpt-4",
+        "messages": [{"role": "user", "content": "x"}],
+        banned_param: "attacker-chosen",
+    }
+    with pytest.raises(ValueError, match="not allowed in request body"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="openai/gpt-4",
+        )
+
+
+def test_banned_param_under_litellm_params_template_is_rejected():
+    # The Gemini/Vertex Agents endpoints spread litellm_params_template into the
+    # outbound request, so an api_base smuggled there must be caught.
+    body = {
+        "model": "gemini/gemini-1.5-pro",
+        "messages": [{"role": "user", "content": "x"}],
+        "litellm_params_template": {
+            "api_base": "http://169.254.169.254/",
+            "api_key": "dummy",
+        },
+    }
+    with pytest.raises(ValueError, match="not allowed in request body"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="gemini/gemini-1.5-pro",
+        )
+
+
+def test_banned_param_in_a_tool_object_is_rejected():
+    # The Advisor orchestration tool reads api_base straight off the tool dict;
+    # an attacker endpoint there exfiltrates the proxy's provider key.
+    body = {
+        "model": "anthropic/claude-3-5-sonnet",
+        "messages": [{"role": "user", "content": "x"}],
+        "tools": [{"type": "advisor_20260301", "api_base": "https://attacker.example"}],
+    }
+    with pytest.raises(ValueError, match="not allowed in request body"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="anthropic/claude-3-5-sonnet",
+        )
+
+
+def test_legit_function_tool_with_api_base_param_is_allowed():
+    # A real function tool whose JSON-schema parameters happen to define an
+    # "api_base" property is data, not a top-level override — must NOT be rejected.
+    body = {
+        "model": "openai/gpt-4",
+        "messages": [{"role": "user", "content": "x"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "fetch",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"api_base": {"type": "string"}},
+                    },
+                },
+            }
+        ],
+    }
+    assert is_request_body_safe(
+        request_body=body,
+        general_settings={},
+        llm_router=None,
+        model="openai/gpt-4",
+    )
+
+
+def test_clientside_api_base_regex_is_fully_anchored():
+    # An allowlist regex must match the WHOLE value: a prefix-only match would
+    # accept a look-alike host with an attacker suffix.
+    allow = r"https://api\.openai\.com"
+    assert check_regex_or_str_match("https://api.openai.com", allow) is True
+    assert (
+        check_regex_or_str_match("https://api.openai.com.attacker.com/v1", allow)
+        is False
+    )
