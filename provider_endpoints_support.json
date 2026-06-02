@@ -2079,6 +2079,24 @@
         "a2a": false
       }
     },
+    "tensormesh": {
+      "display_name": "Tensormesh (`tensormesh`)",
+      "url": "https://docs.litellm.ai/docs/providers/tensormesh",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "text_completion": true
+      }
+    },
     "text-completion-codestral": {
       "display_name": "Text Completion Codestral (`text-completion-codestral`)",
       "url": "https://docs.litellm.ai/docs/providers/codestral",
@@ -2150,6 +2168,13 @@
     "serper": {
       "display_name": "Serper (`serper`)",
       "url": "https://docs.litellm.ai/docs/search/serper",
+      "endpoints": {
+        "search": true
+      }
+    },
+    "apiserpent": {
+      "display_name": "APISerpent (`apiserpent`)",
+      "url": "https://docs.litellm.ai/docs/search/apiserpent",
       "endpoints": {
         "search": true
       }

@@ -1862,9 +1862,11 @@ async def test_get_tools_for_single_server():
     )
     from mcp.types import Tool as MCPTool
 
-    # Create a mock server
+    # Create a mock server (pin allowlist fields; MagicMock auto-attrs are truthy)
     mock_server = MagicMock()
     mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = None
 
     # Create mock tools
     mock_tools = [
@@ -1897,6 +1899,44 @@ async def test_get_tools_for_single_server():
         assert len(result) == 1
         assert result[0].name == "send_email"
         assert result[0].mcp_info == {"server_name": "zapier"}
+
+
+@pytest.mark.asyncio
+async def test_get_tools_for_single_server_applies_disallowed_tools_without_allowlist():
+    """REST listing must honor disallowed_tools even when no allowlist is set."""
+    from litellm.proxy._experimental.mcp_server.rest_endpoints import (
+        _get_tools_for_single_server,
+    )
+    from mcp.types import Tool as MCPTool
+
+    mock_server = MagicMock()
+    mock_server.mcp_info = {"server_name": "zapier"}
+    mock_server.name = "zapier"
+    mock_server.server_id = "zapier"
+    mock_server.allowed_tools = None
+    mock_server.disallowed_tools = ["send_email"]
+
+    mock_tools = [
+        MCPTool(
+            name="send_email",
+            description="Send an email",
+            inputSchema={"type": "object"},
+        ),
+        MCPTool(
+            name="read_email",
+            description="Read an email",
+            inputSchema={"type": "object"},
+        ),
+    ]
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
+    ) as mock_manager:
+        mock_manager._get_tools_from_server = AsyncMock(return_value=mock_tools)
+
+        result = await _get_tools_for_single_server(mock_server, "Bearer test_token")
+
+    assert [tool.name for tool in result] == ["read_email"]
 
 
 @pytest.mark.asyncio
