@@ -1192,6 +1192,7 @@ _key_management_settings: KeyManagementSettings = KeyManagementSettings()
 
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
+from .utils import retry_with_backoff, async_retry_with_backoff
 
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
 # (which imports tiktoken) at import time
