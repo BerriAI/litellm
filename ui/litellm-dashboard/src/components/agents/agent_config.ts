@@ -212,14 +212,14 @@ export const SKILL_FIELD_CONFIG = {
   },
   tags: {
     name: "tags",
-    label: "Tags (comma-separated)",
+    label: "Tags",
     required: true,
-    placeholder: "e.g., hello world, greeting",
+    placeholder: "Type a tag and press Enter",
   },
   examples: {
     name: "examples",
-    label: "Examples (comma-separated)",
-    placeholder: "e.g., hi, hello world",
+    label: "Examples",
+    placeholder: "Type an example and press Enter",
   },
 };
 
