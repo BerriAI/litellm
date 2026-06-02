@@ -186,3 +186,173 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
 
     assert response.choices[0].message.content == "Hello! How can I help you today?"
     assert response.usage.total_tokens == 25
+
+
+class TestZAIMessageTransformation:
+    """Tests for ZAI message content flattening.
+
+    Issue: https://github.com/BerriAI/litellm/issues/25868
+    GLM's Jinja chat template checks ``m.content is string`` and silently drops
+    list-format content. ZAIChatConfig._transform_messages must flatten these
+    before forwarding to z.ai.
+    """
+
+    def test_flatten_tool_message_content_list(self):
+        """Tool message with list-format content is flattened to a plain string."""
+        from typing import cast
+
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        config = ZAIChatConfig()
+        messages = cast(
+            list,
+            [
+                {"role": "user", "content": "What is the temperature in Tokyo?"},
+                {
+                    "role": "assistant",
+                    "content": "Let me check.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_temp", "arguments": '{"city": "Tokyo"}'},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [{"type": "text", "text": "22.5°C, partly cloudy."}],
+                },
+            ],
+        )
+
+        result = config._transform_messages(messages=messages, model="glm-5.1")
+
+        tool_msg = result[2]
+        assert isinstance(tool_msg["content"], str), (
+            f"Expected str content, got {type(tool_msg['content'])}"
+        )
+        assert tool_msg["content"] == "22.5°C, partly cloudy."
+
+    def test_flatten_tool_message_multi_text_parts(self):
+        """Tool message with multiple text parts is joined with newlines."""
+        from typing import cast
+
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        config = ZAIChatConfig()
+        messages = cast(
+            list,
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": [
+                        {"type": "text", "text": "first line"},
+                        {"type": "text", "text": "second line"},
+                    ],
+                },
+            ],
+        )
+
+        result = config._transform_messages(messages=messages, model="glm-5.1")
+
+        assert result[0]["content"] == "first line\nsecond line"
+
+    def test_flatten_assistant_message_content_list(self):
+        """Assistant message with list-format content is flattened."""
+        from typing import cast
+
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        config = ZAIChatConfig()
+        messages = cast(
+            list,
+            [
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": "Sure, here's the answer."}],
+                },
+            ],
+        )
+
+        result = config._transform_messages(messages=messages, model="glm-5.1")
+
+        assert isinstance(result[0]["content"], str)
+        assert result[0]["content"] == "Sure, here's the answer."
+
+    def test_plain_string_tool_content_unchanged(self):
+        """Plain-string tool content is passed through unchanged (no-op)."""
+        from typing import cast
+
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        config = ZAIChatConfig()
+        messages = cast(
+            list,
+            [
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "already a string",
+                },
+            ],
+        )
+
+        result = config._transform_messages(messages=messages, model="glm-5.1")
+
+        assert result[0]["content"] == "already a string"
+
+    def test_user_message_with_list_content_not_flattened(self):
+        """User messages with list content (multi-modal) are NOT flattened — only tool/assistant."""
+        from typing import cast
+
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        config = ZAIChatConfig()
+        original_content = [{"type": "text", "text": "Look at this:"}]
+        messages = cast(
+            list,
+            [{"role": "user", "content": list(original_content)}],
+        )
+
+        result = config._transform_messages(messages=messages, model="glm-5.1")
+
+        # parent OpenAIGPTConfig may normalise images, but text-only list stays a list
+        assert isinstance(result[0]["content"], list)
+
+    def test_tool_content_none_unchanged(self):
+        """None content is passed through (no flattening)."""
+        from typing import cast
+
+        from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+        config = ZAIChatConfig()
+        messages = cast(
+            list,
+            [{"role": "tool", "tool_call_id": "call_1", "content": None}],
+        )
+
+        result = config._transform_messages(messages=messages, model="glm-5.1")
+
+        assert result[0]["content"] is None
+
+    def test_flatten_helper_directly(self):
+        """Direct check of _flatten_content_parts on edge cases."""
+        from litellm.llms.zai.chat.transformation import _flatten_content_parts
+
+        assert _flatten_content_parts(None) is None
+        assert _flatten_content_parts("plain") == "plain"
+        assert _flatten_content_parts([]) == ""
+        assert _flatten_content_parts([{"type": "text", "text": "hi"}]) == "hi"
+        assert _flatten_content_parts(["str-part"]) == "str-part"
+        assert (
+            _flatten_content_parts(
+                [
+                    {"type": "text", "text": "a"},
+                    {"type": "text", "text": "b"},
+                ]
+            )
+            == "a\nb"
+        )
