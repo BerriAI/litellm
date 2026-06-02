@@ -842,9 +842,7 @@ class CustomGuardrail(CustomLogger):
         handle both dict and pydantic-model inputs.
         """
         params = (
-            litellm_params
-            if isinstance(litellm_params, dict)
-            else vars(litellm_params)
+            litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
         )
         for key, value in params.items():
             setattr(self, key, value)
