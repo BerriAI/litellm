@@ -1727,10 +1727,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             descriptors=descriptors,
         )
 
-        # Per-MCP-server rate limits. Only honor mcp_server_name on actual MCP
-        # tool calls; otherwise a normal LLM request could inject it in its body
-        # to consume another server's MCP quota and 429 legitimate tool calls.
-        if call_type == CallTypes.call_mcp_tool.value:
+        # REST MCP calls pass the raw body through this hook before server
+        # resolution; only the later synthetic hook payload may carry this key.
+        if call_type == CallTypes.call_mcp_tool.value and "server_id" not in data:
             mcp_server_name = data.get("mcp_server_name", None)
             self._add_mcp_per_key_rate_limit_descriptor(
                 user_api_key_dict=user_api_key_dict,

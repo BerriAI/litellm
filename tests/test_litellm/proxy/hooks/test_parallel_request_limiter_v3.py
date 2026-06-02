@@ -2976,6 +2976,30 @@ def test_mcp_descriptor_skipped_for_non_mcp_request_v3():
     assert _find_descriptor(descriptors, "mcp_per_key") is None
 
 
+def test_mcp_descriptor_skipped_for_raw_rest_body_v3():
+    handler, _ = _make_mcp_handler()
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-mcp-key"),
+        team_id="team-1",
+        metadata={"mcp_rpm_limit": {"github": 5}},
+        team_metadata={"mcp_rpm_limit": {"github": 3}},
+    )
+
+    descriptors = _build_mcp_descriptors(
+        handler,
+        user_api_key_dict,
+        {
+            "server_id": "slack",
+            "name": "demo-tool",
+            "arguments": {},
+            "mcp_server_name": "github",
+        },
+    )
+
+    assert _find_descriptor(descriptors, "mcp_per_key") is None
+    assert _find_descriptor(descriptors, "mcp_per_team") is None
+
+
 def test_mcp_per_team_descriptor_created_from_team_metadata_v3():
     handler, _ = _make_mcp_handler()
     user_api_key_dict = UserAPIKeyAuth(

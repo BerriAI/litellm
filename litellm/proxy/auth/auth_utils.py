@@ -949,12 +949,12 @@ def get_key_mcp_rpm_limit(
     """
     if user_api_key_dict.metadata:
         result = user_api_key_dict.metadata.get("mcp_rpm_limit")
-        if result:
+        if result is not None:
             return result
 
     if user_api_key_dict.team_metadata:
         team_limit = user_api_key_dict.team_metadata.get("mcp_rpm_limit")
-        if team_limit:
+        if team_limit is not None:
             return team_limit
 
     return None
