@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, cast
+from typing import Any, AsyncIterator, Dict, NamedTuple, Optional, Tuple, cast
 
 import httpx
 
@@ -25,6 +25,16 @@ _POLL_INTERVAL_S = 2.0
 _MAX_POLL_ATTEMPTS = 90
 _TOKEN_CACHE_TTL_BUFFER_S = 60
 _token_cache: Dict[str, Tuple[str, float]] = {}
+
+
+class WXORequestParams(NamedTuple):
+    cp4d_host: str
+    instance_id: str
+    wxo_agent_id: str
+    api_key: str
+    username: Optional[str]
+    auth_mode: str
+    thread_id: Optional[str]
 
 
 class WatsonxOrchestrateHandler:
@@ -186,14 +196,11 @@ class WatsonxOrchestrateHandler:
         return accumulated_text
 
     @staticmethod
-    def _extract_litellm_params(litellm_params: Dict[str, Any]) -> tuple:
+    def _extract_litellm_params(litellm_params: Dict[str, Any]) -> WXORequestParams:
         cp4d_host = litellm_params.get("cp4d_host") or ""
         instance_id = litellm_params.get("instance_id") or ""
         wxo_agent_id = litellm_params.get("wxo_agent_id") or ""
         api_key = litellm_params.get("api_key") or ""
-        username = litellm_params.get("username") or None
-        auth_mode = litellm_params.get("auth_mode") or "cp4d"
-        thread_id = litellm_params.get("thread_id") or None
 
         if not cp4d_host:
             raise ValueError("'cp4d_host' is required in litellm_params for WXO agents")
@@ -208,14 +215,14 @@ class WatsonxOrchestrateHandler:
         if not api_key:
             raise ValueError("'api_key' is required in litellm_params for WXO agents")
 
-        return (
-            cp4d_host,
-            instance_id,
-            wxo_agent_id,
-            api_key,
-            username,
-            auth_mode,
-            thread_id,
+        return WXORequestParams(
+            cp4d_host=cp4d_host,
+            instance_id=instance_id,
+            wxo_agent_id=wxo_agent_id,
+            api_key=api_key,
+            username=litellm_params.get("username") or None,
+            auth_mode=litellm_params.get("auth_mode") or "cp4d",
+            thread_id=litellm_params.get("thread_id") or None,
         )
 
     @staticmethod
@@ -224,26 +231,18 @@ class WatsonxOrchestrateHandler:
         params: Dict[str, Any],
         litellm_params: Dict[str, Any],
     ) -> Dict[str, Any]:
-        (
-            cp4d_host,
-            instance_id,
-            wxo_agent_id,
-            api_key,
-            username,
-            auth_mode,
-            thread_id,
-        ) = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
+        wxo = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
         client = WatsonxOrchestrateHandler._http_client(timeout=90.0)
         token = await WatsonxOrchestrateHandler._get_bearer_token(
-            cp4d_host=cp4d_host,
-            auth_mode=auth_mode,
-            api_key=api_key,
-            username=username,
+            cp4d_host=wxo.cp4d_host,
+            auth_mode=wxo.auth_mode,
+            api_key=wxo.api_key,
+            username=wxo.username,
             client=client,
         )
         base_url = WatsonxOrchestrateTransformation.get_api_base_url(
-            cp4d_host, instance_id
+            wxo.cp4d_host, wxo.instance_id
         )
         auth_headers = {
             "Authorization": f"Bearer {token}",
@@ -253,7 +252,7 @@ class WatsonxOrchestrateHandler:
 
         text = WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
         body = WatsonxOrchestrateTransformation.build_wxo_run_body(
-            wxo_agent_id=wxo_agent_id, text=text, thread_id=thread_id
+            wxo_agent_id=wxo.wxo_agent_id, text=text, thread_id=wxo.thread_id
         )
 
         run_response = await client.post(
@@ -286,26 +285,18 @@ class WatsonxOrchestrateHandler:
         chunk_size: int = 50,
         delay_ms: int = 10,
     ) -> AsyncIterator[Dict[str, Any]]:
-        (
-            cp4d_host,
-            instance_id,
-            wxo_agent_id,
-            api_key,
-            username,
-            auth_mode,
-            thread_id,
-        ) = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
+        wxo = WatsonxOrchestrateHandler._extract_litellm_params(litellm_params)
 
         client = WatsonxOrchestrateHandler._http_client(timeout=120.0)
         token = await WatsonxOrchestrateHandler._get_bearer_token(
-            cp4d_host=cp4d_host,
-            auth_mode=auth_mode,
-            api_key=api_key,
-            username=username,
+            cp4d_host=wxo.cp4d_host,
+            auth_mode=wxo.auth_mode,
+            api_key=wxo.api_key,
+            username=wxo.username,
             client=client,
         )
         base_url = WatsonxOrchestrateTransformation.get_api_base_url(
-            cp4d_host, instance_id
+            wxo.cp4d_host, wxo.instance_id
         )
         auth_headers = {
             "Authorization": f"Bearer {token}",
@@ -314,7 +305,7 @@ class WatsonxOrchestrateHandler:
         }
         text = WatsonxOrchestrateTransformation.extract_text_from_a2a_params(params)
         body = WatsonxOrchestrateTransformation.build_wxo_run_body(
-            wxo_agent_id=wxo_agent_id, text=text, thread_id=thread_id
+            wxo_agent_id=wxo.wxo_agent_id, text=text, thread_id=wxo.thread_id
         )
 
         try:

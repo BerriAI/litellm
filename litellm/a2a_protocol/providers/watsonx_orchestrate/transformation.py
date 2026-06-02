@@ -60,7 +60,7 @@ class WatsonxOrchestrateTransformation:
                 "role": "user",
                 "content": [
                     {
-                        "response_type": "conversational_search",
+                        "response_type": "text",
                         "text": text,
                     }
                 ],

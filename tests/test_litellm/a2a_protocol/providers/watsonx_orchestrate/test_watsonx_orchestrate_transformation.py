@@ -149,7 +149,7 @@ class TestWatsonxOrchestrateTransformation:
         )
         assert body["agent_id"] == "agent-uuid"
         assert body["thread_id"] == "thread-1"
-        assert body["message"]["content"][0]["response_type"] == "conversational_search"
+        assert body["message"]["content"][0]["response_type"] == "text"
         assert body["message"]["content"][0]["text"] == "Hi"
 
     @pytest.mark.parametrize(
