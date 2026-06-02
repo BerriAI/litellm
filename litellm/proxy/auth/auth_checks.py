@@ -491,6 +491,20 @@ async def check_tools_allowlist(
         )
 
 
+# Read-only discovery routes that incur no spend. Kept narrower than info_routes so an exhausted
+# budget cannot reach side-effectful routes like /health/services (Slack/email/webhook). See #27923.
+MODEL_DISCOVERY_ROUTES = frozenset(
+    {
+        "/v1/models",
+        "/models",
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    }
+)
+
+
 async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -533,6 +547,9 @@ async def common_checks(  # noqa: PLR0915
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
     )
+
+    if route in MODEL_DISCOVERY_ROUTES:
+        skip_budget_checks = True
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:

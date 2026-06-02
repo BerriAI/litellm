@@ -238,6 +238,128 @@ def test_idempotent_on_repeat_callback():
     assert len(exporter.get_finished_spans()) == 1
 
 
+# --------------------------------------------------------------------------- #
+#  MCP tool-call spans
+# --------------------------------------------------------------------------- #
+
+
+def _mcp_payload(**overrides):
+    payload = {
+        "call_type": "call_mcp_tool",
+        "status": "success",
+        "litellm_call_id": "mcp_1",
+        "response_cost": 0.01,
+        "metadata": {"user_api_key_team_id": "t1"},
+        "hidden_params": {},
+        "mcp_tool_call_metadata": {
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+            "result": {"temp_c": 21},
+            "mcp_server_name": "weather-mcp",
+            "mcp_session_id": "sess-abc123",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _logger_capturing():
+    from litellm.integrations.otel.model.config import CaptureMessageContent
+
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        capture_message_content=CaptureMessageContent.SPAN_ONLY,
+    )
+    exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
+    return OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider), exporter
+
+
+def test_mcp_tool_call_emits_client_span():
+    """A closed MCP tool call becomes a CLIENT span named ``tools/call {tool}``,
+    carrying the MCP semconv method/operation and the vendor server name."""
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/call get_weather"
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes["mcp.method.name"] == "tools/call"
+    assert span.attributes["mcp.session.id"] == "sess-abc123"
+    assert span.attributes[GenAI.OPERATION_NAME] == "execute_tool"
+    assert span.attributes["gen_ai.tool.name"] == "get_weather"
+    assert span.attributes[LiteLLM.MCP_SERVER_NAME] == "weather-mcp"
+    assert span.attributes[LiteLLM.CALL_ID] == "mcp_1"
+    assert span.status.status_code is StatusCode.UNSET
+    # Tool I/O is content: withheld while capture is off (the default).
+    assert "gen_ai.tool.call.arguments" not in span.attributes
+    assert "gen_ai.tool.call.result" not in span.attributes
+
+
+def test_mcp_tool_call_stateless_omits_session_id():
+    """A stateless MCP call carries no ``mcp-session-id``, so the span must omit
+    ``mcp.session.id`` rather than stamping an empty or ``None`` value."""
+    logger, exporter = _logger()
+    payload = _mcp_payload()
+    del payload["mcp_tool_call_metadata"]["mcp_session_id"]
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": payload}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert "mcp.session.id" not in span.attributes
+    assert span.attributes["mcp.method.name"] == "tools/call"
+
+
+def test_mcp_tool_call_is_not_logged_as_llm_call():
+    """The MCP branch must short-circuit the LLM-call path: even if ``pre_call``
+    opened a stray carrier for this id, the result is one MCP span, never an LLM
+    ``chat`` span."""
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    logger.log_pre_api_call(model="MCP: get_weather", messages=[], kwargs=kwargs)
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["mcp.method.name"] == "tools/call"
+    assert "gen_ai.request.model" not in span.attributes
+
+
+def test_mcp_tool_call_captures_io_when_enabled():
+    logger, exporter = _logger_capturing()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert '"Paris"' in span.attributes["gen_ai.tool.call.arguments"]
+    assert "21" in span.attributes["gen_ai.tool.call.result"]
+
+
+def test_mcp_tool_call_failure_marks_error():
+    logger, exporter = _logger()
+    payload = _mcp_payload(
+        status="failure",
+        error_information={"error_class": "MCPError", "error_message": "upstream 500"},
+    )
+    asyncio.run(
+        logger.async_log_failure_event(
+            {"standard_logging_object": payload}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/call get_weather"
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "MCPError"
+
+
+def test_mcp_tool_call_deduped_on_repeat():
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    assert len(exporter.get_finished_spans()) == 1
+
+
 def test_pre_call_idempotent_keeps_first_span():
     """A retried call may re-enter ``pre_call`` with the same call id; the first
     span (with the true start time) is kept, not replaced."""

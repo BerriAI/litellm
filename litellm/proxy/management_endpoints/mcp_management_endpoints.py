@@ -1542,7 +1542,7 @@ if MCP_AVAILABLE:
                         master_key,
                         algorithms=["HS256"],
                         # UI session cookies may omit exp; don't require it.
-                        options={"verify_exp": False},
+                        options={"verify_exp": False, "verify_aud": False},
                     )
                     if decoded.get("login_method") in ("sso", "username_password"):
                         cookie_key = decoded.get("key", "")
