@@ -22,6 +22,14 @@ import httpx
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
+_BEDROCK_TEST_AWS_ENV = {
+    "AWS_ACCESS_KEY_ID": "test-access-key",
+    "AWS_SECRET_ACCESS_KEY": "test-secret-key",
+    "AWS_REGION": "us-west-2",
+    "AWS_DEFAULT_REGION": "us-west-2",
+}
+
+
 class _CaptureAsyncHTTPHandler(AsyncHTTPHandler):
     def __init__(self):
         self.timeout = None
@@ -77,15 +85,7 @@ async def test_async_create_file():
     file_path = os.path.join(_current_dir, file_name)
     capture_client = _CaptureAsyncHTTPHandler()
     with (
-        patch.dict(
-            os.environ,
-            {
-                "AWS_ACCESS_KEY_ID": "test-access-key",
-                "AWS_SECRET_ACCESS_KEY": "test-secret-key",
-                "AWS_REGION": "us-west-2",
-                "AWS_DEFAULT_REGION": "us-west-2",
-            },
-        ),
+        patch.dict(os.environ, _BEDROCK_TEST_AWS_ENV),
         open(file_path, "rb") as batch_file,
     ):
         file_obj = await litellm.acreate_file(
@@ -122,13 +122,19 @@ async def test_async_file_and_batch():
     file_name = "bedrock_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    with open(file_path, "rb") as batch_file:
+    capture_client = _CaptureAsyncHTTPHandler()
+    with (
+        patch.dict(os.environ, _BEDROCK_TEST_AWS_ENV),
+        open(file_path, "rb") as batch_file,
+    ):
         file_obj = await litellm.acreate_file(
             file=batch_file,
             purpose="batch",
             custom_llm_provider="bedrock",
             s3_bucket_name="litellm-proxy-941277531214",
+            client=capture_client,
         )
+    assert len(capture_client.put_calls) == 1
     print("CREATED FILE RESPONSE=", file_obj)
 
     # create batch
@@ -175,15 +181,7 @@ async def test_mock_bedrock_file_url_mapping():
 
     capture_client = _CaptureAsyncHTTPHandler()
     with (
-        patch.dict(
-            os.environ,
-            {
-                "AWS_ACCESS_KEY_ID": "test-access-key",
-                "AWS_SECRET_ACCESS_KEY": "test-secret-key",
-                "AWS_REGION": "us-west-2",
-                "AWS_DEFAULT_REGION": "us-west-2",
-            },
-        ),
+        patch.dict(os.environ, _BEDROCK_TEST_AWS_ENV),
         open(
             os.path.join(os.path.dirname(__file__), "bedrock_batch_completions.jsonl"),
             "rb",
