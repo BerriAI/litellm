@@ -47,6 +47,7 @@ from litellm.exceptions import (
     BlockedPiiEntityError,
     GuardrailRaisedException,
     ModifyResponseException,
+    SensitiveDataRouteException,
 )
 
 
@@ -68,6 +69,9 @@ class CustomGuardrail(CustomLogger):
         end_session_after_n_fails: Optional[int] = None,
         on_violation: Optional[str] = None,
         realtime_violation_message: Optional[str] = None,
+        on_sensitive_data: Optional[str] = None,
+        sensitive_data_route_to_model: Optional[str] = None,
+        sticky_session_routing: bool = True,
         **kwargs,
     ):
         """
@@ -83,6 +87,9 @@ class CustomGuardrail(CustomLogger):
             end_session_after_n_fails: For /v1/realtime sessions, end the session after this many violations
             on_violation: For /v1/realtime sessions, 'warn' or 'end_session'
             realtime_violation_message: Message the bot speaks aloud when a /v1/realtime guardrail fires
+            on_sensitive_data: Action when sensitive data is detected. 'block' (default) or 'route'
+            sensitive_data_route_to_model: Model to route to when on_sensitive_data='route'
+            sticky_session_routing: When True, all subsequent requests in the session use the same model
         """
         self.guardrail_name = guardrail_name
         self.supported_event_hooks = supported_event_hooks
@@ -96,6 +103,9 @@ class CustomGuardrail(CustomLogger):
         self.end_session_after_n_fails: Optional[int] = end_session_after_n_fails
         self.on_violation: Optional[str] = on_violation
         self.realtime_violation_message: Optional[str] = realtime_violation_message
+        self.on_sensitive_data: Optional[str] = on_sensitive_data
+        self.sensitive_data_route_to_model: Optional[str] = sensitive_data_route_to_model
+        self.sticky_session_routing: bool = sticky_session_routing
 
         if supported_event_hooks:
             ## validate event_hook is in supported_event_hooks
@@ -166,6 +176,108 @@ class CustomGuardrail(CustomLogger):
             guardrail_name=self.guardrail_name,
             detection_info=detection_info,
         )
+
+    def raise_sensitive_data_route_exception(
+        self,
+        route_to_model: str,
+        request_data: Dict[str, Any],
+        detection_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Raise an exception to reroute the request to a different model.
+
+        Use this when sensitive data is detected and the guardrail is configured
+        to route to an on-premise model instead of blocking.
+
+        The exception will:
+        1. Reroute this request to the specified model
+        2. Store the routing decision in session cache
+        3. Route all subsequent requests in this session to the same model
+
+        Args:
+            route_to_model: The model to route this request (and session) to
+            request_data: The original request data dictionary
+            detection_info: Optional dictionary with detection metadata
+
+        Raises:
+            SensitiveDataRouteException: Always raises to trigger rerouting
+        """
+        session_id = self._get_session_id_from_request_data(request_data)
+        if not session_id:
+            raise ValueError(
+                "Cannot route sensitive data without a session_id. "
+                "Ensure the request includes a session_id in metadata or headers."
+            )
+
+        raise SensitiveDataRouteException(
+            route_to_model=route_to_model,
+            session_id=session_id,
+            guardrail_name=self.guardrail_name,
+            detection_info=detection_info,
+        )
+
+    def _get_session_id_from_request_data(
+        self, request_data: Dict[str, Any]
+    ) -> Optional[str]:
+        """Extract session_id from request data."""
+        session_id = request_data.get("litellm_session_id")
+        if session_id:
+            return str(session_id)
+
+        metadata = request_data.get("metadata") or {}
+        session_id = metadata.get("session_id")
+        if session_id:
+            return str(session_id)
+
+        litellm_metadata = request_data.get("litellm_metadata") or {}
+        session_id = litellm_metadata.get("session_id")
+        if session_id:
+            return str(session_id)
+
+        return None
+
+    def should_route_on_sensitive_data(self) -> bool:
+        """
+        Returns True if this guardrail is configured to route requests
+        to a different model when sensitive data is detected.
+        """
+        return (
+            self.on_sensitive_data == "route"
+            and self.sensitive_data_route_to_model is not None
+        )
+
+    def handle_sensitive_data_detection(
+        self,
+        request_data: Dict[str, Any],
+        detection_info: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Handle sensitive data detection based on guardrail configuration.
+
+        If on_sensitive_data='route', raises SensitiveDataRouteException to reroute.
+        Otherwise, raises GuardrailRaisedException to block.
+
+        Args:
+            request_data: The request data dictionary
+            detection_info: Optional detection metadata
+
+        Raises:
+            SensitiveDataRouteException: When configured to route
+            GuardrailRaisedException: When configured to block (default)
+        """
+        from litellm.exceptions import GuardrailRaisedException
+
+        if self.should_route_on_sensitive_data():
+            self.raise_sensitive_data_route_exception(
+                route_to_model=self.sensitive_data_route_to_model,  # type: ignore
+                request_data=request_data,
+                detection_info=detection_info,
+            )
+        else:
+            raise GuardrailRaisedException(
+                message=f"Sensitive data detected by {self.guardrail_name}",
+                source="guardrail",
+            )
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

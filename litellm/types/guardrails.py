@@ -771,6 +771,32 @@ class BaseLitellmParams(
         ),
     )
 
+    on_sensitive_data: Optional[Literal["block", "route"]] = Field(
+        default=None,
+        description=(
+            "Action to take when sensitive data is detected. "
+            "'block' raises an exception (default behavior). "
+            "'route' reroutes the request to the model specified in sensitive_data_route_to_model."
+        ),
+    )
+
+    sensitive_data_route_to_model: Optional[str] = Field(
+        default=None,
+        description=(
+            "Model to route requests to when sensitive data is detected and on_sensitive_data='route'. "
+            "This is typically an on-premise model for data privacy. "
+            "The routing decision persists for the entire session."
+        ),
+    )
+
+    sticky_session_routing: Optional[bool] = Field(
+        default=True,
+        description=(
+            "When True (default), after sensitive data is detected and routed, all subsequent "
+            "requests in the same session will continue routing to the same model."
+        ),
+    )
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 

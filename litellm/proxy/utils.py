@@ -89,10 +89,13 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.exceptions import RejectedRequestError
+from litellm.exceptions import RejectedRequestError, SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+)
+from litellm.proxy.hooks.sensitive_data_routing import (
+    _PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -1519,8 +1522,55 @@ class ProxyLogging:
                 self._process_guardrail_metadata(data)
 
             return data
+        except SensitiveDataRouteException as e:
+            data = await self._handle_sensitive_data_route_exception(e, data)
+            if data is not None:
+                self._process_guardrail_metadata(data)
+            return data
         except Exception as e:
             raise e
+
+    async def _handle_sensitive_data_route_exception(
+        self,
+        exc: SensitiveDataRouteException,
+        data: Optional[dict],
+    ) -> Optional[dict]:
+        """
+        Handle SensitiveDataRouteException by:
+        1. Storing the routing decision in session cache
+        2. Modifying the request's model field
+        """
+        if data is None:
+            return None
+
+        verbose_proxy_logger.info(
+            "SensitiveDataRouteException caught: session_id=%s route_to_model=%s guardrail=%s",
+            exc.session_id,
+            exc.route_to_model,
+            exc.guardrail_name,
+        )
+
+        sensitive_routing_hook = self.get_proxy_hook("sensitive_data_routing")
+        if sensitive_routing_hook is not None and isinstance(
+            sensitive_routing_hook, _PROXY_SensitiveDataRoutingHandler
+        ):
+            await sensitive_routing_hook.set_session_routing(
+                session_id=exc.session_id,
+                model=exc.route_to_model,
+                guardrail_name=exc.guardrail_name,
+            )
+
+        original_model = data.get("model")
+        data["model"] = exc.route_to_model
+
+        metadata = data.get("metadata") or {}
+        metadata["sensitive_data_routing_applied"] = True
+        metadata["sensitive_data_routing_original_model"] = original_model
+        metadata["sensitive_data_routing_guardrail"] = exc.guardrail_name
+        metadata["sensitive_data_routing_detection_info"] = exc.detection_info
+        data["metadata"] = metadata
+
+        return data
 
     @staticmethod
     async def _run_guardrail_task_with_enrichment(
