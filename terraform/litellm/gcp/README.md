@@ -308,63 +308,6 @@ with its own provider config (one `examples/default`-style root per project),
 or fork the module to add `configuration_aliases` and pass per-instance
 `providers = { ... }`.
 
-## Migrating an existing deployment
-
-**Read this before re-applying if you first deployed from `terraform/litellm/gcp/`
-directly** (i.e. before this module-first refactor).
-
-The old layout ran terraform from the stack root, so every resource lived at a
-root-level address (`google_cloud_run_v2_service.gateway`, …). The new entry
-point — `examples/default/` — wraps the stack in a `module "litellm"` block, so
-the same resources now live at `module.litellm.<addr>`. Terraform keys state by
-address, so a plain `terraform plan` from the new root against your **existing
-state** sees the old addresses as "gone" and the prefixed addresses as "new" —
-it will propose a **full destroy-and-recreate of the entire stack** (Cloud SQL,
-load balancer, everything). Do not apply that plan.
-
-Migrate the state once so the addresses line up. From the directory holding
-your existing state:
-
-```bash
-# 1. List the current root-level addresses.
-terraform state list
-
-# 2. Move each one under the module by prefixing it with `module.litellm.`,
-#    keeping any [key]/[index] suffix intact, e.g.:
-terraform state mv 'google_cloud_run_v2_service.gateway' \
-                   'module.litellm.google_cloud_run_v2_service.gateway'
-
-# 3. Confirm the plan is now clean (no destroys/creates).
-terraform plan
-```
-
-A scripted move over the whole list (run from the dir with the state):
-
-```bash
-terraform state list | grep -v '^module\.litellm\.' | while read -r addr; do
-  terraform state mv "$addr" "module.litellm.$addr"
-done
-terraform plan   # expect: No changes (but see the TLS note below)
-```
-
-**TLS-enabled stacks expect one cert replacement.** The managed SSL
-certificate is named with a hash of `lb_domains`
-(`<name>-cert-<hash>`) so a domain change rolls the cert safely. If you
-deployed an earlier revision its cert is stored under the old un-hashed
-name, so after the `state mv` above `terraform plan` will show **one**
-`google_compute_managed_ssl_certificate` replacement (a create-then-destroy,
-guarded by `create_before_destroy`) rather than "No changes". That single
-replacement is expected and safe — the new cert is provisioned and attached
-to the LB before the old one is removed. Everything else should report no
-changes; if the plan shows anything beyond that one cert, an address didn't
-line up — re-check step 1.
-
-`terraform state mv` only rewrites local state — it never touches live
-infrastructure — and a clean `terraform plan` afterward (modulo the cert
-replacement above for TLS stacks) confirms the addresses line up before you
-apply. If you'd rather not migrate, you can keep calling the
-module from your own root with the same addresses you already have.
-
 ## Storage and database retention
 
 Two opt-in tripwires guard against accidental data loss on
