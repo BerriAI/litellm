@@ -181,6 +181,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL] || undefined,
           filters[FILTER_KEYS.MODEL] || undefined,
           filters[FILTER_KEYS.KEY_ALIAS] || undefined,
+          filters[FILTER_KEYS.ERROR_CODE] || undefined,
+          filters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
         )) || { time_bucket_size: "", data: [] }
       );
     },
@@ -224,6 +226,8 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           model: filters[FILTER_KEYS.PUBLIC_MODEL_OR_SEARCH_TOOL] || undefined,
           model_id: filters[FILTER_KEYS.MODEL] || undefined,
           key_alias: filters[FILTER_KEYS.KEY_ALIAS] || undefined,
+          error_code: filters[FILTER_KEYS.ERROR_CODE] || undefined,
+          error_message: filters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
           error_classes: selectedErrorCategories.length > 0 ? selectedErrorCategories.join(",") : undefined,
           page: failureLogsAnalyticsCurrentPage,
           page_size: failureLogsAnalyticsCurrentPageSize,

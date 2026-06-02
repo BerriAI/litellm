@@ -2083,6 +2083,8 @@ export const errorStatsCall = async (
   model?: string,
   model_id?: string,
   key_alias?: string,
+  error_code?: string,
+  error_message?: string,
 ) => {
   try {
     return await apiClient.get(`/spend/logs/error_stats`, {
@@ -2099,6 +2101,8 @@ export const errorStatsCall = async (
         model: model || undefined,
         model_id: model_id || undefined,
         key_alias: key_alias || undefined,
+        error_code: error_code || undefined,
+        error_message: error_message || undefined,
       },
     });
   } catch (error) {
@@ -2120,6 +2124,8 @@ export const failureLogsAnalyticsPaginatedCall = async (
     model?: string;
     model_id?: string;
     key_alias?: string;
+    error_code?: string;
+    error_message?: string;
     error_classes?: string;
     page?: number;
     page_size?: number;
@@ -2139,6 +2145,8 @@ export const failureLogsAnalyticsPaginatedCall = async (
         model: params.model || undefined,
         model_id: params.model_id || undefined,
         key_alias: params.key_alias || undefined,
+        error_code: params.error_code || undefined,
+        error_message: params.error_message || undefined,
         error_classes: params.error_classes || undefined,
         page: params.page,
         page_size: params.page_size,
