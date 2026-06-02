@@ -660,6 +660,29 @@ class TestProxyHandleSensitiveDataRouteException:
         )
 
     @pytest.mark.asyncio
+    async def test_sticky_routing_handles_none_user_api_key_dict(
+        self, proxy_logging, routing_hook
+    ):
+        proxy_logging.proxy_hook_mapping["sensitive_data_routing"] = routing_hook
+        exc = SensitiveDataRouteException(
+            route_to_model="on-premise-model",
+            session_id="sess-no-key",
+            guardrail_name="pii",
+            sticky_session_routing=True,
+        )
+        data = {"model": "gpt-4", "metadata": {"session_id": "sess-no-key"}}
+
+        result = await proxy_logging._handle_sensitive_data_route_exception(
+            exc, data, None
+        )
+
+        assert result["model"] == "on-premise-model"
+        assert (
+            await routing_hook._get_routed_model("sess-no-key", None)
+            == "on-premise-model"
+        )
+
+    @pytest.mark.asyncio
     async def test_sticky_routing_warns_when_hook_not_registered(self, proxy_logging):
         exc = SensitiveDataRouteException(
             route_to_model="on-premise-model",
