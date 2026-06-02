@@ -2,6 +2,7 @@ import asyncio
 import copy
 import logging
 import os
+import secrets
 import time
 import traceback
 from datetime import datetime, timedelta
@@ -39,6 +40,7 @@ from litellm.proxy.health_check import (
 from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
 #### Health ENDPOINTS ####
 
@@ -1551,6 +1553,50 @@ def _allow_public_health_readiness_details() -> bool:
     return general_settings.get("allow_public_health_readiness_details") is True
 
 
+def _drain_endpoint_enabled() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("enable_drain_endpoint") is True
+
+
+def _drain_endpoint_token() -> Optional[str]:
+    """
+    Shared secret required on the X-Drain-Token header to call /health/drain.
+
+    Falls back to the ``DRAIN_ENDPOINT_TOKEN`` env var when unset in
+    general_settings so the kubelet preStop hook can supply it via
+    ``valueFrom.secretKeyRef`` without a config reload.
+    """
+    from litellm.proxy.proxy_server import general_settings
+
+    token = general_settings.get("drain_endpoint_token")
+    if isinstance(token, str) and token:
+        return token
+    env_token = os.getenv("DRAIN_ENDPOINT_TOKEN")
+    if env_token:
+        return env_token
+    return None
+
+
+def _authorize_drain_request(request: Request) -> None:
+    """
+    Reject /health/drain calls that don't carry the configured X-Drain-Token.
+
+    When no token is configured the endpoint is treated as already opted-in
+    (the ``enable_drain_endpoint`` flag is the only gate). Comparison uses
+    ``secrets.compare_digest`` to avoid timing leaks.
+    """
+    expected = _drain_endpoint_token()
+    if expected is None:
+        return
+    supplied = request.headers.get("x-drain-token") or ""
+    if not secrets.compare_digest(supplied, expected):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-Drain-Token",
+        )
+
+
 async def _resolve_public_readiness_db(response: Response) -> str:
     """
     Return the db status string for the public probe and flip the response to
@@ -1580,6 +1626,10 @@ async def health_readiness(response: Response):
     credential. Admins can opt into the legacy detailed payload with
     general_settings.allow_public_health_readiness_details.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down"}
+
     if _allow_public_health_readiness_details():
         return await _get_health_readiness_details(response=response)
 
@@ -1617,6 +1667,54 @@ async def health_backlog():
 
 
 @router.get(
+    "/health/drain",
+    tags=["health"],
+)
+async def health_drain(request: Request):
+    """
+    Graceful-drain probe for Kubernetes ``preStop`` hooks.
+
+    Disabled by default and returns 404 unless ``general_settings`` sets
+    ``enable_drain_endpoint: true``. Calling it flips a process-wide
+    shutting-down flag, so a successful call permanently takes the worker out
+    of rotation until the pod restarts.
+
+    Because the kubelet calls preStop hooks without proxy credentials, the
+    endpoint does not require ``user_api_key_auth``. To prevent any
+    pod-reachable caller from triggering shutdown, set
+    ``general_settings.drain_endpoint_token`` (or the ``DRAIN_ENDPOINT_TOKEN``
+    env var) and supply the same value on the ``X-Drain-Token`` header from
+    the preStop hook. Calls without the header (or with a wrong value) get a
+    401 and have no side effect.
+
+    When enabled, it marks the worker as shutting down (so /health/readiness
+    and /health/liveliness immediately start returning 503, removing the pod
+    from service) and blocks until the in-flight request counter drains to
+    zero or ``GRACEFUL_SHUTDOWN_TIMEOUT`` elapses. Unlike a fixed ``sleep``,
+    this returns as soon as real in-flight work is done.
+
+    Wire it up as:
+
+    ```yaml
+    lifecycle:
+      preStop:
+        httpGet:
+          path: /health/drain
+          port: 4000
+          httpHeaders:
+            - name: X-Drain-Token
+              value: <same value as drain_endpoint_token>
+    ```
+    """
+    if not _drain_endpoint_enabled():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+    _authorize_drain_request(request)
+    GracefulShutdownManager.start_shutdown()
+    drained = await GracefulShutdownManager.wait_for_drain(exclude_self=True)
+    return {"status": "drained", "drained_requests": drained}
+
+
+@router.get(
     "/health/liveliness",  # Historical LiteLLM name; doesn't match k8s terminology but kept for backwards compatibility
     tags=["health"],
 )
@@ -1624,10 +1722,16 @@ async def health_backlog():
     "/health/liveness",  # Kubernetes has "liveness" probes (https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/#define-a-liveness-command)
     tags=["health"],
 )
-async def health_liveliness():
+async def health_liveliness(response: Response):
     """
-    Unprotected endpoint for checking if worker is alive
+    Unprotected endpoint for checking if worker is alive.
+
+    Returns 503 once graceful shutdown has begun so Kubernetes stops counting
+    the draining pod as live and terminates it on schedule.
     """
+    if GracefulShutdownManager.is_shutting_down():
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {"status": "shutting_down"}
     return "I'm alive!"
 
 
