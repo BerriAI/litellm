@@ -1160,7 +1160,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "MorphChatConfig": (".llms.morph.chat.transformation", "MorphChatConfig"),
     "RAGFlowConfig": (".llms.ragflow.chat.transformation", "RAGFlowConfig"),
     "LambdaAIChatConfig": (".llms.lambda_ai.chat.transformation", "LambdaAIChatConfig"),
-    "InceptionChatConfig": (".llms.inception.chat.transformation", "InceptionChatConfig"),
+    "InceptionChatConfig": (
+        ".llms.inception.chat.transformation",
+        "InceptionChatConfig",
+    ),
     "HyperbolicChatConfig": (
         ".llms.hyperbolic.chat.transformation",
         "HyperbolicChatConfig",

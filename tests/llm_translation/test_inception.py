@@ -144,7 +144,9 @@ def test_inception_chat_response_surfaces_reasoning_and_usage():
 
 def test_inception_fim_supported_params_match_schema():
     """FIM exposes the OpenAI subset of Inception's FIMCompletionRequest only"""
-    params = InceptionTextCompletionConfig().get_supported_openai_params("mercury-edit-2")
+    params = InceptionTextCompletionConfig().get_supported_openai_params(
+        "mercury-edit-2"
+    )
     for p in ("suffix", "top_p", "frequency_penalty", "presence_penalty", "stop"):
         assert p in params
     # Chat-only sampling controls are not part of Inception's FIM schema
@@ -252,7 +254,9 @@ def test_get_llm_provider_inception():
     assert model == "mercury-2"
     assert provider == "inception"
 
-    model, provider, _, api_base = get_llm_provider("mercury-2", api_base="https://api.inceptionlabs.ai/v1")
+    model, provider, _, api_base = get_llm_provider(
+        "mercury-2", api_base="https://api.inceptionlabs.ai/v1"
+    )
     assert model == "mercury-2"
     assert provider == "inception"
     assert api_base == "https://api.inceptionlabs.ai/v1"
@@ -393,7 +397,10 @@ def test_inception_fim_model_configuration():
     litellm.text_completion_inception_models = set()
     litellm.add_known_models()
 
-    assert "text-completion-inception/mercury-edit-2" in litellm.text_completion_inception_models
+    assert (
+        "text-completion-inception/mercury-edit-2"
+        in litellm.text_completion_inception_models
+    )
     info = get_model_info("text-completion-inception/mercury-edit-2")
     assert info.get("litellm_provider") == "text-completion-inception"
     assert info.get("mode") == "completion"
