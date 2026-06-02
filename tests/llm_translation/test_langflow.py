@@ -52,6 +52,23 @@ def test_langflow_config_get_complete_url():
     assert url == "http://localhost:7860/api/v1/run/my-flow-id"
 
 
+def test_langflow_config_flow_id_is_path_segment_encoded():
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+    config = LangFlowConfig()
+    url = config.get_complete_url(
+        api_base="http://localhost:7860",
+        api_key=None,
+        model="langflow/../../secret?x=1",
+        optional_params={},
+        litellm_params={},
+        stream=False,
+    )
+    assert url == "http://localhost:7860/api/v1/run/..%2F..%2Fsecret%3Fx%3D1"
+    assert "/api/v1/run/" in url
+    assert url.rsplit("/api/v1/run/", 1)[1] not in ("..", "../..")
+
+
 def test_langflow_config_transform_request_includes_session_id():
     from litellm.llms.langflow.chat.transformation import LangFlowConfig
 

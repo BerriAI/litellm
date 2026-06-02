@@ -1,6 +1,7 @@
 """LangFlow run API: POST {api_base}/api/v1/run/{flow_id}"""
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from urllib.parse import quote
 
 import httpx
 
@@ -102,7 +103,7 @@ class LangFlowConfig(BaseConfig):
             )
 
         api_base = api_base.rstrip("/")
-        flow_id = self._get_flow_id(model, optional_params)
+        flow_id = quote(self._get_flow_id(model, optional_params), safe="")
         return f"{api_base}/api/v1/run/{flow_id}"
 
     def _get_last_user_message(self, messages: List[AllMessageValues]) -> str:
