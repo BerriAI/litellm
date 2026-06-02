@@ -473,6 +473,32 @@ class TestOllamaGetModelInfo:
         assert result["output_cost_per_token"] == 0.0
         assert result["max_tokens"] is None
 
+    def test_get_model_info_graceful_fallback_on_http_error_status(self, monkeypatch):
+        """A non-2xx /api/show response must fall back to defaults, not parse the error body."""
+        from litellm.llms.ollama.completion.transformation import OllamaConfig
+
+        def mock_post(url, json, headers=None):
+            return DummyResponse(
+                {
+                    "template": "{{ .System }} tools {{ .Prompt }}",
+                    "model_info": {"llama.context_length": 8192},
+                },
+                status_code=404,
+            )
+
+        monkeypatch.setattr("litellm.module_level_client.post", mock_post)
+
+        config = OllamaConfig()
+        result = config.get_model_info(
+            "my-custom-model", api_base="http://localhost:11434"
+        )
+
+        assert result["key"] == "my-custom-model"
+        assert result["litellm_provider"] == "ollama"
+        assert result["max_tokens"] is None
+        assert result["max_input_tokens"] is None
+        assert "supports_function_calling" not in result
+
     def test_get_model_info_strips_ollama_prefix(self, monkeypatch):
         """Should strip 'ollama/' or 'ollama_chat/' prefix from model name."""
         from litellm.llms.ollama.completion.transformation import OllamaConfig

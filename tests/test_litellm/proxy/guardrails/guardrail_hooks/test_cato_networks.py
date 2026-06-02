@@ -405,6 +405,28 @@ def test_base_url_from_env(monkeypatch):
     assert guardrail.ws_api_base == "wss://api.aisec.catonetworks.com"
 
 
+def test_initialize_guardrail_forwards_ssl_verify(monkeypatch):
+    """The config-driven initializer must forward ssl_verify so a custom Cato instance
+    behind TLS can disable verification for both HTTP and WebSocket calls."""
+    from litellm.proxy.guardrails.guardrail_hooks.cato_networks import (
+        initialize_guardrail,
+    )
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setenv("CATO_API_KEY", "test-key")
+    litellm_params = LitellmParams(
+        guardrail="cato_networks",
+        mode="pre_call",
+        api_base="https://self-signed.example.com",
+        ssl_verify=False,
+    )
+    guard = initialize_guardrail(litellm_params, {"guardrail_name": "cato-guard"})
+    ssl_ctx = guard._ws_connect_ssl_kwargs["ssl"]
+    assert isinstance(ssl_ctx, ssl.SSLContext)
+    assert ssl_ctx.verify_mode == ssl.CERT_NONE
+    assert ssl_ctx.check_hostname is False
+
+
 # -----------------------------------------------------------------------------
 # _build_cato_headers direct coverage
 # -----------------------------------------------------------------------------

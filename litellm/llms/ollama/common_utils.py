@@ -201,6 +201,7 @@ class OllamaModelInfo(BaseLLMModelInfo):
                 json={"name": model},
                 headers=headers,
             )
+            response.raise_for_status()
         except Exception:
             verbose_logger.debug("OllamaError: Could not get model info.")
             return {
