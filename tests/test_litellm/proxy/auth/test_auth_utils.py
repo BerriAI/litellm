@@ -14,6 +14,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     check_complete_credentials,
     get_end_user_id_from_request_body,
+    get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
     get_model_from_request,
@@ -90,6 +91,22 @@ class TestGetKeyModelRpmLimit:
         )
         result = get_key_model_rpm_limit(user_api_key_dict)
         assert result == {}
+
+
+class TestGetKeyMcpRpmLimit:
+    def test_empty_dict_limits_are_returned(self):
+        key_override = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"mcp_rpm_limit": {}},
+            team_metadata={"mcp_rpm_limit": {"github": 50}},
+        )
+        assert get_key_mcp_rpm_limit(key_override) == {}
+
+        team_empty = UserAPIKeyAuth(
+            api_key="sk-123",
+            team_metadata={"mcp_rpm_limit": {}},
+        )
+        assert get_key_mcp_rpm_limit(team_empty) == {}
 
 
 class TestGetKeyModelTpmLimit:
