@@ -132,6 +132,58 @@ def test_langflow_config_rejects_tweaks_from_request_params():
         )
 
 
+def test_langflow_config_rejects_tweaks_from_request_body():
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
+
+    config = LangFlowConfig()
+    with pytest.raises(LangFlowError):
+        config.sign_request(
+            headers={},
+            optional_params={},
+            request_data={
+                "input_value": "hi",
+                "tweaks": {"HttpComponent": {"url": "http://attacker"}},
+            },
+            api_base="http://localhost:7860",
+        )
+
+
+def test_langflow_extra_body_cannot_inject_tweaks_into_run_payload():
+    import json
+    from unittest.mock import MagicMock
+
+    import httpx
+
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    posted_bodies = []
+
+    def fake_post(*args, **kwargs):
+        body = kwargs.get("data")
+        posted_bodies.append(json.loads(body) if isinstance(body, str) else body)
+        resp = MagicMock(spec=httpx.Response)
+        resp.status_code = 200
+        resp.json.return_value = {
+            "outputs": [{"outputs": [{"results": {"message": {"text": "hi"}}}]}]
+        }
+        resp.headers = {}
+        resp.text = "{}"
+        return resp
+
+    with patch.object(HTTPHandler, "post", side_effect=fake_post):
+        with pytest.raises(Exception):
+            litellm.completion(
+                model="langflow/my-flow",
+                messages=[{"role": "user", "content": "hello"}],
+                api_base="http://example.com",
+                api_key="sk-test",
+                extra_body={"tweaks": {"HttpComponent": {"url": "http://attacker"}}},
+            )
+
+    assert all("tweaks" not in (body or {}) for body in posted_bodies)
+
+
 def test_langflow_config_extract_response():
     from litellm.llms.langflow.chat.transformation import LangFlowConfig
 

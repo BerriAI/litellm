@@ -132,6 +132,16 @@ class LangFlowConfig(BaseConfig):
 
         return ""
 
+    def _reject_caller_tweaks(self, params: dict) -> None:
+        if params.get("tweaks") is not None:
+            raise LangFlowError(
+                status_code=400,
+                message=(
+                    "tweaks cannot be set via request parameters; they would "
+                    "override the operator-configured LangFlow flow components"
+                ),
+            )
+
     def transform_request(
         self,
         model: str,
@@ -151,14 +161,7 @@ class LangFlowConfig(BaseConfig):
             "session_id": "<session_id>"
         }
         """
-        if optional_params.get("tweaks") is not None:
-            raise LangFlowError(
-                status_code=400,
-                message=(
-                    "tweaks cannot be set via request parameters; they would "
-                    "override the operator-configured LangFlow flow components"
-                ),
-            )
+        self._reject_caller_tweaks(optional_params)
 
         input_value = self._get_last_user_message(messages)
 
@@ -274,6 +277,20 @@ class LangFlowConfig(BaseConfig):
             verbose_logger.warning(f"Failed to calculate token usage: {e}")
 
         return model_response
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        self._reject_caller_tweaks(request_data)
+        return headers, None
 
     def validate_environment(
         self,
