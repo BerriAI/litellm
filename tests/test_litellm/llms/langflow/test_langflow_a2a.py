@@ -72,3 +72,26 @@ async def test_langflow_a2a_config_passes_session_id_to_completion():
         assert (
             mock_acompletion.call_args.kwargs.get("session_id") == "shared-session-99"
         )
+
+
+@pytest.mark.asyncio
+async def test_langflow_a2a_config_requires_litellm_params_non_streaming():
+    from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
+
+    with pytest.raises(ValueError, match="litellm_params is required"):
+        await LangFlowA2AConfig().handle_non_streaming(
+            request_id="req-1",
+            params={"message": {"contextId": "shared-session-99"}},
+        )
+
+
+@pytest.mark.asyncio
+async def test_langflow_a2a_config_requires_litellm_params_streaming():
+    from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
+
+    with pytest.raises(ValueError, match="litellm_params is required"):
+        async for _ in LangFlowA2AConfig().handle_streaming(
+            request_id="req-1",
+            params={"message": {"contextId": "shared-session-99"}},
+        ):
+            pass
