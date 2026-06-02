@@ -47,6 +47,14 @@ from litellm.llms.black_forest_labs.image_generation.handler import bfl_image_ge
 # Hunyuan handlers
 from litellm.llms.hunyuan.image_generation.handler import hunyuan_image_generation
 from litellm.llms.hunyuan.image_edit.handler import hunyuan_image_edit
+
+# Hunyuan GPT-Maas handlers (synchronous, tokenhub.tencentmaas.com)
+from litellm.llms.hunyuan_gpt_maas.image_generation.handler import (
+    hunyuan_gpt_maas_image_generation,
+)
+from litellm.llms.hunyuan_gpt_maas.image_edit.handler import (
+    hunyuan_gpt_maas_image_edit,
+)
 from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
@@ -443,6 +451,24 @@ def image_generation(  # noqa: PLR0915
             litellm_params_dict["api_key"] = api_key
             litellm_params_dict["api_base"] = api_base or litellm.api_base
             return hunyuan_image_generation.image_generation(
+                model=model,
+                prompt=prompt,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout,
+                extra_headers=extra_headers,
+                client=client,
+                aimg_generation=aimg_generation,
+            )
+        elif custom_llm_provider == "hunyuan_gpt_maas":
+            # Route to Hunyuan GPT-Maas handler (synchronous, tokenhub.tencentmaas.com)
+            if model is None:
+                raise Exception("Model needs to be set for hunyuan_gpt_maas")
+            litellm_params_dict["api_key"] = api_key
+            litellm_params_dict["api_base"] = api_base or litellm.api_base
+            return hunyuan_gpt_maas_image_generation.image_generation(
                 model=model,
                 prompt=prompt,
                 model_response=model_response,
@@ -990,6 +1016,23 @@ def image_edit(  # noqa: PLR0915
                 raise Exception("Model needs to be set for hunyuan")
             image_edit_request_params.update(non_default_params)
             return hunyuan_image_edit.image_edit(
+                model=model,
+                image=images,
+                prompt=prompt,
+                image_edit_optional_request_params=image_edit_request_params,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+                extra_headers=extra_headers,
+                client=kwargs.get("client"),
+                aimage_edit=_is_async,
+            )
+        elif custom_llm_provider == "hunyuan_gpt_maas":
+            # Route to Hunyuan GPT-Maas handler (synchronous, tokenhub.tencentmaas.com)
+            if model is None:
+                raise Exception("Model needs to be set for hunyuan_gpt_maas")
+            image_edit_request_params.update(non_default_params)
+            return hunyuan_gpt_maas_image_edit.image_edit(
                 model=model,
                 image=images,
                 prompt=prompt,
