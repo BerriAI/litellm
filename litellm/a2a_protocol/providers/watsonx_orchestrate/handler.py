@@ -118,6 +118,9 @@ class WatsonxOrchestrateHandler:
 
         expires_at = now + max(ttl_s - _TOKEN_CACHE_TTL_BUFFER_S, 0)
         _token_cache[cache_key] = (token, expires_at)
+        for stale_key, (_, stale_expires_at) in list(_token_cache.items()):
+            if stale_expires_at <= now:
+                del _token_cache[stale_key]
         return token
 
     @staticmethod
@@ -143,7 +146,7 @@ class WatsonxOrchestrateHandler:
             if status in WatsonxOrchestrateTransformation.TERMINAL_STATES:
                 return result
 
-        raise TimeoutError(
+        raise asyncio.TimeoutError(
             f"WXO run '{run_id}' did not reach a terminal state after "
             f"{max_attempts * interval_s:.0f}s"
         )
