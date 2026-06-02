@@ -1,0 +1,74 @@
+## Config-param cache
+- `_ConfigRow`
+- `_config_cache_key`
+- `_pack_config_row`
+- `_unpack_config_row`
+- `get_config_param`
+- `invalidate_config_param`
+- `prefetch_config_params`
+## PrismaClient — lifecycle
+- `PrismaClient.__init__`
+- `PrismaClient.writer_db`
+- `PrismaClient.connect`
+- `PrismaClient.disconnect`
+## PrismaClient — data ops
+- `PrismaClient.hash_token`
+- `PrismaClient.jsonify_object`
+- `PrismaClient.jsonify_team_object`
+- `PrismaClient.check_view_exists`
+- `PrismaClient.get_request_status`
+- `PrismaClient.get_generic_data`
+- `PrismaClient._query_first_with_cached_plan_fallback`
+- `PrismaClient.get_data`
+- `PrismaClient.insert_data`
+- `PrismaClient.update_data`
+- `PrismaClient.delete_data`
+## PrismaClient — engine watcher
+- `PrismaClient._get_engine_pid`
+- `PrismaClient._is_engine_alive`
+- `PrismaClient._reap_all_zombies`
+- `PrismaClient._try_waitpid_watch`
+- `PrismaClient._waitpid_thread_func`
+- `PrismaClient._on_engine_death_from_thread`
+- `PrismaClient._try_pidfd_watch`
+- `PrismaClient._on_pidfd_readable`
+- `PrismaClient._poll_engine_proc`
+- `PrismaClient._cleanup_engine_watcher`
+- `PrismaClient._start_engine_watcher`
+- `PrismaClient._stop_engine_watcher`
+## PrismaClient — reconnect
+- `PrismaClient._run_reconnect_cycle`
+- `PrismaClient._attempt_reconnect_inside_lock`
+- `PrismaClient.attempt_db_reconnect`
+- `PrismaClient.start_db_health_watchdog_task`
+- `PrismaClient.stop_db_health_watchdog_task`
+- `PrismaClient._db_health_watchdog_loop`
+## PrismaClient — health
+- `PrismaClient.health_check`
+- `PrismaClient._get_spend_logs_row_count`
+- `PrismaClient._set_spend_logs_row_count_in_proxy_state`
+- `PrismaClient._validate_response_time`
+- `PrismaClient._clean_details`
+- `PrismaClient.save_health_check_result`
+- `PrismaClient.get_health_check_history`
+- `PrismaClient.get_all_latest_health_checks`
+- `PrismaClient._is_sha256_hex`
+## User cache + email
+- `_cache_user_row`
+- `send_email`
+## Password / token helpers
+- `hash_token`
+- `hash_password`
+- `verify_password`
+- `migrate_passwords_to_scrypt_async`
+- `_hash_token_if_needed`
+## ProxyUpdateSpend
+- `ProxyUpdateSpend.update_end_user_spend`
+- `ProxyUpdateSpend.update_spend_logs`
+- `ProxyUpdateSpend.disable_spend_updates`
+## Spend functions
+- `update_spend`
+- `update_daily_tag_spend`
+- `update_spend_logs_job`
+- `_monitor_spend_logs_queue`
+- `_raise_failed_update_spend_exception`

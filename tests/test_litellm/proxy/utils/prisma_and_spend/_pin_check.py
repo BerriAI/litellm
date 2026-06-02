@@ -11,7 +11,8 @@ For each identifier in the pin list, asserts that the test directory contains:
   3. No test that is purely "status-only" (its only assert is on
      ``response.status_code``).
 
-``_harness_smoke_test.py`` is ignored.
+Files whose name does not match ``test_*.py`` (for example
+``_harness_smoke_test.py``) are not part of pin-list enforcement.
 
 Exits 0 on PASS, non-zero on FAIL.
 """
@@ -116,8 +117,6 @@ def _extract_status_code(node: ast.Assert) -> Optional[int]:
 def collect_test_functions(test_dir: Path) -> List[TestFunction]:
     funcs: List[TestFunction] = []
     for path in sorted(test_dir.glob("test_*.py")):
-        if path.name == "_harness_smoke_test.py":
-            continue
         source = path.read_text()
         try:
             tree = ast.parse(source)
