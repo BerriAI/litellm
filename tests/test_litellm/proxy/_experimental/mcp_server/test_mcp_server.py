@@ -776,7 +776,7 @@ async def test_get_tools_from_mcp_servers_continues_when_one_server_fails():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         if server.name == "working_server":
             # Working server returns tools
@@ -882,7 +882,7 @@ async def test_get_tools_from_mcp_servers_handles_all_servers_failing():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         # All servers fail
         raise Exception(f"Server {server.name} connection failed")
@@ -1004,28 +1004,18 @@ async def test_concurrent_initialize_session_managers():
     # Reset state before test
     original_initialized = mcp_server._SESSION_MANAGERS_INITIALIZED
     original_session_cm = mcp_server._session_manager_cm
-    original_session_stateful_cm = mcp_server._session_manager_stateful_cm
-    original_sse_session_cm = mcp_server._sse_session_manager_cm
-    original_cleanup_task = mcp_server._stateful_auth_context_cleanup_task
+
 
     try:
         mcp_server._SESSION_MANAGERS_INITIALIZED = False
         mcp_server._session_manager_cm = None
-        mcp_server._session_manager_stateful_cm = None
-        mcp_server._sse_session_manager_cm = None
-        mcp_server._stateful_auth_context_cleanup_task = None
+
 
         # Mock the session managers to avoid actual MCP initialization
         with (
             patch(
-                "litellm.proxy._experimental.mcp_server.server.session_manager_stateless"
-            ) as mock_session_manager_stateless,
-            patch(
-                "litellm.proxy._experimental.mcp_server.server.session_manager_stateful"
-            ) as mock_session_manager_stateful,
-            patch(
-                "litellm.proxy._experimental.mcp_server.server.sse_session_manager"
-            ) as mock_sse_session_manager,
+                "litellm.proxy._experimental.mcp_server.server.session_manager"
+            ) as mock_session_manager,
             patch("litellm.proxy._experimental.mcp_server.server.verbose_logger"),
         ):
             # Mock the run() method to return a mock context manager
@@ -1033,9 +1023,8 @@ async def test_concurrent_initialize_session_managers():
             mock_cm.__aenter__ = AsyncMock()
             mock_cm.__aexit__ = AsyncMock()
 
-            mock_session_manager_stateless.run.return_value = mock_cm
-            mock_session_manager_stateful.run.return_value = mock_cm
-            mock_sse_session_manager.run.return_value = mock_cm
+            mock_session_manager.run.return_value = mock_cm
+
 
             # Create multiple concurrent tasks that call initialize_session_managers
             async def init_task():
@@ -1053,19 +1042,15 @@ async def test_concurrent_initialize_session_managers():
 
             # Each session manager.run() should only be called once due to the lock
             assert (
-                mock_session_manager_stateless.run.call_count == 1
-            ), f"Expected 1 call to session_manager_stateless.run(), got {mock_session_manager_stateless.run.call_count}"
-            assert (
-                mock_session_manager_stateful.run.call_count == 1
-            ), f"Expected 1 call to session_manager_stateful.run(), got {mock_session_manager_stateful.run.call_count}"
-            assert (
-                mock_sse_session_manager.run.call_count == 1
-            ), f"Expected 1 call to sse_session_manager.run(), got {mock_sse_session_manager.run.call_count}"
+                mock_session_manager.run.call_count == 1
+            ), f"Expected 1 call to session_manager.run(), got {mock_session_manager.run.call_count}"
+
 
             # The context managers should only be entered once each (3 managers)
             assert (
-                mock_cm.__aenter__.call_count == 3
-            ), f"Expected 3 calls to __aenter__ (one per session manager), got {mock_cm.__aenter__.call_count}"
+                mock_cm.__aenter__.call_count == 1
+            ), f"Expected 1 call to __aenter__, got {mock_cm.__aenter__.call_count}"
+
 
             # State should be properly set
             assert mcp_server._SESSION_MANAGERS_INITIALIZED is True
@@ -1083,9 +1068,7 @@ async def test_concurrent_initialize_session_managers():
         # Restore original state
         mcp_server._SESSION_MANAGERS_INITIALIZED = original_initialized
         mcp_server._session_manager_cm = original_session_cm
-        mcp_server._session_manager_stateful_cm = original_session_stateful_cm
-        mcp_server._sse_session_manager_cm = original_sse_session_cm
-        mcp_server._stateful_auth_context_cleanup_task = original_cleanup_task
+
 
 
 @pytest.mark.asyncio
@@ -2611,7 +2594,7 @@ async def test_oauth2_headers_passed_to_mcp_client():
         mcp_auth_header=None,
         extra_headers=None,
         stdio_env=None,
-        subject_token=None,
+        **kwargs,
     ):
         # Capture the arguments for verification
         captured_client_args.update(
@@ -2722,7 +2705,7 @@ async def test_list_tools_single_server_unprefixed_names():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         tool = MagicMock()
         tool.name = f"{server.alias}-toolA" if add_prefix else "toolA"
@@ -2804,7 +2787,7 @@ async def test_list_tools_multiple_servers_prefixed_names():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         tool = MagicMock()
         # When multiple servers, add_prefix should be True -> prefixed names
@@ -3071,7 +3054,7 @@ async def test_list_tools_filters_by_key_team_permissions():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         # Return 4 tools, but only 2 should be allowed
         tool1 = MagicMock()
@@ -3181,7 +3164,7 @@ async def test_list_tools_with_team_tool_permissions_inheritance():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         # Return 4 tools
         tool1 = MagicMock()
@@ -3277,7 +3260,7 @@ async def test_list_tools_with_no_tool_permissions_shows_all():
         extra_headers=None,
         add_prefix=False,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         # Return 3 tools
         tool1 = MagicMock()
@@ -3376,7 +3359,7 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
         extra_headers=None,
         add_prefix=True,
         raw_headers=None,
-        user_api_key_auth=None,
+        **kwargs,
     ):
         # Return tools WITH prefix (as they come from MCP server)
         tool1 = MagicMock()

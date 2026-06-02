@@ -12,6 +12,8 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+pytest.importorskip("semantic_router")
+
 sys.path.insert(0, os.path.abspath("../.."))
 
 from mcp.types import Tool as MCPTool

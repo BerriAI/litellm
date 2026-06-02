@@ -320,9 +320,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -375,9 +373,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -414,9 +410,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -457,7 +451,7 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None
+            server, mcp_auth_header, extra_headers, stdio_env, **kwargs
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -1005,9 +999,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"

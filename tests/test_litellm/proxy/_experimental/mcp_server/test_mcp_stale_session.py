@@ -9,8 +9,6 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
-
-from fastapi import HTTPException
 from litellm.types.mcp import MCPAuth
 import pytest
 
@@ -617,12 +615,17 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
         ],
     }
     receive = AsyncMock()
-    send = AsyncMock()
     user_auth = MagicMock()
     user_auth.user_id = "test-user-id"
     oauth_server = MagicMock()
     oauth_server.auth_type = MCPAuth.oauth2
     oauth_server.needs_user_oauth_token = True
+
+    # Capture responses sent via ASGI 'send'
+    captured_messages = []
+
+    async def mock_send(message):
+        captured_messages.append(message)
 
     with (
         patch(
@@ -652,19 +655,28 @@ async def test_per_user_oauth_missing_stored_token_returns_preemptive_401():
             return_value=oauth_server,
         ),
         patch.object(
-            session_manager_stateless,
+            session_manager,
             "handle_request",
             new_callable=AsyncMock,
         ) as mock_handle_request,
     ):
-        with pytest.raises(HTTPException) as exc_info:
-            await handle_streamable_http_mcp(scope, receive, send)
+        await handle_streamable_http_mcp(scope, receive, mock_send)
 
-    exc = exc_info.value
-    assert exc.status_code == 401
-    assert "www-authenticate" in exc.headers
+    # Verify a 401 response was sent
     assert mock_get_stored_token.await_count == 1
     assert mock_handle_request.await_count == 0
+
+    # Find the http.response.start message
+    start_message = next(
+        (m for m in captured_messages if m["type"] == "http.response.start"), None
+    )
+    assert start_message is not None
+    assert start_message["status"] == 401
+
+    # Verify WWW-Authenticate header is present
+    headers = {k.lower(): v for k, v in start_message.get("headers", [])}
+    assert b"www-authenticate" in headers
+    assert b"Bearer authorization_uri=" in headers[b"www-authenticate"]
 
 
 @pytest.mark.asyncio
@@ -725,7 +737,7 @@ async def test_per_user_oauth_with_stored_token_skips_preemptive_401():
             return_value=oauth_server,
         ),
         patch.object(
-            session_manager_stateless,
+            session_manager,
             "handle_request",
             new_callable=AsyncMock,
         ) as mock_handle_request,
