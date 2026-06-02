@@ -133,22 +133,25 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         extra_body: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """
-        Transform search request for Vertex AI RAG API
+        Transform a search request for the Vertex AI Search (Discovery Engine) API.
+
+        Per-request params pass through to the engine: max_num_results maps to
+        pageSize, and extra_body is merged in raw and takes precedence, so callers
+        can send native Discovery Engine fields such as dataStoreSpecs, filter,
+        boostSpec, or contentSearchSpec.
         """
-        # Convert query to string if it's a list
         if isinstance(query, list):
             query = " ".join(query)
 
-        # Vertex AI RAG API endpoint for retrieving contexts
         url = f"{api_base}:search"
 
-        # Construct full rag corpus path
-        # Build the request body for Vertex AI Search API
-        request_body = {"query": query, "pageSize": 10}
+        request_body: Dict[str, Any] = {"query": query, "pageSize": 10}
+        max_num_results = vector_store_search_optional_params.get("max_num_results")
+        if max_num_results is not None:
+            request_body["pageSize"] = max_num_results
+        if isinstance(extra_body, dict):
+            request_body.update(extra_body)
 
-        #########################################################
-        # Update logging object with details of the request
-        #########################################################
         litellm_logging_obj.model_call_details["query"] = query
 
         return url, request_body
