@@ -56,7 +56,7 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
 
         {/* Skills */}
         {shouldShow(AGENT_FORM_CONFIG.skills.key) && (
-        <Panel header={`${AGENT_FORM_CONFIG.skills.title} (Required)`} key={AGENT_FORM_CONFIG.skills.key}>
+        <Panel header={`${AGENT_FORM_CONFIG.skills.title}`} key={AGENT_FORM_CONFIG.skills.key}>
           <Form.List name="skills">
             {(fields, { add, remove }) => (
               <>
@@ -94,20 +94,28 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                       label={SKILL_FIELD_CONFIG.tags.label}
                       name={[field.name, 'tags']}
                       rules={[{ required: SKILL_FIELD_CONFIG.tags.required, message: 'Required' }]}
-                      getValueFromEvent={(e) => e.target.value.split(',').map((s: string) => s.trim())}
-                      getValueProps={(value) => ({ value: Array.isArray(value) ? value.join(', ') : value })}
                     >
-                      <Input placeholder={SKILL_FIELD_CONFIG.tags.placeholder} />
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        tokenSeparators={[',']}
+                        open={false}
+                        placeholder={SKILL_FIELD_CONFIG.tags.placeholder}
+                      />
                     </Form.Item>
                     
                     <Form.Item
                       {...field}
                       label={SKILL_FIELD_CONFIG.examples.label}
                       name={[field.name, 'examples']}
-                      getValueFromEvent={(e) => e.target.value.split(',').map((s: string) => s.trim()).filter((s: string) => s)}
-                      getValueProps={(value) => ({ value: Array.isArray(value) ? value.join(', ') : '' })}
                     >
-                      <Input placeholder={SKILL_FIELD_CONFIG.examples.placeholder} />
+                      <Select
+                        mode="tags"
+                        style={{ width: '100%' }}
+                        tokenSeparators={[',']}
+                        open={false}
+                        placeholder={SKILL_FIELD_CONFIG.examples.placeholder}
+                      />
                     </Form.Item>
                     
                     <AntButton 
