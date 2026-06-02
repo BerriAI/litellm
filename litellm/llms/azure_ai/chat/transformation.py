@@ -1,4 +1,5 @@
 import enum
+import re
 from typing import Any, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
@@ -292,8 +293,6 @@ class AzureAIStudioConfig(OpenAIConfig):
         )
 
     def _error_has_tool_level_extra_fields(self, error_text: str) -> bool:
-        import re
-
         return bool(re.search(r"tools\[\d+\]\.", error_text))
 
     @property
@@ -330,9 +329,7 @@ class AzureAIStudioConfig(OpenAIConfig):
     def _drop_tool_level_extra_fields(
         self, request_data: dict, error_text: str
     ) -> dict:
-        import re
-
-        fields_to_drop = set(re.findall(r"tools\[\d+\]\.(\w+)", error_text))
+        fields_to_drop = set(re.findall(r"tools\[\d+\]\.([\w-]+)", error_text))
         tools = request_data.get("tools")
         if fields_to_drop and isinstance(tools, list):
             for tool in tools:
@@ -358,9 +355,6 @@ class AzureAIStudioConfig(OpenAIConfig):
         Error text looks like this"
             "Extra parameters ['stream_options', 'extra-parameters'] are not allowed when extra-parameters is not set or set to be 'error'.
         """
-        import re
-
-        # Extract parameters within square brackets
         match = re.search(r"\[(.*?)\]", error_text)
         if not match:
             return []
