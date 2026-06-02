@@ -38,6 +38,14 @@ class TestBedrockMantleResponsesURL:
         )
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
         assert "/v1/openai/v1/responses" not in url
+        url_trailing = cfg.get_complete_url(
+            api_base="https://bedrock-mantle.us-east-2.api.aws/v1/",
+            litellm_params={},
+        )
+        assert (
+            url_trailing
+            == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+        )
 
     def test_url_does_not_double_openai_v1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
