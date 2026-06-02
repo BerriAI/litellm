@@ -27,8 +27,8 @@ HERE = Path(__file__).resolve().parent
 _REPO_ROOT = HERE.parent.parent.parent.parent.parent
 
 _TARGET_FILE_SUFFIX = "proxy/utils.py"
-_PR2_LINE_START = 2668
-_PR2_LINE_END = 5541
+_PR2_LINE_START = 2669
+_PR2_LINE_END = 5542
 _MIN_LINE_RATE = 0.55
 _MIN_BRANCH_RATE = 0.40
 
