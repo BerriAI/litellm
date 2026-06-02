@@ -337,3 +337,30 @@ def test_extra_headers_not_present():
     # Verify metadata is still forwarded
     assert "metadata" in completion_kwargs
     assert completion_kwargs["metadata"]["user_id"] == "test-user"
+
+
+@pytest.mark.asyncio
+async def test_async_sse_wrapper_passes_through_raw_bytes():
+    """Regression test: raw bytes SSE frames must be yielded verbatim.
+
+    Previously the non-dict fallback used ``str(chunk).encode()``. Because
+    ``bytes`` has no ``.encode()``, the ``hasattr(chunk, "encode")`` check was
+    False and bytes frames were stringified to ``b'data: {...}'``, corrupting
+    the SSE stream and breaking client-side JSON parsing.
+    """
+    from litellm.google_genai.adapters.transformation import (
+        GoogleGenAIStreamWrapper,
+    )
+
+    raw_frame = b'data: {"candidates": []}\n\n'
+
+    async def _byte_stream():
+        yield raw_frame
+
+    wrapper = GoogleGenAIStreamWrapper(completion_stream=_byte_stream())
+
+    out = [chunk async for chunk in wrapper.async_google_genai_sse_wrapper()]
+
+    assert out == [raw_frame]
+    # The corrupted form must never appear on the wire.
+    assert not out[0].startswith(b"b'")
