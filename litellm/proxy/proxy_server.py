@@ -7072,11 +7072,12 @@ async def async_data_generator(  # noqa: PLR0915
             # still flush their post-stream logging.
             ProxyLogging._fire_deferred_stream_logging(request_data)
 
-        # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
             yield error_message
-        done_message = "[DONE]"
-        yield f"data: {done_message}\n\n"
+        # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
+        if not request_data.get("_litellm_skip_openai_stream_done"):
+            done_message = "[DONE]"
+            yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(

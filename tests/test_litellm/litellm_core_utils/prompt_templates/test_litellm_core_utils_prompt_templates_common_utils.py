@@ -546,3 +546,178 @@ class TestExtractFileDataBareStr:
         extracted = extract_file_data(("foo.txt", b"raw bytes content"))
         assert extracted.get("filename") == "foo.txt"
         assert extracted.get("content") == b"raw bytes content"
+
+
+class TestUnpackLegacyDefs:
+    """Cover the public ``unpack_legacy_defs`` helper directly so the no-op
+    branches (non-dict input, schema with no legacy/OpenAPI defs) are exercised
+    without needing a provider-specific entry point.
+    """
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, [], "string-not-a-dict", 42, 1.5, True, set(), tuple()],
+    )
+    def test_non_dict_returns_unchanged_no_op(self, value):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        # Should never raise; returns the input unchanged.
+        assert unpack_legacy_defs(value) is value
+        assert unpack_legacy_defs(value, copy=True) is value
+
+    def test_dict_without_legacy_defs_is_no_op(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {"a": {"$ref": "#/$defs/A"}},
+            "$defs": {"A": {"type": "string"}},
+        }
+        snapshot = json.loads(json.dumps(schema))
+
+        # No `definitions` and no `components.schemas` -> early return, no work.
+        out = unpack_legacy_defs(schema)
+        assert out is schema
+        assert schema == snapshot, "schema mutated despite no legacy defs"
+
+    def test_components_with_no_schemas_block_is_no_op(self):
+        """``components`` without a ``schemas`` sub-key must not be popped."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {"a": {"type": "string"}},
+            "components": {"securitySchemes": {"foo": "bar"}},
+        }
+        snapshot = json.loads(json.dumps(schema))
+
+        unpack_legacy_defs(schema)
+        assert schema == snapshot, "components without schemas was incorrectly popped"
+
+    def test_legitimate_schema_within_budget_succeeds(self):
+        """A flat schema with many distinct ``$ref``s into small targets must
+        inline cleanly under the default budget -- the budget rejects bombs,
+        not legitimately-shaped schemas.
+        """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        n = 200
+        schema = {
+            "type": "object",
+            "properties": {f"f{i}": {"$ref": f"#/definitions/T{i}"} for i in range(n)},
+            "definitions": {f"T{i}": {"type": "string"} for i in range(n)},
+        }
+
+        out = unpack_legacy_defs(schema)
+        assert "definitions" not in out
+        for i in range(n):
+            assert out["properties"][f"f{i}"] == {"type": "string"}
+
+    # Schema-bomb amplification vectors. ``max_inlined_bytes`` is the universal
+    # measure of expansion: every other dimension (ref count, node count,
+    # scalar size) reduces to bytes-on-the-wire, so a single byte budget
+    # closes all three vectors at once.
+
+    def test_rejects_fan_out_bomb(self):
+        """Each level multiplies refs (cycle detection only stops re-entry
+        along the *same* path). Must trip the byte budget."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        depth, fanout = 12, 2  # 2**12 = 4096 leaves
+        definitions = {
+            f"L{i}": {
+                "type": "object",
+                "properties": {
+                    f"x{j}": {"$ref": f"#/definitions/L{i + 1}"} for j in range(fanout)
+                },
+            }
+            for i in range(depth)
+        }
+        definitions[f"L{depth}"] = {"type": "string"}
+        schema = {
+            "type": "object",
+            "properties": {"root": {"$ref": "#/definitions/L0"}},
+            "definitions": definitions,
+        }
+
+        with pytest.raises(ValueError, match="byte budget"):
+            unpack_legacy_defs(schema, max_inlined_bytes=100_000)
+
+    def test_rejects_target_amplification_bomb(self):
+        """Few refs each deep-copying one large target -- bounded total
+        expanded bytes catches it even though ref count is small."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        big = {
+            "type": "object",
+            "properties": {f"p{i}": {"type": "string"} for i in range(100)},
+        }
+        schema = {
+            "type": "object",
+            "properties": {f"r{i}": {"$ref": "#/definitions/Big"} for i in range(50)},
+            "definitions": {"Big": big},
+        }
+
+        with pytest.raises(ValueError, match="byte budget"):
+            unpack_legacy_defs(schema, max_inlined_bytes=10_000)
+
+    def test_rejects_scalar_byte_amplification_bomb(self):
+        """Many ``$ref``s to a target containing one large scalar (e.g. a
+        long ``description``, ``const`` value, or ``enum`` entry). A
+        node-counter would treat this as 1 node per resolution and miss it;
+        a byte budget catches the actual wire-size amplification.
+        """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        big_description = "x" * 100_000  # 100KB string
+        schema = {
+            "type": "object",
+            "properties": {f"r{i}": {"$ref": "#/definitions/Big"} for i in range(50)},
+            "definitions": {
+                "Big": {"type": "string", "description": big_description},
+            },
+        }
+        # 50 refs * ~100KB string == ~5MB cumulative; 1MB budget trips.
+        with pytest.raises(ValueError, match="byte budget"):
+            unpack_legacy_defs(schema, max_inlined_bytes=1_000_000)
+
+    def test_budget_does_not_trip_for_legitimate_large_schema(self):
+        """An OpenAPI-derived tool with ~50 small targets must inline cleanly
+        under the default ``max_inlined_bytes`` budget."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            unpack_legacy_defs,
+        )
+
+        schema = {
+            "type": "object",
+            "properties": {
+                f"r{i}": {"$ref": f"#/components/schemas/T{i}"} for i in range(50)
+            },
+            "components": {
+                "schemas": {
+                    f"T{i}": {
+                        "type": "object",
+                        "properties": {f"p{j}": {"type": "string"} for j in range(5)},
+                    }
+                    for i in range(50)
+                }
+            },
+        }
+
+        out = unpack_legacy_defs(schema)
+        assert "components" not in out
+        assert out["properties"]["r0"]["properties"]["p0"] == {"type": "string"}
