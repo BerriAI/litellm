@@ -20,9 +20,20 @@ from litellm.a2a_protocol.litellm_completion_bridge.transformation import (
 )
 from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
 
+# litellm_params key carrying the authenticated principal (hashed virtual key) so
+# A2A provider configs can scope provider-side state (e.g. LangFlow session memory)
+# per key instead of trusting the client-supplied A2A contextId.
+A2A_USER_API_KEY_HASH_PARAM = "litellm_a2a_user_api_key_hash"
+
 # Agent metadata fields stored in litellm_params that are not valid litellm.acompletion() kwargs
 _AGENT_ONLY_PARAMS = frozenset(
-    {"is_public", "agent_name", "agent_id", "agent_card_params"}
+    {
+        "is_public",
+        "agent_name",
+        "agent_id",
+        "agent_card_params",
+        A2A_USER_API_KEY_HASH_PARAM,
+    }
 )
 
 
