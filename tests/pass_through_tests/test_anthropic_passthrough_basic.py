@@ -1,3 +1,5 @@
+import os
+
 from base_anthropic_messages_test import BaseAnthropicMessagesTest
 import anthropic
 
@@ -21,7 +23,7 @@ class TestAnthropicMessagesEndpoint(BaseAnthropicMessagesTest):
     def test_anthropic_messages_to_wildcard_model(self):
         client = self.get_client()
         response = client.messages.create(
-            model="anthropic/claude-haiku-4-5-20251001",
+            model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
             messages=[{"role": "user", "content": "Hello, world!"}],
             max_tokens=100,
         )

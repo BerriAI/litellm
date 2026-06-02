@@ -1,3 +1,5 @@
+import os
+
 import httpx
 from openai import OpenAI, BadRequestError
 import pytest
@@ -124,7 +126,7 @@ def test_bad_request_bad_param_error():
 def test_anthropic_with_responses_api():
     client = get_test_client()
     response = client.responses.create(
-        model="anthropic/claude-sonnet-4-5-20250929",
+        model=f"anthropic/{os.environ.get('CI_CD_DEFAULT_ANTHROPIC_MODEL', 'claude-haiku-4-5-20251001')}",
         input="just respond with the word 'ping'",
         previous_response_id="hi",
     )
