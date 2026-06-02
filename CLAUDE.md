@@ -15,6 +15,8 @@ When adding new features, add meaningful tests. Don't add tests that don't check
 
 Same thing for bug fixes. The tests should make it so that this specific bug can never happen again without failing tests (i.e., regression)
 
+`tests/test_litellm/` mirrors `litellm/` (see `tests/test_litellm/readme.md`). The default name is `test_<filename>.py` in the parallel path (`transformation.py` → `test_transformation.py`). Many provider dirs use a longer descriptive name instead (e.g. `test_anthropic_chat_transformation.py`) when `test_transformation.py` would be ambiguous across sibling folders or that name is already what the repo uses there; always match the existing test file in the directory you touch rather than introducing another style. Each `*_transformation.py` under `litellm/llms/{provider}/...` ideally has a matching test file in the parallel path. For bug fixes, do not create a new test file; add or extend a regression test in that existing mapped test file. Only create a new test file when adding a new feature (new provider, endpoint, or transformation module) that does not already have a mapped test file; then follow the naming pattern already used in that directory, or `test_<filename>.py` if you are the first test there. One focused regression test is better than many shallow ones.
+
 When creating PRs, don't set base to `main`. `litellm_internal_staging` serves that purpose
 
 Always use @.github/pull_request_template.md as a guide for your PR body
