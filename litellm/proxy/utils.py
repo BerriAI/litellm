@@ -2925,6 +2925,10 @@ class PrismaClient:
         self._reconnect_escalation_threshold: int = max(
             1, int(os.getenv("PRISMA_RECONNECT_ESCALATION_THRESHOLD", "3"))
         )
+        self._watchdog_failures_before_reconnect: int = max(
+            1, int(os.getenv("PRISMA_WATCHDOG_FAILURES_BEFORE_RECONNECT", "1"))
+        )
+        self._consecutive_probe_failures: int = 0
         self._engine_pidfd: int = -1
         self._engine_pid: int = 0
         self._watching_engine: bool = False
@@ -4775,16 +4779,29 @@ class PrismaClient:
                     self.db.query_raw("SELECT 1"),
                     timeout=self._db_health_watchdog_probe_timeout_seconds,
                 )
+                self._consecutive_probe_failures = 0
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 if isinstance(
                     e, asyncio.TimeoutError
                 ) or PrismaDBExceptionHandler.is_database_connection_error(e):
-                    await self.attempt_db_reconnect(
-                        reason="db_health_watchdog_connection_error",
-                        timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
-                    )
+                    self._consecutive_probe_failures += 1
+                    if (
+                        self._consecutive_probe_failures
+                        >= self._watchdog_failures_before_reconnect
+                    ):
+                        self._consecutive_probe_failures = 0
+                        await self.attempt_db_reconnect(
+                            reason="db_health_watchdog_connection_error",
+                            timeout_seconds=self._db_watchdog_reconnect_timeout_seconds,
+                        )
+                    else:
+                        verbose_proxy_logger.debug(
+                            "Prisma DB watchdog probe failure %d/%d; deferring reconnect.",
+                            self._consecutive_probe_failures,
+                            self._watchdog_failures_before_reconnect,
+                        )
                 else:
                     verbose_proxy_logger.debug(
                         "Prisma DB health watchdog observed non-DB error: %s", e
