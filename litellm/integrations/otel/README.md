@@ -172,10 +172,13 @@ nothing here imports outside it:
   `capture_span_content` gates whether prompt/response bodies may be written as
   span attributes; it defaults **off** (`no_content`). The Baggage allowlists are
   configurable, not hard-coded: set `LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS` /
-  `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` (comma-separated) as env vars, or
-  `baggage_promoted_keys` / `baggage_metadata_keys` (YAML lists) under
-  `callback_settings.otel` in `config.yaml` — the latter reach the config through
-  the logger's constructor kwargs.
+  `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` /
+  `LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS` (comma-separated) as env vars, or
+  `baggage_promoted_keys` / `baggage_metadata_keys` /
+  `baggage_team_metadata_keys` (YAML lists) under `callback_settings.otel` in
+  `config.yaml` — the latter reach the config through the logger's constructor
+  kwargs. `baggage_team_metadata_keys` is empty by default, so none of a team's
+  free-form metadata is promoted until each sub-key is explicitly allowlisted.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.

@@ -3180,6 +3180,7 @@ all_litellm_params = (
         "allowed_openai_params",
         "litellm_session_id",
         "use_litellm_proxy",
+        "use_chat_completions_api",
         "prompt_label",
         "shared_session",
         "search_tool_name",
@@ -3364,6 +3365,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
