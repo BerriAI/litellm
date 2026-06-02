@@ -79,6 +79,9 @@ def test_mixed_content_function_call_emits_tool_calls():
     assert tc_id == "call_good", f"tool_call id mismatch: {tc_id!r}"
     assert _get(tc_fn, "name") == "test"
     assert _get(tc_fn, "arguments") == "{}"
+    # index must be the position among tool_calls (0), not the position in the
+    # raw content list (would be 1 here, after the leading text part). #29328
+    assert _get(tc, "index") == 0, f"tool_call index should be 0, got {_get(tc, 'index')!r}"
 
     # Text part should survive as content (either as a list with text block
     # or as the normalized string "ok"). What we care about is that "ok"

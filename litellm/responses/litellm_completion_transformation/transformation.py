@@ -1154,7 +1154,7 @@ class LiteLLMCompletionResponsesConfig:
         """
         non_call_parts: List[Any] = []
         tool_calls: List[ChatCompletionToolCallChunk] = []
-        for idx, part in enumerate(content_list):
+        for part in content_list:
             if isinstance(part, dict) and part.get("type") == "function_call":
                 tool_calls.append(
                     ChatCompletionToolCallChunk(
@@ -1164,7 +1164,9 @@ class LiteLLMCompletionResponsesConfig:
                             name=part.get("name") or "",
                             arguments=str(part.get("arguments") or ""),
                         ),
-                        index=idx,
+                        # index = position among tool calls, not position in the raw
+                        # content list (a leading text part must not shift it off 0).
+                        index=len(tool_calls),
                     )
                 )
             else:
