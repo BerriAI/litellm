@@ -2536,7 +2536,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     disable_budget_reservation: Optional[bool] = Field(
         None,
-        description="If True, disables the optimistic per-request budget reservation (the v1.84.0 Redis pre-charge) and falls back to read-time budget enforcement only. Budgets are still enforced.",
+        description="If True, disables the optimistic per-request budget reservation added in v1.84.0 and reverts to read-time budget enforcement only (the pre-v1.84.0 behavior). Budgets are still checked on every request, but without the reservation a burst of concurrent requests can each pass the spend check before their cost is recorded, so a budget can be briefly exceeded under high concurrency. Intended as an opt-out for operators hit by phantom BudgetExceededError from leaked reservations.",
     )
 
 
