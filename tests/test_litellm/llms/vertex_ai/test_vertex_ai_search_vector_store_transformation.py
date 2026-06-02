@@ -166,18 +166,47 @@ def test_search_request_maps_max_num_results_to_pagesize():
     assert body["pageSize"] == 25
 
 
-def test_search_request_passes_datastorespecs_through_extra_body():
+def test_search_request_rejects_datastorespecs_in_extra_body():
     specs = [
         {
             "dataStore": "projects/p/locations/global/collections/default_collection/dataStores/ds-beta"
         }
     ]
 
-    _, body = _search_request(extra_body={"dataStoreSpecs": specs})
+    with pytest.raises(ValueError, match="target-selecting"):
+        _search_request(extra_body={"dataStoreSpecs": specs})
 
-    assert body["dataStoreSpecs"] == specs
+
+@pytest.mark.parametrize(
+    "field", ["dataStoreSpecs", "branch", "servingConfig", "entity"]
+)
+def test_search_request_rejects_target_selecting_fields(field):
+    with pytest.raises(ValueError, match="target-selecting"):
+        _search_request(extra_body={field: "x"})
+
+
+def test_search_request_rejects_unsupported_extra_body_field():
+    with pytest.raises(ValueError, match="Unsupported Vertex AI Search extra_body"):
+        _search_request(extra_body={"notARealField": True})
+
+
+def test_search_request_forwards_supported_extra_body_fields():
+    _, body = _search_request(
+        extra_body={
+            "filter": 'category: ANY("docs")',
+            "boostSpec": {"conditionBoostSpecs": []},
+        }
+    )
+
+    assert body["filter"] == 'category: ANY("docs")'
+    assert body["boostSpec"] == {"conditionBoostSpecs": []}
     assert body["query"] == "hello"
-    assert body["pageSize"] == 10
+
+
+def test_search_request_ignores_none_valued_extra_body_fields():
+    _, body = _search_request(extra_body={"filter": None})
+
+    assert "filter" not in body
 
 
 def test_search_request_extra_body_takes_precedence_over_defaults():

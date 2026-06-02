@@ -26,6 +26,52 @@ else:
     LiteLLMLoggingObj = Any
 
 
+VERTEX_SEARCH_TARGET_SELECTING_FIELDS = frozenset(
+    {
+        "dataStoreSpecs",
+        "branch",
+        "servingConfig",
+        "entity",
+    }
+)
+
+VERTEX_SEARCH_SUPPORTED_EXTRA_BODY_FIELDS = frozenset(
+    {
+        "query",
+        "pageSize",
+        "pageToken",
+        "offset",
+        "oneBoxPageSize",
+        "numResultsPerDataStore",
+        "pageCategories",
+        "imageQuery",
+        "filter",
+        "canonicalFilter",
+        "orderBy",
+        "userInfo",
+        "languageCode",
+        "facetSpecs",
+        "boostSpec",
+        "params",
+        "queryExpansionSpec",
+        "spellCorrectionSpec",
+        "userPseudoId",
+        "contentSearchSpec",
+        "rankingExpression",
+        "rankingExpressionBackend",
+        "safeSearch",
+        "userLabels",
+        "naturalLanguageQueryUnderstandingSpec",
+        "searchAsYouTypeSpec",
+        "displaySpec",
+        "crowdingSpecs",
+        "relevanceThreshold",
+        "relevanceScoreSpec",
+        "customRankingParams",
+    }
+)
+
+
 class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
     """
     Configuration for Vertex AI Search API Vector Store
@@ -35,6 +81,42 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
 
     def __init__(self):
         super().__init__()
+
+    @staticmethod
+    def get_supported_extra_body_fields() -> frozenset:
+        """Native SearchRequest fields callers may forward via ``extra_body``."""
+        return VERTEX_SEARCH_SUPPORTED_EXTRA_BODY_FIELDS
+
+    @classmethod
+    def _filter_extra_body(cls, extra_body: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate ``extra_body`` against the supported-field allowlist.
+
+        Raises ``ValueError`` if the caller includes a target-selecting field
+        (e.g. ``dataStoreSpecs``) or any field not on the allowlist, so the
+        request fails loudly instead of silently searching the wrong store.
+        """
+        supported = cls.get_supported_extra_body_fields()
+        filtered = {
+            key: value for key, value in extra_body.items() if value is not None
+        }
+
+        target_selecting = set(filtered) & VERTEX_SEARCH_TARGET_SELECTING_FIELDS
+        if target_selecting:
+            raise ValueError(
+                "Vertex AI Search extra_body may not set target-selecting fields "
+                f"{sorted(target_selecting)}: the data store is scoped by "
+                "vector_store_id / vertex_engine_id and cannot be overridden per request."
+            )
+
+        unsupported = set(filtered) - supported
+        if unsupported:
+            raise ValueError(
+                f"Unsupported Vertex AI Search extra_body fields {sorted(unsupported)}. "
+                f"Supported fields: {sorted(supported)}."
+            )
+
+        return filtered
 
     def get_auth_credentials(
         self, litellm_params: dict
@@ -136,9 +218,14 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         Transform a search request for the Vertex AI Search (Discovery Engine) API.
 
         Per-request params pass through to the engine: max_num_results maps to
-        pageSize, and extra_body is merged in raw and takes precedence, so callers
-        can send native Discovery Engine fields such as dataStoreSpecs, filter,
+        pageSize, and extra_body fields on the supported allowlist
+        (`get_supported_extra_body_fields`) are merged in with precedence, so
+        callers can send native Discovery Engine tuning fields such as filter,
         boostSpec, or contentSearchSpec.
+
+        Target-selecting fields (e.g. dataStoreSpecs, branch) are rejected: the
+        data store is scoped by the URL path (vector_store_id / vertex_engine_id)
+        and must not be overridable per request.
         """
         if isinstance(query, list):
             query = " ".join(query)
@@ -150,7 +237,7 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         if max_num_results is not None:
             request_body["pageSize"] = max_num_results
         if isinstance(extra_body, dict):
-            request_body.update(extra_body)
+            request_body.update(self._filter_extra_body(extra_body))
 
         litellm_logging_obj.model_call_details["query"] = request_body.get(
             "query", query
