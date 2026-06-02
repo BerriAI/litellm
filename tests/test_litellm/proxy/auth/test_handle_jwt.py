@@ -3470,6 +3470,44 @@ async def test_multi_issuer_jwt_validates_selected_issuer_and_maps_claims(
 
 
 @pytest.mark.asyncio
+async def test_auth_jwt_issuer_path_expired_token_raises_401(monkeypatch):
+    """An expired JWT validated through the issuer-scoped path
+    (_auth_jwt_with_issuer) must raise a ProxyException carrying a 401 so the
+    status is preserved end-to-end, just like the non-issuer path.
+    """
+    import time
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)
+
+    issuer = "https://issuer.example.com"
+    jwks_url = f"{issuer}/keys"
+    kid = "expired-kid"
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid=kid)
+
+    jwt_handler = _get_jwt_handler_with_issuer_keys(
+        issuers=[{"issuer": issuer, "jwks_url": jwks_url, "audience": "my-audience"}],
+        keys_by_url={jwks_url: [jwk]},
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer=issuer,
+        audience="my-audience",
+        kid=kid,
+        extra_claims={"exp": int(time.time()) - 100},
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await jwt_handler.auth_jwt(token=token)
+
+    assert exc_info.value.code == str(401)
+    assert exc_info.value.type == ProxyErrorTypes.expired_key.value
+    assert "Token Expired" in exc_info.value.message
+
+
+@pytest.mark.asyncio
 async def test_multi_issuer_jwt_maps_kubernetes_namespace_claim(monkeypatch):
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     monkeypatch.delenv("JWT_PUBLIC_KEY_URL", raising=False)

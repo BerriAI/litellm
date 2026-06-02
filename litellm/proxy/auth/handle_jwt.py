@@ -1059,7 +1059,12 @@ class JWTHandler:
                 disable_audience_validation=issuer_config.disable_audience_validation,
             )
         except jwt.ExpiredSignatureError:
-            raise Exception("Token Expired")
+            raise ProxyException(
+                message="Token Expired",
+                type=ProxyErrorTypes.expired_key,
+                param=None,
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
         except Exception as e:
             raise Exception(f"Validation fails: {str(e)}")
 
