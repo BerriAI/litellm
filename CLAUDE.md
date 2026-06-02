@@ -9,6 +9,7 @@ Don't assume that the existing code is correct or the right way of doing things 
 - readable
 - easy to maintain/change
 - modern
+
 In that order of importance
 
 When adding new features, add meaningful tests. Don't add tests that don't check anything substantial and is there just to make the code coverage pass. Yes, code coverage is important, but I'd rather have no signal whether the code is working than tests that don't fail when code is broken. The goal is to have tests that would fail before the feature was added/if the code was mutated in a way that breaks the feature and succeed only when the feature is fully working. I should run mutation testing and see > 90% kill rate
