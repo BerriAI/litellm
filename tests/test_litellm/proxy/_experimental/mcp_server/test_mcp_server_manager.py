@@ -2888,6 +2888,31 @@ class TestMCPServerTimestamps:
         assert rebuilt_table.created_at == created
         assert rebuilt_table.updated_at == updated
 
+    @pytest.mark.asyncio
+    async def test_round_trip_source_url_preserved(self):
+        """source_url survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable.
+
+        Regression test: the list endpoint (GET /v1/mcp/server) builds its
+        response from the registry via this round-trip, so a dropped field
+        here surfaces as a null source_url in the list response even though
+        the value is stored in the DB.
+        """
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="src-url-server",
+            server_name="src_url_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            source_url="https://github.com/org/mcp-server",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        assert mcp_server.source_url == "https://github.com/org/mcp-server"
+
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+        assert rebuilt_table.source_url == "https://github.com/org/mcp-server"
+
 
 class TestInternalDelegatePkceWarningLog:
     @pytest.mark.asyncio
