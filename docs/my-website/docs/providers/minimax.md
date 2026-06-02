@@ -15,8 +15,9 @@ MiniMax offers the following models through their Anthropic-compatible API:
 
 | Model | Description | Input Cost | Output Cost | Prompt Caching Read | Prompt Caching Write |
 |-------|-------------|------------|-------------|---------------------|----------------------|
-| **MiniMax-M2.7** | Latest flagship model with enhanced reasoning and coding | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
-| **MiniMax-M2.7-lightning** | High-speed version of M2.7 for low-latency scenarios | $0.3/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
+| **MiniMax-M3** | Latest flagship model with 512K context, 128K output, and image input support (default) | $0.6/M tokens | $2.4/M tokens | $0.12/M tokens | — |
+| **MiniMax-M2.7** | Previous flagship model with enhanced reasoning and coding | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
+| **MiniMax-M2.7-highspeed** | High-speed version of M2.7 for low-latency scenarios | $0.3/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
 | **MiniMax-M2.5** | Advanced reasoning, Agentic capabilities | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
 | **MiniMax-M2.5-lightning** | High-speed version of M2.5 | $0.3/M tokens | $2.4/M tokens | $0.03/M tokens | $0.375/M tokens |
 | **MiniMax-M2.1** | Powerful Multi-Language Programming with Enhanced Programming Experience (~60 tps) | $0.3/M tokens | $1.2/M tokens | $0.03/M tokens | $0.375/M tokens |
@@ -32,7 +33,7 @@ MiniMax offers the following models through their Anthropic-compatible API:
 import litellm
 
 response = litellm.anthropic.messages.acreate(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
     api_key="your-minimax-api-key",
     api_base="https://api.minimax.io/anthropic/v1/messages",
@@ -53,17 +54,17 @@ export MINIMAX_API_BASE="https://api.minimax.io/anthropic/v1/messages"
 import litellm
 
 response = litellm.anthropic.messages.acreate(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "Hello!"}],
     max_tokens=1000
 )
 ```
 
-### With Thinking (M2.1 Feature)
+### With Thinking
 
 ```python
 response = litellm.anthropic.messages.acreate(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "Solve: 2+2=?"}],
     thinking={"type": "enabled", "budget_tokens": 1000},
     api_key="your-minimax-api-key"
@@ -96,7 +97,7 @@ tools = [
 ]
 
 response = litellm.anthropic.messages.acreate(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "What's the weather in SF?"}],
     tools=tools,
     api_key="your-minimax-api-key",
@@ -122,9 +123,9 @@ Create a `config.yaml`:
 
 ```yaml
 model_list:
-  - model_name: minimax/MiniMax-M2.1
+  - model_name: minimax/MiniMax-M3
     litellm_params:
-      model: minimax/MiniMax-M2.1
+      model: minimax/MiniMax-M3
       api_key: os.environ/MINIMAX_API_KEY
       api_base: https://api.minimax.io/anthropic/v1/messages
 ```
@@ -147,7 +148,7 @@ import anthropic
 client = anthropic.Anthropic()
 
 message = client.messages.create(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     max_tokens=1000,
     system="You are a helpful assistant.",
     messages=[
@@ -182,7 +183,7 @@ You can use MiniMax's OpenAI-compatible API directly with LiteLLM:
 import litellm
 
 response = litellm.completion(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Hello, how are you?"}
@@ -205,7 +206,7 @@ export MINIMAX_API_BASE="https://api.minimax.io/v1"
 import litellm
 
 response = litellm.completion(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "Hello!"}]
 )
 ```
@@ -214,7 +215,7 @@ response = litellm.completion(
 
 ```python
 response = litellm.completion(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Solve: 2+2=?"}
@@ -251,7 +252,7 @@ tools = [
 ]
 
 response = litellm.completion(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "What's the weather in SF?"}],
     tools=tools,
     api_key="your-minimax-api-key",
@@ -263,7 +264,7 @@ response = litellm.completion(
 
 ```python
 response = litellm.completion(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "Tell me a story"}],
     stream=True,
     api_key="your-minimax-api-key",
@@ -292,9 +293,9 @@ Create a `config.yaml`:
 
 ```yaml
 model_list:
-  - model_name: minimax/MiniMax-M2.1
+  - model_name: minimax/MiniMax-M3
     litellm_params:
-      model: minimax/MiniMax-M2.1
+      model: minimax/MiniMax-M3
       api_key: os.environ/MINIMAX_API_KEY
       api_base: https://api.minimax.io/v1
 ```
@@ -317,7 +318,7 @@ from openai import OpenAI
 client = OpenAI()
 
 response = client.chat.completions.create(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Hi, how are you?"},
@@ -340,7 +341,7 @@ from openai import OpenAI
 client = OpenAI()
 
 stream = client.chat.completions.create(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Tell me a story"},
@@ -377,7 +378,7 @@ Cost calculation works automatically using the pricing information in `model_pri
 Example:
 ```python
 response = litellm.completion(
-    model="minimax/MiniMax-M2.1",
+    model="minimax/MiniMax-M3",
     messages=[{"role": "user", "content": "Hello!"}],
     api_key="your-minimax-api-key"
 )

@@ -18,6 +18,7 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     - China: https://api.minimaxi.com/anthropic
 
     Supported models:
+    - MiniMax-M3
     - MiniMax-M2.1
     - MiniMax-M2.1-lightning
     - MiniMax-M2
