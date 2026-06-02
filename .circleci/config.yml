@@ -2400,6 +2400,11 @@ jobs:
     environment:
       DATABASE_URL: "postgresql://e2euser:e2epassword@localhost:5432/litellm_e2e"
       CI: "true"
+      # Boot the proxy with an external logout URL so proxyLogoutUrl.spec.ts can
+      # assert the redirect. Set at job level so both the proxy boot step and the
+      # Playwright step (whose skip guard reads this) see the same value. Safe for
+      # the rest of the suite: nothing else performs a logout.
+      PROXY_LOGOUT_URL: "https://www.example.com"
     steps:
       - checkout
       - setup_google_dns
@@ -2476,7 +2481,8 @@ jobs:
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
-            PROXY_LOGOUT_URL: ""
+            # PROXY_LOGOUT_URL is inherited from the job-level environment so the
+            # proxy and proxyLogoutUrl.spec.ts agree on the logout target.
           # LITELLM_LICENSE is forwarded from the project env so premium-gated
           # UI flows can be exercised. license.spec.ts asserts the resulting
           # JWT carries premium_user=true; if it ever stops being passed, that

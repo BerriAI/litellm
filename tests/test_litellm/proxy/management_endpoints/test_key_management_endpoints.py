@@ -611,7 +611,9 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
-        AsyncMock(),
+        AsyncMock(
+            side_effect=lambda object_permission=None, **kwargs: object_permission
+        ),
     )
 
     from litellm.proxy._types import (
@@ -857,6 +859,64 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
 
     # Verify upsert was called to create new record
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_key_update_object_permission_does_not_add_null_fields():
+    """
+    Updating a key with an object_permission that only sets a subset of fields
+    must not normalize the unset list fields to ``None``.
+
+    The UI always submits object_permission with empty MCP/vector lists, even for
+    a TPM/RPM-only edit. ``models``/``blocked_tools``/``search_tools`` are
+    non-nullable array columns, so emitting them as ``None`` makes the downstream
+    Prisma write fail. The normalized object_permission must keep the same field
+    set the caller provided.
+    """
+    data = UpdateKeyRequest(
+        key="sk-test-key",
+        tpm_limit=123,
+        rpm_limit=456,
+        object_permission={
+            "vector_stores": [],
+            "mcp_servers": [],
+            "mcp_access_groups": [],
+            "mcp_toolsets": [],
+            "agents": [],
+            "agent_access_groups": [],
+        },
+    )
+    provided_fields = set(data.object_permission.model_fields_set)
+
+    existing_key_row = MagicMock()
+    existing_key_row.user_id = "admin_user"
+    existing_key_row.token = "hashed_token"
+    existing_key_row.team_id = None
+    existing_key_row.organization_id = None
+    existing_key_row.project_id = None
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-admin",
+        user_id="admin_user",
+    )
+
+    await _validate_update_key_data(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+        llm_router=None,
+        premium_user=False,
+        prisma_client=AsyncMock(),
+        user_api_key_cache=MagicMock(),
+    )
+
+    normalized = data.object_permission.model_dump(exclude_unset=True)
+    assert set(normalized.keys()) == provided_fields
+    assert "models" not in normalized
+    assert "blocked_tools" not in normalized
+    assert "search_tools" not in normalized
+    assert "mcp_tool_permissions" not in normalized
 
 
 @pytest.mark.asyncio
@@ -3006,7 +3066,9 @@ async def test_generate_key_with_object_permission():
         ),
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
-            new_callable=AsyncMock,
+            new=AsyncMock(
+                side_effect=lambda object_permission=None, **kwargs: object_permission
+            ),
         ),
     ):
         # Execute

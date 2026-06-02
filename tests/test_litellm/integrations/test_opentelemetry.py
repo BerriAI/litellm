@@ -5142,3 +5142,95 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         span, exp = self._span()
         otel.set_preprocessing_duration_attribute(span, None)
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
+
+
+class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
+    """team_metadata, http.route, and both model names (the user-facing
+    model_group alias and the dispatched provider model) must land on the
+    inference span via set_attributes."""
+
+    def _span(self):
+        exporter = InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(exporter))
+        tracer = provider.get_tracer(__name__)
+        return tracer.start_span("litellm_request"), exporter
+
+    def _attr(self, span, exporter):
+        span.end()
+        return exporter.get_finished_spans()[0].attributes
+
+    def _kwargs(self):
+        return {
+            "model": "gpt-4o",
+            "optional_params": {},
+            "litellm_params": {
+                "custom_llm_provider": "azure",
+                "metadata": {
+                    "user_api_key_team_metadata": {
+                        "tier": "gold",
+                        "cost_center": "42",
+                    }
+                },
+            },
+            "standard_logging_object": {
+                "metadata": {
+                    "user_api_key_request_route": "/v1/chat/completions",
+                    "user_api_key_team_id": "team-1",
+                },
+                "call_type": "completion",
+                "model_group": "gpt-4o",
+                "model": "azure/my-deployment",
+                "hidden_params": {"litellm_model_name": "azure/my-deployment"},
+                "id": "req-1",
+                "litellm_call_id": "call-1",
+            },
+        }
+
+    def test_all_identity_attributes_stamped(self):
+        otel = OpenTelemetry()
+        span, exp = self._span()
+        otel.set_attributes(span, self._kwargs(), {"model": "azure/gpt-4o"})
+        attrs = self._attr(span, exp)
+
+        assert attrs["http.route"] == "/v1/chat/completions"
+        assert json.loads(attrs["litellm.team.metadata"]) == {
+            "tier": "gold",
+            "cost_center": "42",
+        }
+        assert attrs["litellm.model_group"] == "gpt-4o"
+        assert attrs["litellm.provider.model"] == "azure/my-deployment"
+
+    def test_provider_model_falls_back_to_payload_model(self):
+        """Without hidden_params.litellm_model_name the dispatched model is
+        the payload model (the SDK path, where no router renaming happened)."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        kwargs["standard_logging_object"]["hidden_params"] = {}
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert self._attr(span, exp)["litellm.provider.model"] == "azure/my-deployment"
+
+    def test_empty_team_metadata_is_dropped(self):
+        """An empty team_metadata dict must not stamp a useless '{}'."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        kwargs["litellm_params"]["metadata"]["user_api_key_team_metadata"] = {}
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert "litellm.team.metadata" not in self._attr(span, exp)
+
+    def test_missing_route_is_dropped(self):
+        """An SDK request has no route; http.route must be absent, not empty."""
+        otel = OpenTelemetry()
+        kwargs = self._kwargs()
+        del kwargs["standard_logging_object"]["metadata"]["user_api_key_request_route"]
+        span, exp = self._span()
+        otel.set_attributes(span, kwargs, {"model": "azure/gpt-4o"})
+        assert "http.route" not in self._attr(span, exp)
+
+    def test_team_metadata_json_helper_non_dict(self):
+        assert OpenTelemetry._team_metadata_json(None) is None
+        assert OpenTelemetry._team_metadata_json("not-a-dict") is None
+        assert OpenTelemetry._team_metadata_json({}) is None
+        assert json.loads(OpenTelemetry._team_metadata_json({"a": 1})) == {"a": 1}

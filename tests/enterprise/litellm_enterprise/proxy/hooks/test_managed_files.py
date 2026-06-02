@@ -38,6 +38,39 @@ def test_get_file_ids_from_messages():
     ]
 
 
+def test_get_file_ids_from_messages_skips_bedrock_content_blocks_without_type():
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=MagicMock()
+    )
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"text": "What is Apptio?"},
+                {
+                    "toolResult": {
+                        "toolUseId": "tooluse_123",
+                        "status": "success",
+                        "content": [
+                            {
+                                "searchResult": {
+                                    "source": "source",
+                                    "title": "title",
+                                    "content": [{"text": "snippet"}],
+                                    "citations": {"enabled": True},
+                                }
+                            }
+                        ],
+                    }
+                },
+                {"type": "file", "file": {"file_id": "file-keep"}},
+            ],
+        }
+    ]
+    file_ids = proxy_managed_files.get_file_ids_from_messages(messages)
+    assert file_ids == ["file-keep"]
+
+
 @pytest.mark.asyncio
 async def test_async_pre_call_hook_batch_retrieve():
     from litellm.proxy._types import UserAPIKeyAuth
