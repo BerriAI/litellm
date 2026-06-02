@@ -156,7 +156,12 @@ def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
 
 
 def test_cache_ping_no_cache_initialized():
-    """Test cache ping when no cache is initialized returns 503 with a clear message."""
+    """Test cache ping when no cache is initialized returns 503 with a clear message.
+
+    Verifies the exact response structure so that regressions in the error format
+    (e.g. message moving to a different field, or extra internal details leaking)
+    are caught immediately.
+    """
     original_cache = litellm.cache
     litellm.cache = None
 
@@ -169,7 +174,43 @@ def test_cache_ping_no_cache_initialized():
         data = response.json()
         print("response data=", json.dumps(data, indent=4))
         # FastAPI serialises HTTPException as {"detail": "<message>"}
+        # Assert the complete response structure — not just a substring of the raw dict.
         assert data["detail"] == "Cache not initialized. litellm.cache is None"
+    finally:
+        litellm.cache = original_cache
+
+
+def test_cache_ping_no_cache_does_not_expose_internals():
+    """CWE-209: No-cache 503 must contain only the clean HTTPException detail.
+
+    Demonstrates the code path is still working correctly after the CWE-209 fix:
+    the HTTPException is re-raised as-is (caching_routes.py: except HTTPException: raise),
+    and the response contains exactly {"detail": "Cache not initialized. litellm.cache is None"}
+    with no tracebacks, source paths, or extra fields that could leak internals.
+    """
+    original_cache = litellm.cache
+    litellm.cache = None
+
+    try:
+        response = client.get(
+            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+        )
+        assert response.status_code == 503
+
+        raw_body = response.text
+        # No Python traceback or source-file paths must appear in the response
+        assert "traceback" not in raw_body.lower(), (
+            "CWE-209: Python traceback exposed in /cache/ping no-cache response"
+        )
+        assert 'File "' not in raw_body, (
+            "CWE-209: Python stack frame paths exposed in /cache/ping no-cache response"
+        )
+
+        data = response.json()
+        # Response must be exactly the HTTPException payload — nothing more, nothing less
+        assert data == {"detail": "Cache not initialized. litellm.cache is None"}, (
+            f"Unexpected response structure: {data}"
+        )
     finally:
         litellm.cache = original_cache
 
