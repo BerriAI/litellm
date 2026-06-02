@@ -48,6 +48,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
@@ -116,6 +117,103 @@ _AZURE_ENTRA_HOSTS = {
     "login.microsoftonline.us",  # US Government
     "login.chinacloudapi.cn",  # China
 }
+
+
+def _should_strip_caller_authorization(
+    mcp_server: MCPServer,
+    raw_headers: Optional[Dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> bool:
+    """Decide whether the caller's ``Authorization`` header must NOT be
+    forwarded upstream when populating ``extra_headers`` for an MCP server.
+
+    Centralized so ``_call_regular_mcp_tool`` (this module) and
+    ``_prepare_mcp_server_headers`` (``server.py``) cannot drift apart on
+    this security-sensitive decision.
+
+    Strip rules:
+    - **M2M (client_credentials) servers**: never forward the caller's
+      ``Authorization`` — the proxy fetches its own upstream token.
+    - **OAuth pass-through servers**: strip when the ``Authorization``
+      header is actually the LiteLLM API key — either because admission
+      validated it (``user_api_key_auth.api_key`` is set) and the caller
+      did NOT also supply ``x-litellm-api-key`` to disambiguate, or
+      because the legacy ``user_api_key_auth is None`` call sites did
+      not supply an explicit admission header.  In the anonymous /
+      pass-through cold-start case (RFC 9728) the bearer in
+      ``Authorization`` is the upstream OAuth token and must be
+      forwarded, so we keep it.
+    """
+    if mcp_server.has_client_credentials:
+        return True
+    if not mcp_server.is_oauth_passthrough:
+        return False
+
+    normalized_raw_headers = {
+        str(k).lower(): v for k, v in (raw_headers or {}).items() if isinstance(k, str)
+    }
+    has_explicit_litellm_admission_header = (
+        normalized_raw_headers.get("x-litellm-api-key") is not None
+    )
+    admission_consumed_authorization_as_litellm_key = (
+        user_api_key_auth is not None
+        and bool(getattr(user_api_key_auth, "api_key", None))
+        and not has_explicit_litellm_admission_header
+    )
+    return admission_consumed_authorization_as_litellm_key or (
+        user_api_key_auth is None and not has_explicit_litellm_admission_header
+    )
+
+
+def _extract_upstream_auth_failure(
+    exc: BaseException,
+) -> Optional[Tuple[int, Optional[str]]]:
+    """Walk the exception tree looking for an HTTP 401/403 response from the
+    upstream MCP server.
+
+    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
+    may chain through ``__cause__`` / ``__context__``. We inspect all of those
+    layers for an ``httpx.Response``-bearing exception (typically
+    ``httpx.HTTPStatusError``) and extract the status code and any upstream
+    ``WWW-Authenticate`` header.
+
+    Returns ``(status_code, www_authenticate)`` on match, else ``None``.
+    """
+    seen: Set[int] = set()
+    stack: List[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+
+        response = getattr(current, "response", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+            if isinstance(status_code, int) and status_code in (401, 403):
+                www_authenticate: Optional[str] = None
+                headers = getattr(response, "headers", None)
+                if headers is not None:
+                    try:
+                        www_authenticate = headers.get("www-authenticate")
+                    except Exception:
+                        www_authenticate = None
+                return status_code, www_authenticate
+
+        # anyio / PEP 654 ExceptionGroup
+        sub_exceptions = getattr(current, "exceptions", None)
+        if sub_exceptions:
+            stack.extend(sub_exceptions)
+
+        if current.__cause__ is not None:
+            stack.append(current.__cause__)
+        if (
+            current.__context__ is not None
+            and current.__context__ is not current.__cause__
+        ):
+            stack.append(current.__context__)
+
+    return None
 
 
 def _warn_on_server_name_fields(
@@ -483,6 +581,7 @@ class MCPServerManager:
                 delegate_auth_to_upstream=bool(
                     server_config.get("delegate_auth_to_upstream", False)
                 ),
+                oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -881,6 +980,7 @@ class MCPServerManager:
             delegate_auth_to_upstream=bool(
                 getattr(mcp_server, "delegate_auth_to_upstream", False)
             ),
+            oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(
@@ -1599,7 +1699,9 @@ class MCPServerManager:
                     ]
                 return tools
             else:
-                tools = await self._fetch_tools_with_timeout(client, server.name)
+                tools = await self._fetch_tools_with_timeout(
+                    client, server.name, server=server
+                )
                 self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
@@ -1608,6 +1710,11 @@ class MCPServerManager:
 
             return prefixed_or_original_tools
 
+        except MCPUpstreamAuthError:
+            # Pass-through 401 must surface to single-server routes so the
+            # client triggers the upstream OAuth flow. The multi-server
+            # aggregator catches this explicitly to keep absorbing.
+            raise
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get tools from server {server.name}: {str(e)}"
@@ -2209,7 +2316,10 @@ class MCPServerManager:
         return None
 
     async def _fetch_tools_with_timeout(
-        self, client: MCPClient, server_name: str
+        self,
+        client: MCPClient,
+        server_name: str,
+        server: Optional[MCPServer] = None,
     ) -> List[MCPTool]:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -2217,16 +2327,28 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
+        For pass-through MCP servers (``MCPServer.is_oauth_passthrough``) an
+        upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
+        instead of being swallowed to an empty tool list. That lets the
+        single-server HTTP routes surface a proper 401 + ``WWW-Authenticate``
+        challenge so standards-compliant MCP clients trigger the upstream
+        OAuth flow. Non-pass-through servers keep today's swallow-and-log
+        behaviour so the multi-server ``/mcp`` aggregator doesn't get
+        tainted by a single bad server.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
+            server: Optional MCPServer; when pass-through, auth errors are
+                re-raised as :class:`MCPUpstreamAuthError`.
 
         Returns:
             List of tools from the server
         """
+        is_passthrough = bool(server is not None and server.is_oauth_passthrough)
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools()
+                tools = await client.list_tools(raise_on_error=is_passthrough)
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -2243,6 +2365,19 @@ class MCPServerManager:
             )
             return []
         except Exception as e:
+            if is_passthrough:
+                auth_info = _extract_upstream_auth_failure(e)
+                if auth_info is not None:
+                    status_code, www_authenticate = auth_info
+                    verbose_logger.info(
+                        f"Upstream auth failure from pass-through MCP server "
+                        f"{server_name}: HTTP {status_code}"
+                    )
+                    raise MCPUpstreamAuthError(
+                        status_code=status_code,
+                        www_authenticate=www_authenticate,
+                        server_name=server_name,
+                    ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
             return []
 
@@ -2768,6 +2903,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2833,13 +2969,16 @@ class MCPServerManager:
             normalized_raw_headers = {
                 str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
+            strip_caller_authorization = _should_strip_caller_authorization(
+                mcp_server=mcp_server,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
+
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
                     continue
-                if (
-                    mcp_server.has_client_credentials
-                    and header.lower() == "authorization"
-                ):
+                if header.lower() == "authorization" and strip_caller_authorization:
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
@@ -3131,6 +3270,7 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
@@ -3162,7 +3302,23 @@ class MCPServerManager:
             if server.needs_user_oauth_token:
                 # Skip OAuth2 servers that rely on user-provided tokens
                 continue
-            tools = await self._get_tools_from_server(server)
+            try:
+                tools = await self._get_tools_from_server(server)
+            except MCPUpstreamAuthError as e:
+                # Pass-through servers expect a user-supplied bearer token;
+                # at startup we have none, so an upstream 401 is normal.
+                # Swallow it so we keep mapping the remaining servers.
+                verbose_logger.debug(
+                    f"Skipping tool name mapping for server {server.name} "
+                    f"due to upstream auth error: {str(e)}"
+                )
+                continue
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Failed to get tools from server {server.name} during "
+                    f"tool name mapping initialization: {str(e)}"
+                )
+                continue
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
@@ -3754,6 +3910,7 @@ class MCPServerManager:
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
             delegate_auth_to_upstream=server.delegate_auth_to_upstream,
+            oauth_passthrough=getattr(server, "oauth_passthrough", False),
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,

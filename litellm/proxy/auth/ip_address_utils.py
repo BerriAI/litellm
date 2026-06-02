@@ -153,8 +153,9 @@ class IPAddressUtils:
                 verbose_proxy_logger.warning(
                     "use_x_forwarded_for is enabled but mcp_trusted_proxy_ranges "
                     "is not configured. X-Forwarded-* headers will NOT be "
-                    "trusted, so MCP OAuth discovery URLs will use the proxy's "
-                    "literal base URL. Set mcp_trusted_proxy_ranges in "
+                    "trusted, so MCP OAuth discovery URLs and access-control "
+                    "client IPs will use the proxy's literal request values. "
+                    "Set mcp_trusted_proxy_ranges in "
                     "general_settings to your reverse-proxy CIDR(s) to allow "
                     "X-Forwarded-* through."
                 )
@@ -199,17 +200,19 @@ class IPAddressUtils:
 
         # If XFF is enabled, validate the request comes from a trusted proxy
         if use_xff and "x-forwarded-for" in request.headers:
-            trusted_ranges = general_settings.get("mcp_trusted_proxy_ranges")
-            if trusted_ranges:
-                # Validate direct connection is from trusted proxy
+            if not IPAddressUtils.is_request_from_trusted_proxy(
+                request, general_settings=general_settings
+            ):
                 direct_ip = request.client.host if request.client else None
-                trusted_networks = IPAddressUtils.parse_trusted_proxy_networks(
-                    trusted_ranges
-                )
-                if not IPAddressUtils.is_trusted_proxy(direct_ip, trusted_networks):
-                    # Untrusted source trying to set XFF - ignore XFF, use direct IP
+                if general_settings.get("mcp_trusted_proxy_ranges"):
+                    # Direct connection isn't in any configured trusted CIDR.
                     verbose_proxy_logger.warning(
                         "XFF header from untrusted IP %s, ignoring", direct_ip
                     )
                     return direct_ip
+                # XFF enabled but no trusted proxy ranges configured: the direct
+                # peer is typically the reverse proxy's own (private) IP, so
+                # returning it would mis-classify external callers as internal.
+                # Fail closed for access control.
+                return ""
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
