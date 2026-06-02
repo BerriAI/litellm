@@ -8,6 +8,9 @@ re-ran the import finder/loader machinery every time. The classification is now
 resolved once and degrades gracefully when prisma is absent.
 """
 
+import sys
+import types
+
 import httpx
 
 import litellm.proxy.db.log_db_metrics as m
@@ -39,17 +42,26 @@ def test_exception_types_resolved_once_and_cached():
     assert httpx.TimeoutException in first
 
 
-def test_prisma_error_classified_as_db_when_available():
+def test_prisma_error_classified_as_db_when_available(monkeypatch):
+    """With prisma installed, ``PrismaError`` is treated as a DB failure.
+
+    prisma is optional and absent in this environment, so inject a fake
+    ``prisma.errors`` module to exercise the import-success branch deterministically.
+    """
+
+    class FakePrismaError(Exception):
+        pass
+
+    fake_errors = types.ModuleType("prisma.errors")
+    fake_errors.PrismaError = FakePrismaError
+    fake_prisma = types.ModuleType("prisma")
+    fake_prisma.errors = fake_errors
+    monkeypatch.setitem(sys.modules, "prisma", fake_prisma)
+    monkeypatch.setitem(sys.modules, "prisma.errors", fake_errors)
+
     _reset_cache()
-    try:
-        from prisma.errors import PrismaError
-    except Exception:
-        import pytest
+    assert FakePrismaError in m._db_exception_types_cached()
+    assert m._is_exception_related_to_db(FakePrismaError()) is True
+    assert m._is_exception_related_to_db(httpx.ConnectError("x")) is True
 
-        pytest.skip("prisma not installed")
-
-    class _FakePrismaError(PrismaError):
-        def __init__(self):
-            pass
-
-    assert m._is_exception_related_to_db(_FakePrismaError()) is True
+    _reset_cache()
