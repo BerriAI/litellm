@@ -88,14 +88,16 @@ class GenAI:
     TOOL_CALL_ID: Final = "gen_ai.tool.call.id"
     TOOL_CALL_ARGUMENTS: Final = "gen_ai.tool.call.arguments"
     TOOL_CALL_RESULT: Final = "gen_ai.tool.call.result"
+    # prompt (MCP ``prompts/get`` etc.)
+    PROMPT_NAME: Final = "gen_ai.prompt.name"
 
 
 class MCP:
     """OTel GenAI MCP (Model Context Protocol) span-attribute keys.
 
-    ``METHOD_NAME`` is the only key litellm can populate from a closed request
-    today; the rest are part of the convention's vocabulary and are stamped when
-    the corresponding signal (session, protocol version, resource) is available.
+    ``METHOD_NAME`` is the only key litellm populates from a closed request today;
+    the rest are part of the convention's vocabulary and are stamped when the
+    corresponding signal (session, protocol version, resource) is available.
     """
 
     METHOD_NAME: Final = "mcp.method.name"
@@ -111,6 +113,33 @@ class JsonRpc:
     REQUEST_ID: Final = "jsonrpc.request.id"
     PROTOCOL_VERSION: Final = "jsonrpc.protocol.version"
     RESPONSE_STATUS_CODE: Final = "rpc.response.status_code"
+
+
+class NetworkTransport(str, Enum):
+    """Well-known values for ``network.transport``."""
+
+    TCP = "tcp"
+    UDP = "udp"
+    QUIC = "quic"
+    UNIX = "unix"
+    PIPE = "pipe"
+
+
+class Network:
+    """OTel network keys, recommended on MCP spans to describe the transport
+    carrying the JSON-RPC messages (stdio pipe, HTTP, websocket, …)."""
+
+    PROTOCOL_NAME: Final = "network.protocol.name"
+    PROTOCOL_VERSION: Final = "network.protocol.version"
+    TRANSPORT: Final = "network.transport"
+
+
+class Client:
+    """Peer (client) network keys, stamped on MCP *server* spans the same way
+    ``server.*`` is stamped on client spans."""
+
+    ADDRESS: Final = "client.address"
+    PORT: Final = "client.port"
 
 
 class Error:

@@ -122,12 +122,50 @@ def _all_constants(cls):
 
 
 def test_attribute_keys_are_unique_across_namespaces():
+    from litellm.integrations.otel import MCP, Client, JsonRpc, Network
+
     # prefixes are allowed to be substrings; exact keys must not collide.
     exact = set()
-    for cls in (GenAI, Error, Server, HTTP, DB):
+    for cls in (GenAI, Error, Server, HTTP, DB, MCP, JsonRpc, Network, Client):
         for key in _all_constants(cls):
             assert key not in exact, f"duplicate attribute key {key}"
             exact.add(key)
+
+
+def test_mcp_attribute_vocabulary_is_complete():
+    """Every span-attribute key the OTel GenAI MCP semconv defines has a constant.
+
+    Pins the vocabulary so a dropped or renamed key fails here rather than
+    silently emitting a non-conformant attribute name.
+    """
+    from litellm.integrations.otel import MCP, Client, JsonRpc, Network
+
+    defined = set()
+    for cls in (GenAI, Error, Server, MCP, JsonRpc, Network, Client):
+        defined |= _all_constants(cls)
+    required = {
+        "mcp.method.name",
+        "mcp.session.id",
+        "mcp.protocol.version",
+        "mcp.resource.uri",
+        "jsonrpc.request.id",
+        "jsonrpc.protocol.version",
+        "rpc.response.status_code",
+        "gen_ai.operation.name",
+        "gen_ai.tool.name",
+        "gen_ai.tool.call.arguments",
+        "gen_ai.tool.call.result",
+        "gen_ai.prompt.name",
+        "error.type",
+        "server.address",
+        "server.port",
+        "client.address",
+        "client.port",
+        "network.protocol.name",
+        "network.protocol.version",
+        "network.transport",
+    }
+    assert required <= defined, f"missing MCP semconv keys: {required - defined}"
 
 
 def test_provider_resolution():
