@@ -60,6 +60,3 @@ def test_update_model_cost_via_completion():
         assert litellm.model_cost["gpt-3.5-turbo"]["output_cost_per_token"] == 0.4
     except Exception as e:
         pytest.fail(f"An error occurred: {e}")
-
-
-test_update_model_cost_via_completion()
