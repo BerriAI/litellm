@@ -1,6 +1,7 @@
 import os
 import sys
-from unittest.mock import MagicMock, patch
+import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -786,6 +787,211 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
     dummy_logger.log_stream_event.assert_not_called()
 
 
+def test_is_sync_litellm_request():
+    assert LitellmLogging._is_sync_litellm_request({}) is True
+    assert LitellmLogging._is_sync_litellm_request({"acompletion": True}) is False
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_invokes_callbacks_once_for_final_stream(
+    logging_obj,
+):
+    """Second final-stream dispatch must not re-export (CSW + deferred guardrail paths)."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    original_async_callbacks = list(litellm._async_success_callback or [])
+    litellm._async_success_callback = [mock_callback]
+
+    result = ModelResponse(
+        id="resp-dedupe",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    try:
+        logging_obj.stream = True
+        logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
+
+        with (
+            patch.object(
+                mock_callback, "async_log_success_event", new_callable=AsyncMock
+            ) as mock_async_log,
+            patch.object(mock_callback, "log_success_event") as mock_sync_log,
+            patch.object(
+                logging_obj,
+                "_success_handler_helper_fn",
+                return_value=(time.time(), time.time(), result),
+            ),
+            patch.object(
+                logging_obj,
+                "_get_assembled_streaming_response",
+                return_value=result,
+            ),
+            patch.object(
+                logging_obj,
+                "_should_run_sync_callbacks_for_async_calls",
+                return_value=True,
+            ),
+        ):
+            await logging_obj.dispatch_success_handlers(result=result)
+            await logging_obj.dispatch_success_handlers(result=result)
+
+        mock_async_log.assert_awaited_once()
+        mock_sync_log.assert_not_called()
+    finally:
+        litellm._async_success_callback = original_async_callbacks
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_sync_path_invokes_callback_once_for_final_stream(
+    logging_obj,
+):
+    """Sync dispatch path must also dedupe when dispatch is called twice."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    original_success_callbacks = list(litellm.success_callback or [])
+    litellm.success_callback = [mock_callback]
+
+    result = ModelResponse(
+        id="resp-sync-dedupe",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    try:
+        logging_obj.stream = True
+        logging_obj.model_call_details["litellm_params"] = {}
+
+        with (
+            patch.object(mock_callback, "log_success_event") as mock_sync_log,
+            patch.object(
+                mock_callback, "async_log_success_event", new_callable=AsyncMock
+            ) as mock_async_log,
+            patch.object(
+                logging_obj,
+                "_success_handler_helper_fn",
+                return_value=(time.time(), time.time(), result),
+            ),
+            patch.object(
+                logging_obj,
+                "_get_assembled_streaming_response",
+                return_value=result,
+            ),
+        ):
+            await logging_obj.dispatch_success_handlers(result=result)
+            await logging_obj.dispatch_success_handlers(result=result)
+
+        mock_sync_log.assert_called_once()
+        mock_async_log.assert_not_awaited()
+    finally:
+        litellm.success_callback = original_success_callbacks
+
+
+@pytest.mark.asyncio
+async def test_dispatch_prefer_async_handlers_runs_legacy_callbacks(
+    logging_obj,
+):
+    """``prefer_async_handlers`` must not skip executor.submit for string callbacks."""
+    result = ModelResponse(
+        id="resp-prefer-async",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+    )
+
+    logging_obj.stream = True
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    with (
+        patch.object(
+            logging_obj, "async_success_handler", new_callable=AsyncMock
+        ) as mock_async,
+        patch.object(
+            logging_obj, "success_handler", new_callable=MagicMock
+        ) as mock_sync,
+        patch.object(
+            logging_obj,
+            "_should_run_sync_callbacks_for_async_calls",
+            return_value=True,
+        ),
+        patch(
+            "litellm.litellm_core_utils.litellm_logging.executor.submit"
+        ) as mock_submit,
+    ):
+        await logging_obj.dispatch_success_handlers(
+            result=result,
+            prefer_async_handlers=True,
+        )
+
+    mock_async.assert_awaited_once()
+    mock_sync.assert_not_called()
+    mock_submit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_success_handlers_invokes_async_callback_for_pass_through(
+    logging_obj,
+):
+    """Pass-through must use async_success_handler (CustomLogger skips sync success_handler)."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.types.utils import CallTypes
+
+    class MockCallback(CustomLogger):
+        pass
+
+    mock_callback = MockCallback()
+    original_async_callbacks = list(litellm._async_success_callback or [])
+    litellm._async_success_callback = [mock_callback]
+
+    logging_obj.call_type = CallTypes.pass_through.value
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+
+    try:
+        with (
+            patch.object(
+                mock_callback, "async_log_success_event", new_callable=AsyncMock
+            ) as mock_async_log,
+            patch.object(mock_callback, "log_success_event") as mock_sync_log,
+        ):
+            await logging_obj.dispatch_success_handlers(result={"id": "pt-1"})
+
+        mock_async_log.assert_awaited_once()
+        mock_sync_log.assert_not_called()
+    finally:
+        litellm._async_success_callback = original_async_callbacks
+
+
 def test_success_handler_skips_guardrail_logging_hook_when_disabled(logging_obj):
     """Ensure CustomGuardrail logging_hook is skipped when should_run_guardrail is False."""
     import datetime
@@ -1351,7 +1557,7 @@ async def test_e2e_generate_cold_storage_object_key_with_custom_logger_s3_path()
     Test that _generate_cold_storage_object_key uses s3_path from custom logger instance.
     """
     from datetime import datetime, timezone
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -1404,7 +1610,7 @@ async def test_e2e_generate_cold_storage_object_key_with_logger_no_s3_path():
     Test that _generate_cold_storage_object_key falls back to empty s3_path when logger has no s3_path.
     """
     from datetime import datetime, timezone
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -2076,6 +2282,146 @@ async def test_async_success_handler_preserves_response_cost_for_pass_through_en
     slo = logging_obj.model_call_details.get("standard_logging_object")
     assert slo is not None
     assert slo["response_cost"] > 0
+
+
+def test_process_hidden_params_recalculates_cost_after_failure_handler_zero():
+    """
+    Regression: PR #21844 preserved response_cost=0 set by failure_handler on failed
+    router retry attempts, so a later successful response with usage logged $0 spend.
+    """
+    from datetime import datetime
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-retry-zero-cost",
+        function_id="test-retry-zero-cost",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"model": "openai/gpt-4o-mini"}
+    logging_obj.optional_params = {}
+
+    err = litellm.RateLimitError(
+        message="rate limit",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+    )
+    for _ in range(2):
+        logging_obj._failure_handler_helper_fn(
+            exception=err,
+            traceback_exception="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+    assert logging_obj.model_call_details.get("response_cost") == 0
+
+    result = ModelResponse(
+        id="success",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=9698, completion_tokens=30, total_tokens=9728),
+    )
+    logging_obj._process_hidden_params_and_response_cost(
+        result, datetime.now(), datetime.now()
+    )
+
+    cost = logging_obj.model_call_details.get("response_cost")
+    assert cost is not None and cost > 0
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost", 0) > 0
+
+
+def test_process_hidden_params_preserves_zero_cost_in_hidden_params():
+    """Pass-through handlers often set response_cost on result._hidden_params (including 0)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="gemini-2.5-flash-lite",
+        messages=[{"role": "user", "content": "test"}],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id="test-hidden-zero-cost",
+        function_id="test-hidden-zero-cost",
+    )
+    logging_obj.model_call_details["litellm_params"] = {
+        "model": "gemini-2.5-flash-lite"
+    }
+    logging_obj.optional_params = {}
+
+    result = ModelResponse(
+        id="batch-pending",
+        choices=[{"message": {"role": "assistant", "content": "pending"}}],
+        usage=Usage(prompt_tokens=100, completion_tokens=10, total_tokens=110),
+    )
+    result._hidden_params = {"response_cost": 0.0}
+
+    logging_obj._process_hidden_params_and_response_cost(
+        result, datetime.now(), datetime.now()
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") == 0.0
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost") == 0.0
+
+
+def test_process_hidden_params_uses_hidden_params_cost_after_failure_handler_zero():
+    """After retry failures pin model_call_details to 0, success cost on _hidden_params wins."""
+    from datetime import datetime
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.utils import ModelResponse, Usage
+
+    logging_obj = LiteLLMLoggingObj(
+        model="openai/gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="test-retry-hidden-cost",
+        function_id="test-retry-hidden-cost",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"model": "openai/gpt-4o-mini"}
+    logging_obj.optional_params = {}
+
+    err = litellm.RateLimitError(
+        message="rate limit",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+    )
+    for _ in range(2):
+        logging_obj._failure_handler_helper_fn(
+            exception=err,
+            traceback_exception="",
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+    assert logging_obj.model_call_details.get("response_cost") == 0
+
+    passthrough_cost = 0.00042
+    result = ModelResponse(
+        id="success",
+        choices=[{"message": {"role": "assistant", "content": "ok"}}],
+        usage=Usage(prompt_tokens=9698, completion_tokens=30, total_tokens=9728),
+    )
+    result._hidden_params = {"response_cost": passthrough_cost}
+
+    logging_obj._process_hidden_params_and_response_cost(
+        result, datetime.now(), datetime.now()
+    )
+
+    assert logging_obj.model_call_details.get("response_cost") == passthrough_cost
+    slo = logging_obj.model_call_details.get("standard_logging_object") or {}
+    assert slo.get("response_cost") == passthrough_cost
 
 
 def test_function_setup_litellm_metadata_populates_metadata():

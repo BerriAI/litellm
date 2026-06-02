@@ -105,6 +105,7 @@ export interface MCPInfo {
   description?: string;
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
+  tool_allowlist_enforced?: boolean;
 }
 
 // Define the structure for a single MCP tool
@@ -163,6 +164,13 @@ export interface MCPToolsViewerProps {
   serverId: string;
   accessToken: string | null;
   auth_type?: string | null;
+  /**
+   * When set, indicates the server uses the OAuth2 M2M (client_credentials)
+   * flow — the backend handles token acquisition internally, so the UI must
+   * not gate tool listing behind an interactive PKCE authorization. Mirrors
+   * the heuristic used in `mcp_server_edit.tsx` (`token_url` set => M2M).
+   */
+  tokenUrl?: string | null;
   userRole: string | null;
   userID: string | null;
   serverAlias?: string | null;

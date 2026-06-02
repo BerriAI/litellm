@@ -80,31 +80,47 @@ class VertexSearchAPIVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
         litellm_params: dict,
     ) -> str:
         """
-        Get the Base endpoint for Vertex AI Search API
+        Get the Base endpoint for Vertex AI Search API.
+
+        Branches on whether a `vertex_engine_id` is configured:
+        - Engine ID present: route through the search app (engine) — required for website,
+          healthcare, and connector-based data stores. Note the serving config name differs
+          (`default_serving_config` vs `default_config` for direct data store search).
+        - Engine ID absent: query the data store directly via `vector_store_id`.
         """
+        if api_base:
+            return api_base.rstrip("/")
+
         vertex_location = self.get_vertex_ai_location(litellm_params)
         vertex_project = self.get_vertex_ai_project(litellm_params)
         collection_id = (
             litellm_params.get("vertex_collection_id") or "default_collection"
         )
-        datastore_id = litellm_params.get("vector_store_id")
-        if not datastore_id:
-            raise ValueError("vector_store_id is required")
-        if api_base:
-            return api_base.rstrip("/")
         encoded_collection_id = encode_url_path_segment(
             collection_id, field_name="vertex_collection_id"
         )
+        base = (
+            f"https://discoveryengine.googleapis.com/v1/"
+            f"projects/{vertex_project}/locations/{vertex_location}/"
+            f"collections/{encoded_collection_id}"
+        )
+
+        engine_id = litellm_params.get("vertex_engine_id")
+        if engine_id:
+            encoded_engine_id = encode_url_path_segment(
+                engine_id, field_name="vertex_engine_id"
+            )
+            return f"{base}/engines/{encoded_engine_id}/servingConfigs/default_serving_config"
+
+        datastore_id = litellm_params.get("vector_store_id")
+        if not datastore_id:
+            raise ValueError(
+                "vector_store_id is required when vertex_engine_id is not set"
+            )
         encoded_datastore_id = encode_url_path_segment(
             datastore_id, field_name="vector_store_id"
         )
-
-        # Vertex AI Search API endpoint for search
-        return (
-            f"https://discoveryengine.googleapis.com/v1/"
-            f"projects/{vertex_project}/locations/{vertex_location}/"
-            f"collections/{encoded_collection_id}/dataStores/{encoded_datastore_id}/servingConfigs/default_config"
-        )
+        return f"{base}/dataStores/{encoded_datastore_id}/servingConfigs/default_config"
 
     def transform_search_vector_store_request(
         self,
