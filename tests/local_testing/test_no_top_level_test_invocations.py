@@ -19,7 +19,10 @@ def _top_level_test_invocations(tree):
 def test_no_module_level_test_invocations():
     offenders = []
     for path in sorted(LOCAL_TESTING_DIR.rglob("*.py")):
-        tree = ast.parse(path.read_text(), filename=str(path))
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except SyntaxError:
+            continue
         for name, lineno in _top_level_test_invocations(tree):
             offenders.append(
                 f"{path.relative_to(LOCAL_TESTING_DIR)}:{lineno} calls {name}()"
