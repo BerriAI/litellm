@@ -84,8 +84,8 @@ class LangFlowConfig(BaseConfig):
                 ),
             )
 
-        flow_id = model.split("/", 1)[1] if "/" in model else model
-        if not flow_id.strip():
+        flow_id = (model.split("/", 1)[1] if "/" in model else model).strip()
+        if not flow_id:
             raise LangFlowError(
                 status_code=400,
                 message="flow_id is required; use model langflow/{flow_id}",

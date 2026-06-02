@@ -85,6 +85,21 @@ def test_langflow_config_rejects_empty_flow_id(model):
         )
 
 
+def test_langflow_config_strips_flow_id_whitespace():
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+    config = LangFlowConfig()
+    url = config.get_complete_url(
+        api_base="http://localhost:7860",
+        api_key=None,
+        model="langflow/  my-flow-id  ",
+        optional_params={},
+        litellm_params={},
+        stream=False,
+    )
+    assert url == "http://localhost:7860/api/v1/run/my-flow-id"
+
+
 def test_langflow_config_transform_request_includes_session_id():
     from litellm.llms.langflow.chat.transformation import LangFlowConfig
 
