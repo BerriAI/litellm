@@ -45,7 +45,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         self.ttl = int(
             os.getenv(
                 "LITELLM_SENSITIVE_ROUTING_TTL",
-                DEFAULT_SENSITIVE_ROUTING_TTL,
+                str(DEFAULT_SENSITIVE_ROUTING_TTL),
             )
         )
 
@@ -92,10 +92,13 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
                 )
                 if result is not None:
                     routed_model = str(result)
+                    remaining_ttl = await self.internal_usage_cache.dual_cache.redis_cache.async_get_ttl(
+                        key=cache_key
+                    )
                     await self.internal_usage_cache.async_set_cache(
                         key=cache_key,
                         value=routed_model,
-                        ttl=self.ttl,
+                        ttl=remaining_ttl if remaining_ttl is not None else self.ttl,
                         litellm_parent_otel_span=None,
                         local_only=True,
                     )

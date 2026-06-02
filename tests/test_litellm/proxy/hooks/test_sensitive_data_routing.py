@@ -29,6 +29,7 @@ from litellm.proxy.hooks.sensitive_data_routing import (
 class MockInternalUsageCache:
     def __init__(self):
         self._cache: Dict[str, Any] = {}
+        self._ttls: Dict[str, int] = {}
         self.dual_cache = MagicMock()
         self.dual_cache.redis_cache = None
 
@@ -37,6 +38,7 @@ class MockInternalUsageCache:
 
     async def async_set_cache(self, key: str, value: Any, ttl: int = 3600, **kwargs):
         self._cache[key] = value
+        self._ttls[key] = ttl
 
 
 class TestSensitiveDataRoutingHandler:
@@ -540,6 +542,9 @@ class TestRedisCache:
         handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
             return_value="on-premise-model"
         )
+        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_ttl = (
+            AsyncMock(return_value=120)
+        )
 
         first = await handler_with_redis._get_routed_model("session-123", key)
         assert first == "on-premise-model"
@@ -552,6 +557,41 @@ class TestRedisCache:
         )
         second = await handler_with_redis._get_routed_model("session-123", key)
         assert second == "on-premise-model"
+
+    @pytest.mark.asyncio
+    async def test_backfill_uses_remaining_redis_ttl(self, handler_with_redis):
+        cache_key = "{sensitive_route:hashed-key:session-123}:model"
+        key = UserAPIKeyAuth(api_key="hashed-key")
+        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
+            return_value="on-premise-model"
+        )
+        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_ttl = (
+            AsyncMock(return_value=42)
+        )
+
+        await handler_with_redis._get_routed_model("session-123", key)
+
+        assert handler_with_redis.internal_usage_cache._ttls[cache_key] == 42
+
+    @pytest.mark.asyncio
+    async def test_backfill_falls_back_to_full_ttl_when_redis_ttl_missing(
+        self, handler_with_redis
+    ):
+        cache_key = "{sensitive_route:hashed-key:session-123}:model"
+        key = UserAPIKeyAuth(api_key="hashed-key")
+        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
+            return_value="on-premise-model"
+        )
+        handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_ttl = (
+            AsyncMock(return_value=None)
+        )
+
+        await handler_with_redis._get_routed_model("session-123", key)
+
+        assert (
+            handler_with_redis.internal_usage_cache._ttls[cache_key]
+            == handler_with_redis.ttl
+        )
 
     @pytest.mark.asyncio
     async def test_get_routed_model_redis_fallback_on_error(self, handler_with_redis):
