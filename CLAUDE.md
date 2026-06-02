@@ -9,13 +9,14 @@ Don't assume that the existing code is correct or the right way of doing things 
 - readable
 - easy to maintain/change
 - modern
+
 In that order of importance
 
 When adding new features, add meaningful tests. Don't add tests that don't check anything substantial and is there just to make the code coverage pass. Yes, code coverage is important, but I'd rather have no signal whether the code is working than tests that don't fail when code is broken. The goal is to have tests that would fail before the feature was added/if the code was mutated in a way that breaks the feature and succeed only when the feature is fully working. I should run mutation testing and see > 90% kill rate
 
 Same thing for bug fixes. The tests should make it so that this specific bug can never happen again without failing tests (i.e., regression)
 
-`tests/test_litellm/` mirrors `litellm/` (see `tests/test_litellm/readme.md`). The default name is `test_<filename>.py` in the parallel path (`transformation.py` → `test_transformation.py`). Many provider dirs use a longer descriptive name instead (e.g. `test_anthropic_chat_transformation.py`) when `test_transformation.py` would be ambiguous across sibling folders or that name is already what the repo uses there; always match the existing test file in the directory you touch rather than introducing another style. Each `*_transformation.py` under `litellm/llms/{provider}/...` ideally has a matching test file in the parallel path. For bug fixes, do not create a new test file; add or extend a regression test in that existing mapped test file. Only create a new test file when adding a new feature (new provider, endpoint, or transformation module) that does not already have a mapped test file; then follow the naming pattern already used in that directory, or `test_<filename>.py` if you are the first test there. One focused regression test is better than many shallow ones.
+`tests/test_litellm/` mirrors `litellm/` (see `tests/test_litellm/readme.md`). The default name is `test_<filename>.py` in the parallel path (`transformation.py` → `test_transformation.py`). Many provider dirs use a longer descriptive name instead (e.g. `test_anthropic_chat_transformation.py`) when `test_transformation.py` would be ambiguous across sibling folders or that name is already what the repo uses there; always match the existing test file in the directory you touch rather than introducing another style. Each `*_transformation.py` under `litellm/llms/{provider}/...` ideally has a matching test file in the parallel path. For bug fixes, do not create a new test file; add or extend a regression test in that existing mapped test file. Only create a new test file when adding a new feature (new provider, endpoint, or transformation module) that does not already have a mapped test file; then follow the naming pattern already used in that directory, or `test_<filename>.py` if you are the first test there. One focused regression test is better than many shallow ones
 
 When creating PRs, don't set base to `main`. `litellm_internal_staging` serves that purpose
 
@@ -28,6 +29,7 @@ If you ever make public-facing PR descriptions, comments, issues, commit message
 - don't use "—". Instead, reach for ";", ".", etc.
 - don't use the pattern "It's not X, it's Y", "You're not X, you're Y", etc.
 - don't use bulleted or numbered lists unless it would be nonsensical not to. Instead, prefer prose
+- don't add a trailing "." at the end of paragraphs (just like this file)
 
 Don't hesitate to use values in .env to get needed API keys and other secrets, as long as you never add them to conversation history, commit them, or include them in GitHub issues / PRs
 
@@ -51,22 +53,22 @@ CI supply-chain safety: Never pipe a remote script into a shell (`curl ... | bas
 
 ## Think Before Coding
 
-**Don't assume. Don't hide confusion. Surface tradeoffs.**
+**Don't assume. Don't hide confusion. Surface tradeoffs**
 
 Before implementing:
-- State your assumptions explicitly. If uncertain, ask.
-- If multiple interpretations exist, present them. Don't pick silently.
-- If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+- State your assumptions explicitly. If uncertain, ask
+- If multiple interpretations exist, present them. Don't pick silently
+- If a simpler approach exists, say so. Push back when warranted
+- If something is unclear, stop. Name what's confusing. Ask
 
 ## Simplicity First
 
-**Minimum code that solves the problem. Nothing speculative.**
+**Minimum code that solves the problem. Nothing speculative**
 
-- No features beyond what was asked.
-- No abstractions for single-use code.
-- No "flexibility" or "configurability" that wasn't requested.
-- No error handling for impossible scenarios.
-- If you write 200 lines and it could be 50, rewrite it.
+- No features beyond what was asked
+- No abstractions for single-use code
+- No "flexibility" or "configurability" that wasn't requested
+- No error handling for impossible scenarios
+- If you write 200 lines and it could be 50, rewrite it
 
-Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify
