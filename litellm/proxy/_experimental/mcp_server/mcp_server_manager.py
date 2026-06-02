@@ -2785,6 +2785,9 @@ class MCPServerManager:
             "name": name,
             "arguments": arguments,
             "server_name": server_name,
+            "mcp_rate_limit_server_name": server.alias
+            or server.server_name
+            or server.name,
             "user_api_key_auth": user_api_key_auth,
             "user_api_key_user_id": (
                 getattr(user_api_key_auth, "user_id", None)
