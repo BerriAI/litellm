@@ -195,7 +195,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller
     )
 
     # Verify both counter and window values are stored in cache
-    window_key = f"{{api_key:{_api_key}}}:window"
+    window_key = f"{{api_key:{_api_key}}}:window:requests"
     counter_key = f"{{api_key:{_api_key}}}:requests"
 
     window_value = await local_cache.async_get_cache(key=window_key)
