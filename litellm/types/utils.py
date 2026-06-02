@@ -3295,6 +3295,7 @@ class LlmProviders(str, Enum):
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
     HUNYUAN = "hunyuan"
+    HUNYUAN_GPT_MAAS = "hunyuan_gpt_maas"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
