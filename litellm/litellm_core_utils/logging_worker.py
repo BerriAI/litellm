@@ -490,9 +490,10 @@ class LoggingWorker:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         previous_raise_exceptions = logging.raiseExceptions
-        logging.raiseExceptions = False
 
         try:
+            logging.raiseExceptions = False
+
             # Process remaining queue items with time limit
             processed = 0
             start_time = loop.time()

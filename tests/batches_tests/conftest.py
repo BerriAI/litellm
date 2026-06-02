@@ -101,7 +101,7 @@ def _copy_litellm_state():
     for attr in _CALLBACK_ATTRS:
         if hasattr(litellm, attr):
             value = getattr(litellm, attr)
-            state[attr] = value.copy() if value else []
+            state[attr] = value.copy() if isinstance(value, list) else value
     for attr in _SCALAR_ATTRS:
         if hasattr(litellm, attr):
             state[attr] = getattr(litellm, attr)

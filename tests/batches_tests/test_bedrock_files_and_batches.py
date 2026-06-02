@@ -96,7 +96,8 @@ class _CaptureAsyncHTTPHandler(AsyncHTTPHandler):
                 "content": content,
             }
         )
-        payload = json if json is not None else json_module.loads(data)
+        raw = json if json is not None else (data if data is not None else content)
+        payload = raw if isinstance(raw, dict) else json_module.loads(raw)
         job_name = payload["jobName"]
         job_arn = f"arn:aws:bedrock:us-west-2:941277531214:model-invocation-job/{job_name}"
         self.batch_jobs[job_arn] = {
