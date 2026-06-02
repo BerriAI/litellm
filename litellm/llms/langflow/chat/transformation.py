@@ -84,9 +84,13 @@ class LangFlowConfig(BaseConfig):
                 ),
             )
 
-        if "/" in model:
-            return model.split("/", 1)[1]
-        return model
+        flow_id = model.split("/", 1)[1] if "/" in model else model
+        if not flow_id.strip():
+            raise LangFlowError(
+                status_code=400,
+                message="flow_id is required; use model langflow/{flow_id}",
+            )
+        return flow_id
 
     def get_complete_url(
         self,

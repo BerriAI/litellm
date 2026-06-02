@@ -69,6 +69,22 @@ def test_langflow_config_flow_id_is_path_segment_encoded():
     assert url.rsplit("/api/v1/run/", 1)[1] not in ("..", "../..")
 
 
+@pytest.mark.parametrize("model", ["langflow/", "langflow/   "])
+def test_langflow_config_rejects_empty_flow_id(model):
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
+
+    config = LangFlowConfig()
+    with pytest.raises(LangFlowError):
+        config.get_complete_url(
+            api_base="http://localhost:7860",
+            api_key=None,
+            model=model,
+            optional_params={},
+            litellm_params={},
+            stream=False,
+        )
+
+
 def test_langflow_config_transform_request_includes_session_id():
     from litellm.llms.langflow.chat.transformation import LangFlowConfig
 
