@@ -170,6 +170,40 @@ class TestHunyuanImageGenerationConfig:
         with pytest.raises(ValueError, match="failed"):
             self.cfg._check_task_status({"status": "FAIL", "message": "error"})
 
+    def test_transform_image_generation_request_default_extra_body(self):
+        """When no extra_body in optional_params, logo_add=0 is injected inside extra_body."""
+        body = self.cfg.transform_image_generation_request(
+            model="gpt-image-2",
+            prompt="A dancing dog",
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assert body["extra_body"] == {"logo_add": 0}
+
+    def test_transform_image_generation_request_extra_body_preserves_logo_add(self):
+        """When extra_body already contains logo_add, it is not overwritten."""
+        body = self.cfg.transform_image_generation_request(
+            model="gpt-image-2",
+            prompt="A dancing dog",
+            optional_params={"extra_body": {"logo_add": 1}},
+            litellm_params={},
+            headers={},
+        )
+        assert body["extra_body"]["logo_add"] == 1
+
+    def test_transform_image_generation_request_extra_body_adds_default_logo_add(self):
+        """When extra_body exists but lacks logo_add, logo_add=0 is added."""
+        body = self.cfg.transform_image_generation_request(
+            model="gpt-image-2",
+            prompt="A dancing dog",
+            optional_params={"extra_body": {"seed": 42}},
+            litellm_params={},
+            headers={},
+        )
+        assert body["extra_body"]["seed"] == 42
+        assert body["extra_body"]["logo_add"] == 0
+
 
 # ---------------------------------------------------------------------------
 # HunyuanImageGeneration handler
@@ -453,7 +487,7 @@ class TestHunyuanImageGenerationPostCall:
 
 
 class TestHunyuanImageGenerationLitellmParams:
-    """Verify provider-specific params in litellm_params.extra are merged into the request body."""
+    """Verify extra_body params are forwarded correctly to the Hunyuan API."""
 
     def _make_mock_client(self, job_id: str = "job-extra") -> MagicMock:
         submit_resp = MagicMock()
@@ -476,8 +510,8 @@ class TestHunyuanImageGenerationLitellmParams:
         client.post.side_effect = [submit_resp, poll_resp]
         return client
 
-    def test_litellm_params_extra_appends_new_params(self):
-        """Keys in litellm_params.extra are appended to the request body."""
+    def test_logo_add_default_is_zero_in_extra_body(self):
+        """logo_add=0 is injected inside extra_body when not provided."""
         handler = HunyuanImageGeneration()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -489,88 +523,7 @@ class TestHunyuanImageGenerationLitellmParams:
         ):
             handler.image_generation(
                 model="gpt-image-2",
-                prompt="test",
-                model_response=ImageResponse(),
-                optional_params={},
-                litellm_params={
-                    "api_key": "sk-test",
-                    "extra": {"seed": 42, "guidance_scale": 7.5},
-                },
-                logging_obj=mock_logging,
-                timeout=30.0,
-            )
-
-        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
-        assert submit_call_body["seed"] == 42
-        assert submit_call_body["guidance_scale"] == 7.5
-
-    def test_litellm_params_extra_overwrites_existing_params(self):
-        """Keys in litellm_params.extra overwrite keys already in the request body."""
-        handler = HunyuanImageGeneration()
-        mock_client = self._make_mock_client()
-        mock_logging = MagicMock()
-
-        os.environ["HUNYUAN_API_KEY"] = "sk-test"
-        with patch(
-            "litellm.llms.hunyuan.image_generation.handler._get_httpx_client",
-            return_value=mock_client,
-        ):
-            handler.image_generation(
-                model="gpt-image-2",
-                prompt="original prompt",
-                model_response=ImageResponse(),
-                optional_params={"size": "1024x1024"},
-                litellm_params={
-                    "api_key": "sk-test",
-                    "extra": {"size": "512x512", "custom_param": "value"},
-                },
-                logging_obj=mock_logging,
-                timeout=30.0,
-            )
-
-        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
-        assert submit_call_body["size"] == "512x512"
-        assert submit_call_body["custom_param"] == "value"
-
-    def test_no_extra_key_does_not_affect_request(self):
-        """When litellm_params has no 'extra' key, the request body is unchanged."""
-        handler = HunyuanImageGeneration()
-        mock_client = self._make_mock_client()
-        mock_logging = MagicMock()
-
-        os.environ["HUNYUAN_API_KEY"] = "sk-test"
-        with patch(
-            "litellm.llms.hunyuan.image_generation.handler._get_httpx_client",
-            return_value=mock_client,
-        ):
-            handler.image_generation(
-                model="gpt-image-2",
-                prompt="test",
-                model_response=ImageResponse(),
-                optional_params={"quality": "high"},
-                litellm_params={"api_key": "sk-test"},
-                logging_obj=mock_logging,
-                timeout=30.0,
-            )
-
-        submit_call_body = mock_client.post.call_args_list[0][1]["json"]
-        assert submit_call_body["quality"] == "high"
-        assert "extra" not in submit_call_body
-
-    def test_logo_add_default_is_zero(self):
-        """logo_add is set to 0 by default when not provided."""
-        handler = HunyuanImageGeneration()
-        mock_client = self._make_mock_client()
-        mock_logging = MagicMock()
-
-        os.environ["HUNYUAN_API_KEY"] = "sk-test"
-        with patch(
-            "litellm.llms.hunyuan.image_generation.handler._get_httpx_client",
-            return_value=mock_client,
-        ):
-            handler.image_generation(
-                model="gpt-image-2",
-                prompt="test",
+                prompt="一只跳舞的小狗",
                 model_response=ImageResponse(),
                 optional_params={},
                 litellm_params={"api_key": "sk-test"},
@@ -579,10 +532,10 @@ class TestHunyuanImageGenerationLitellmParams:
             )
 
         submit_call_body = mock_client.post.call_args_list[0][1]["json"]
-        assert submit_call_body["logo_add"] == 0
+        assert submit_call_body["extra_body"]["logo_add"] == 0
 
-    def test_logo_add_overridable_via_extra(self):
-        """logo_add default can be overridden via litellm_params.extra."""
+    def test_logo_add_overridable_via_extra_body(self):
+        """logo_add default can be overridden by passing extra_body in optional_params."""
         handler = HunyuanImageGeneration()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -594,19 +547,19 @@ class TestHunyuanImageGenerationLitellmParams:
         ):
             handler.image_generation(
                 model="gpt-image-2",
-                prompt="test",
+                prompt="一只跳舞的小狗",
                 model_response=ImageResponse(),
-                optional_params={},
-                litellm_params={"api_key": "sk-test", "extra": {"logo_add": 1}},
+                optional_params={"extra_body": {"logo_add": 1}},
+                litellm_params={"api_key": "sk-test"},
                 logging_obj=mock_logging,
                 timeout=30.0,
             )
 
         submit_call_body = mock_client.post.call_args_list[0][1]["json"]
-        assert submit_call_body["logo_add"] == 1
+        assert submit_call_body["extra_body"]["logo_add"] == 1
 
-    def test_multiple_provider_params_in_extra(self):
-        """Multiple Hunyuan-specific params in litellm_params.extra are all forwarded."""
+    def test_extra_body_params_forwarded(self):
+        """Provider-specific params passed in extra_body are forwarded to the API."""
         handler = HunyuanImageGeneration()
         mock_client = self._make_mock_client()
         mock_logging = MagicMock()
@@ -618,18 +571,15 @@ class TestHunyuanImageGenerationLitellmParams:
         ):
             handler.image_generation(
                 model="gpt-image-2",
-                prompt="test",
+                prompt="一只跳舞的小狗",
                 model_response=ImageResponse(),
-                optional_params={},
-                litellm_params={
-                    "api_key": "sk-test",
-                    "extra": {"seed": 123, "logo_add": 1, "revise_prompt": 0},
-                },
+                optional_params={"extra_body": {"seed": 42, "revise_prompt": 0}},
+                litellm_params={"api_key": "sk-test"},
                 logging_obj=mock_logging,
                 timeout=30.0,
             )
 
         submit_call_body = mock_client.post.call_args_list[0][1]["json"]
-        assert submit_call_body["seed"] == 123
-        assert submit_call_body["logo_add"] == 1
-        assert submit_call_body["revise_prompt"] == 0
+        assert submit_call_body["extra_body"]["seed"] == 42
+        assert submit_call_body["extra_body"]["revise_prompt"] == 0
+        assert submit_call_body["extra_body"]["logo_add"] == 0

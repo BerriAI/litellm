@@ -202,6 +202,13 @@ class HunyuanImageEditConfig(BaseImageEditConfig):
             elif k not in ("mask",) and v is not None:
                 request_body[k] = v
 
+        extra_body = request_body.get('extra_body')
+        if extra_body is not None:
+            if isinstance(extra_body, dict):
+                extra_body.setdefault("logo_add", 0)
+        else:
+            request_body["extra_body"] = {"logo_add": 0}
+
         return request_body, []
 
     def transform_image_edit_response(

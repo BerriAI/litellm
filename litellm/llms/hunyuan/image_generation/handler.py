@@ -28,7 +28,6 @@ from .transformation import (
     HUNYUAN_BASE_URL,
     HUNYUAN_QUERY_ENDPOINT,
     HunyuanImageGenerationConfig,
-    extract_hunyuan_extra_params,
 )
 
 HUNYUAN_POLLING_INTERVAL = 1.5  # seconds
@@ -115,10 +114,6 @@ class HunyuanImageGeneration:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
-        data.setdefault("logo_add", 0)
-        extra_params = extract_hunyuan_extra_params(litellm_params_dict)
-        if extra_params:
-            data.update(extra_params)
 
         logging_obj.pre_call(
             input=prompt,
@@ -214,10 +209,6 @@ class HunyuanImageGeneration:
             litellm_params=litellm_params_dict,
             headers=headers,
         )
-        data.setdefault("logo_add", 0)
-        extra_params = extract_hunyuan_extra_params(litellm_params_dict)
-        if extra_params:
-            data.update(extra_params)
 
         logging_obj.pre_call(
             input=prompt,

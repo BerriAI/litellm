@@ -26,11 +26,6 @@ HUNYUAN_BASE_URL = "https://api.cloudai.tencent.com"
 HUNYUAN_SUBMIT_ENDPOINT = "v1/aiart/openai/image/submit"
 HUNYUAN_QUERY_ENDPOINT = "v1/aiart/openai/image/query"
 
-def extract_hunyuan_extra_params(litellm_params: Dict) -> Dict:
-    """Return provider-specific params from litellm_params.extra."""
-    return litellm_params.get("extra") or {}
-
-
 class HunyuanImageGenerationConfig(BaseImageGenerationConfig):
     """
     Configuration for Tencent Hunyuan image generation via OpenAI-compatible API.
@@ -121,6 +116,14 @@ class HunyuanImageGenerationConfig(BaseImageGenerationConfig):
         }
         for k, v in optional_params.items():
             request_body[k] = v
+
+        extra_body = request_body.get('extra_body')
+        if extra_body is not None:
+            if isinstance(extra_body, dict):
+                extra_body.setdefault("logo_add", 0)
+        else:
+            request_body["extra_body"] = {"logo_add": 0}
+
         return request_body
 
     @staticmethod
