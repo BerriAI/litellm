@@ -12,7 +12,6 @@ emitted on both allow and block.
 """
 
 import json
-import sys
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -47,20 +46,9 @@ _COLLECT = (
 _GUARDRAIL_SPAN = "execute_guardrail block-demo"
 _TRIGGER = "BLOCKME"
 
-
-def _ensure_proxy_server_mock():
-    key = "litellm.proxy.proxy_server"
-    if key not in sys.modules:
-        mock_mod = MagicMock()
-        sys.modules[key] = mock_mod
-    import litellm.proxy
-
-    if not hasattr(litellm.proxy, "proxy_server"):
-        litellm.proxy.proxy_server = sys.modules[key]
-
-
-_ensure_proxy_server_mock()
-
+# pass_through_endpoints imports proxy_server lazily (inside the request
+# function), so importing this at module scope does not require the real
+# proxy_server and does not mutate sys.modules.
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (  # noqa: E402
     pass_through_request,
 )

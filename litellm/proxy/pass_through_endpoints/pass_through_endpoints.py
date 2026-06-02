@@ -691,15 +691,8 @@ def _carry_guardrail_logging_info(
 
     metadata = request_data.get("metadata")
     if not isinstance(metadata, dict):
-        metadata = {}
-        request_data["metadata"] = metadata
-    existing = metadata.get("standard_logging_guardrail_information")
-    if isinstance(existing, list):
-        for entry in entries:
-            if entry not in existing:
-                existing.append(entry)
-    else:
-        metadata["standard_logging_guardrail_information"] = entries
+        metadata = request_data["metadata"] = {}
+    metadata.setdefault("standard_logging_guardrail_information", list(entries))
 
 
 async def pass_through_request(  # noqa: PLR0915
