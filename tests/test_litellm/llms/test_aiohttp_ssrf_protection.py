@@ -1,13 +1,17 @@
 import asyncio
 import ipaddress
 import pytest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+import httpx
 
 import litellm
 from litellm.llms.custom_httpx.aiohttp_handler import (
     _SSRFGuardResolver,
+    _SSRFGuardTransport,
     _assert_not_private_ip_literal,
     _assert_not_private_url,
+    _get_ssrf_safe_sync_client,
     _is_blocked_address,
 )
 
@@ -261,10 +265,9 @@ class TestSSRFGuardOnRequestMethods:
             pass  # Other errors (e.g. from mock) are fine
 
     def test_make_common_sync_call_blocks_private_ip(self):
-        """Sync path still runs _assert_not_private_url preflight since httpx
-        has no connection-time resolver hook."""
-        from unittest.mock import Mock
-
+        """Sync path _assert_not_private_url preflight still blocks private IPs
+        for externally-supplied clients (defence-in-depth).  Internally created
+        clients use _SSRFGuardTransport for connect-time validation."""
         from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
 
         handler = BaseLLMAIOHTTPHandler()
@@ -282,6 +285,65 @@ class TestSSRFGuardOnRequestMethods:
                 timeout=30,
                 litellm_params={},
             )
+
+    def test_make_common_sync_call_succeeds_for_public_url(self):
+        """Sync code path still works for legitimate (public-IP) API bases after
+        introducing _SSRFGuardTransport.  Uses _get_ssrf_safe_sync_client() as the
+        internally-created client — the same path taken by BaseLLMAIOHTTPHandler
+        when no explicit client is supplied.
+
+        Verifies both that:
+        - the transport's validation passes (public IP, no block), and
+        - the request is forwarded to the pinned IP (no second DNS lookup).
+        """
+        from litellm.llms.custom_httpx.aiohttp_handler import (
+            BaseLLMAIOHTTPHandler,
+            _get_ssrf_safe_sync_client,
+        )
+
+        handler = BaseLLMAIOHTTPHandler()
+        mock_config = Mock()
+        mock_config.max_retry_on_unprocessable_entity_error = 1
+        mock_config.should_retry_llm_api_inside_llm_translation_on_http_error = Mock(
+            return_value=False
+        )
+
+        # Simulate DNS resolving to a public IP (legitimate provider)
+        public_dns = [(2, 1, 6, "", ("104.18.7.8", 443))]
+
+        # httpx.Client._send_single_request asserts isinstance(response.stream,
+        # SyncByteStream) after calling transport.handle_request, so we must
+        # return a real httpx.Response (not a plain Mock).
+        fake_response = httpx.Response(
+            status_code=200,
+            content=b'{"id": "chatcmpl-test", "choices": []}',
+            headers={"content-type": "application/json"},
+        )
+
+        ssrf_safe_client = _get_ssrf_safe_sync_client()
+        forwarded_hosts: list = []
+
+        original_handle = httpx.HTTPTransport.handle_request
+
+        def spy_handle(self_transport, request):
+            forwarded_hosts.append(request.url.host)
+            return fake_response
+
+        with patch("socket.getaddrinfo", return_value=public_dns):
+            with patch.object(httpx.HTTPTransport, "handle_request", spy_handle):
+                result = handler._make_common_sync_call(
+                    sync_httpx_client=ssrf_safe_client,
+                    provider_config=mock_config,
+                    api_base="https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": "Bearer sk-test"},
+                    data={"model": "gpt-4", "messages": []},
+                    timeout=30,
+                    litellm_params={},
+                )
+
+        assert result is fake_response
+        # Transport received the pinned IP, proving no second DNS resolution occurs
+        assert forwarded_hosts == ["104.18.7.8"]
 
 
 class TestSSRFGuardResolver:
@@ -367,3 +429,140 @@ class TestSSRFGuardResolver:
     async def test_resolver_close_is_noop(self):
         resolver = _SSRFGuardResolver()
         await resolver.close()  # Should not raise
+
+
+class TestSSRFGuardTransport:
+    """_SSRFGuardTransport eliminates DNS-rebinding TOCTOU on the sync httpx path.
+
+    It resolves the hostname, validates every returned IP, then rewrites the
+    URL to an IP literal so httpcore connects directly — no second DNS lookup.
+    """
+
+    def test_transport_blocks_hostname_resolving_to_private_ip(self):
+        """Raises when DNS returns a private IP for a hostname-based URL."""
+        transport = _SSRFGuardTransport()
+        mock_infos = [(2, 1, 6, "", ("10.0.0.1", 443))]
+        request = httpx.Request("POST", "https://evil.internal/v1/chat")
+
+        with patch("socket.getaddrinfo", return_value=mock_infos):
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(request)
+
+    def test_transport_blocks_aws_metadata_endpoint(self):
+        transport = _SSRFGuardTransport()
+        mock_infos = [(2, 1, 6, "", ("169.254.169.254", 80))]
+        request = httpx.Request("GET", "http://metadata.example.com/latest/meta-data/")
+
+        with patch("socket.getaddrinfo", return_value=mock_infos):
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(request)
+
+    def test_transport_blocks_all_dns_answers(self):
+        """Raises when ANY answer resolves to a private IP (A-record rotation)."""
+        transport = _SSRFGuardTransport()
+        mock_infos = [
+            (2, 1, 6, "", ("104.18.7.8", 443)),    # public — passes
+            (2, 1, 6, "", ("169.254.169.254", 443)),  # private — must still block
+        ]
+        request = httpx.Request("POST", "https://rebinding.example.com/v1")
+
+        with patch("socket.getaddrinfo", return_value=mock_infos):
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(request)
+
+    def test_transport_pins_ip_and_preserves_hostname(self):
+        """Forwards request with URL rewritten to pinned IP; original hostname
+        in Host header and sni_hostname extension for TLS."""
+        transport = _SSRFGuardTransport()
+        mock_infos = [(2, 1, 6, "", ("104.18.7.8", 443))]
+        request = httpx.Request(
+            "POST",
+            "https://api.openai.com/v1/chat/completions",
+            content=b'{"model":"gpt-4"}',
+        )
+        mock_response = Mock(spec=httpx.Response)
+
+        with patch("socket.getaddrinfo", return_value=mock_infos):
+            with patch.object(
+                httpx.HTTPTransport, "handle_request", return_value=mock_response
+            ) as mock_super:
+                result = transport.handle_request(request)
+
+        assert result is mock_response
+        forwarded: httpx.Request = mock_super.call_args[0][0]
+        # URL host is the pinned IP — httpcore skips DNS, TOCTOU window closed
+        assert forwarded.url.host == "104.18.7.8"
+        # Original hostname preserved for virtual hosting
+        assert forwarded.headers.get("host") == "api.openai.com"
+        # Original hostname preserved for TLS SNI so cert validation passes
+        assert forwarded.extensions.get("sni_hostname") == "api.openai.com"
+
+    def test_transport_dns_failure_passes_through(self):
+        """DNS failure is not treated as a block — httpcore propagates the error."""
+        import socket as _socket
+
+        transport = _SSRFGuardTransport()
+        request = httpx.Request("POST", "https://nonexistent.invalid/v1")
+        mock_response = Mock(spec=httpx.Response)
+
+        with patch("socket.getaddrinfo", side_effect=_socket.gaierror("DNS fail")):
+            with patch.object(
+                httpx.HTTPTransport, "handle_request", return_value=mock_response
+            ):
+                result = transport.handle_request(request)
+
+        assert result is mock_response
+
+    def test_transport_skips_ip_literal_hosts(self):
+        """IP-literal URLs bypass hostname resolution (already validated upstream)."""
+        transport = _SSRFGuardTransport()
+        request = httpx.Request("POST", "https://104.18.7.8/v1/chat")
+        mock_response = Mock(spec=httpx.Response)
+
+        # getaddrinfo must NOT be called for an IP-literal URL
+        with patch("socket.getaddrinfo") as mock_dns:
+            with patch.object(
+                httpx.HTTPTransport, "handle_request", return_value=mock_response
+            ):
+                result = transport.handle_request(request)
+
+        mock_dns.assert_not_called()
+        assert result is mock_response
+
+    def test_transport_bypassed_when_flag_set(self):
+        """allow_requests_to_internal_ips=True disables all transport-level checks."""
+        transport = _SSRFGuardTransport()
+        mock_infos = [(2, 1, 6, "", ("10.0.0.1", 443))]
+        request = httpx.Request("POST", "https://internal.corp/v1/chat")
+        mock_response = Mock(spec=httpx.Response)
+
+        litellm.allow_requests_to_internal_ips = True
+        try:
+            with patch("socket.getaddrinfo", return_value=mock_infos):
+                with patch.object(
+                    httpx.HTTPTransport, "handle_request", return_value=mock_response
+                ):
+                    result = transport.handle_request(request)
+            assert result is mock_response
+        finally:
+            litellm.allow_requests_to_internal_ips = False
+
+    def test_get_ssrf_safe_sync_client_uses_guard_transport(self):
+        """_get_ssrf_safe_sync_client() produces an HTTPHandler backed by
+        _SSRFGuardTransport so the sync code path gets connect-time validation."""
+        from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+        handler = _get_ssrf_safe_sync_client()
+        assert isinstance(handler, HTTPHandler)
+        # The underlying httpx.Client must use _SSRFGuardTransport
+        assert isinstance(handler.client._transport, _SSRFGuardTransport)
+
+    def test_ssrf_safe_client_blocks_private_ip_at_connect_time(self):
+        """End-to-end: _get_ssrf_safe_sync_client raises on a private-IP hostname
+        even when called via HTTPHandler.post(), proving the sync code path works."""
+        handler = _get_ssrf_safe_sync_client()
+        mock_infos = [(2, 1, 6, "", ("10.0.0.1", 443))]
+
+        with patch("socket.getaddrinfo", return_value=mock_infos):
+            with pytest.raises(ValueError, match="private/reserved"):
+                handler.post("https://evil.internal/v1/chat", json={"test": True})

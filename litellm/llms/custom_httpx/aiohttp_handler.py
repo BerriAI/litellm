@@ -20,7 +20,6 @@ from litellm.llms.base_llm.image_variations.transformation import (
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
 )
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.types.llms.openai import FileTypes
@@ -61,7 +60,11 @@ def _assert_not_private_url(url: str) -> None:
     """Raise ValueError if url resolves to any private/reserved IP (SSRF protection).
 
     Validates all DNS answers, not just the first, to prevent A-record rotation attacks.
-    Used as a fast-fail guard on the sync path (httpx) and as defence-in-depth on async.
+
+    On the sync path this is defence-in-depth for externally-supplied httpx clients.
+    Internally-created clients use ``_SSRFGuardTransport``, which resolves, validates,
+    and pins the IP at TCP-connect time — eliminating the DNS-rebinding TOCTOU window
+    that a preflight-only check cannot close.
 
     Set ``litellm.allow_requests_to_internal_ips = True`` to disable this check
     for self-hosted / on-prem deployments where api_base is an internal address.
@@ -161,6 +164,92 @@ class _SSRFGuardResolver(AbstractResolver):
 
     async def close(self) -> None:
         pass
+
+
+class _SSRFGuardTransport(httpx.HTTPTransport):
+    """Sync httpx transport that eliminates the DNS-rebinding TOCTOU gap.
+
+    Mirrors ``_SSRFGuardResolver`` on the async path: resolves the hostname
+    once, validates every returned IP, then pins the TCP connection to the
+    first safe address by rewriting the request URL to an IP literal.
+    httpcore skips DNS for IP-literal hosts, so the second resolution that
+    creates the TOCTOU window never occurs.
+
+    The original hostname is preserved in the ``Host`` header and the
+    ``sni_hostname`` extension so that TLS certificate validation and
+    virtual-host routing are unaffected.
+
+    Set ``litellm.allow_requests_to_internal_ips = True`` to disable all
+    SSRF checking.
+    """
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:  # type: ignore[override]
+        if not litellm.allow_requests_to_internal_ips:
+            host = request.url.host
+            # IP-literal hosts are validated by _assert_not_private_ip_literal before
+            # the request reaches the transport; skip re-validation here.
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                # Hostname — resolve, validate all answers, then pin.
+                port = request.url.port or (
+                    443 if request.url.scheme == "https" else 80
+                )
+                try:
+                    infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+                except socket.gaierror:
+                    # DNS failed — let httpcore propagate the error naturally.
+                    return super().handle_request(request)
+
+                for info in infos:
+                    raw_ip = info[4][0]
+                    try:
+                        addr = ipaddress.ip_address(raw_ip)
+                    except ValueError:
+                        continue
+                    if _is_blocked_address(addr):
+                        raise ValueError(
+                            f"Host '{host}' resolves to a private/reserved IP "
+                            f"address ({raw_ip}) which is not allowed (SSRF protection)"
+                        )
+
+                if infos:
+                    # Rewrite the URL to the first validated IP so that httpcore
+                    # connects directly without a second DNS resolution — this closes
+                    # the TOCTOU window entirely.
+                    pinned_ip = infos[0][4][0]
+                    pinned_url = request.url.copy_with(host=pinned_ip)
+
+                    # Preserve the original hostname in the Host header (virtual
+                    # hosting) and sni_hostname extension (TLS cert validation).
+                    headers = [
+                        (k, v)
+                        for k, v in request.headers.raw
+                        if k.lower() != b"host"
+                    ]
+                    headers.append((b"host", host.encode("utf-8")))
+                    extensions = {**request.extensions, "sni_hostname": host}
+                    request = httpx.Request(
+                        method=request.method,
+                        url=pinned_url,
+                        headers=headers,
+                        content=request.stream,
+                        extensions=extensions,
+                    )
+
+        return super().handle_request(request)
+
+
+def _get_ssrf_safe_sync_client() -> HTTPHandler:
+    """Return an HTTPHandler whose transport validates and pins IPs at connect time.
+
+    Uses ``_SSRFGuardTransport`` to mirror the TOCTOU-free guarantee that
+    ``_SSRFGuardResolver`` provides on the async/aiohttp path.  All standard
+    HTTPHandler configuration (SSL, certs, default headers, timeout) is applied
+    because we inject the transport via the ``transport=`` parameter rather than
+    bypassing ``HTTPHandler.__init__``.
+    """
+    return HTTPHandler(transport=_SSRFGuardTransport())
 
 
 class BaseLLMAIOHTTPHandler:
@@ -569,7 +658,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_ssrf_safe_sync_client()
         else:
             sync_httpx_client = client
 
@@ -610,7 +699,7 @@ class BaseLLMAIOHTTPHandler:
         client: Optional[HTTPHandler] = None,
     ) -> Tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_ssrf_safe_sync_client()
         else:
             sync_httpx_client = client
         stream = True
@@ -795,7 +884,7 @@ class BaseLLMAIOHTTPHandler:
             )  # type: ignore
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = _get_ssrf_safe_sync_client()
         else:
             sync_httpx_client = client
 
