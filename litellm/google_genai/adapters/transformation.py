@@ -175,7 +175,13 @@ class GoogleGenAIStreamWrapper(AdapterCompletionStreamWrapper):
                     continue
             else:
                 # For other chunk types, yield them directly
-                if hasattr(chunk, "encode"):
+                if isinstance(chunk, (bytes, bytearray)):
+                    # Already-encoded SSE bytes: pass through unchanged.
+                    # bytes has no .encode(), so the old hasattr() check fell
+                    # through to str(chunk) -> "b'data: {...}'", corrupting the
+                    # SSE frame and breaking client-side JSON parsing.
+                    yield bytes(chunk)
+                elif isinstance(chunk, str):
                     yield chunk.encode()
                 else:
                     yield str(chunk).encode()
