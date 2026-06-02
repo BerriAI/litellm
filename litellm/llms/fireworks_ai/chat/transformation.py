@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
@@ -216,8 +217,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
         self, tools: List[OpenAIChatCompletionToolParam]
     ) -> List[OpenAIChatCompletionToolParam]:
         for tool in tools:
-            if tool.get("type") == "function":
-                tool["function"].pop("strict", None)
+            if tool.get("type") != "function":
+                continue
+            function = tool["function"]
+            function.pop("strict", None)
+            params = function.get("parameters")
+            if isinstance(params, dict):
+                unpack_legacy_defs(params)
         return tools
 
     def _transform_messages_helper(
