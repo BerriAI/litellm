@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   create-oss-agent-shin-branch:
-    if: github.repository == 'BerriAI/litellm'
+    if: github.repository == 'rayward-external/litellm'
     runs-on: ubuntu-latest
     permissions:
       contents: read
