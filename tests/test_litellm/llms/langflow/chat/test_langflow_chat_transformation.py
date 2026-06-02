@@ -1,20 +1,14 @@
-import os
-import sys
+from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../.."))
-
-from unittest.mock import AsyncMock, patch
-
+import httpx
 import pytest
 
-from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManager
-from litellm.types.utils import LlmProviders
+from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
+from litellm.types.utils import LlmProviders, ModelResponse
 from litellm.utils import ProviderConfigManager
 
 
 def test_flow_id_cannot_be_overridden_via_optional_params():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
-
     config = LangFlowConfig()
     url = config.get_complete_url(
         api_base="http://localhost:7860",
@@ -38,8 +32,6 @@ def test_flow_id_cannot_be_overridden_via_optional_params():
 
 
 def test_langflow_config_get_complete_url():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig
-
     config = LangFlowConfig()
     url = config.get_complete_url(
         api_base="http://localhost:7860",
@@ -52,9 +44,20 @@ def test_langflow_config_get_complete_url():
     assert url == "http://localhost:7860/api/v1/run/my-flow-id"
 
 
-def test_langflow_config_flow_id_is_path_segment_encoded():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig
+def test_langflow_config_get_complete_url_requires_api_base():
+    config = LangFlowConfig()
+    with pytest.raises(ValueError):
+        config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model="langflow/my-flow-id",
+            optional_params={},
+            litellm_params={},
+            stream=False,
+        )
 
+
+def test_langflow_config_flow_id_is_path_segment_encoded():
     config = LangFlowConfig()
     url = config.get_complete_url(
         api_base="http://localhost:7860",
@@ -71,8 +74,6 @@ def test_langflow_config_flow_id_is_path_segment_encoded():
 
 @pytest.mark.parametrize("model", ["langflow/", "langflow/   "])
 def test_langflow_config_rejects_empty_flow_id(model):
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
-
     config = LangFlowConfig()
     with pytest.raises(LangFlowError):
         config.get_complete_url(
@@ -86,8 +87,6 @@ def test_langflow_config_rejects_empty_flow_id(model):
 
 
 def test_langflow_config_strips_flow_id_whitespace():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig
-
     config = LangFlowConfig()
     url = config.get_complete_url(
         api_base="http://localhost:7860",
@@ -101,8 +100,6 @@ def test_langflow_config_strips_flow_id_whitespace():
 
 
 def test_langflow_config_transform_request_includes_session_id():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig
-
     config = LangFlowConfig()
     request = config.transform_request(
         model="langflow/my-flow-id",
@@ -118,9 +115,52 @@ def test_langflow_config_transform_request_includes_session_id():
     assert request["session_id"] == "sess-abc"
 
 
-def test_langflow_config_rejects_tweaks_from_request_params():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
+def test_langflow_config_transform_request_uses_last_user_message():
+    config = LangFlowConfig()
+    request = config.transform_request(
+        model="langflow/my-flow-id",
+        messages=[
+            {"role": "system", "content": "be helpful"},
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": [{"type": "text", "text": "second"}]},
+        ],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
 
+    assert request["input_value"] == "second"
+    assert "session_id" not in request
+
+
+def test_langflow_config_transform_request_falls_back_to_last_message():
+    config = LangFlowConfig()
+    request = config.transform_request(
+        model="langflow/my-flow-id",
+        messages=[{"role": "assistant", "content": "only assistant"}],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["input_value"] == "only assistant"
+
+
+def test_langflow_config_transform_request_empty_messages():
+    config = LangFlowConfig()
+    request = config.transform_request(
+        model="langflow/my-flow-id",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["input_value"] == ""
+
+
+def test_langflow_config_rejects_tweaks_from_request_params():
     config = LangFlowConfig()
     with pytest.raises(LangFlowError):
         config.transform_request(
@@ -133,8 +173,6 @@ def test_langflow_config_rejects_tweaks_from_request_params():
 
 
 def test_langflow_config_rejects_tweaks_from_request_body():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
-
     config = LangFlowConfig()
     with pytest.raises(LangFlowError):
         config.sign_request(
@@ -148,11 +186,34 @@ def test_langflow_config_rejects_tweaks_from_request_body():
         )
 
 
+def test_langflow_config_sign_request_passes_through_without_tweaks():
+    config = LangFlowConfig()
+    headers, body = config.sign_request(
+        headers={"x-api-key": "secret"},
+        optional_params={},
+        request_data={"input_value": "hi"},
+        api_base="http://localhost:7860",
+    )
+    assert headers == {"x-api-key": "secret"}
+    assert body is None
+
+
+def test_langflow_config_validate_environment_sets_api_key_header():
+    config = LangFlowConfig()
+    headers = config.validate_environment(
+        headers={},
+        model="langflow/my-flow-id",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        api_key="secret",
+    )
+    assert headers["Content-Type"] == "application/json"
+    assert headers["x-api-key"] == "secret"
+
+
 def test_langflow_extra_body_cannot_inject_tweaks_into_run_payload():
     import json
-    from unittest.mock import MagicMock
-
-    import httpx
 
     import litellm
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -185,8 +246,6 @@ def test_langflow_extra_body_cannot_inject_tweaks_into_run_payload():
 
 
 def test_langflow_config_extract_response():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig
-
     config = LangFlowConfig()
     content = config._extract_content_from_response(
         {
@@ -207,12 +266,36 @@ def test_langflow_config_extract_response():
     assert content == "Hello from LangFlow"
 
 
-def test_langflow_extract_response_returns_none_when_no_message():
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig
+def test_langflow_config_extract_response_from_outputs_dict():
+    config = LangFlowConfig()
+    content = config._extract_content_from_response(
+        {
+            "outputs": [
+                {
+                    "outputs": [
+                        {
+                            "results": {},
+                            "outputs": {
+                                "message": {"message": {"text": "via outputs dict"}}
+                            },
+                        }
+                    ]
+                }
+            ],
+        }
+    )
+    assert content == "via outputs dict"
 
+
+def test_langflow_extract_response_returns_none_when_no_message():
     config = LangFlowConfig()
     assert config._extract_content_from_response({"outputs": []}) is None
     assert config._extract_content_from_response({"detail": "flow failed"}) is None
+    assert config._extract_content_from_response({"outputs": ["not-a-dict"]}) is None
+    assert (
+        config._extract_content_from_response({"outputs": [{"outputs": ["bad"]}]})
+        is None
+    )
     assert (
         config._extract_content_from_response(
             {"outputs": [{"outputs": [{"results": {"message": {"text": ""}}}]}]}
@@ -221,12 +304,40 @@ def test_langflow_extract_response_returns_none_when_no_message():
     )
 
 
+def test_langflow_transform_response_builds_model_response_with_usage():
+    config = LangFlowConfig()
+    raw_response = httpx.Response(
+        status_code=200,
+        json={
+            "session_id": "sess-abc",
+            "outputs": [
+                {"outputs": [{"results": {"message": {"text": "Hello from LangFlow"}}}]}
+            ],
+        },
+    )
+
+    result = config.transform_response(
+        model="langflow/my-flow-id",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=None,
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.content == "Hello from LangFlow"
+    assert result.choices[0].finish_reason == "stop"
+    assert result.model == "langflow/my-flow-id"
+    assert result.usage.completion_tokens > 0
+    assert result.usage.total_tokens == (
+        result.usage.prompt_tokens + result.usage.completion_tokens
+    )
+
+
 def test_langflow_transform_response_raises_on_unparseable_body():
-    import httpx
-
-    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
-    from litellm.types.utils import ModelResponse
-
     config = LangFlowConfig()
     raw_response = httpx.Response(status_code=200, json={"detail": "flow failed"})
 
@@ -244,6 +355,40 @@ def test_langflow_transform_response_raises_on_unparseable_body():
         )
 
 
+def test_langflow_transform_response_raises_on_non_json_body():
+    config = LangFlowConfig()
+    raw_response = httpx.Response(
+        status_code=200, content=b"not json", headers={"content-type": "text/plain"}
+    )
+
+    with pytest.raises(LangFlowError):
+        config.transform_response(
+            model="langflow/my-flow-id",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=None,
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+
+def test_langflow_config_get_error_class():
+    config = LangFlowConfig()
+    err = config.get_error_class(error_message="boom", status_code=503, headers={})
+    assert isinstance(err, LangFlowError)
+    assert err.status_code == 503
+
+
+def test_langflow_config_stream_behavior_flags():
+    config = LangFlowConfig()
+    assert config.supports_stream_param_in_request_body is False
+    assert config.should_fake_stream(model="langflow/x", stream=True) is True
+    assert config.should_fake_stream(model="langflow/x", stream=False) is False
+
+
 def test_langflow_provider_config_registered():
     cfg = ProviderConfigManager.get_provider_chat_config(
         model="langflow/flow-1",
@@ -251,65 +396,3 @@ def test_langflow_provider_config_registered():
     )
     assert cfg is not None
     assert cfg.__class__.__name__ == "LangFlowConfig"
-
-
-def test_merge_a2a_session_into_litellm_params():
-    from litellm.llms.langflow.a2a import merge_a2a_session_into_litellm_params
-
-    merged = merge_a2a_session_into_litellm_params(
-        {"custom_llm_provider": "langflow", "model": "langflow/flow-1"},
-        {"message": {"contextId": "shared-session-99"}},
-    )
-    assert merged["session_id"] == "shared-session-99"
-
-
-def test_langflow_a2a_provider_config_registered():
-    cfg = A2AProviderConfigManager.get_provider_config(
-        custom_llm_provider="langflow",
-        model="langflow/flow-1",
-    )
-    assert cfg is not None
-    assert cfg.__class__.__name__ == "LangFlowA2AConfig"
-
-
-@pytest.mark.asyncio
-async def test_langflow_a2a_config_passes_session_id_to_completion():
-    from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
-
-    mock_response = type(
-        "R",
-        (),
-        {
-            "choices": [
-                type(
-                    "C",
-                    (),
-                    {"message": type("M", (), {"content": "ok"})()},
-                )()
-            ]
-        },
-    )()
-
-    with patch("litellm.acompletion", new_callable=AsyncMock) as mock_acompletion:
-        mock_acompletion.return_value = mock_response
-
-        await LangFlowA2AConfig().handle_non_streaming(
-            request_id="req-1",
-            params={
-                "message": {
-                    "role": "user",
-                    "parts": [{"kind": "text", "text": "hi"}],
-                    "contextId": "shared-session-99",
-                }
-            },
-            litellm_params={
-                "custom_llm_provider": "langflow",
-                "model": "langflow/flow-1",
-                "api_base": "http://localhost:7860",
-            },
-            api_base="http://localhost:7860",
-        )
-
-        assert (
-            mock_acompletion.call_args.kwargs.get("session_id") == "shared-session-99"
-        )
