@@ -945,10 +945,16 @@ if MCP_AVAILABLE:
         Returns:
             Filtered list of tools
         """
+        from litellm.proxy._experimental.mcp_server.utils import (
+            server_applies_tool_allowlist,
+        )
+
         tools_to_return = tools
 
         # Filter by allowed_tools (whitelist)
-        if mcp_server.allowed_tools:
+        if server_applies_tool_allowlist(mcp_server):
+            if not mcp_server.allowed_tools:
+                return []
             tools_to_return = [
                 tool
                 for tool in tools

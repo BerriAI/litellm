@@ -4184,6 +4184,85 @@ def test_filter_tools_by_allowed_tools_no_filter():
     assert len(filtered_tools) == 2
 
 
+def test_filter_tools_enforced_empty_allowlist_blocks_all():
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        filter_tools_by_allowed_tools,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    tools = [
+        Tool(
+            name="read_wiki_structure",
+            title=None,
+            description="",
+            inputSchema={"type": "object"},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+    server = MCPServer(
+        server_id="deepwiki",
+        name="deepwiki",
+        transport=MCPTransport.http,
+        allowed_tools=[],
+        mcp_info={"tool_allowlist_enforced": True},
+    )
+
+    assert filter_tools_by_allowed_tools(tools, server) == []
+
+
+def test_filter_tools_legacy_empty_allowlist_allows_all():
+    from mcp.types import Tool
+
+    from litellm.proxy._experimental.mcp_server.server import (
+        filter_tools_by_allowed_tools,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    tools = [
+        Tool(
+            name="read_wiki_structure",
+            title=None,
+            description="",
+            inputSchema={"type": "object"},
+            outputSchema=None,
+            annotations=None,
+        ),
+    ]
+    server = MCPServer(
+        server_id="legacy",
+        name="legacy",
+        transport=MCPTransport.http,
+        allowed_tools=[],
+        mcp_info=None,
+    )
+
+    assert len(filter_tools_by_allowed_tools(tools, server)) == 1
+
+
+def test_check_allowed_or_banned_tools_enforced_empty_denies_calls():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager.__new__(MCPServerManager)
+    server = MCPServer(
+        server_id="deepwiki",
+        name="deepwiki",
+        transport=MCPTransport.http,
+        allowed_tools=[],
+        mcp_info={"tool_allowlist_enforced": True},
+    )
+
+    assert manager.check_allowed_or_banned_tools("read_wiki_structure", server) is False
+
+
 @pytest.mark.asyncio
 async def test_get_tools_from_mcp_servers_injects_stored_oauth2_token():
     """
@@ -4540,9 +4619,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
                     server
                 )
-                assert create.await_count == 1, (
-                    "Second probe within cooldown must not reconnect to upstream"
-                )
+                assert (
+                    create.await_count == 1
+                ), "Second probe within cooldown must not reconnect to upstream"
                 assert (
                     "empty-server"
                     not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id
@@ -4567,7 +4646,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
 
         server = _make_instruction_server(server_id="boom-server", instructions=None)
         fake_client = MagicMock()
-        fake_client.run_with_session = AsyncMock(side_effect=RuntimeError("upstream down"))
+        fake_client.run_with_session = AsyncMock(
+            side_effect=RuntimeError("upstream down")
+        )
         fake_client._last_initialize_instructions = None
 
         create = AsyncMock(return_value=fake_client)
@@ -4579,9 +4660,9 @@ class TestEnsureUpstreamInitializeInstructionsCached:
                 await global_mcp_server_manager._ensure_upstream_initialize_instructions_cached(
                     server
                 )
-                assert create.await_count == 1, (
-                    "Second probe within cooldown must not reconnect after failure"
-                )
+                assert (
+                    create.await_count == 1
+                ), "Second probe within cooldown must not reconnect after failure"
                 assert (
                     "boom-server"
                     not in global_mcp_server_manager._upstream_initialize_instructions_by_server_id

@@ -365,10 +365,9 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
         )
 
-        # Filter tools based on allowed_tools configuration
-        # Only filter if allowed_tools is explicitly configured (not None and not empty)
-        if server.allowed_tools is not None and len(server.allowed_tools) > 0:
-            tools = filter_tools_by_allowed_tools(tools, server)
+        # Always apply allowed_tools/disallowed_tools so the blacklist is
+        # enforced even when no allowlist is set (matches the SSE/HTTP path).
+        tools = filter_tools_by_allowed_tools(tools, server)
 
         # Filter tools based on user_api_key_auth.object_permission.mcp_tool_permissions
         # This provides per-key/team/org control over which tools can be accessed
