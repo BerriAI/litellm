@@ -353,6 +353,7 @@ class TestProxyInitializationHelpers:
         # Execute and Assert
         assert ProxyInitializationHelpers._is_port_in_use(8000) is False
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_get_loop_type(self):
         with patch("sys.platform", "win32"):
             assert ProxyInitializationHelpers._get_loop_type() is None
