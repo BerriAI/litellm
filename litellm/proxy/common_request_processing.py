@@ -1948,7 +1948,11 @@ class ProxyBaseLLMRequestProcessing:
         # the upstream API response. Use it to return the correct HTTP code
         # instead of defaulting to 500.
         _exc_status_code = getattr(e, "status_code", None)
-        if _exc_status_code is not None and isinstance(_exc_status_code, int) and 100 <= _exc_status_code <= 599:
+        if (
+            _exc_status_code is not None
+            and isinstance(_exc_status_code, int)
+            and 100 <= _exc_status_code <= 599
+        ):
             raise ProxyException(
                 message=getattr(e, "message", error_msg),
                 type=getattr(e, "type", "None"),
