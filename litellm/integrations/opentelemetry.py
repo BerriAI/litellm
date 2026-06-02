@@ -3287,6 +3287,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             value=int(status_code),
         )
 
+    def record_error_attributes_on_span(
+        self,
+        span: Optional[Span],
+        exception: Optional[Exception],
+        status_code: int,
+    ) -> None:
+        """Stamp structured ``error.*`` attributes on the SERVER span from the
+        exception returned to the client, with ``error.code`` pinned to the real
+        response status. Idempotent (overwrites); emits no exception event."""
+        if span is None or exception is None:
+            return
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=exception
+        )
+        error_information["error_code"] = str(status_code)
+        self._record_exception_on_span(
+            span=span,
+            kwargs={
+                "standard_logging_object": {"error_information": error_information}
+            },
+        )
+
     def set_preprocessing_duration_attribute(
         self, span: Optional[Span], container: Any
     ) -> None:

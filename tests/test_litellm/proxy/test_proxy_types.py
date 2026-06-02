@@ -87,3 +87,22 @@ def test_user_api_key_auth_hashes_authorization_header_form_of_key():
         assert from_header.api_key == baseline.api_key
         assert from_header.token == baseline.token
         assert not from_header.api_key.lower().startswith("bearer")
+
+
+def test_proxy_exception_str_returns_message():
+    """ProxyException must stringify to its message: OTEL's
+    ``span.record_exception`` and ``str(exc)``-based logging read the string
+    form, which was empty pre-fix. The OpenAI-mapped fields must stay intact."""
+    from litellm.proxy._types import ProxyException
+
+    msg = "Authentication Error, Invalid proxy server token passed."
+    exc = ProxyException(message=msg, type="auth_error", param="key", code=401)
+
+    assert str(exc) == msg
+    assert exc.message == msg
+    assert exc.to_dict() == {
+        "message": msg,
+        "type": "auth_error",
+        "param": "key",
+        "code": "401",
+    }
