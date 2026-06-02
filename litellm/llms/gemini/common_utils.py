@@ -193,11 +193,13 @@ def get_gemini_image_generation_config(
     if image_config:
         generation_config["imageConfig"] = image_config
 
-    candidate_count = (
-        optional_params.get("candidateCount")
-        or optional_params.get("candidate_count")
-        or optional_params.get("sampleCount")
-        or optional_params.get("n")
+    candidate_count = next(
+        (
+            optional_params[key]
+            for key in ("candidateCount", "candidate_count", "sampleCount", "n")
+            if optional_params.get(key) is not None
+        ),
+        None,
     )
     if candidate_count is not None:
         generation_config["candidateCount"] = candidate_count
