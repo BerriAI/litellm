@@ -264,7 +264,9 @@ class CustomGuardrail(CustomLogger):
         Handle sensitive data detection based on guardrail configuration.
 
         If on_sensitive_data='route', raises SensitiveDataRouteException to reroute.
-        Otherwise, raises GuardrailRaisedException to block.
+        Otherwise, raises GuardrailRaisedException to block. When routing is
+        configured but the request carries no session_id, routing is not possible
+        so the request falls back to a graceful block.
 
         Args:
             request_data: The request data dictionary
@@ -273,15 +275,25 @@ class CustomGuardrail(CustomLogger):
                 the raw detected sensitive values.
 
         Raises:
-            SensitiveDataRouteException: When configured to route
-            GuardrailRaisedException: When configured to block (default)
+            SensitiveDataRouteException: When configured to route and a session_id is present
+            GuardrailRaisedException: When configured to block, or when routing is
+                configured but no session_id is available
         """
         if self.should_route_on_sensitive_data():
-            self.raise_sensitive_data_route_exception(
-                route_to_model=self.sensitive_data_route_to_model,  # type: ignore
-                request_data=request_data,
-                detection_info=detection_info,
-            )
+            try:
+                self.raise_sensitive_data_route_exception(
+                    route_to_model=self.sensitive_data_route_to_model,  # type: ignore
+                    request_data=request_data,
+                    detection_info=detection_info,
+                )
+            except ValueError:
+                raise GuardrailRaisedException(
+                    message=(
+                        f"Sensitive data detected by {self.guardrail_name} "
+                        "(routing skipped: request has no session_id)"
+                    ),
+                    guardrail_name=self.guardrail_name,
+                )
         else:
             raise GuardrailRaisedException(
                 message=f"Sensitive data detected by {self.guardrail_name}",

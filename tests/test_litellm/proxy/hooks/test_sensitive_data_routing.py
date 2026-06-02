@@ -264,6 +264,25 @@ class TestCustomGuardrailSensitiveDataRouting:
                 request_data=request_data,
             )
 
+    def test_handle_sensitive_data_detection_route_no_session_falls_back_to_block(self):
+        from litellm.exceptions import GuardrailRaisedException
+
+        guardrail = CustomGuardrail(
+            guardrail_name="test",
+            on_sensitive_data="route",
+            sensitive_data_route_to_model="on-premise-model",
+        )
+
+        request_data = {"model": "gpt-4"}
+
+        with pytest.raises(GuardrailRaisedException) as exc_info:
+            guardrail.handle_sensitive_data_detection(
+                request_data=request_data,
+                detection_info={"type": "PII"},
+            )
+
+        assert "session_id" in str(exc_info.value)
+
 
 class TestStickySessionRouting:
     @pytest.fixture
