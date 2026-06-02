@@ -1881,6 +1881,21 @@ async def _run_centralized_common_checks(  # noqa: PLR0915
     ):
         return
 
+    # Per-key IP restriction check
+    if user_api_key_auth_obj.allowed_ips:
+        from litellm.proxy.auth.auth_utils import _check_key_ip_allowed
+
+        _is_allowed, _client_ip = _check_key_ip_allowed(
+            allowed_ips=user_api_key_auth_obj.allowed_ips,
+            request=request,
+            use_x_forwarded_for=general_settings.get("use_x_forwarded_for", False),
+        )
+        if not _is_allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: IP address {_client_ip} not allowed for this API key.",
+            )
+
     parent_otel_span = user_api_key_auth_obj.parent_otel_span
     # In the integrated auth flow ``_user_api_key_auth_builder`` has already
     # resolved the end-user id and attached it here. Reuse that to avoid a

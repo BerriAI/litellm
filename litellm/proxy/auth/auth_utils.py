@@ -54,6 +54,51 @@ def _check_valid_ip(
     return True, client_ip
 
 
+def _check_key_ip_allowed(
+    allowed_ips: Optional[List[str]],
+    request: Request,
+    use_x_forwarded_for: Optional[bool] = False,
+) -> Tuple[bool, Optional[str]]:
+    """
+    Check if the request IP is in the key's allowed_ips list.
+
+    Supports both exact IP addresses and CIDR ranges (e.g. "10.0.0.0/8").
+    Returns (is_allowed, client_ip).
+    """
+    import ipaddress
+
+    if not allowed_ips:
+        return True, None
+
+    client_ip = _get_request_ip_address(
+        request=request, use_x_forwarded_for=use_x_forwarded_for
+    )
+
+    if not client_ip:
+        return False, client_ip
+
+    ip_to_check = client_ip.split(",")[0].strip() if "," in client_ip else client_ip
+
+    try:
+        client_addr = ipaddress.ip_address(ip_to_check)
+    except ValueError:
+        return False, client_ip
+
+    for entry in allowed_ips:
+        try:
+            if "/" in entry:
+                network = ipaddress.ip_network(entry, strict=False)
+                if client_addr in network:
+                    return True, client_ip
+            else:
+                if client_addr == ipaddress.ip_address(entry):
+                    return True, client_ip
+        except ValueError:
+            continue
+
+    return False, client_ip
+
+
 def check_complete_credentials(request_body: dict) -> bool:
     """
     if 'api_base' in request body. Check if complete credentials given. Prevent malicious attacks.

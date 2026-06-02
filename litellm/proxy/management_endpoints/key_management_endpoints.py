@@ -3412,6 +3412,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     created_by: Optional[str] = None,
     updated_by: Optional[str] = None,
     allowed_routes: Optional[list] = None,
+    allowed_ips: Optional[list] = None,
     sso_user_id: Optional[str] = None,
     object_permission_id: Optional[
         str
@@ -3552,6 +3553,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
+            "allowed_ips": allowed_ips or [],
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
             "access_group_ids": access_group_ids or [],
