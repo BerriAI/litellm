@@ -18,9 +18,9 @@ jobs:
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          if echo "$PR_BODY" | grep -qiE 'Resolves LIT-[0-9]+'; then
+          if echo "$PR_BODY" | grep -qiE 'Resolves LIT-0*[1-9][0-9]*'; then
             echo "Found Linear ticket reference."
             exit 0
           fi
-          echo "::error::PRs targeting 'litellm_internal_staging' must reference a Linear ticket in the description using the format 'Resolves LIT-XXXX' (e.g. 'Resolves LIT-1234')."
+          echo "::error::PRs targeting 'litellm_internal_staging' must reference a real Linear ticket in the description using the format 'Resolves LIT-XXXX' (e.g. 'Resolves LIT-1234'). Placeholder values like LIT-0000 are not accepted."
           exit 1
