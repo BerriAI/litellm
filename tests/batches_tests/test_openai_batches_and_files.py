@@ -288,8 +288,6 @@ async def test_async_create_batch(provider, tmp_path):
     litellm._turn_on_debug()
     print("Testing async create batch")
     litellm.logging_callback_manager._reset_all_callbacks()
-    custom_logger = TestCustomLogger()
-    litellm.callbacks = [custom_logger, "datadog"]
 
     file_name = "openai_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -312,6 +310,8 @@ async def test_async_create_batch(provider, tmp_path):
         "user_api_key_alias": "special_api_key_alias",
         "user_api_key_team_alias": "special_team_alias",
     }
+    custom_logger = TestCustomLogger()
+    litellm.callbacks = [custom_logger, "datadog"]
     create_batch_response = await litellm.acreate_batch(
         completion_window="24h",
         endpoint="/v1/chat/completions",

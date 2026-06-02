@@ -19,6 +19,47 @@ from typing import Optional
 import litellm
 from unittest.mock import patch, MagicMock
 import httpx
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+
+
+class _CaptureAsyncHTTPHandler(AsyncHTTPHandler):
+    def __init__(self):
+        self.timeout = None
+        self.event_hooks = None
+        self.client_alias = "bedrock-test"
+        self.put_calls = []
+
+    async def put(
+        self,
+        url: str,
+        data=None,
+        json=None,
+        params=None,
+        headers=None,
+        timeout=None,
+        stream: bool = False,
+        content=None,
+    ):
+        self.put_calls.append(
+            {
+                "url": url,
+                "data": data,
+                "json": json,
+                "params": params,
+                "headers": headers or {},
+                "timeout": timeout,
+                "stream": stream,
+                "content": content,
+            }
+        )
+        body = data if data is not None else content
+        content_bytes = body.encode("utf-8") if isinstance(body, str) else body or b""
+        content_length = len(content_bytes)
+        return httpx.Response(
+            status_code=200,
+            headers={"Content-Length": str(content_length)},
+            request=httpx.Request("PUT", url),
+        )
 
 
 @pytest.mark.asyncio()
@@ -34,12 +75,42 @@ async def test_async_create_file():
     file_name = "bedrock_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="batch",
-        custom_llm_provider="bedrock",
-        s3_bucket_name="litellm-proxy-941277531214",
+    capture_client = _CaptureAsyncHTTPHandler()
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "AWS_ACCESS_KEY_ID": "test-access-key",
+                "AWS_SECRET_ACCESS_KEY": "test-secret-key",
+                "AWS_REGION": "us-west-2",
+                "AWS_DEFAULT_REGION": "us-west-2",
+            },
+        ),
+        open(file_path, "rb") as batch_file,
+    ):
+        file_obj = await litellm.acreate_file(
+            file=batch_file,
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="litellm-proxy-941277531214",
+            client=capture_client,
+        )
+
+    assert len(capture_client.put_calls) == 1
+    put_call = capture_client.put_calls[0]
+    assert put_call["url"].startswith(
+        "https://s3.us-west-2.amazonaws.com/litellm-proxy-941277531214/"
     )
+    assert "/litellm-bedrock-files-us.anthropic.claude-haiku-4-5-20251001-v1-0-" in (
+        put_call["url"]
+    )
+    assert put_call["url"].endswith(".jsonl")
+    assert put_call["headers"]["Authorization"].startswith("AWS4-HMAC-SHA256")
+    assert "recordId" in put_call["data"]
+    assert file_obj.id.startswith(
+        "s3://litellm-proxy-941277531214/litellm-bedrock-files-"
+    )
+    assert file_obj.filename.endswith(".jsonl")
 
 
 @pytest.mark.asyncio()
@@ -51,12 +122,13 @@ async def test_async_file_and_batch():
     file_name = "bedrock_batch_completions.jsonl"
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
-    file_obj = await litellm.acreate_file(
-        file=open(file_path, "rb"),
-        purpose="batch",
-        custom_llm_provider="bedrock",
-        s3_bucket_name="litellm-proxy-941277531214",
-    )
+    with open(file_path, "rb") as batch_file:
+        file_obj = await litellm.acreate_file(
+            file=batch_file,
+            purpose="batch",
+            custom_llm_provider="bedrock",
+            s3_bucket_name="litellm-proxy-941277531214",
+        )
     print("CREATED FILE RESPONSE=", file_obj)
 
     # create batch
@@ -101,52 +173,44 @@ async def test_mock_bedrock_file_url_mapping():
     """
     print("Testing Bedrock file URL mapping")
 
-    captured_put_url = None
-
-    async def mock_async_create_file(transformed_request, **kwargs):
-        nonlocal captured_put_url
-        # Capture PUT URL from transformed request
-        if isinstance(transformed_request, dict) and "url" in transformed_request:
-            captured_put_url = transformed_request["url"]
-
-        # Call the real method to get actual response
-        from litellm.files.main import base_llm_http_handler
-
-        return await base_llm_http_handler.__class__.async_create_file(
-            base_llm_http_handler, transformed_request, **kwargs
-        )
-
-    with patch(
-        "litellm.files.main.base_llm_http_handler.async_create_file",
-        side_effect=mock_async_create_file,
+    capture_client = _CaptureAsyncHTTPHandler()
+    with (
+        patch.dict(
+            os.environ,
+            {
+                "AWS_ACCESS_KEY_ID": "test-access-key",
+                "AWS_SECRET_ACCESS_KEY": "test-secret-key",
+                "AWS_REGION": "us-west-2",
+                "AWS_DEFAULT_REGION": "us-west-2",
+            },
+        ),
+        open(
+            os.path.join(os.path.dirname(__file__), "bedrock_batch_completions.jsonl"),
+            "rb",
+        ) as batch_file,
     ):
         file_obj = await litellm.acreate_file(
-            file=open(
-                os.path.join(
-                    os.path.dirname(__file__), "bedrock_batch_completions.jsonl"
-                ),
-                "rb",
-            ),
+            file=batch_file,
             purpose="batch",
             custom_llm_provider="bedrock",
             s3_bucket_name="litellm-proxy-941277531214",
+            client=capture_client,
         )
 
-        print(f"PUT URL: {captured_put_url}")
-        print(f"File ID: {file_obj.id}")
+    captured_put_url = capture_client.put_calls[0]["url"]
+    print(f"PUT URL: {captured_put_url}")
+    print(f"File ID: {file_obj.id}")
 
-        # Validate URL was captured and response is correct
-        assert captured_put_url is not None
-        assert file_obj.id.startswith("s3://")
+    # Validate URL was captured and response is correct
+    assert captured_put_url is not None
+    assert file_obj.id.startswith("s3://")
 
-        # Verify mapping
-        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+    # Verify mapping
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
-        bedrock_config = BedrockFilesConfig()
-        expected_s3_uri, _ = bedrock_config._convert_https_url_to_s3_uri(
-            captured_put_url
-        )
-        assert file_obj.id == expected_s3_uri
+    bedrock_config = BedrockFilesConfig()
+    expected_s3_uri, _ = bedrock_config._convert_https_url_to_s3_uri(captured_put_url)
+    assert file_obj.id == expected_s3_uri
 
 
 @pytest.mark.asyncio()
