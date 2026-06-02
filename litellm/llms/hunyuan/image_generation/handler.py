@@ -276,9 +276,8 @@ class HunyuanImageGeneration:
 
         api_error = submit_data.get("error")
         if api_error:
-            error_msg = api_error.get("message") or str(api_error)
             raise self.config.get_error_class(
-                error_message=f"Hunyuan API error: {error_msg}",
+                error_message=f"Hunyuan API error: {submit_data}",
                 status_code=400,
                 headers=submit_response.headers,
             )

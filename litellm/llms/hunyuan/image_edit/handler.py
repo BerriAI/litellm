@@ -248,10 +248,9 @@ class HunyuanImageEdit:
 
         api_error = submit_data.get("error")
         if api_error:
-            error_msg = api_error.get("message") or str(api_error)
             raise BaseLLMException(
                 status_code=400,
-                message=f"Hunyuan API error: {error_msg}",
+                message=f"Hunyuan API error: {submit_data}",
             )
 
         job_id = submit_data.get("job_id")
@@ -304,7 +303,7 @@ class HunyuanImageEdit:
             elif status == "FAIL":
                 raise BaseLLMException(
                     status_code=400,
-                    message=f"Hunyuan image edit failed: {data.get('message', 'Unknown error')}",
+                    message=f"Hunyuan image edit failed: {data}",
                 )
 
             time.sleep(interval)
@@ -345,7 +344,7 @@ class HunyuanImageEdit:
             elif status == "FAIL":
                 raise BaseLLMException(
                     status_code=400,
-                    message=f"Hunyuan image edit failed: {data.get('message', 'Unknown error')}",
+                    message=f"Hunyuan image edit failed: {data}",
                 )
 
             await asyncio.sleep(interval)
