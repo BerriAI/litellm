@@ -103,7 +103,7 @@ describe("FilterComponent", () => {
     });
   });
 
-  it("should render filters in correct order", async () => {
+  it("renders filters in the caller-supplied order", async () => {
     const user = userEvent.setup({ delay: null });
     const options: FilterOption[] = [
       { name: "model", label: "Model" },
@@ -113,11 +113,7 @@ describe("FilterComponent", () => {
     ];
 
     renderWithProviders(
-      <FilterComponent
-        options={options}
-        onApplyFilters={mockOnApplyFilters}
-        onResetFilters={mockOnResetFilters}
-      />,
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
     );
 
     const filterButton = screen.getByRole("button", { name: "Filters" });
@@ -125,8 +121,7 @@ describe("FilterComponent", () => {
 
     await waitFor(() => {
       const labels = screen.getAllByText(/^(Team ID|Status|User ID|Model)$/);
-      expect(labels[0]).toHaveTextContent("Team ID");
-      expect(labels[1]).toHaveTextContent("Status");
+      expect(labels.map((l) => l.textContent)).toEqual(["Model", "Team ID", "Status", "User ID"]);
     });
   });
 
@@ -218,11 +213,7 @@ describe("FilterComponent", () => {
     ];
 
     renderWithProviders(
-      <FilterComponent
-        options={options}
-        onApplyFilters={mockOnApplyFilters}
-        onResetFilters={mockOnResetFilters}
-      />,
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
     );
 
     const filterButton = screen.getByRole("button", { name: "Filters" });
@@ -245,9 +236,7 @@ describe("FilterComponent", () => {
 
   it("should debounce search input for searchable filters", async () => {
     const user = userEvent.setup({ delay: null });
-    const mockSearchFn = vi.fn().mockResolvedValue([
-      { label: "Result", value: "result" },
-    ]);
+    const mockSearchFn = vi.fn().mockResolvedValue([{ label: "Result", value: "result" }]);
 
     const options: FilterOption[] = [
       {
@@ -259,11 +248,7 @@ describe("FilterComponent", () => {
     ];
 
     renderWithProviders(
-      <FilterComponent
-        options={options}
-        onApplyFilters={mockOnApplyFilters}
-        onResetFilters={mockOnResetFilters}
-      />,
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
     );
 
     const filterButton = screen.getByRole("button", { name: "Filters" });
@@ -311,11 +296,7 @@ describe("FilterComponent", () => {
     ];
 
     renderWithProviders(
-      <FilterComponent
-        options={options}
-        onApplyFilters={mockOnApplyFilters}
-        onResetFilters={mockOnResetFilters}
-      />,
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
     );
 
     const filterButton = screen.getByRole("button", { name: "Filters" });
@@ -360,11 +341,7 @@ describe("FilterComponent", () => {
     ];
 
     renderWithProviders(
-      <FilterComponent
-        options={options}
-        onApplyFilters={mockOnApplyFilters}
-        onResetFilters={mockOnResetFilters}
-      />,
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
     );
 
     const filterButton = screen.getByRole("button", { name: "Filters" });
@@ -393,9 +370,7 @@ describe("FilterComponent", () => {
 
   it("should load initial options when dropdown opens for searchable filter", async () => {
     const user = userEvent.setup({ delay: null });
-    const mockSearchFn = vi.fn().mockResolvedValue([
-      { label: "Initial Result", value: "initial" },
-    ]);
+    const mockSearchFn = vi.fn().mockResolvedValue([{ label: "Initial Result", value: "initial" }]);
 
     const options: FilterOption[] = [
       {
@@ -407,11 +382,7 @@ describe("FilterComponent", () => {
     ];
 
     renderWithProviders(
-      <FilterComponent
-        options={options}
-        onApplyFilters={mockOnApplyFilters}
-        onResetFilters={mockOnResetFilters}
-      />,
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
     );
 
     const filterButton = screen.getByRole("button", { name: "Filters" });
@@ -433,7 +404,7 @@ describe("FilterComponent", () => {
     });
   });
 
-  it("should not render filters that are not in orderedFilters list", async () => {
+  it("renders caller-supplied options that match no predefined filter name (LIT-3151)", async () => {
     const user = userEvent.setup({ delay: null });
     const options: FilterOption[] = [
       {
@@ -443,18 +414,36 @@ describe("FilterComponent", () => {
     ];
 
     renderWithProviders(
-      <FilterComponent
-        options={options}
-        onApplyFilters={mockOnApplyFilters}
-        onResetFilters={mockOnResetFilters}
-      />,
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
     );
 
     const filterButton = screen.getByRole("button", { name: "Filters" });
     await user.click(filterButton);
 
     await waitFor(() => {
-      expect(screen.queryByText("Unknown Filter")).not.toBeInTheDocument();
+      expect(screen.getByText("Unknown Filter")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Enter Unknown Filter...")).toBeInTheDocument();
+    });
+  });
+
+  it("renders every Tool Policies filter when none match a predefined name (LIT-3151)", async () => {
+    const user = userEvent.setup({ delay: null });
+    const options: FilterOption[] = [
+      { name: "Input Policy", label: "Input Policy", options: [{ label: "Trusted", value: "trusted" }] },
+      { name: "Output Policy", label: "Output Policy", options: [{ label: "Blocked", value: "blocked" }] },
+      { name: "Team Name", label: "Team Name", options: [] },
+      { name: "Key Name", label: "Key Name", options: [] },
+    ];
+
+    renderWithProviders(
+      <FilterComponent options={options} onApplyFilters={mockOnApplyFilters} onResetFilters={mockOnResetFilters} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+
+    await waitFor(() => {
+      const labels = screen.getAllByText(/^(Input Policy|Output Policy|Team Name|Key Name)$/);
+      expect(labels.map((l) => l.textContent)).toEqual(["Input Policy", "Output Policy", "Team Name", "Key Name"]);
     });
   });
 
