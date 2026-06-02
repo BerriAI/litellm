@@ -91,6 +91,7 @@ class UpdateRouterConfig(BaseModel):
     routing_strategy_args: Optional[dict] = None
     routing_strategy: Optional[str] = None
     routing_groups: Optional[List[RoutingGroup]] = None
+    retry_policy: Optional[dict] = None
     model_group_retry_policy: Optional[dict] = None
     model_group_affinity_config: Optional[Dict[str, List[str]]] = None
     allowed_fails: Optional[int] = None

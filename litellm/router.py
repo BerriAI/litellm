@@ -10189,6 +10189,7 @@ class Router:
             "retry_after",
             "fallbacks",
             "context_window_fallbacks",
+            "retry_policy",
             "model_group_retry_policy",
             "model_group_alias",
             "enable_weighted_failover",
@@ -10212,6 +10213,11 @@ class Router:
                 elif var == "routing_groups":
                     self._routing_groups_input = kwargs[var]
                     rebuild_routing_groups = True
+                elif var == "retry_policy":
+                    value = kwargs[var]
+                    if isinstance(value, dict):
+                        value = RetryPolicy(**value)
+                    setattr(self, var, value)
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed
