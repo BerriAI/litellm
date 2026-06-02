@@ -84,8 +84,6 @@ class LangFlowConfig(BaseConfig):
                 ),
             )
 
-        if model.startswith("langflow/"):
-            return model.split("/", 1)[1]
         if "/" in model:
             return model.split("/", 1)[1]
         return model
