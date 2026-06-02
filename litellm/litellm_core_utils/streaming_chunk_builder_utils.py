@@ -430,7 +430,18 @@ class ChunkProcessor:
     def get_combined_reasoning_content(
         self, chunks: List[Dict[str, Any]]
     ) -> ChatCompletionAssistantContentValue:
-        return self.get_combined_content(chunks, delta_key="reasoning_content")
+        content_list: List[str] = []
+        for chunk in chunks:
+            choices = chunk["choices"]
+            for choice in choices:
+                delta = choice.get("delta", {})
+                # Prefer reasoning_content; fall back to reasoning for providers
+                # (e.g. Scaleway) that use the raw 'reasoning' field name.
+                content = delta.get("reasoning_content") or delta.get("reasoning") or ""
+                if content is None:
+                    continue
+                content_list.append(content)
+        return "".join(content_list)
 
     def get_combined_audio_content(
         self, chunks: List[Dict[str, Any]]
