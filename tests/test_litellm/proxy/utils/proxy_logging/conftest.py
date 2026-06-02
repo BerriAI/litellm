@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -76,14 +76,6 @@ def mock_callbacks_disabled(monkeypatch):
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     monkeypatch.setattr(litellm, "_async_failure_callback", [])
     yield
-
-
-@pytest.fixture
-def mock_httpx_client():
-    client = MagicMock()
-    client.post = AsyncMock()
-    client.get = AsyncMock()
-    return client
 
 
 @pytest.fixture
