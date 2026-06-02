@@ -97,6 +97,27 @@ class TestLoggingWorker:
             logging.raiseExceptions = previous_raise_exceptions
             logger.removeHandler(handler)
 
+    def test_flush_on_exit_swallows_errors_and_drains_remaining(self):
+        """A failing queued coroutine must not abort the atexit drain of later events."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        processed = []
+
+        async def raises_during_flush():
+            raise RuntimeError("boom during shutdown flush")
+
+        async def records_during_flush():
+            processed.append("ran")
+
+        worker.enqueue(raises_during_flush())
+        worker.enqueue(records_during_flush())
+
+        worker._flush_on_exit()
+
+        assert processed == ["ran"]
+        assert worker._queue.empty()
+
     @pytest.mark.asyncio
     async def test_worker_handles_cancellation_gracefully(self, logging_worker):
         """Test that the worker handles cancellation without throwing exceptions."""
