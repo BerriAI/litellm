@@ -68,6 +68,17 @@ def _prepare_mcp_server_data(
         # ``alias=None`` is a valid request to clear the stored alias.
         if data_dict.get("alias") is None and "alias" not in fields_set:
             data_dict.pop("alias", None)
+        # Prisma ``allowed_tools`` is a required String[]; ``null`` is invalid.
+        # The UI sends null to clear a whitelist — treat that as ``[]``.
+        if "allowed_tools" in data_dict and data_dict["allowed_tools"] is None:
+            data_dict["allowed_tools"] = []
+        # Json map fields use ``@default("{}")``; explicit null means clear overrides.
+        for json_map_field in (
+            "tool_name_to_display_name",
+            "tool_name_to_description",
+        ):
+            if json_map_field in data_dict and data_dict[json_map_field] is None:
+                data_dict[json_map_field] = {}
     else:
         data_dict = data.model_dump(exclude_none=True)
         # Ensure alias is always present in the dict (even if None)
@@ -94,13 +105,13 @@ def _prepare_mcp_server_data(
     if data_dict.get("env") is not None:
         data_dict["env"] = safe_dumps(data_dict["env"])
 
-    if data_dict.get("tool_name_to_display_name") is not None:
+    if "tool_name_to_display_name" in data_dict:
         data_dict["tool_name_to_display_name"] = safe_dumps(
-            data_dict["tool_name_to_display_name"]
+            data_dict["tool_name_to_display_name"] or {}
         )
-    if data_dict.get("tool_name_to_description") is not None:
+    if "tool_name_to_description" in data_dict:
         data_dict["tool_name_to_description"] = safe_dumps(
-            data_dict["tool_name_to_description"]
+            data_dict["tool_name_to_description"] or {}
         )
 
     # mcp_access_groups is already List[str], no serialization needed

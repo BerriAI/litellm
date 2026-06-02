@@ -78,6 +78,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   } | null>(null);
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [transportType, setTransportType] = useState<string>("");
@@ -115,6 +116,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           transportType,
           costConfig,
           allowedTools,
+          hasToolAllowlistInteraction,
           searchValue,
           aliasManuallyEdited,
           logoUrl,
@@ -214,6 +216,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
       if (parsed.allowedTools) {
         setAllowedTools(parsed.allowedTools);
+      }
+      if (typeof parsed.hasToolAllowlistInteraction === "boolean") {
+        setHasToolAllowlistInteraction(parsed.hasToolAllowlistInteraction);
       }
       if (parsed.searchValue) {
         setSearchValue(parsed.searchValue);
@@ -395,12 +400,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           description: restValues.description,
           logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
+          tool_allowlist_enforced: hasToolAllowlistInteraction || allowedTools.length > 0,
         },
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
-        allowed_tools: allowedTools.length > 0 ? allowedTools : null,
-        tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
-        tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
+        allowed_tools: allowedTools,
+        tool_name_to_display_name: toolNameToDisplayName,
+        tool_name_to_description: toolNameToDescription,
         allow_all_keys: Boolean(allowAllKeysRaw),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw),
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
@@ -464,6 +470,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setCostConfig({});
         clearTools();
         setAllowedTools([]);
+        setHasToolAllowlistInteraction(false);
         setAliasManuallyEdited(false);
         setLogoUrl(undefined);
         setModalVisible(false);
@@ -485,6 +492,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setCostConfig({});
     clearTools();
     setAllowedTools([]);
+    setHasToolAllowlistInteraction(false);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
     setModalVisible(false);
@@ -1074,6 +1082,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               allowedTools={allowedTools}
               existingAllowedTools={null}
               onAllowedToolsChange={setAllowedTools}
+              hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+              onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
               toolNameToDisplayName={toolNameToDisplayName}
               toolNameToDescription={toolNameToDescription}
               onToolNameToDisplayNameChange={setToolNameToDisplayName}

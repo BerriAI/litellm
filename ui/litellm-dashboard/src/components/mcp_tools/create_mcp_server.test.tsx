@@ -375,6 +375,50 @@ describe("CreateMCPServer", () => {
       // No credentials should be sent for "none" auth
       expect(payload.credentials).toBeUndefined();
     });
+
+    it("enforces the allowlist when the user explicitly deselects every tool", async () => {
+      await selectHttpTransport();
+
+      const user = userEvent.setup({ delay: null });
+
+      const nameInput = getServerNameInput();
+      await user.type(nameInput, "Locked_Down_Server");
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await user.type(urlInput, "https://example.com/mcp");
+
+      await selectAntOption("Authentication", "None");
+
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Disable all tools" }));
+      });
+
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "new-server-1",
+        server_name: "Locked_Down_Server",
+        alias: "Locked_Down_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.createMCPServer).toHaveBeenCalledTimes(1);
+      });
+
+      const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
+      expect(payload.mcp_info.tool_allowlist_enforced).toBe(true);
+      expect(payload.allowed_tools).toEqual([]);
+    });
   });
 
   describe("when OAuth interactive auth is selected", () => {

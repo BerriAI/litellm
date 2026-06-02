@@ -127,6 +127,7 @@ export interface MCPInfo {
   description?: string;
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
+  tool_allowlist_enforced?: boolean;
 }
 
 // Define the structure for a single MCP tool

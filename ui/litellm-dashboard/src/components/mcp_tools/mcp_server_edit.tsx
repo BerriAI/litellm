@@ -53,6 +53,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const [searchValue, setSearchValue] = useState<string>("");
   const [aliasManuallyEdited, setAliasManuallyEdited] = useState(false);
   const [allowedTools, setAllowedTools] = useState<string[]>([]);
+  const [hasToolAllowlistInteraction, setHasToolAllowlistInteraction] = useState(false);
   const [toolNameToDisplayName, setToolNameToDisplayName] = useState<Record<string, string>>({});
   const [toolNameToDescription, setToolNameToDescription] = useState<Record<string, string>>({});
   const [pendingRestoredValues, setPendingRestoredValues] = useState<Record<string, any> | null>(null);
@@ -78,6 +79,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const currentAuthorizationUrl = Form.useWatch("authorization_url", form);
   const currentTokenUrl = Form.useWatch("token_url", form);
   const currentRegistrationUrl = Form.useWatch("registration_url", form);
+  const hasExistingToolAllowlist =
+    Boolean(mcpServer.mcp_info?.tool_allowlist_enforced) || (mcpServer.allowed_tools?.length ?? 0) > 0;
+  const existingAllowedTools = hasExistingToolAllowlist ? mcpServer.allowed_tools ?? [] : null;
 
   const persistEditUiState = () => {
     if (typeof window === "undefined") {
@@ -92,6 +96,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           formValues: values,
           costConfig,
           allowedTools,
+          hasToolAllowlistInteraction,
           searchValue,
           aliasManuallyEdited,
         }),
@@ -151,11 +156,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           ...(token.expires_in && { expires_in: token.expires_in }),
           ...(token.scope && { scope: token.scope }),
         };
-        
+
         form.setFieldsValue({ credentials });
-        
+
         NotificationsManager.success(
-          "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials."
+          "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
         );
       }
     },
@@ -184,7 +189,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return "";
     }
   }, [mcpServer.env]);
-
 
   // If server has spec_path, show it as "openapi" transport in the UI
   const effectiveTransport = React.useMemo(() => {
@@ -231,12 +235,16 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
   // Initialize allowed tools and tool overrides from existing server data
   useEffect(() => {
-    if (mcpServer.allowed_tools) {
-      setAllowedTools(mcpServer.allowed_tools);
+    setHasToolAllowlistInteraction(false);
+  }, [mcpServer.server_id]);
+
+  useEffect(() => {
+    if (hasExistingToolAllowlist) {
+      setAllowedTools(mcpServer.allowed_tools ?? []);
     }
     setToolNameToDisplayName(mcpServer.tool_name_to_display_name ?? {});
     setToolNameToDescription(mcpServer.tool_name_to_description ?? {});
-  }, [mcpServer]);
+  }, [mcpServer, hasExistingToolAllowlist]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -260,6 +268,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
       if (parsed.allowedTools) {
         setAllowedTools(parsed.allowedTools);
+      }
+      if (typeof parsed.hasToolAllowlistInteraction === "boolean") {
+        setHasToolAllowlistInteraction(parsed.hasToolAllowlistInteraction);
       }
       if (parsed.searchValue) {
         setSearchValue(parsed.searchValue);
@@ -579,6 +590,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcpServer.alias ||
         "unknown";
 
+      const toolAllowlistEnforced = hasExistingToolAllowlist || hasToolAllowlistInteraction || allowedTools.length > 0;
+
       const payload: Record<string, any> = {
         ...restValues,
         ...stdioFields,
@@ -587,16 +600,22 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_json: undefined,
         server_id: mcpServer.server_id,
         mcp_info: {
+          ...(mcpServer.mcp_info ?? {}),
           server_name: mcpInfoServerName,
           description: restValues.description,
           logo_url: logoUrl || undefined,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
+          tool_allowlist_enforced: toolAllowlistEnforced,
         },
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         // Include permission management fields
         extra_headers: restValues.extra_headers || [],
-        allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        ...(toolAllowlistEnforced
+          ? {
+              allowed_tools: allowedTools,
+            }
+          : {}),
         tool_name_to_display_name: Object.keys(toolNameToDisplayName).length > 0 ? toolNameToDisplayName : null,
         tool_name_to_description: Object.keys(toolNameToDescription).length > 0 ? toolNameToDescription : null,
         disallowed_tools: restValues.disallowed_tools || [],
@@ -613,12 +632,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
             : false,
         // Include token_validation when it is set (non-null) or when clearing an existing value
-        ...(tokenValidation !== null || mcpServer.token_validation
-          ? { token_validation: tokenValidation }
-          : {}),
+        ...(tokenValidation !== null || mcpServer.token_validation ? { token_validation: tokenValidation } : {}),
       };
 
-      const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
+      const includeCredentials =
+        restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
       if (includeCredentials && credentialsPayload && Object.keys(credentialsPayload).length > 0) {
         payload.credentials = credentialsPayload;
@@ -790,10 +808,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   />
                 </Form.Item>
 
-                <Form.Item
-                  label="Args"
-                  name="args"
-                >
+                <Form.Item label="Args" name="args">
                   <Select
                     mode="tags"
                     size="large"
@@ -1006,17 +1021,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       }
                       name="token_storage_ttl_seconds"
                     >
-                      <InputNumber
-                        min={1}
-                        placeholder="e.g. 3600"
-                        style={{ width: "100%" }}
-                        className="rounded-lg"
-                      />
+                      <InputNumber min={1} placeholder="e.g. 3600" style={{ width: "100%" }} className="rounded-lg" />
                     </Form.Item>
                   </>
                 )}
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
+                  <p className="text-sm text-gray-600">
+                    Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication
+                    value.
+                  </p>
                   <Button
                     variant="secondary"
                     onClick={startOAuthFlow}
@@ -1042,7 +1055,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               <>
                 <p className="text-sm text-gray-500 mb-2">
                   For MCP servers hosted on AWS Bedrock AgentCore.{" "}
-                  <a href="https://docs.litellm.ai/docs/mcp_aws_sigv4" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                  <a
+                    href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-500 hover:text-blue-700"
+                  >
                     View docs &rarr;
                   </a>
                 </p>
@@ -1187,7 +1205,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   transport: transportType ?? mcpServer.transport,
                   auth_type: currentAuthType ?? mcpServer.auth_type,
                   mcp_info: mcpServer.mcp_info,
-                  oauth_flow_type: (currentTokenUrl ?? mcpServer.token_url) ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
+                  oauth_flow_type: currentTokenUrl ?? mcpServer.token_url ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
                   static_headers: currentStaticHeaders ?? mcpServer.static_headers,
                   credentials: currentCredentials,
                   authorization_url: currentAuthorizationUrl ?? mcpServer.authorization_url,
@@ -1195,8 +1213,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   registration_url: currentRegistrationUrl ?? mcpServer.registration_url,
                 }}
                 allowedTools={allowedTools}
-                existingAllowedTools={mcpServer.allowed_tools || null}
+                existingAllowedTools={existingAllowedTools}
+                hasToolAllowlistInteraction={hasToolAllowlistInteraction}
+                isEditMode
                 onAllowedToolsChange={setAllowedTools}
+                onToolAllowlistInteraction={() => setHasToolAllowlistInteraction(true)}
                 toolNameToDisplayName={toolNameToDisplayName}
                 toolNameToDescription={toolNameToDescription}
                 onToolNameToDisplayNameChange={setToolNameToDisplayName}
