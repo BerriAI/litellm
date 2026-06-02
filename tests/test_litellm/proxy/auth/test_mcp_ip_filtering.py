@@ -60,7 +60,7 @@ class TestIsInternalIp:
 
 
 class TestMCPClientIPExtraction:
-    def test_ignores_xff_without_trusted_proxy_ranges(self):
+    def test_fails_closed_when_xff_enabled_without_trusted_proxy_ranges(self):
         request = MagicMock(spec=Request)
         request.client = MagicMock()
         request.client.host = "203.0.113.5"
@@ -71,7 +71,29 @@ class TestMCPClientIPExtraction:
             general_settings={"use_x_forwarded_for": True},
         )
 
-        assert result == "203.0.113.5"
+        # XFF is untrusted (no mcp_trusted_proxy_ranges) so it must be ignored,
+        # and we must not trust the direct peer either: fail closed so the caller
+        # is classified as external and is_internal_ip("") is False.
+        assert result == ""
+        assert IPAddressUtils.is_internal_ip(result) is False
+
+    def test_private_proxy_peer_does_not_grant_internal_access(self):
+        # Regression: behind an internal reverse proxy with use_x_forwarded_for
+        # enabled but mcp_trusted_proxy_ranges unset, the direct peer is the
+        # proxy's private IP. Returning it would mis-classify an external caller
+        # as internal and expose available_on_public_internet=false servers.
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = "10.0.0.7"
+        request.headers = {"x-forwarded-for": "8.8.8.8"}
+
+        result = IPAddressUtils.get_mcp_client_ip(
+            request,
+            general_settings={"use_x_forwarded_for": True},
+        )
+
+        assert result == ""
+        assert IPAddressUtils.is_internal_ip(result) is False
 
     def test_honours_xff_from_trusted_proxy(self):
         request = MagicMock(spec=Request)

@@ -210,5 +210,9 @@ class IPAddressUtils:
                         "XFF header from untrusted IP %s, ignoring", direct_ip
                     )
                     return direct_ip
-                return _get_request_ip_address(request, use_x_forwarded_for=False)
+                # XFF enabled but no trusted proxy ranges configured: the direct
+                # peer is typically the reverse proxy's own (private) IP, so
+                # returning it would mis-classify external callers as internal.
+                # Fail closed for access control.
+                return ""
         return _get_request_ip_address(request, use_x_forwarded_for=use_xff)
