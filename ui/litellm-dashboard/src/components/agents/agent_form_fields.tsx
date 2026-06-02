@@ -99,7 +99,6 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                         mode="tags"
                         style={{ width: '100%' }}
                         tokenSeparators={[',']}
-                        open={false}
                         placeholder={SKILL_FIELD_CONFIG.tags.placeholder}
                       />
                     </Form.Item>
@@ -113,7 +112,6 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true,
                         mode="tags"
                         style={{ width: '100%' }}
                         tokenSeparators={[',']}
-                        open={false}
                         placeholder={SKILL_FIELD_CONFIG.examples.placeholder}
                       />
                     </Form.Item>
