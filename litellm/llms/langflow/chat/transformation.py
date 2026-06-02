@@ -1,6 +1,5 @@
 """LangFlow run API: POST {api_base}/api/v1/run/{flow_id}"""
 
-import json
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
@@ -166,57 +165,47 @@ class LangFlowConfig(BaseConfig):
         verbose_logger.debug(f"LangFlow request payload: {payload}")
         return payload
 
-    def _extract_content_from_response(self, response_json: dict) -> str:
+    def _extract_content_from_response(self, response_json: dict) -> Optional[str]:
         """
-        Extract the text content from a LangFlow response.
+        Extract the assistant text from a LangFlow run response.
 
         Expected structure:
-        {
-          "outputs": [
-            {
-              "outputs": [
-                {
-                  "results": {
-                    "message": {"text": "...", ...}
-                  }
-                }
-              ]
-            }
-          ]
-        }
+        {"outputs": [{"outputs": [{"results": {"message": {"text": "..."}}}]}]}
+
+        Returns None when no message text is present so the caller can surface an
+        explicit error instead of forwarding a raw JSON blob as the answer.
         """
-        try:
-            outputs = response_json.get("outputs", [])
-            if isinstance(outputs, list) and outputs:
-                first_output = outputs[0]
-                inner_outputs = first_output.get("outputs", [])
-                if isinstance(inner_outputs, list) and inner_outputs:
-                    first_inner = inner_outputs[0]
+        outputs = response_json.get("outputs", [])
+        if not (isinstance(outputs, list) and outputs):
+            return None
 
-                    # Try results.message.text (most common Chat Output format)
-                    results = first_inner.get("results", {})
-                    if isinstance(results, dict):
-                        message = results.get("message", {})
-                        if isinstance(message, dict):
-                            text = message.get("text", "")
-                            if text:
-                                return text
+        first_output = outputs[0]
+        if not isinstance(first_output, dict):
+            return None
 
-                    # Try outputs dict for other component types
-                    outputs_dict = first_inner.get("outputs", {})
-                    if isinstance(outputs_dict, dict):
-                        for _key, val in outputs_dict.items():
-                            if isinstance(val, dict):
-                                msg = val.get("message", {})
-                                if isinstance(msg, dict) and msg.get("text"):
-                                    return msg["text"]
-        except Exception as e:
-            verbose_logger.warning(f"Could not parse LangFlow response structure: {e}")
+        inner_outputs = first_output.get("outputs", [])
+        if not (isinstance(inner_outputs, list) and inner_outputs):
+            return None
 
-        verbose_logger.warning(
-            "Could not extract content from LangFlow response, returning raw JSON"
-        )
-        return json.dumps(response_json)
+        first_inner = inner_outputs[0]
+        if not isinstance(first_inner, dict):
+            return None
+
+        results = first_inner.get("results", {})
+        if isinstance(results, dict):
+            message = results.get("message", {})
+            if isinstance(message, dict) and message.get("text"):
+                return message["text"]
+
+        outputs_dict = first_inner.get("outputs", {})
+        if isinstance(outputs_dict, dict):
+            for val in outputs_dict.values():
+                if isinstance(val, dict):
+                    msg = val.get("message", {})
+                    if isinstance(msg, dict) and msg.get("text"):
+                        return msg["text"]
+
+        return None
 
     def transform_response(
         self,
@@ -234,40 +223,47 @@ class LangFlowConfig(BaseConfig):
     ) -> ModelResponse:
         try:
             response_json = raw_response.json()
-            verbose_logger.debug(f"LangFlow response: {response_json}")
-
-            content = self._extract_content_from_response(response_json)
-
-            message = Message(content=content, role="assistant")
-            choice = Choices(finish_reason="stop", index=0, message=message)
-
-            model_response.choices = [choice]
-            model_response.model = model
-
-            try:
-                from litellm.utils import token_counter
-
-                prompt_tokens = token_counter(model=model, messages=messages)
-                completion_tokens = token_counter(
-                    model=model, text=content, count_response_tokens=True
-                )
-                usage = Usage(
-                    prompt_tokens=prompt_tokens,
-                    completion_tokens=completion_tokens,
-                    total_tokens=prompt_tokens + completion_tokens,
-                )
-                setattr(model_response, "usage", usage)
-            except Exception as e:
-                verbose_logger.warning(f"Failed to calculate token usage: {e}")
-
-            return model_response
-
         except Exception as e:
-            verbose_logger.error(f"Error processing LangFlow response: {e}")
             raise LangFlowError(
-                message=f"Error processing response: {e}",
+                message=f"LangFlow returned a non-JSON response: {e}",
                 status_code=raw_response.status_code,
             )
+
+        verbose_logger.debug(f"LangFlow response: {response_json}")
+
+        content = self._extract_content_from_response(response_json)
+        if content is None:
+            raise LangFlowError(
+                message=(
+                    "Could not extract a message from the LangFlow response; "
+                    "ensure the flow ends in a Chat Output component"
+                ),
+                status_code=500,
+            )
+
+        message = Message(content=content, role="assistant")
+        choice = Choices(finish_reason="stop", index=0, message=message)
+
+        model_response.choices = [choice]
+        model_response.model = model
+
+        try:
+            from litellm.utils import token_counter
+
+            prompt_tokens = token_counter(model=model, messages=messages)
+            completion_tokens = token_counter(
+                model=model, text=content, count_response_tokens=True
+            )
+            usage = Usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=prompt_tokens + completion_tokens,
+            )
+            setattr(model_response, "usage", usage)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to calculate token usage: {e}")
+
+        return model_response
 
     def validate_environment(
         self,

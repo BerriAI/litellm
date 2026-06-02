@@ -93,6 +93,43 @@ def test_langflow_config_extract_response():
     assert content == "Hello from LangFlow"
 
 
+def test_langflow_extract_response_returns_none_when_no_message():
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+    config = LangFlowConfig()
+    assert config._extract_content_from_response({"outputs": []}) is None
+    assert config._extract_content_from_response({"detail": "flow failed"}) is None
+    assert (
+        config._extract_content_from_response(
+            {"outputs": [{"outputs": [{"results": {"message": {"text": ""}}}]}]}
+        )
+        is None
+    )
+
+
+def test_langflow_transform_response_raises_on_unparseable_body():
+    import httpx
+
+    from litellm.llms.langflow.chat.transformation import LangFlowConfig, LangFlowError
+    from litellm.types.utils import ModelResponse
+
+    config = LangFlowConfig()
+    raw_response = httpx.Response(status_code=200, json={"detail": "flow failed"})
+
+    with pytest.raises(LangFlowError):
+        config.transform_response(
+            model="langflow/my-flow-id",
+            raw_response=raw_response,
+            model_response=ModelResponse(),
+            logging_obj=None,
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+
 def test_langflow_provider_config_registered():
     cfg = ProviderConfigManager.get_provider_chat_config(
         model="langflow/flow-1",
