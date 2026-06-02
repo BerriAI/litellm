@@ -3459,3 +3459,35 @@ async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder()
     finally:
         for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)
+
+
+def test_get_temp_budget_increase_tz_aware_expiry():
+    """
+    /key/update accepts ISO 8601 with timezone (e.g. "2026-01-20T00:00:00Z");
+    Pydantic parses it to a tz-aware datetime and prepare_metadata_fields
+    stores .isoformat() -> "2026-01-20T00:00:00+00:00". The comparison must
+    not raise TypeError on the next request. Also covers the naive-input
+    path (legacy metadata written without timezone).
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+
+    future_aware = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    past_aware = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    future_naive = (datetime.now() + timedelta(days=1)).isoformat()
+
+    for expiry, expected in [
+        (future_aware, 100),  # tz-aware future
+        (past_aware, None),   # tz-aware past
+        (future_naive, 100),  # naive future, exercises the `tzinfo is None` branch
+    ]:
+        token = UserAPIKeyAuth(
+            max_budget=100,
+            spend=0,
+            metadata={
+                "temp_budget_increase": 100,
+                "temp_budget_expiry": expiry,
+            },
+        )
+        assert _get_temp_budget_increase(token) == expected, expiry
