@@ -970,8 +970,32 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    ## /v2/agents+sessions cleanup sweeper (Epic A — Cursor SDK).
+    ## Idempotent; safe even if the agent_session_endpoints module never
+    ## sees traffic.
+    try:
+        from litellm.proxy.agent_session_endpoints.cleanup import (
+            start_cleanup_sweeper,
+        )
+
+        start_cleanup_sweeper()
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "agent_session_endpoints cleanup sweeper failed to start: %s", exc
+        )
+
     # End of startup event
     yield
+
+    ## Stop the agent session cleanup sweeper.
+    try:
+        from litellm.proxy.agent_session_endpoints.cleanup import (
+            stop_cleanup_sweeper,
+        )
+
+        stop_cleanup_sweeper()
+    except Exception:
+        pass
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
@@ -15688,6 +15712,53 @@ app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
 app.include_router(google_router)
+
+# /v2/agents, /v2/sessions — Cursor SDK agent runtime (Epic A).
+# Mounted under /v2/ to avoid collision with the existing /v1/agents
+# (A2A registry in litellm/proxy/agent_endpoints/).
+#
+# SECURITY: the daemon JWT secret is a separate credential from the proxy
+# master key. If ``LITELLM_AGENT_JWT_SECRET`` is not set, refuse to mount
+# these routers — silently signing daemon tokens with the master key (or
+# any default) would conflate two distinct auth surfaces and let a
+# captured daemon JWT mint master-key-authority API keys.
+from litellm.proxy.agent_session_endpoints.auth import (
+    is_agent_jwt_secret_configured,
+)
+
+if is_agent_jwt_secret_configured():
+    from litellm.proxy.agent_session_endpoints import (
+        agent_router as agent_session_agent_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        internal_router as agent_session_internal_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        run_router as agent_session_run_router,
+    )
+    from litellm.proxy.agent_session_endpoints import (
+        session_router as agent_session_session_router,
+    )
+    from litellm.proxy.agent_session_endpoints.error_envelope import (
+        register_v2_exception_handlers,
+    )
+
+    app.include_router(agent_session_agent_router)
+    app.include_router(agent_session_session_router)
+    app.include_router(agent_session_run_router)
+    app.include_router(agent_session_internal_router)
+    # Wrap HTTPException + RequestValidationError under /v2/* in the
+    # standard {error: {code, message, status, details?}} envelope so
+    # SDK consumers have a single error contract. Non-/v2/ paths keep
+    # FastAPI defaults (handler short-circuits on path prefix).
+    register_v2_exception_handlers(app)
+else:
+    verbose_proxy_logger.error(
+        "agent_session_endpoints (/v2/agents, /v2/sessions) NOT mounted: "
+        "LITELLM_AGENT_JWT_SECRET is not set. Set this env var to a "
+        "dedicated random secret (distinct from LITELLM_MASTER_KEY) to "
+        "enable the Cursor SDK agent runtime."
+    )
 
 attach_lazy_features(app)
 app.add_middleware(
