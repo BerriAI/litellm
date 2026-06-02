@@ -621,7 +621,7 @@ Below is a quick reference for the route groups you can use and example represen
 | `mcp_routes` | Internal MCP management endpoints | `/mcp/tools`, `/mcp/tools/call` |
 | `info_routes` | Read-only & info endpoints used by the UI | `/key/info`, `/team/info`, `/v1/models` |
 | `management_routes` | Admin-only management endpoints (create/update/delete user/team/model) | `/team/new`, `/key/generate`, `/model/new` |
-| `spend_tracking_routes` | Budget/spend related endpoints | `/spend/logs`, `/spend/keys` |
+| `spend_tracking_routes` | Budget/spend related endpoints | `/spend/logs`, `/spend/keys`, `/spend/users` |
 | `public_routes` | Public and unauthenticated endpoints | `/`, `/routes`, `/.well-known/litellm-ui-config` |
 
 Note: `llm_api_routes` is the union of OpenAI, Anthropic, Google, pass-through and other LLM routes (`openai_routes + anthropic_routes + google_routes + mapped_pass_through_routes + passthrough_routes_wildcard + apply_guardrail_routes + mcp_routes + litellm_native_routes`).

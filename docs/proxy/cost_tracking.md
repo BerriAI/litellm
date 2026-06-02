@@ -280,6 +280,62 @@ curl -L -X GET 'http://localhost:4000/user/info?user_id=jane_smith' \
 End users can provide the `user` parameter in their request bodies, doing this will increment the cost reported via `/customer/info?end_user_id=self-declared-user`, and not for the user that owns the key as reported by that API. This means users could "avoid" having their spend tracked, through their method.
 This means if you need to track user spend, and are giving end users API keys, you must always set user_id when creating their api keys, and use keys issued for that user every time you're making LLM calls on their behalf in backend services. This will track their spend.
 
+## Spend list endpoints (`/spend/keys` and `/spend/users`)
+
+These endpoints list rows from the verification-token and user tables (ordered by spend). They are included in `spend_tracking_routes` for internal users.
+
+### Access control (default)
+
+By default, non-admin callers are **scoped to their own data**:
+
+| Caller role | `/spend/keys` | `/spend/users` |
+|-------------|---------------|----------------|
+| `proxy_admin` / `proxy_admin_viewer` | All keys | All users (or `?user_id=` for one row) |
+| `internal_user` / `internal_user_view_only` | Keys where `user_id` matches the caller | Only the caller's row |
+| Non-admin with no `user_id` on the key | Empty list `[]` | Empty list `[]` |
+
+An internal user who passes `?user_id=` for **another** user receives **HTTP 403** (not a silently filtered list).
+
+```shell title="Admin — all keys" showLineNumbers
+curl -X GET 'http://localhost:4000/spend/keys' \
+  -H 'Authorization: Bearer <proxy-admin-key>'
+```
+
+```shell title="Internal user — own keys only" showLineNumbers
+curl -X GET 'http://localhost:4000/spend/keys' \
+  -H 'Authorization: Bearer <internal-user-key>'
+```
+
+### Legacy unscoped behavior (upgrade path)
+
+Before this scoping change, any authenticated key could list the **full** key/user tables. If you rely on that behavior (for example automation using an `internal_user` key), opt out explicitly:
+
+```yaml title="config.yaml" showLineNumbers
+general_settings:
+  legacy_unscoped_spend_list_endpoints: true
+```
+
+Or set the environment variable:
+
+```shell
+export LITELLM_LEGACY_UNSCOPED_SPEND_LIST_ENDPOINTS=true
+```
+
+When legacy mode is enabled, `/spend/keys` and `/spend/users` behave as they did previously for non-admin callers.
+
+To disable scoping without the legacy flag name:
+
+```yaml
+general_settings:
+  scope_spend_list_endpoints_to_caller: false
+```
+
+See [general_settings reference](./config_settings.md#general_settings---reference) for `scope_spend_list_endpoints_to_caller` and `legacy_unscoped_spend_list_endpoints`.
+
+:::info
+Prefer `/user/info?user_id=...` or `/global/spend/report` for per-user spend analytics. The list endpoints are intended for admin dashboards and scoped self-service views.
+:::
+
 ## Daily Spend Breakdown API
 
 Retrieve granular daily usage data for a user (by model, provider, and API key) with a single endpoint.
