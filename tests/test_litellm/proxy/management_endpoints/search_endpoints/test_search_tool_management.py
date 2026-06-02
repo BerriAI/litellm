@@ -4,6 +4,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -603,3 +604,205 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
                     assert tool4["litellm_params"]["search_provider"] == "custom"
                 finally:
                     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_update_search_tool_preserves_masked_api_key(monkeypatch):
+    from litellm.proxy.search_endpoints import search_tool_management
+
+    existing_tool = {
+        "search_tool_id": "test-id-1",
+        "search_tool_name": "perplexity-tool",
+        "litellm_params": {
+            "search_provider": "perplexity",
+            "api_key": "pplx-secret-1234",
+            "api_base": "https://api.perplexity.ai",
+        },
+        "search_tool_info": {"description": "old description"},
+    }
+    request = search_tool_management.UpdateSearchToolRequest(
+        search_tool={
+            "search_tool_name": "perplexity-tool",
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "pp****34",
+                "api_base": "https://api.perplexity.ai",
+            },
+            "search_tool_info": {"description": "new description"},
+        }
+    )
+
+    mock_registry = MagicMock()
+    mock_registry.get_search_tool_by_id_from_db = AsyncMock(return_value=existing_tool)
+    mock_registry.update_search_tool_in_db = AsyncMock(
+        return_value={
+            **existing_tool,
+            "search_tool_info": {"description": "new description"},
+        }
+    )
+
+    monkeypatch.setattr(
+        search_tool_management,
+        "SEARCH_TOOL_REGISTRY",
+        mock_registry,
+    )
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+
+    result = await search_tool_management.update_search_tool("test-id-1", request)
+
+    called_search_tool = mock_registry.update_search_tool_in_db.call_args.kwargs[
+        "search_tool"
+    ]
+    assert called_search_tool["litellm_params"]["api_key"] == "pplx-secret-1234"
+    assert called_search_tool["litellm_params"]["api_base"] == (
+        "https://api.perplexity.ai"
+    )
+    assert result["litellm_params"]["api_key"] == "pp****34"
+    assert result["litellm_params"]["api_base"] == "https://api.perplexity.ai"
+
+
+def test_masked_search_tool_value_ignores_non_string_values():
+    from litellm.proxy.search_endpoints import search_tool_management
+
+    assert (
+        search_tool_management._is_masked_search_tool_value(
+            key="api_key",
+            submitted_value=None,
+            stored_value="pplx-secret-1234",
+        )
+        is False
+    )
+    assert (
+        search_tool_management._is_masked_search_tool_value(
+            key="api_key",
+            submitted_value="pp****34",
+            stored_value=None,
+        )
+        is False
+    )
+
+
+def test_preserve_masked_search_tool_params_returns_update_without_litellm_params():
+    from litellm.proxy.search_endpoints import search_tool_management
+
+    updated_tool = {"search_tool_name": "perplexity-tool"}
+
+    assert (
+        search_tool_management._preserve_masked_search_tool_params(
+            existing_tool={
+                "search_tool_name": "perplexity-tool",
+                "litellm_params": {"api_key": "pplx-secret-1234"},
+            },
+            updated_tool=updated_tool,
+        )
+        is updated_tool
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("updated_search_provider", "updated_api_base"),
+    [
+        ("perplexity", "https://attacker.example"),
+        ("tavily", "https://api.perplexity.ai"),
+    ],
+)
+async def test_update_search_tool_rejects_masked_api_key_when_destination_changes(
+    monkeypatch,
+    updated_search_provider,
+    updated_api_base,
+):
+    from litellm.proxy.search_endpoints import search_tool_management
+
+    existing_tool = {
+        "search_tool_id": "test-id-1",
+        "search_tool_name": "perplexity-tool",
+        "litellm_params": {
+            "search_provider": "perplexity",
+            "api_key": "pplx-secret-1234",
+            "api_base": "https://api.perplexity.ai",
+        },
+        "search_tool_info": {"description": "old description"},
+    }
+    request = search_tool_management.UpdateSearchToolRequest(
+        search_tool={
+            "search_tool_name": "perplexity-tool",
+            "litellm_params": {
+                "search_provider": updated_search_provider,
+                "api_key": "pp****34",
+                "api_base": updated_api_base,
+            },
+            "search_tool_info": {"description": "new description"},
+        }
+    )
+
+    mock_registry = MagicMock()
+    mock_registry.get_search_tool_by_id_from_db = AsyncMock(return_value=existing_tool)
+    mock_registry.update_search_tool_in_db = AsyncMock()
+
+    monkeypatch.setattr(
+        search_tool_management,
+        "SEARCH_TOOL_REGISTRY",
+        mock_registry,
+    )
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await search_tool_management.update_search_tool("test-id-1", request)
+
+    assert exc_info.value.status_code == 400
+    assert "Submit the cleartext credential again" in exc_info.value.detail
+    mock_registry.update_search_tool_in_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_search_tool_allows_api_key_rotation(monkeypatch):
+    from litellm.proxy.search_endpoints import search_tool_management
+
+    existing_tool = {
+        "search_tool_id": "test-id-1",
+        "search_tool_name": "perplexity-tool",
+        "litellm_params": {
+            "search_provider": "perplexity",
+            "api_key": "pplx-secret-1234",
+        },
+        "search_tool_info": {"description": "old description"},
+    }
+    request = search_tool_management.UpdateSearchToolRequest(
+        search_tool={
+            "search_tool_name": "perplexity-tool",
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "pplx-new-secret-5678",
+            },
+            "search_tool_info": {"description": "new description"},
+        }
+    )
+
+    mock_registry = MagicMock()
+    mock_registry.get_search_tool_by_id_from_db = AsyncMock(return_value=existing_tool)
+    mock_registry.update_search_tool_in_db = AsyncMock(
+        return_value={
+            **existing_tool,
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "pplx-new-secret-5678",
+            },
+            "search_tool_info": {"description": "new description"},
+        }
+    )
+
+    monkeypatch.setattr(
+        search_tool_management,
+        "SEARCH_TOOL_REGISTRY",
+        mock_registry,
+    )
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+
+    result = await search_tool_management.update_search_tool("test-id-1", request)
+
+    called_search_tool = mock_registry.update_search_tool_in_db.call_args.kwargs[
+        "search_tool"
+    ]
+    assert called_search_tool["litellm_params"]["api_key"] == "pplx-new-secret-5678"
+    assert result["litellm_params"]["api_key"] == "pp****78"

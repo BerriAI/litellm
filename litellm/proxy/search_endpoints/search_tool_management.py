@@ -3,12 +3,13 @@ CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
@@ -22,6 +23,9 @@ from litellm.types.utils import SearchProviders
 
 router = APIRouter()
 SEARCH_TOOL_REGISTRY = SearchToolRegistry()
+_MASK_UNMASKED_LENGTH: int = 4
+_MASK_NUMBER_OF_ASTERISKS: int = 4
+_SECRET_DESTINATION_FIELDS = ("search_provider", "api_base")
 
 
 def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, None]:
@@ -39,6 +43,94 @@ def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, No
     if isinstance(value, datetime):
         return value.isoformat()
     return value
+
+
+def _is_masked_search_tool_value(
+    *,
+    key: str,
+    submitted_value: Any,
+    stored_value: Any,
+    unmasked_length: int = _MASK_UNMASKED_LENGTH,
+    number_of_asterisks: int = _MASK_NUMBER_OF_ASTERISKS,
+) -> bool:
+    if not isinstance(submitted_value, str) or not isinstance(stored_value, str):
+        return False
+
+    masked_value = _get_masked_values(
+        {key: stored_value},
+        unmasked_length=unmasked_length,
+        number_of_asterisks=number_of_asterisks,
+    )[key]
+    if masked_value == stored_value:
+        return False
+
+    return submitted_value == masked_value
+
+
+def _secret_destination_changed(
+    existing_litellm_params: Dict[str, Any],
+    updated_litellm_params: Dict[str, Any],
+) -> bool:
+    return any(
+        existing_litellm_params.get(field) != updated_litellm_params.get(field)
+        for field in _SECRET_DESTINATION_FIELDS
+    )
+
+
+def _preserve_masked_search_tool_params(
+    existing_tool: SearchTool,
+    updated_tool: SearchTool,
+) -> SearchTool:
+    updated_litellm_params = dict(updated_tool.get("litellm_params", {}))
+    if not updated_litellm_params:
+        return updated_tool
+
+    existing_litellm_params = dict(existing_tool.get("litellm_params", {}))
+    destination_changed = _secret_destination_changed(
+        existing_litellm_params=existing_litellm_params,
+        updated_litellm_params=updated_litellm_params,
+    )
+    for key, value in list(updated_litellm_params.items()):
+        existing_value = existing_litellm_params.get(key)
+        if _is_masked_search_tool_value(
+            key=key,
+            submitted_value=value,
+            stored_value=existing_value,
+        ):
+            if destination_changed:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Masked search tool credentials cannot be reused when "
+                        "search_provider or api_base changes. Submit the cleartext "
+                        "credential again."
+                    ),
+                )
+            updated_litellm_params[key] = existing_value
+
+    return cast(
+        SearchTool,
+        {
+            **updated_tool,
+            "litellm_params": updated_litellm_params,
+        },
+    )
+
+
+def _mask_search_tool_litellm_params(search_tool: SearchTool) -> SearchTool:
+    litellm_params = dict(search_tool.get("litellm_params", {}))
+    masked_litellm_params = _get_masked_values(
+        litellm_params,
+        unmasked_length=_MASK_UNMASKED_LENGTH,
+        number_of_asterisks=_MASK_NUMBER_OF_ASTERISKS,
+    )
+    return cast(
+        SearchTool,
+        {
+            **search_tool,
+            "litellm_params": masked_litellm_params,
+        },
+    )
 
 
 @router.get(
@@ -304,9 +396,14 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
                 detail=f"Search tool with ID {search_tool_id} not found",
             )
 
+        search_tool = _preserve_masked_search_tool_params(
+            existing_tool=existing_tool,
+            updated_tool=request.search_tool,
+        )
+
         result = await SEARCH_TOOL_REGISTRY.update_search_tool_in_db(
             search_tool_id=search_tool_id,
-            search_tool=request.search_tool,
+            search_tool=search_tool,
             prisma_client=prisma_client,
         )
 
@@ -315,7 +412,7 @@ async def update_search_tool(search_tool_id: str, request: UpdateSearchToolReque
             f"Router will be updated by the cron job."
         )
 
-        return result
+        return _mask_search_tool_litellm_params(result)
     except HTTPException as e:
         raise e
     except Exception as e:
