@@ -1536,7 +1536,7 @@ class ProxyLogging:
         self,
         exc: SensitiveDataRouteException,
         data: Optional[dict],
-        user_api_key_dict: UserAPIKeyAuth,
+        user_api_key_dict: Optional[UserAPIKeyAuth],
     ) -> Optional[dict]:
         """
         Handle SensitiveDataRouteException by rerouting the current request to
