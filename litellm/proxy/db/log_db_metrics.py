@@ -106,15 +106,37 @@ def log_db_metrics(func):
     return wrapper
 
 
+_db_exception_types: Optional[Tuple[type, ...]] = None
+
+
+def _db_exception_types_cached() -> Tuple[type, ...]:
+    """Exception types that mark a DB failure, resolved once.
+
+    ``prisma`` is an optional dependency, so a proxy without it must not re-run
+    (and re-fail) ``from prisma.errors import PrismaError`` on every handled
+    exception -- a failed import is never cached in ``sys.modules`` and re-runs
+    the whole finder/loader machinery each call.
+    """
+    global _db_exception_types
+    if _db_exception_types is None:
+        import httpx
+
+        types: Tuple[type, ...] = (httpx.ConnectError, httpx.TimeoutException)
+        try:
+            from prisma.errors import PrismaError
+
+            types = (PrismaError, *types)
+        except Exception:
+            pass
+        _db_exception_types = types
+    return _db_exception_types
+
+
 def _is_exception_related_to_db(e: Exception) -> bool:
     """
     Returns True if the exception is related to the DB
     """
-
-    import httpx
-    from prisma.errors import PrismaError
-
-    return isinstance(e, (PrismaError, httpx.ConnectError, httpx.TimeoutException))
+    return isinstance(e, _db_exception_types_cached())
 
 
 async def _handle_logging_db_exception(
