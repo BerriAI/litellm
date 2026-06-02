@@ -1722,17 +1722,6 @@ app.add_middleware(
 app.add_middleware(PrometheusAuthMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 
-# CF-INJECTED-ORIGIN-SECRET-MIDDLEWARE — Rayward v1 internal-gateway control.
-# Rejects any request missing the Cloudflare Transform Rule's secret header,
-# unless CF_ORIGIN_SECRET env var is unset (then the middleware aborts startup,
-# refusing to silently allow all traffic).
-if os.environ.get("CF_ORIGIN_SECRET"):
-    from litellm.proxy.middleware.cf_origin_secret import (
-        CloudflareOriginSecretMiddleware,
-    )
-
-    app.add_middleware(CloudflareOriginSecretMiddleware)
-
 
 def mount_swagger_ui():
     swagger_directory = os.path.join(current_dir, "swagger")
@@ -7005,12 +6994,6 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
     return f"data: {chunk}\n\n"
 
 
-def _should_emit_done_sentinel(request_data: dict) -> bool:
-    logging_obj = request_data.get("litellm_logging_obj")
-    call_type = getattr(logging_obj, "call_type", None)
-    return call_type != "agenerate_content_stream"
-
-
 async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -7089,10 +7072,10 @@ async def async_data_generator(  # noqa: PLR0915
             # still flush their post-stream logging.
             ProxyLogging._fire_deferred_stream_logging(request_data)
 
-        # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
             yield error_message
-        if _should_emit_done_sentinel(request_data=request_data):
+        # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
+        if not request_data.get("_litellm_skip_openai_stream_done"):
             done_message = "[DONE]"
             yield f"data: {done_message}\n\n"
     except Exception as e:

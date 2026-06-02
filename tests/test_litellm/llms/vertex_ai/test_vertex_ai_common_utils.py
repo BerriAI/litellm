@@ -1326,6 +1326,63 @@ def test_vertex_ai_zai_is_partner_model():
     assert VertexAIPartnerModels.is_vertex_partner_model("zai-org/glm-4.7-maas")
 
 
+def test_vertex_ai_gemma_maas_is_partner_model():
+    """
+    Ensure Gemma MaaS models are detected as Vertex AI partner models so they
+    route through the OpenAI-compatible /endpoints/openapi path (not the
+    legacy non-gemini path or the vertex_ai/gemma/ predict-endpoint handler).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.is_vertex_partner_model(
+        "google/gemma-4-26b-a4b-it-maas"
+    )
+
+
+def test_vertex_ai_gemma_maas_uses_openai_handler():
+    """
+    Ensure Gemma MaaS partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "google/gemma-4-26b-a4b-it-maas"
+    )
+
+
+def test_vertex_ai_gemma_maas_routes_to_partner_models():
+    """
+    Regression guard for owtaylor's worry that Gemma MaaS could be misrouted as
+    a gemma model. get_vertex_ai_model_route must return PARTNER_MODELS, never
+    GEMMA, MODEL_GARDEN, or NON_GEMINI.
+    """
+    from litellm.llms.vertex_ai.common_utils import (
+        VertexAIModelRoute,
+        get_vertex_ai_model_route,
+    )
+
+    route = get_vertex_ai_model_route("google/gemma-4-26b-a4b-it-maas")
+    assert route == VertexAIModelRoute.PARTNER_MODELS
+
+
+def test_vertex_ai_google_gemini_not_detected_as_gemma_maas():
+    """
+    Negative: adding the "google/gemma-" prefix must not widen detection to
+    other google/* models like google/gemini-* (which should keep flowing
+    through the gemini route, not partner_models).
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert not VertexAIPartnerModels.is_vertex_partner_model("google/gemini-1.5-pro")
+    assert not VertexAIPartnerModels.should_use_openai_handler("google/gemini-1.5-pro")
+
+
 def test_build_vertex_schema_empty_properties():
     """
     Test _build_vertex_schema handles empty properties objects correctly.
