@@ -295,21 +295,8 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "deployment_url",
     # Routing / credential-selection / config-shaped fields a client must not
     # supply: each retargets the request to another tenant's deployment, swaps
-    # in a server-side credential, or smuggles config past the model-authz layer.
-    #  - ``model_list``: array of deployment dicts (own ``litellm_params``/
-    #    ``api_base``) processed by batch_completion, smuggling arbitrary
-    #    deployments past authorization (only the root ``model`` is authorized).
-    #  - ``vertex_ai_credentials``: alias of the already-banned
-    #    ``vertex_credentials``; the ``external_account`` ``executable``
-    #    credential source is an RCE sink.
-    #  - ``vertex_project``: selects the GCP project the proxy SA acts on
-    #    (cross-tenant impersonation).
-    #  - ``litellm_credential_name``: resolves a globally-stored credential by
-    #    name with no ownership model.
-    #  - ``aws_profile_name``: selects a server-side AWS profile/credential.
-    #  - ``base_model``: redirects the cost-lookup model (spend spoofing).
-    #  - ``oci_key_file``: a server file path the OCI handler opens and reads
-    #    unbounded (arbitrary-file-path DoS).
+    # in a server-side credential, or smuggles config past the model-authz layer
+    # (vertex_ai_credentials is the alias of the already-banned vertex_credentials).
     "model_list",
     "vertex_ai_credentials",
     "vertex_project",
@@ -324,6 +311,9 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     *sorted(_build_banned_observability_params()),
     *sorted(CustomPricingLiteLLMParams.model_fields.keys()),
 )
+# Membership set for the per-request check, which iterates the (small) body
+# keys against it rather than scanning the (large, still-growing) ban list.
+_BANNED_REQUEST_BODY_PARAMS_SET: FrozenSet[str] = frozenset(_BANNED_REQUEST_BODY_PARAMS)
 
 
 def _check_banned_params(
@@ -337,12 +327,11 @@ def _check_banned_params(
     Shared between the root-level check and the nested-config check so a
     new banned param only needs to be added in one place.
     """
-    for param in _BANNED_REQUEST_BODY_PARAMS:
-        if param not in body:
+    for param in body:
+        if param not in _BANNED_REQUEST_BODY_PARAMS_SET:
             continue
         if general_settings.get("allow_client_side_credentials") is True:
-            # Proxy-wide opt-in: every banned param is permitted, exit
-            # entirely so the rest of the loop doesn't waste work.
+            # Proxy-wide opt-in: every banned param is permitted.
             return
         if (
             _allow_model_level_clientside_configurable_parameters(
@@ -353,11 +342,9 @@ def _check_banned_params(
             )
             is True
         ):
-            # Per-param opt-in: only THIS param is permitted by the
-            # deployment's ``configurable_clientside_auth_params``. Skip
-            # to the next banned param so a body that pairs an allowed
-            # ``api_base`` with an unallowed ``langfuse_host`` is still
-            # rejected for the second field.
+            # Per-param opt-in via the deployment's
+            # ``configurable_clientside_auth_params``: only THIS param is
+            # permitted, so keep checking the remaining body keys.
             continue
         raise ValueError(
             f"Rejected Request: {param} is not allowed in request body. "
@@ -398,20 +385,14 @@ def is_request_body_safe(
     recursion-depth DoS surface.
     """
     _check_banned_params(request_body, general_settings, llm_router, model)
-    for nested_key in _NESTED_CONFIG_KEYS:
+    for nested_key in (*_NESTED_CONFIG_KEYS, *_NESTED_METADATA_KEYS):
         nested = _coerce_metadata_to_dict(request_body.get(nested_key))
         if nested is not None:
             _check_banned_params(nested, general_settings, llm_router, model)
-    for metadata_key in _NESTED_METADATA_KEYS:
-        metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
-        if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model)
-    # Each entry in ``tools`` is a caller-supplied dict; provider integrations
-    # (e.g. the Advisor orchestration tool) read endpoint/credential fields
-    # straight off the tool object (``tool["api_base"]``) without re-validating,
-    # so an ``api_base`` smuggled here is an SSRF / master-key-exfil primitive.
-    # Check each tool object the same way — one level, no descent into the
-    # JSON-schema ``function.parameters`` where an ``api_base`` is just data.
+    # Each ``tools`` entry is a caller-supplied dict that integrations (e.g. the
+    # Advisor tool) read endpoint/credential fields straight off of, so check
+    # each one level deep — not into ``function.parameters``, where an
+    # ``api_base`` is just schema data.
     tools = request_body.get("tools")
     if isinstance(tools, list):
         for tool in tools:

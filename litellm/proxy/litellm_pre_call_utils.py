@@ -30,6 +30,7 @@ from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.hooks.parallel_request_limiter_v3 import _LITELLM_STASH_KEYS
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -186,16 +187,11 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     # ``usage_object`` overwrites the server-computed token counts, corrupting
     # spend/analytics aggregates (and a non-dict value silently drops the row).
     "usage_object",
-    # Internal rate-limiter stash sentinels (mirrors STASH_KEYS in
-    # litellm/proxy/hooks/parallel_request_limiter_v3.py). A client that injects
-    # these into metadata, then errors before the pre-call hook strips them, has
-    # the failure hook refund/replay another tenant's TPM reservation. Stripping
-    # at ingestion closes every channel, not just the pre-call path.
-    "_litellm_tpm_reserved_tokens",
-    "_litellm_tpm_reserved_model",
-    "_litellm_tpm_reserved_scopes",
-    "_litellm_tpm_reservation_released",
-    "_litellm_rate_limit_descriptors",
+    # Internal rate-limiter stash sentinels: a client that injects these into
+    # metadata, then errors before the pre-call hook strips them, has the failure
+    # hook refund/replay another tenant's TPM reservation. Stripping at ingestion
+    # closes every channel, not just the pre-call path.
+    *_LITELLM_STASH_KEYS,
 )
 
 _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
@@ -209,9 +205,20 @@ _ALLOW_CLIENT_MESSAGE_REDACTION_OPT_OUT_METADATA_KEY = (
     "allow_client_message_redaction_opt_out"
 )
 
-# Upper bound on a client-supplied ``x-litellm-num-retries``. Applied verbatim,
-# a large value amplifies one request into many upstream calls (cost/DoS).
+# Upper bound on a client-supplied num_retries (header or body). Applied
+# verbatim, a large value amplifies one request into many upstream calls (DoS).
 _MAX_CLIENT_NUM_RETRIES = 5
+
+
+def _clamp_client_num_retries(value: Any) -> Optional[int]:
+    """Clamp a client-supplied num_retries to ``[0, _MAX_CLIENT_NUM_RETRIES]``;
+    return None if it isn't a valid integer."""
+    try:
+        requested = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, min(requested, _MAX_CLIENT_NUM_RETRIES))
+
 
 # Per-request pricing parameters mutate cost-tracking output and (via
 # ``litellm.completion`` → ``register_model``) the process-wide
@@ -710,11 +717,7 @@ class LiteLLMProxyRequestSetup:
         num_retries_header = headers.get("x-litellm-num-retries", None)
         if num_retries_header is None:
             return None
-        try:
-            requested = int(num_retries_header)
-        except (TypeError, ValueError):
-            return None
-        return max(0, min(requested, _MAX_CLIENT_NUM_RETRIES))
+        return _clamp_client_num_retries(num_retries_header)
 
     @staticmethod
     def _get_spend_logs_metadata_from_request_headers(headers: dict) -> Optional[dict]:
@@ -1346,6 +1349,14 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if _allow_client_mock_response and _internal_key in _CLIENT_MOCK_CONTROL_FIELDS:
             continue
         data.pop(_internal_key, None)
+    # A body-supplied ``num_retries`` bypasses the header clamp but still reaches
+    # the router via ``**data``; clamp it here (drop if non-integer).
+    if data.get("num_retries") is not None:
+        _clamped_retries = _clamp_client_num_retries(data["num_retries"])
+        if _clamped_retries is None:
+            data.pop("num_retries", None)
+        else:
+            data["num_retries"] = _clamped_retries
     _reject_url_valued_destinations(data)
     # Strip spoofable auth metadata from user-supplied metadata dict
     _user_metadata = data.get("metadata")

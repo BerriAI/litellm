@@ -820,14 +820,15 @@ async def test_add_litellm_data_to_request_strips_new_metadata_control_fields():
     """Spend/guardrail/rate-limiter sentinels injected via client metadata corrupt
     analytics, spoof guardrail verdicts, or refund another tenant's TPM
     reservation on the failure path; strip them at ingestion."""
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _LITELLM_STASH_KEYS
+
+    stripped = {
+        "usage_object",
+        "standard_logging_guardrail_information",
+        *_LITELLM_STASH_KEYS,
+    }
     malicious_metadata = {
-        "usage_object": {"total_tokens": 0},
-        "standard_logging_guardrail_information": {"status": "success"},
-        "_litellm_tpm_reserved_tokens": 999999,
-        "_litellm_tpm_reserved_model": "victim",
-        "_litellm_tpm_reserved_scopes": ["victim"],
-        "_litellm_tpm_reservation_released": True,
-        "_litellm_rate_limit_descriptors": [{"key": "victim"}],
+        **{key: "victim" for key in stripped},
         "safe_user_metadata": "kept",
     }
     data = {
@@ -844,20 +845,41 @@ async def test_add_litellm_data_to_request_strips_new_metadata_control_fields():
         general_settings={},
         version="test-version",
     )
-    stripped = {
-        "usage_object",
-        "standard_logging_guardrail_information",
-        "_litellm_tpm_reserved_tokens",
-        "_litellm_tpm_reserved_model",
-        "_litellm_tpm_reserved_scopes",
-        "_litellm_tpm_reservation_released",
-        "_litellm_rate_limit_descriptors",
-    }
     for metadata_key in ("metadata", "litellm_metadata"):
         cleaned = updated.get(metadata_key) or {}
         for key in stripped:
             assert key not in cleaned
         assert cleaned.get("safe_user_metadata") == "kept"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body_value,expected",
+    [
+        (999999, 5),  # huge body-supplied num_retries is capped
+        ("999999", 5),  # string form is also capped
+        (-1, 0),  # negative clamped to 0
+        ("not-int", None),  # non-integer is dropped, not applied
+    ],
+)
+async def test_add_litellm_data_to_request_clamps_body_num_retries(
+    body_value, expected
+):
+    """A num_retries supplied in the request body (not the header) still reaches
+    the router via **data, so it must be clamped at ingestion too."""
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}],
+            "num_retries": body_value,
+        },
+        request=_strip_request_mock(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+    assert updated.get("num_retries") == expected
 
 
 @pytest.mark.asyncio
