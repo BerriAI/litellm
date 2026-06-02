@@ -3,6 +3,7 @@ import os
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
@@ -368,6 +369,108 @@ async def test_handle_streaming_does_not_fallback_on_invalid_json(monkeypatch):
             pass
 
     assert not any(url.endswith("/runs") for url in client.post_urls)
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_does_not_resubmit_run_on_poll_transport_error(
+    monkeypatch,
+):
+    class _RunSubmissionClient:
+        def __init__(self):
+            self.post_urls = []
+
+        async def post(self, url, **kwargs):
+            self.post_urls.append(url)
+            if "identity/token" in url:
+                return _JsonResponse({"access_token": "token", "expires_in": 3600})
+            if url.endswith("/runs/stream"):
+                return _JsonStreamResponse({"status": "running", "run_id": "run-1"})
+            if url.endswith("/runs"):
+                return _JsonResponse({"status": "completed", "results": "duplicate"})
+            raise AssertionError(url)
+
+    client = _RunSubmissionClient()
+
+    async def poll_run(base_url, run_id, auth_headers, client, **kwargs):
+        raise httpx.ConnectError("connection reset during poll")
+
+    monkeypatch.setattr(
+        WatsonxOrchestrateHandler,
+        "_http_client",
+        lambda timeout=90.0: client,
+    )
+    monkeypatch.setattr(WatsonxOrchestrateHandler, "_poll_run", poll_run)
+
+    params = {"message": {"parts": [{"kind": "text", "text": "Hello"}]}}
+    litellm_params = {
+        "cp4d_host": "https://cpd.example.com",
+        "instance_id": "instance-id",
+        "wxo_agent_id": "agent-id",
+        "api_key": "poll-transport-error-cache-key",
+        "auth_mode": "ibm_cloud",
+    }
+
+    with pytest.raises(httpx.TransportError):
+        async for _ in WatsonxOrchestrateHandler.handle_streaming(
+            request_id="req-1",
+            params=params,
+            litellm_params=litellm_params,
+            delay_ms=0,
+        ):
+            pass
+
+    assert not any(url.endswith("/runs") for url in client.post_urls)
+
+
+@pytest.mark.asyncio
+async def test_handle_streaming_falls_back_when_initial_post_fails(monkeypatch):
+    class _StreamPostFailsClient:
+        def __init__(self):
+            self.post_urls = []
+
+        async def post(self, url, **kwargs):
+            self.post_urls.append(url)
+            if "identity/token" in url:
+                return _JsonResponse({"access_token": "token", "expires_in": 3600})
+            if url.endswith("/runs/stream"):
+                raise httpx.ConnectError("cannot reach stream endpoint")
+            if url.endswith("/runs"):
+                return _JsonResponse({"status": "completed", "results": "fallback"})
+            raise AssertionError(url)
+
+    client = _StreamPostFailsClient()
+    monkeypatch.setattr(
+        WatsonxOrchestrateHandler,
+        "_http_client",
+        lambda timeout=90.0: client,
+    )
+
+    params = {"message": {"parts": [{"kind": "text", "text": "Hello"}]}}
+    litellm_params = {
+        "cp4d_host": "https://cpd.example.com",
+        "instance_id": "instance-id",
+        "wxo_agent_id": "agent-id",
+        "api_key": "stream-post-fails-cache-key",
+        "auth_mode": "ibm_cloud",
+    }
+
+    events = [
+        event
+        async for event in WatsonxOrchestrateHandler.handle_streaming(
+            request_id="req-1",
+            params=params,
+            litellm_params=litellm_params,
+            delay_ms=0,
+        )
+    ]
+    artifact_text = "".join(
+        event["result"]["artifact"]["parts"][0]["text"]
+        for event in events
+        if event["result"].get("kind") == "artifact-update"
+    )
+
+    assert artifact_text == "fallback"
+    assert sum(url.endswith("/runs") for url in client.post_urls) == 1
 
 
 def test_config_manager_returns_wxo_provider():

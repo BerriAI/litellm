@@ -325,41 +325,10 @@ class WatsonxOrchestrateHandler:
                 stream=True,
             )
             response.raise_for_status()
-            content_type = response.headers.get("content-type", "").lower()
-
-            if "text/event-stream" not in content_type:
-                response_body = await response.aread()
-                result = json.loads(response_body)
-                result = await WatsonxOrchestrateHandler._get_successful_run_data(
-                    run_data=result,
-                    base_url=base_url,
-                    auth_headers=auth_headers,
-                    client=client,
-                )
-                accumulated_text = (
-                    WatsonxOrchestrateTransformation.extract_text_from_wxo_result(
-                        result
-                    )
-                )
-            else:
-                accumulated_text = (
-                    await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(response)
-                )
-
-            async for (
-                chunk
-            ) in WatsonxOrchestrateTransformation.fake_streaming_from_text(
-                text=accumulated_text,
-                request_id=request_id,
-                chunk_size=chunk_size,
-                delay_ms=delay_ms,
-            ):
-                yield chunk
-
         except httpx.TransportError as exc:
             verbose_logger.warning(
-                f"WXO: Streaming transport failed ({exc!r}), "
-                "falling back to non-streaming + fake streaming",
+                f"WXO: Streaming request failed before a run was submitted "
+                f"({exc!r}), falling back to non-streaming + fake streaming",
                 exc_info=True,
             )
             result = await WatsonxOrchestrateHandler.handle_non_streaming(
@@ -381,3 +350,30 @@ class WatsonxOrchestrateHandler:
                 delay_ms=delay_ms,
             ):
                 yield chunk
+            return
+
+        content_type = response.headers.get("content-type", "").lower()
+        if "text/event-stream" not in content_type:
+            response_body = await response.aread()
+            result = json.loads(response_body)
+            result = await WatsonxOrchestrateHandler._get_successful_run_data(
+                run_data=result,
+                base_url=base_url,
+                auth_headers=auth_headers,
+                client=client,
+            )
+            accumulated_text = (
+                WatsonxOrchestrateTransformation.extract_text_from_wxo_result(result)
+            )
+        else:
+            accumulated_text = await WatsonxOrchestrateHandler._accumulate_wxo_sse_text(
+                response
+            )
+
+        async for chunk in WatsonxOrchestrateTransformation.fake_streaming_from_text(
+            text=accumulated_text,
+            request_id=request_id,
+            chunk_size=chunk_size,
+            delay_ms=delay_ms,
+        ):
+            yield chunk
