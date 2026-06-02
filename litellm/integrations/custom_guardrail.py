@@ -104,7 +104,9 @@ class CustomGuardrail(CustomLogger):
         self.on_violation: Optional[str] = on_violation
         self.realtime_violation_message: Optional[str] = realtime_violation_message
         self.on_sensitive_data: Optional[str] = on_sensitive_data
-        self.sensitive_data_route_to_model: Optional[str] = sensitive_data_route_to_model
+        self.sensitive_data_route_to_model: Optional[str] = (
+            sensitive_data_route_to_model
+        )
         self.sticky_session_routing: bool = sticky_session_routing
 
         if supported_event_hooks:
