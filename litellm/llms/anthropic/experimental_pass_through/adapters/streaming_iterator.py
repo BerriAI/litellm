@@ -312,14 +312,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if compaction_event is not None:
                     return compaction_event
 
-            if (
-                self.sent_compaction_block is False
-                and self.compaction_block is not None
-            ):
-                compaction_event = self._next_compaction_event()
-                if compaction_event is not None:
-                    return compaction_event
-
             for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
@@ -349,28 +341,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         else None
                     ),
                 )
-
-                if not self.sent_content_block_start:
-                    self.sent_content_block_start = True
-                    self.sent_content_block_finish = False
-                    self.chunk_queue.append(
-                        {
-                            "type": "content_block_start",
-                            "index": self.current_content_block_index,
-                            "content_block": self.current_content_block_start,
-                        }
-                    )
-                    if (
-                        processed_chunk.get("type") == "content_block_delta"
-                        and isinstance(processed_chunk.get("delta"), dict)
-                        and processed_chunk["delta"].get("type")
-                        in ("text_delta", "input_json_delta")
-                        and processed_chunk["delta"].get(
-                            "text", processed_chunk["delta"].get("partial_json", "")
-                        )
-                    ):
-                        self.chunk_queue.append(processed_chunk)
-                    return self.chunk_queue.popleft()
 
                 if not self.sent_content_block_start:
                     self.sent_content_block_start = True
@@ -599,14 +569,6 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if compaction_event is not None:
                     return compaction_event
 
-            if (
-                self.sent_compaction_block is False
-                and self.compaction_block is not None
-            ):
-                compaction_event = self._next_compaction_event()
-                if compaction_event is not None:
-                    return compaction_event
-
             async for chunk in self.completion_stream:
                 if chunk == "None" or chunk is None:
                     raise Exception
@@ -637,6 +599,28 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         else None
                     ),
                 )
+
+                if not self.sent_content_block_start:
+                    self.sent_content_block_start = True
+                    self.sent_content_block_finish = False
+                    self.chunk_queue.append(
+                        {
+                            "type": "content_block_start",
+                            "index": self.current_content_block_index,
+                            "content_block": self.current_content_block_start,
+                        }
+                    )
+                    if (
+                        processed_chunk.get("type") == "content_block_delta"
+                        and isinstance(processed_chunk.get("delta"), dict)
+                        and processed_chunk["delta"].get("type")
+                        in ("text_delta", "input_json_delta")
+                        and processed_chunk["delta"].get(
+                            "text", processed_chunk["delta"].get("partial_json", "")
+                        )
+                    ):
+                        self.chunk_queue.append(processed_chunk)
+                    return self.chunk_queue.popleft()
 
                 # Check if this is a usage chunk and we have a held stop_reason chunk
                 if will_merge_into_held:
