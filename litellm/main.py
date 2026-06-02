@@ -3805,10 +3805,13 @@ def completion(  # type: ignore # noqa: PLR0915
                 return _model_response
             response = _model_response
         elif custom_llm_provider == "text-completion-inception":
-            api_base = (
+            passed_api_base = (
                 api_base
                 or optional_params.pop("api_base", None)
                 or optional_params.pop("base_url", None)
+            )
+            api_base = (
+                passed_api_base
                 or get_secret_str("INCEPTION_API_BASE")
                 or "https://api.inceptionlabs.ai/v1"
             )
@@ -3818,19 +3821,23 @@ def completion(  # type: ignore # noqa: PLR0915
             if not api_base.endswith("/fim"):
                 api_base += "/fim"
 
-            api_key = (
-                api_key
-                or litellm.api_key
-                or litellm.inception_key
-                or get_secret("INCEPTION_API_KEY")
-            )
+            # Don't forward the server-managed Inception key to a caller-supplied
+            # api_base; only resolve it for the default/server base, or when the
+            # caller passes their own key.
+            if passed_api_base is None or api_key:
+                api_key = (
+                    api_key
+                    or litellm.api_key
+                    or litellm.inception_key
+                    or get_secret("INCEPTION_API_KEY")
+                )
 
             _response = openai_text_completions.completion(
                 model=model,
                 messages=messages,
                 model_response=model_response,
                 print_verbose=print_verbose,
-                api_key=api_key,
+                api_key=api_key,  # type: ignore[arg-type]
                 custom_llm_provider="text-completion-inception",
                 api_base=api_base,
                 acompletion=acompletion,

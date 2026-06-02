@@ -181,6 +181,35 @@ def test_inception_key_module_attr_fallback():
             assert api_key == "module-attr-key"
 
 
+def test_inception_does_not_leak_key_to_caller_api_base():
+    """
+    The server-managed Inception key must not be forwarded to a caller-supplied
+    api_base. It is only resolved for the default/server base, or when the
+    caller also supplies their own key.
+    """
+    config = InceptionChatConfig()
+    with mock.patch.dict(
+        os.environ, {"INCEPTION_API_KEY": "server-secret"}, clear=True
+    ):
+        with mock.patch.object(litellm, "inception_key", "module-secret"):
+            # caller overrides api_base without a key -> server key withheld
+            api_base, api_key = config._get_openai_compatible_provider_info(
+                "https://attacker.example/v1", None
+            )
+            assert api_base == "https://attacker.example/v1"
+            assert api_key is None
+
+            # caller overrides api_base AND supplies their own key -> used as-is
+            _, api_key = config._get_openai_compatible_provider_info(
+                "https://attacker.example/v1", "caller-key"
+            )
+            assert api_key == "caller-key"
+
+            # default/server base -> server-managed key resolved
+            _, api_key = config._get_openai_compatible_provider_info(None, None)
+            assert api_key == "module-secret"
+
+
 def test_get_llm_provider_inception():
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 

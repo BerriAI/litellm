@@ -7,11 +7,27 @@ import os
 from unittest import mock
 
 import httpx
+import pytest
 
 import litellm
 from litellm.llms.inception.completion.transformation import (
     InceptionTextCompletionConfig,
 )
+
+
+def _fim_response_bytes():
+    return json.dumps(
+        {
+            "id": "fim-1",
+            "object": "text_completion",
+            "created": 1,
+            "model": "mercury-edit-2",
+            "choices": [
+                {"text": "a + b", "index": 0, "finish_reason": "stop", "logprobs": None}
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        }
+    ).encode()
 
 
 def test_inception_fim_supports_suffix_param():
@@ -46,6 +62,85 @@ def test_text_completion_inception_in_provider_lists():
 
     assert LlmProviders.TEXT_COMPLETION_INCEPTION == "text-completion-inception"
     assert "text-completion-inception" in litellm.provider_list
+
+
+def test_inception_get_supported_openai_params_dispatch():
+    """litellm.get_supported_openai_params routes the FIM provider to our config"""
+    params = litellm.get_supported_openai_params(
+        model="mercury-edit-2", custom_llm_provider="text-completion-inception"
+    )
+    assert "suffix" in params
+    assert "temperature" not in params
+
+
+@pytest.mark.parametrize("provider", ["inception", "text-completion-inception"])
+def test_inception_validate_environment(provider):
+    model = (
+        "inception/mercury-2"
+        if provider == "inception"
+        else "text-completion-inception/mercury-edit-2"
+    )
+
+    with mock.patch.dict(os.environ, {}, clear=True):
+        result = litellm.validate_environment(model)
+        assert result["keys_in_environment"] is False
+        assert "INCEPTION_API_KEY" in result["missing_keys"]
+
+    with mock.patch.dict(os.environ, {"INCEPTION_API_KEY": "sk-x"}, clear=True):
+        result = litellm.validate_environment(model)
+        assert result["keys_in_environment"] is True
+
+
+def test_inception_completion_endpoint_returns_chat_object():
+    """
+    Calling chat `completion()` with the FIM provider converts the text
+    completion result into a chat-shaped ModelResponse.
+    """
+
+    def fake_send(self, request, **kwargs):
+        return httpx.Response(
+            status_code=200,
+            request=request,
+            headers={"content-type": "application/json"},
+            content=_fim_response_bytes(),
+        )
+
+    with mock.patch("httpx.Client.send", new=fake_send):
+        r = litellm.completion(
+            model="text-completion-inception/mercury-edit-2",
+            messages=[{"role": "user", "content": "def add(a, b): return "}],
+            api_key="sk-x",
+        )
+
+    assert r.choices[0].message.content == "a + b"
+
+
+@pytest.mark.asyncio
+async def test_inception_fim_async():
+    """async FIM path (acompletion) hits Inception's /v1/fim/completions"""
+
+    captured = {}
+
+    async def fake_asend(self, request, **kwargs):
+        captured["url"] = str(request.url)
+        return httpx.Response(
+            status_code=200,
+            request=request,
+            headers={"content-type": "application/json"},
+            content=_fim_response_bytes(),
+        )
+
+    with mock.patch("httpx.AsyncClient.send", new=fake_asend):
+        r = await litellm.atext_completion(
+            model="text-completion-inception/mercury-edit-2",
+            prompt="def add(a, b): return ",
+            suffix="\n",
+            api_key="sk-x",
+            max_tokens=10,
+        )
+
+    assert captured["url"] == "https://api.inceptionlabs.ai/v1/fim/completions"
+    assert r.choices[0].text == "a + b"
 
 
 def test_inception_fim_model_configuration():
