@@ -41,6 +41,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
+    VigilGuardGuardrailConfigModel,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -103,6 +106,7 @@ class SupportedGuardrailIntegrations(Enum):
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
+    VIGIL_GUARD = "vigil_guard"
 
 
 class Role(Enum):
@@ -758,6 +762,15 @@ class BaseLitellmParams(
         description="Python-like code containing the apply_guardrail function for custom guardrail logic",
     )
 
+    timeout: Optional[float] = Field(
+        default=None,
+        description=(
+            "Per-request timeout for the guardrail provider API call (seconds). "
+            "Accepts int, float, or numeric string; coerced to float on load. "
+            "Each guardrail handler chooses its own default when unset."
+        ),
+    )
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -791,6 +804,7 @@ class LitellmParams(
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
+    VigilGuardGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -813,6 +827,18 @@ class LitellmParams(
         if isinstance(v, list):
             return [x.lower() if isinstance(x, str) else x for x in v]
         return v
+
+    @field_validator("timeout", mode="before", check_fields=False)
+    @classmethod
+    def coerce_timeout(cls, v):
+        """Accept string-valued timeouts (dashboard UI sends JSON strings)
+        and coerce to float before any handler reads the value."""
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"timeout must be numeric, got {v!r}") from e
 
     def __init__(self, **kwargs):
         default_on = kwargs.pop("default_on", None)
