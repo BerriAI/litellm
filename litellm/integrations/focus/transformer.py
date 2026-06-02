@@ -41,6 +41,12 @@ def _build_tags_expr(available_keys: list[str]) -> pl.Expr:
     )
 
 
+def _non_blank_string_expr(column_name: str) -> pl.Expr:
+    """Return a stripped string column, treating null/blank values as null."""
+    value = pl.col(column_name).cast(pl.String).str.strip_chars()
+    return pl.when(value.is_not_null() & (value != "")).then(value).otherwise(None)
+
+
 class FocusTransformer:
     """Transforms LiteLLM DB rows into Focus-compatible schema."""
 
@@ -80,6 +86,12 @@ class FocusTransformer:
 
         none_str = pl.lit(None, dtype=pl.Utf8)
         none_dec = pl.lit(None, dtype=pl.Decimal(18, 6))
+        service_name = pl.coalesce(
+            _non_blank_string_expr("model_group"),
+            _non_blank_string_expr("model"),
+            _non_blank_string_expr("custom_llm_provider"),
+            pl.lit("litellm-proxy"),
+        )
 
         return frame.select(
             dec(pl.col("spend").fill_null(0.0)).alias("BilledCost"),
@@ -121,7 +133,7 @@ class FocusTransformer:
             pl.col("model").cast(pl.String).alias("ResourceType"),
             pl.lit("AI and Machine Learning").alias("ServiceCategory"),
             pl.lit("Generative AI").alias("ServiceSubcategory"),
-            pl.col("model_group").cast(pl.String).alias("ServiceName"),
+            service_name.alias("ServiceName"),
             pl.col("team_id").cast(pl.String).alias("SubAccountId"),
             pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
             none_str.alias("SubAccountType"),
