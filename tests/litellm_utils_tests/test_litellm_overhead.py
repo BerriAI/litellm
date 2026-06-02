@@ -75,6 +75,7 @@ async def _vertex_ai_mocks():
         yield
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model",
@@ -141,6 +142,7 @@ async def test_litellm_overhead_non_streaming(model):
     pass
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "model",

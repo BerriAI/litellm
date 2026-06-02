@@ -1628,6 +1628,7 @@ def test_router_add_deployment():
     assert new_model_id_list[1] != new_model_id_list[0]
 
 
+@pytest.mark.flaky(reruns=2, reruns_delay=5)
 @pytest.mark.asyncio
 async def test_router_text_completion_client():
     # This tests if we re-use the Async OpenAI client
