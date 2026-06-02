@@ -200,3 +200,65 @@ def test_azure_model_router_response_shows_actual_model():
         f"Expected model to be 'azure_ai/gpt-5-nano-2025-08-07' (actual model used), "
         f"but got '{result.model}'"
     )
+
+
+def test_drop_tool_level_extra_fields_strips_copilot_mcp_server_name():
+    """
+    Regression test: Azure AI returns 400 when tools contain copilot_mcp_server_name.
+    LiteLLM should strip the field and retry automatically.
+    """
+    import httpx
+
+    config = AzureAIStudioConfig()
+
+    error_text = json.dumps(
+        {
+            "error": {
+                "message": "2 request validation errors: Extra inputs are not permitted, field: 'tools[0].copilot_mcp_server_name', value: 'github-mcp-server'; Extra inputs are not permitted, field: 'tools[1].copilot_mcp_server_name', value: 'ide'"
+            }
+        }
+    )
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.text = error_text
+    mock_response.json.return_value = json.loads(error_text)
+    mock_response.status_code = 400
+    e = httpx.HTTPStatusError(
+        message="400", request=MagicMock(), response=mock_response
+    )
+
+    assert config._error_has_tool_level_extra_fields(error_text) is True
+    assert (
+        config.should_retry_llm_api_inside_llm_translation_on_http_error(e, {}) is True
+    )
+
+    request_data = {
+        "model": "FW-Kimi-K2.6",
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "tools": [
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "github-mcp-server",
+                "function": {
+                    "name": "github_search_code",
+                    "description": "Search code",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "copilot_mcp_server_name": "ide",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a file",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+        ],
+    }
+
+    result = config.transform_request_on_unprocessable_entity_error(e, request_data)
+
+    for tool in result["tools"]:
+        assert "copilot_mcp_server_name" not in tool
+    assert result["tools"][0]["type"] == "function"
+    assert result["tools"][1]["function"]["name"] == "read_file"
