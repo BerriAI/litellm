@@ -436,7 +436,6 @@ if MCP_AVAILABLE:
         mcp_auth_header: Optional[str],
         raw_headers_from_request: dict,
         user_api_key_dict: UserAPIKeyAuth,
-        request: Request,
     ) -> dict:
         """Handle tool listing for a single server_id request."""
         # Resolve a server name to its UUID if needed
@@ -502,13 +501,11 @@ if MCP_AVAILABLE:
                 user_api_key_dict,
                 extra_headers=user_oauth_extra_headers,
             )
-        except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
-            # standards-compliant MCP clients trigger the upstream OAuth flow.
-            raise e.to_http_exception(
-                base_url=get_request_base_url(request),
-                request_path=request.scope.get("_original_path") or request.url.path,
-            )
+        except MCPUpstreamAuthError:
+            # Surface the upstream 401/403 to the caller so it can emit the
+            # matching status code and WWW-Authenticate challenge; that is what
+            # lets standards-compliant MCP clients run the upstream OAuth flow.
+            raise
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -596,7 +593,6 @@ if MCP_AVAILABLE:
                     mcp_auth_header=mcp_auth_header,
                     raw_headers_from_request=raw_headers_from_request,
                     user_api_key_dict=user_api_key_dict,
-                    request=request,
                 )
             else:
                 if not allowed_server_ids:
@@ -676,14 +672,16 @@ if MCP_AVAILABLE:
                 ),
             }
 
+        except MCPUpstreamAuthError as e:
+            # Surface upstream pass-through 401/403 challenges to the client so
+            # standards-compliant MCP clients can run the upstream OAuth flow.
+            raise e.to_http_exception(
+                base_url=get_request_base_url(request),
+                request_path=request.scope.get("_original_path") or request.url.path,
+            )
         except HTTPException as http_exc:
-            # Preserve 401s emitted by the single-server pass-through path so
-            # clients receive the upstream WWW-Authenticate challenge and can
-            # start the upstream OAuth flow. 403 etc. keep flowing through the
-            # legacy "error dict" response shape so the existing contract
-            # stays intact.
-            if http_exc.status_code == 401:
-                raise
+            # Internal access/IP 403s keep the legacy error-dict response shape
+            # so the existing contract stays intact.
             verbose_logger.exception(
                 "HTTPException in list_tool_rest_api: %s", str(http_exc)
             )
