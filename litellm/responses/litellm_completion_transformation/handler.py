@@ -4,11 +4,8 @@ Handler for transforming responses api requests to litellm.completion requests
 
 from typing import Any, Coroutine, Dict, List, Optional, Union
 
-import base64
-import random
-import string
-import json
 import litellm
+from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
 )
@@ -25,6 +22,39 @@ from litellm.types.utils import ModelResponse
 
 
 class LiteLLMCompletionTransformationHandler:
+
+    @staticmethod
+    def _prepend_compaction_to_response(
+        responses_api_response: ResponsesAPIResponse,
+        compaction_item: Dict[str, Any],
+    ) -> ResponsesAPIResponse:
+        if responses_api_response.output is None:
+            responses_api_response.output = []
+        responses_api_response.output.insert(0, compaction_item)
+        return responses_api_response
+
+    async def _maybe_compact_messages(
+        self,
+        model: str,
+        messages: List[Any],
+        context_management: Optional[List[Dict[str, Any]]],
+        **kwargs: Any,
+    ) -> tuple[Optional[Dict[str, Any]], List[Any]]:
+        if not context_management:
+            return None, messages
+
+        new_messages, compaction_item = (
+            await LiteLLMCompletionResponsesConfig._transform_context_management(
+                model=model,
+                input=messages,
+                context_management=context_management,
+                **kwargs,
+            )
+        )
+        if compaction_item is None:
+            return None, messages
+        return compaction_item, new_messages
+
     def response_api_handler(
         self,
         model: str,
@@ -64,9 +94,18 @@ class LiteLLMCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_args = {}
-        completion_args.update(kwargs)
-        completion_args.update(litellm_completion_request)
+        compaction_item: Optional[Dict[str, Any]] = None
+        if context_management:
+            compact_model = litellm_completion_request.get("model", model)
+            compaction_item, compacted_messages = run_async_function(
+                self._maybe_compact_messages,
+                model=compact_model,
+                messages=litellm_completion_request.get("messages", []),
+                context_management=context_management,
+                **kwargs,
+            )
+            if compaction_item:
+                litellm_completion_request["messages"] = compacted_messages
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
@@ -83,7 +122,10 @@ class LiteLLMCompletionTransformationHandler:
                     responses_api_request=responses_api_request,
                 )
             )
-
+            if compaction_item:
+                return self._prepend_compaction_to_response(
+                    responses_api_response, compaction_item
+                )
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
@@ -94,6 +136,7 @@ class LiteLLMCompletionTransformationHandler:
                 responses_api_request=responses_api_request,
                 custom_llm_provider=custom_llm_provider,
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                compaction_item=compaction_item,
             )
         raise ValueError(
             f"Unexpected response type: {type(litellm_completion_response)}"
@@ -116,37 +159,23 @@ class LiteLLMCompletionTransformationHandler:
                 litellm_completion_request=litellm_completion_request,
             )
 
-        # breakpoint()
-        compacted = False
-        if context_management:
-            model = litellm_completion_request.get("model", "")
-            provider = litellm_completion_request.get("custom_llm_provider", "")
-            if provider:
-                model = provider + "/" + model
+        model = litellm_completion_request.get("model", "")
 
-            litellm_completion_request["messages"], compacted = (
-                await LiteLLMCompletionResponsesConfig._transform_context_management(
-                    model=model,
-                    input=litellm_completion_request.get("messages", []),
-                    context_management=context_management,
-                    **kwargs,
-                )
-            )
-            if compacted:
-                compact_input = litellm_completion_request["messages"][0]
+        compaction_item, compacted_messages = await self._maybe_compact_messages(
+            model=model,
+            messages=litellm_completion_request.get("messages", []),
+            context_management=context_management,
+            **kwargs,
+        )
+        if compaction_item:
+            litellm_completion_request["messages"] = compacted_messages
 
-        acompletion_args = {}
-        acompletion_args.update(kwargs)
-        acompletion_args.update(litellm_completion_request)
-
-        if "context_management" in acompletion_args:
-            del acompletion_args["context_management"]
+        acompletion_args = {**kwargs, **litellm_completion_request}
+        acompletion_args.pop("context_management", None)
 
         litellm_completion_response: Union[
             ModelResponse, litellm.CustomStreamWrapper
-        ] = await litellm.acompletion(
-            **acompletion_args,
-        )
+        ] = await litellm.acompletion(**acompletion_args)
 
         if isinstance(litellm_completion_response, ModelResponse):
             responses_api_response: ResponsesAPIResponse = (
@@ -156,20 +185,10 @@ class LiteLLMCompletionTransformationHandler:
                     responses_api_request=responses_api_request,
                 )
             )
-            if compacted:
-                responses_api_response.output.append(
-                    {
-                        "id": "cmp_"
-                        + "".join(
-                            random.choices(string.ascii_letters + string.digits, k=20)
-                        ),
-                        "type": "compaction",
-                        "encrypted_content": base64.b64encode(
-                            json.dumps(compact_input).encode("utf-8")
-                        ).decode("utf-8"),
-                    }
+            if compaction_item:
+                return self._prepend_compaction_to_response(
+                    responses_api_response, compaction_item
                 )
-
             return responses_api_response
 
         elif isinstance(litellm_completion_response, litellm.CustomStreamWrapper):
@@ -182,6 +201,7 @@ class LiteLLMCompletionTransformationHandler:
                     "custom_llm_provider"
                 ),
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
+                compaction_item=compaction_item,
             )
         raise ValueError(
             f"Unexpected response type: {type(litellm_completion_response)}"

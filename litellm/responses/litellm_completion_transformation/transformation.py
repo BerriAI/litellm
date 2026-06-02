@@ -5,6 +5,8 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 from collections.abc import Sequence
 import json
 import base64
+import random
+import string
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
@@ -166,111 +168,125 @@ class LiteLLMCompletionResponsesConfig:
         ]
     ]
 
+    COMPACTION_SUMMARY_PREFIX = "[Previous conversation summary: "
+
     @staticmethod
-    async def _compact_input(
+    def should_execute_compaction(
+        input_token_size: int,
+        context_management: Optional[List[Dict[str, Any]]],
+    ) -> bool:
+        if not context_management:
+            return False
+        entry = context_management[0]
+        if entry.get("type") != "compaction":
+            return False
+        threshold = entry.get("compact_threshold")
+        if threshold is None or threshold <= 0:
+            return False
+        return input_token_size >= int(threshold)
+
+    @staticmethod
+    def _cheap_token_counter_for_messages(messages: Messages) -> int:
+        total = 0
+        for message in messages:
+            content = (
+                message.get("content", "")
+                if isinstance(message, dict)
+                else getattr(message, "content", "")
+            )
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict):
+                        total += len(str(part.get("text", ""))) // 4
+            else:
+                total += len(str(content or "")) // 4
+        return total
+
+    @staticmethod
+    def _cheap_token_counter(
+        input: Union[str, List[Any], Messages],
+    ) -> int:
+        json_str = json.dumps(input)
+        return len(json_str) // 4
+
+    @staticmethod
+    async def _apply_compaction_to_messages(
         model: str,
-        input: Messages,
-        **kwargs,
-    ) -> Messages:
-        """
-        Make a 2nd LLM call to compact/summarize the conversation history.
-        Returns the compacted input as a single user message list.
-        """
+        messages: Messages,
+        **kwargs: Any,
+    ) -> Tuple[Messages, Dict[str, Any]]:
         import litellm
 
-        summary_args = {}
-        # summary_args.update(kwargs)
-        if "context_management" in summary_args:
-            del summary_args["context_management"]
-        summary_args["model"] = model
-        conversation_history = json.dumps(input)
-        summary_args["messages"] = [
-            {
-                "role": "user",
-                "content": f"Provide a summary of the conversation below in your response directly with no special formatting. Focus on the key points and important details. Be concise but include relevant context that would help answer the next user message. The summary should be in a compact format that captures the essence of the conversation history.\n\n<conversation>\n{conversation_history}\n</conversation>",
-            }
-        ]
-        # breakpoint()
-        summary_response = litellm.completion(**summary_args)
+        if len(messages) <= 1:
+            raise ValueError("Compaction requires at least two messages")
 
-        if not isinstance(summary_response, ModelResponse):
+        history = messages[:-1]
+        last_message = messages[-1]
+        response = await litellm.acompletion(
+            model=model,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Provide a concise summary of the conversation below. "
+                        "Focus on key points needed to answer the next user message.\n\n"
+                        f"<conversation>\n{json.dumps(history)}\n</conversation>"
+                    ),
+                }
+            ]
+        )
+
+        if not isinstance(response, ModelResponse):
             raise ValueError("Expected a ModelResponse object")
 
         summary = (
-            summary_response.choices[0].message.content
-            if summary_response.choices
+            response.choices[0].message.content
+            if response.choices and response.choices[0].message
             else ""
         )
-        return [
-            {
-                "role": "developer",
-                "content": f"The following is a compacted summary of the prior conversation. Treat it as historical context, not as a new user request. Use it only to answer the latest user message.\n\n<conversation_summary>\nEarlier conversation: {summary}\n</conversation_summary>",
-            }
-        ]
+        summary = str(summary or "")
 
-    @staticmethod
-    def _cheap_token_counter(input: Messages) -> int:
-        """
-        Cheaply estimate the token count of the input.
-        ~4 chars per token for strings; for message lists, stringify first.
-
-        Note: 1. not using an actual tokenizer
-              2. transformation from ResponseInputParam to str is ugly and not precise
-        """
-        json_str = json.dumps(input)
-        return len(json_str) // 4
+        summary_message: Dict[str, Any] = {
+            "role": "user",
+            "content": f"{LiteLLMCompletionResponsesConfig.COMPACTION_SUMMARY_PREFIX}{summary}]",
+        }
+        last_dict = (
+            dict(last_message)
+            if isinstance(last_message, dict)
+            else {"role": getattr(last_message, "role", "user"), "content": getattr(last_message, "content", "")}
+        )
+        compaction_item = {
+            "id": "cmp_"
+            + "".join(random.choices(string.ascii_letters + string.digits, k=20)),
+            "type": "compaction",
+            "encrypted_content": base64.b64encode(summary.encode()).decode(),
+        }
+        return [summary_message, last_dict], compaction_item
 
     @staticmethod
     async def _transform_context_management(
         model: str,
         input: Messages,
         context_management: Optional[List[Dict[str, Any]]],
-        **kwargs,
-    ) -> Tuple[Messages, bool]:
-        """
-        Handle context_management compaction for the Responses API -> Chat Completion path.
+        **kwargs: Any,
+    ) -> Tuple[Messages, Optional[Dict[str, Any]]]:
+        if not context_management or len(input) <= 1:
+            return input, None
 
-        1. Check if at compaction threshold. Early exit if no need to do compaction.
-        2. If reached threshold, make a 2nd LLM call to compact the input.
-
-        Returns the (possibly compacted) input.
-        """
-        if not context_management:
-            return input, False
-        ctx_mgmt_type = context_management[0].get("type", "")
-        ctx_mgmt_threshold = context_management[0].get("compact_threshold", 0)
-        if not ctx_mgmt_type or not ctx_mgmt_threshold:
-            return input, False
-
-        # Note: for now skip compaction if input is a string or only has 1 message
-        if len(input) <= 1:
-            return input, False
-
-        # Note: exclude the last user message from token count since that's the new input we want to preserve in full
-        input_token_size = LiteLLMCompletionResponsesConfig._cheap_token_counter(
-            input[:-1]
+        input_token_size = (
+            LiteLLMCompletionResponsesConfig._cheap_token_counter_for_messages(input)
         )
-        if input_token_size < ctx_mgmt_threshold:
-            return input, False
+        if not LiteLLMCompletionResponsesConfig.should_execute_compaction(
+            input_token_size=input_token_size,
+            context_management=context_management,
+        ):
+            return input, None
 
-        compacted_input = await LiteLLMCompletionResponsesConfig._compact_input(
+        return await LiteLLMCompletionResponsesConfig._apply_compaction_to_messages(
             model=model,
-            input=input[:-1],
+            messages=input,
             **kwargs,
         )
-        # Append the latest user message back to the compacted history
-        compacted_input.append(input[-1])
-        return compacted_input, True
-
-    # @staticmethod
-    # def should_execute_compaction(
-    #     input_token_size: int,
-    #     context_management: Optional[List[Dict[str, Any]]],
-    # ) -> bool:
-    #     """
-    #     Check if compaction should be executed
-    #     """
-    #     pass
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -331,7 +347,6 @@ class LiteLLMCompletionResponsesConfig:
             "web_search_options": web_search_options,
             "response_format": response_format,
             "reasoning_effort": reasoning_effort,
-            "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
             "extra_headers": extra_headers,
@@ -1094,12 +1109,17 @@ class LiteLLMCompletionResponsesConfig:
                 function_call=input_item
             )
         elif input_item.get("type") == "compaction":
+            encrypted_content = input_item.get("encrypted_content") or ""
+            if not encrypted_content:
+                return []
+            summary = (
+                base64.b64decode(encrypted_content).decode("utf-8")
+            )
             return [
-                json.loads(
-                    base64.b64decode(input_item.get("encrypted_content")).decode(
-                        "utf-8"
-                    )
-                )
+                {
+                    "role": "user",
+                    "content": f"{LiteLLMCompletionResponsesConfig.COMPACTION_SUMMARY_PREFIX}{summary}]",
+                }
             ]
         else:
             content = input_item.get("content")

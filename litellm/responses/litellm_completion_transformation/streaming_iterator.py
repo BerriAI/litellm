@@ -57,6 +57,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         responses_api_request: ResponsesAPIOptionalRequestParams,
         custom_llm_provider: Optional[str] = None,
         litellm_metadata: Optional[dict] = None,
+        compaction_item: Optional[Dict[str, Any]] = None,
     ):
         self.model: str = model
         self.litellm_custom_stream_wrapper: litellm.CustomStreamWrapper = (
@@ -68,6 +69,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
         self.custom_llm_provider: Optional[str] = custom_llm_provider
         self.litellm_metadata: Optional[dict] = litellm_metadata or {}
+        self.compaction_item: Optional[Dict[str, Any]] = compaction_item
         # Store lightweight dict snapshots for stream_chunk_builder to reduce
         # repeated Pydantic attribute access in end-of-stream assembly.
         self.collected_chat_completion_chunks: List[Dict[str, Any]] = []
@@ -1186,6 +1188,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 custom_llm_provider=self.custom_llm_provider,
                 litellm_metadata=self.litellm_metadata,
             )
+
+            if self.compaction_item:
+                if encoded_response.output is None:
+                    encoded_response.output = []
+                encoded_response.output.insert(0, self.compaction_item)
 
             return ResponseCompletedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
