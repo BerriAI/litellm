@@ -127,6 +127,9 @@ general_settings:
   enable_jwt_auth: boolean  # allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims
   enforce_user_param: boolean  # requires all openai endpoint requests to have a 'user' param
   reject_clientside_metadata_tags: boolean  # if true, rejects requests with client-side 'metadata.tags' to prevent users from influencing budgets
+  disable_batch_input_file_rate_limiting: boolean  # if true, skip pre-reading batch input files for rate-limit/model checks
+  skip_batch_input_file_rate_limiting_for_providers: ["hosted_vllm"]  # provider allowlist for skipping batch input-file pre-read
+  skip_batch_input_file_rate_limiting_for_models: ["my-batch-model-prefix"]  # model/prefix allowlist for skipping batch input-file pre-read
   allowed_routes: ["route1", "route2"]  # list of allowed proxy API routes - a user can access. (currently JWT-Auth only)
   key_management_system: google_kms  # either google_kms or azure_kms
   master_key: string
@@ -242,6 +245,9 @@ router_settings:
 | enable_jwt_auth | boolean | allow proxy admin to auth in via jwt tokens with 'litellm_proxy_admin' in claims. [Doc on JWT Tokens](token_auth) |
 | enforce_user_param | boolean | If true, requires all OpenAI endpoint requests to have a 'user' param. [Doc on call hooks](call_hooks)|
 | reject_clientside_metadata_tags | boolean | If true, rejects requests that contain client-side 'metadata.tags' to prevent users from influencing budgets by sending different tags. Tags can only be inherited from the API key metadata. |
+| disable_batch_input_file_rate_limiting | boolean | If true, skips pre-reading batch input files during `POST /batches` pre-checks. |
+| skip_batch_input_file_rate_limiting_for_providers | array of strings | Skip batch input-file pre-read for specific providers (for example `["hosted_vllm"]`). |
+| skip_batch_input_file_rate_limiting_for_models | array of strings | Skip batch input-file pre-read for specific model names or prefixes. |
 | allowed_routes | array of strings | List of allowed proxy API routes a user can access [Doc on controlling allowed routes](enterprise#control-available-public-private-routes)|
 | key_management_system | string | Specifies the key management system. [Doc Secret Managers](../secret) |
 | master_key | string | The master key for the proxy [Set up Virtual Keys](virtual_keys) |

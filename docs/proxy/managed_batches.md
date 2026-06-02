@@ -31,6 +31,7 @@ Here's how to give developers access to your Batch models.
 ### 1. Setup config.yaml
 
 - specify `mode: batch` for each model: Allows developers to know this is a batch model.
+- optionally skip pre-read of batch input files for specific batch providers/models (useful for large files on custom vLLM batch deployments).
 
 ```yaml showLineNumbers title="litellm_config.yaml"
 model_list:
@@ -48,6 +49,18 @@ model_list:
       api_key: os.environ/AZURE_API_KEY_2
     model_info: 
       mode: batch # 👈 SPECIFY MODE AS BATCH, to tell user this is a batch model
+
+general_settings:
+  # Optional: disable batch input-file pre-read globally
+  # disable_batch_input_file_rate_limiting: true
+
+  # Optional: skip only for selected providers (example: custom vLLM)
+  skip_batch_input_file_rate_limiting_for_providers:
+    - hosted_vllm
+
+  # Optional: skip only for selected model names / prefixes
+  # skip_batch_input_file_rate_limiting_for_models:
+  #   - my-vllm-batch-model
 
 ```
 
@@ -129,6 +142,17 @@ batch_response = client.batches.retrieve(
     batch_id
 )
 status = batch_response.status
+```
+
+You can also skip input-file pre-read per request:
+
+```python showLineNumbers title="create_batch.py"
+batch = client.batches.create(
+    input_file_id=batch_input_file.id,
+    endpoint="/v1/chat/completions",
+    completion_window="24h",
+    metadata={"skip_batch_input_file_rate_limiting": True},
+)
 ```
 
 ### 4. Retrieve Batch Content 
