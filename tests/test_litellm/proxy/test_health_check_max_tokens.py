@@ -389,6 +389,19 @@ def test_unknown_model_without_mode_defaults_to_chat():
     assert updated["max_tokens"] == 5
 
 
+def test_unresolvable_provider_without_mode_falls_back_to_chat():
+    """
+    If get_llm_provider can't resolve the provider (no prefix, not a known
+    model), mode resolution must not raise; the probe falls back to chat and
+    still injects max_tokens.
+    """
+    updated = _update_litellm_params_for_health_check(
+        {}, {"model": "random-unknown-model-xyz"}
+    )
+
+    assert updated["max_tokens"] == 5
+
+
 def test_explicit_override_injects_for_unmoded_embedding_model():
     """health_check_supports_max_tokens wins over the resolved embedding mode."""
     updated = _update_litellm_params_for_health_check(
