@@ -75,6 +75,7 @@ class GenAIMapper:
     _MCP_ATTRS: dict[str, Callable[[MCPToolCallSpanData], AttrValue | None]] = {
         GenAI.OPERATION_NAME: lambda d: d.operation.value,
         MCP.METHOD_NAME: lambda d: d.method,
+        MCP.SESSION_ID: lambda d: d.session_id,
         GenAI.TOOL_NAME: lambda d: d.tool_name or None,
         GenAI.TOOL_CALL_ARGUMENTS: lambda d: d.arguments_json,
         GenAI.TOOL_CALL_RESULT: lambda d: d.result_json,

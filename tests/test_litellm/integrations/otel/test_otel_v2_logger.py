@@ -256,6 +256,7 @@ def _mcp_payload(**overrides):
             "arguments": {"city": "Paris"},
             "result": {"temp_c": 21},
             "mcp_server_name": "weather-mcp",
+            "mcp_session_id": "sess-abc123",
         },
     }
     payload.update(overrides)
@@ -285,6 +286,7 @@ def test_mcp_tool_call_emits_client_span():
     assert span.name == "tools/call get_weather"
     assert span.kind is SpanKind.CLIENT
     assert span.attributes["mcp.method.name"] == "tools/call"
+    assert span.attributes["mcp.session.id"] == "sess-abc123"
     assert span.attributes[GenAI.OPERATION_NAME] == "execute_tool"
     assert span.attributes["gen_ai.tool.name"] == "get_weather"
     assert span.attributes[LiteLLM.MCP_SERVER_NAME] == "weather-mcp"

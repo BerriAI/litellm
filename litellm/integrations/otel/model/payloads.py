@@ -329,6 +329,7 @@ class MCPToolCallSpanData:
     method: str
     tool_name: str
     server_name: str | None
+    session_id: str | None
     arguments_json: str | None
     result_json: str | None
     error: SpanError | None
@@ -345,6 +346,7 @@ class MCPToolCallSpanData:
             method=MCPMethod.TOOLS_CALL.value,
             tool_name=as_str(meta.get("name")) or "",
             server_name=as_str(meta.get("mcp_server_name")),
+            session_id=as_str(meta.get("mcp_session_id")),
             arguments_json=(
                 _json_or_none(meta.get("arguments"))
                 if capture_content and meta.get("arguments") is not None

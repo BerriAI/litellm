@@ -202,6 +202,7 @@ def _mcp_payload(capture=False, **overrides):
             "arguments": {"city": "Paris"},
             "result": {"temp_c": 21},
             "mcp_server_name": "weather-mcp",
+            "mcp_session_id": "sess-abc123",
         },
     }
     payload.update(overrides)
@@ -224,6 +225,7 @@ def test_mcp_tool_call_adapter_extracts_fields():
     assert data.method == "tools/call"
     assert data.tool_name == "get_weather"
     assert data.server_name == "weather-mcp"
+    assert data.session_id == "sess-abc123"
     assert data.response_cost == 0.01
     assert data.identity.call_id == "mcp_call_1"
     assert data.identity.team_id == "t1"
