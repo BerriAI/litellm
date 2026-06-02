@@ -490,9 +490,25 @@ def _get_public_model_name(
     patch_data: updateDeployment,
     db_model: Deployment,
 ) -> str:
-    """Determine the public model name from patch or existing model."""
-    if patch_data.model_name:
-        return patch_data.model_name
+    """Determine the public model name from patch or existing model.
+
+    Defends against a stale client round-tripping the internal mangled
+    `model_name` (the routing key `model_name_{team_id}_{uuid}`) instead
+    of the actual public name. A no-op (incoming equals current DB column)
+    or an internal-shape match is treated as "no rename intent" and falls
+    through to the existing public name.
+    """
+    incoming = patch_data.model_name
+    if incoming:
+        team_id = (
+            patch_data.model_info.team_id if patch_data.model_info else None
+        ) or (db_model.model_info.team_id if db_model.model_info else None)
+        is_internal_shape = team_id is not None and incoming.startswith(
+            f"model_name_{team_id}_"
+        )
+        is_no_op = incoming == db_model.model_name
+        if not (is_internal_shape or is_no_op):
+            return incoming
 
     if db_model.model_info and db_model.model_info.team_public_model_name:
         return db_model.model_info.team_public_model_name
