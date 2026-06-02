@@ -2893,3 +2893,109 @@ async def test_pre_call_hook_rejects_caller_supplied_stash_values():
     ):
         leaked = [k for k in _LITELLM_STASH_KEYS if k in channel]
         assert not leaked, f"caller-supplied stash survived in {channel!r}: {leaked}"
+
+
+# ────────────────────────────────────────────────────────────────────
+# Regression: GH #27884 — 429 body must not leak the SHA-256 token hash
+# ────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_429_body_redacts_api_key_descriptor_value():
+    """GH #27884: the customer-facing 429 ``detail`` string used to echo
+    the offending virtual key's full SHA-256 hash. The hash is not
+    reversible to the raw ``sk-...``, but exposing it in an HTTP error
+    body still discloses LiteLLM's internal key-storage strategy and
+    lets a third party fingerprint which key is rate-limited.
+
+    This regression locks the contract: when ``descriptor_key`` is
+    ``api_key``, the rendered ``descriptor_value`` is ``<redacted>``
+    rather than the hash.
+    """
+    _api_key = "sk-12345"
+    _api_key_hash = hash_token(_api_key)
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key_hash, rpm_limit=1)
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 1,
+                    "limit_remaining": -1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "api_key",
+                }
+            ],
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with pytest.raises(HTTPException) as exc_info:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+
+    detail = exc_info.value.detail
+    # The full 64-char SHA-256 hash MUST NOT appear in the response body.
+    assert (
+        _api_key_hash not in detail
+    ), f"Full key hash leaked into 429 body: {detail!r}"
+    assert "Rate limit exceeded for api_key: <redacted>" in detail
+
+
+@pytest.mark.asyncio
+async def test_429_body_passes_non_api_key_descriptors_through_unchanged():
+    """The redaction only applies to ``api_key`` descriptors. User-
+    supplied scoping values (``user_id`` etc.) are not key material and
+    appear verbatim — important for operators who need to know which
+    user / team / model triggered the limit."""
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-test"), max_parallel_requests=1
+    )
+
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    async def mock_should_rate_limit(descriptors, **kwargs):
+        # Inject a user_id descriptor so the handler renders its value.
+        descriptors.append(
+            {"key": "user_id", "value": "alice@example.com", "rate_limit": {}}
+        )
+        return {
+            "overall_code": "OVER_LIMIT",
+            "statuses": [
+                {
+                    "code": "OVER_LIMIT",
+                    "current_limit": 1,
+                    "limit_remaining": -1,
+                    "rate_limit_type": "requests",
+                    "descriptor_key": "user_id",
+                }
+            ],
+        }
+
+    parallel_request_handler.should_rate_limit = mock_should_rate_limit
+
+    with pytest.raises(HTTPException) as exc_info:
+        await parallel_request_handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo"},
+            call_type="",
+        )
+
+    detail = exc_info.value.detail
+    assert "user_id: alice@example.com" in detail
+    assert "<redacted>" not in detail

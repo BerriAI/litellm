@@ -1893,6 +1893,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     else "unknown"
                 )
 
+                # GH #27884: ``descriptor_value`` is the SHA-256 hash of the
+                # virtual key when ``descriptor_key == 'api_key'``. The hash
+                # is not reversible to the raw key, but echoing it in a
+                # customer-facing 429 body still discloses LiteLLM's internal
+                # key-storage strategy and lets a third party fingerprint
+                # which key is rate-limited. Redact it before composing
+                # ``detail``; non-key descriptors flow through untouched
+                # so user-supplied scoping values (``user_id`` / ``team_id``
+                # / ``model``) still appear verbatim.
+                if descriptor_key == "api_key" and descriptor_value not in (
+                    "",
+                    "unknown",
+                ):
+                    descriptor_value = "<redacted>"
+
                 now = self._get_current_time().timestamp()
                 reset_time = now + self.window_size
                 reset_time_formatted = datetime.fromtimestamp(reset_time).strftime(
