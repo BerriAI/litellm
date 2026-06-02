@@ -13387,6 +13387,22 @@
             "notes": "Serper Google Search API. Pricing: $1.00/1k queries (Starter), $0.75/1k (Standard), $0.50/1k (Scale), $0.30/1k (Ultimate)."
         }
     },
+    "apiserpent/search": {
+        "input_cost_per_query": 0.0006,
+        "litellm_provider": "apiserpent",
+        "mode": "search",
+        "metadata": {
+            "notes": "APISerpent quick search (/api/search/quick), multi-engine (Google, Bing, Yahoo, DuckDuckGo). Pricing: $0.60/1k searches."
+        }
+    },
+    "apiserpent/deep_search": {
+        "input_cost_per_query": 0.0006,
+        "litellm_provider": "apiserpent",
+        "mode": "search",
+        "metadata": {
+            "notes": "APISerpent deep search (/api/search), multi-engine (Google, Bing, Yahoo, DuckDuckGo). Pricing: $0.60/1k searches."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",

@@ -3374,12 +3374,17 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             and "dimensions" in non_default_params.keys()
             and "dimensions" not in (allowed_openai_params or [])
         ):
-            raise UnsupportedParamsError(
-                status_code=500,
-                message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
-            )
-        else:
-            optional_params = non_default_params
+            # Honor drop_params (per-call) and litellm.drop_params (global) the same
+            # way `_check_valid_arg` does above. The raised error message itself
+            # tells users to set `drop_params=True`, so respect it here.
+            if litellm.drop_params is True or drop_params is True:
+                non_default_params.pop("dimensions", None)
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
+                )
+        optional_params = non_default_params
     elif custom_llm_provider == "triton":
         supported_params = get_supported_openai_params(
             model=model,
@@ -9444,6 +9449,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.apiserpent.search.transformation import (
+            APISerpentSearchConfig,
+        )
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
@@ -9474,6 +9482,7 @@ class ProviderConfigManager:
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
             SearchProviders.SEARCHAPI: SearchAPIConfig,
             SearchProviders.SERPER: SerperSearchConfig,
+            SearchProviders.APISERPENT: APISerpentSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:
