@@ -3673,6 +3673,7 @@ class ProxyException(Exception):
         provider_specific_fields: Optional[dict] = None,
     ):
         self.message = str(message)
+        super().__init__(self.message)
         self.type = type
         self.param = param
         self.openai_code = openai_code or code
