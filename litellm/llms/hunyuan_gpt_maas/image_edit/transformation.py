@@ -180,6 +180,8 @@ class HunyuanGptMaasImageEditConfig(BaseImageEditConfig):
             elif k not in ("mask",) and v is not None:
                 request_body[k] = v
 
+        request_body.setdefault("logo_add", 0)
+
         return request_body, []
 
     def transform_image_edit_response(

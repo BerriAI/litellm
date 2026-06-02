@@ -127,6 +127,7 @@ class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
         }
         for k, v in optional_params.items():
             request_body[k] = v
+        request_body.setdefault("logo_add", 0)
         return request_body
 
     def transform_image_generation_response(
