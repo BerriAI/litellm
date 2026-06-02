@@ -1,7 +1,9 @@
 """Tests for MCP OAuth discoverable endpoints"""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -299,25 +301,21 @@ async def test_token_endpoint_forwards_code_verifier():
 
     # Mock httpx client response
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {
         "access_token": "ya29.test_access_token",
         "token_type": "Bearer",
         "expires_in": 3599,
         "scope": "openid email https://www.googleapis.com/auth/drive",
     }
-    mock_response.raise_for_status = MagicMock()
 
-    # Mock the async httpx client with AsyncMock for async methods
-    from unittest.mock import AsyncMock
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
-    ) as mock_get_client:
-        mock_async_client = MagicMock()
-        # Use AsyncMock for the async post method
-        mock_async_client.post = AsyncMock(return_value=mock_response)
-        mock_get_client.return_value = mock_async_client
-
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
         # Call token endpoint with code_verifier
         response = await token_endpoint(
             request=mock_request,
@@ -646,22 +644,20 @@ async def test_token_endpoint_respects_x_forwarded_proto():
 
     # Mock httpx client response
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {
         "access_token": "test_token",
         "token_type": "Bearer",
         "expires_in": 3599,
     }
-    mock_response.raise_for_status = MagicMock()
 
-    # Mock the async httpx client
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
-    ) as mock_get_client:
-        mock_get_client.return_value = mock_async_client
-
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
         await token_endpoint(
             request=mock_request,
             grant_type="authorization_code",
@@ -951,22 +947,20 @@ async def test_token_endpoint_respects_x_forwarded_host():
 
     # Mock httpx client response
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {
         "access_token": "test_token",
         "token_type": "Bearer",
         "expires_in": 3599,
     }
-    mock_response.raise_for_status = MagicMock()
 
-    # Mock the async httpx client
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
-    ) as mock_get_client:
-        mock_get_client.return_value = mock_async_client
-
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
         await token_endpoint(
             request=mock_request,
             grant_type="authorization_code",
@@ -1769,22 +1763,21 @@ async def test_token_root_resolves_single_oauth2_server():
     mock_request.headers = {}
 
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {
         "access_token": "ya29.test_token",
         "token_type": "Bearer",
         "expires_in": 3599,
     }
-    mock_response.raise_for_status = MagicMock()
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
     try:
         with patch(
-            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
-        ) as mock_get_client:
-            mock_get_client.return_value = mock_async_client
-
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+            return_value=mock_async_client,
+        ):
             # Call /token WITHOUT mcp_server_name
             response = await token_endpoint(
                 request=mock_request,
@@ -2326,22 +2319,21 @@ async def test_token_endpoint_refresh_token_grant():
 
     # Mock httpx client response with new tokens
     mock_response = MagicMock()
+    mock_response.status_code = 200
     mock_response.json.return_value = {
         "access_token": "new_access_token",
         "token_type": "Bearer",
         "expires_in": 3599,
         "refresh_token": "new_refresh_token",
     }
-    mock_response.raise_for_status = MagicMock()
 
     mock_async_client = MagicMock()
     mock_async_client.post = AsyncMock(return_value=mock_response)
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client"
-    ) as mock_get_client:
-        mock_get_client.return_value = mock_async_client
-
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
         response = await token_endpoint(
             request=mock_request,
             grant_type="refresh_token",
@@ -2635,12 +2627,12 @@ async def test_token_endpoint_sets_no_store_cache_control():
     mock_request.headers = {}
 
     fake_http_response = MagicMock()
+    fake_http_response.status_code = 200
     fake_http_response.json.return_value = {
         "access_token": "tok",
         "token_type": "Bearer",
         "expires_in": 3600,
     }
-    fake_http_response.raise_for_status = MagicMock()
     fake_http_client = MagicMock()
     fake_http_client.post = AsyncMock(return_value=fake_http_response)
 
@@ -2661,3 +2653,381 @@ async def test_token_endpoint_sets_no_store_cache_control():
 
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
+
+
+@pytest.mark.asyncio
+async def test_register_client_public_client_returns_real_client_id_and_no_secret():
+    """Bug 1 fix: when client_id is set without client_secret, /register returns
+    the real client_id, no client_secret, and token_endpoint_auth_method=none."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            register_client,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    public_server = MCPServer(
+        server_id="public_server",
+        name="public_server",
+        server_name="public_server",
+        alias="public_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-entra-client-id",
+        client_secret=None,
+        authorization_url="https://login.microsoftonline.com/tid/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+    )
+    global_mcp_server_manager.registry[public_server.server_id] = public_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    try:
+        with patch(
+            "litellm.proxy._experimental.mcp_server.discoverable_endpoints._read_request_body",
+            new=AsyncMock(return_value={}),
+        ):
+            result = await register_client(
+                request=mock_request, mcp_server_name="public_server"
+            )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert result == {
+        "client_id": "real-entra-client-id",
+        "redirect_uris": ["https://proxy.litellm.example/callback"],
+        "token_endpoint_auth_method": "none",
+    }
+    assert "client_secret" not in result
+
+
+def test_oauth_authorization_server_metadata_advertises_none_for_public_client():
+    """Bug 2 fix: token_endpoint_auth_methods_supported includes 'none' when the
+    server has client_id but no client_secret."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    public_server = MCPServer(
+        server_id="public_server",
+        name="public_server",
+        server_name="public_server",
+        alias="public_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-entra-client-id",
+        client_secret=None,
+        authorization_url="https://login.microsoftonline.com/tid/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+    )
+    global_mcp_server_manager.registry[public_server.server_id] = public_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    try:
+        result = _build_oauth_authorization_server_response(
+            request=mock_request, mcp_server_name="public_server"
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert result["token_endpoint_auth_methods_supported"] == ["none"]
+
+
+def test_oauth_authorization_server_metadata_keeps_client_secret_post_for_confidential_client():
+    """Bug 2 fix regression guard: confidential client (both client_id +
+    client_secret stored) keeps advertising client_secret_post."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+    confidential_server = MCPServer(
+        server_id="confidential_server",
+        name="confidential_server",
+        server_name="confidential_server",
+        alias="confidential_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret="real-client-secret",
+        authorization_url="https://provider.example/authorize",
+        token_url="https://provider.example/token",
+    )
+    global_mcp_server_manager.registry[confidential_server.server_id] = (
+        confidential_server
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    try:
+        result = _build_oauth_authorization_server_response(
+            request=mock_request, mcp_server_name="confidential_server"
+        )
+    finally:
+        global_mcp_server_manager.registry.clear()
+
+    assert result["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
+
+
+def test_oauth_authorization_server_metadata_default_for_unresolved_server():
+    """Bug 2 fix regression guard: unknown server name and empty registry fall
+    back to legacy ['client_secret_post']."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            _build_oauth_authorization_server_response,
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    global_mcp_server_manager.registry.clear()
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    result = _build_oauth_authorization_server_response(
+        request=mock_request, mcp_server_name=None
+    )
+
+    assert result["token_endpoint_auth_methods_supported"] == ["client_secret_post"]
+
+
+@pytest.mark.parametrize("placeholder", [None, "", "dummy"])
+@pytest.mark.asyncio
+async def test_exchange_token_omits_placeholder_client_secret(placeholder):
+    """Cyrus Patch 2: client_secret in (None, '', 'dummy') is dropped from the
+    upstream /token form body."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    server = MCPServer(
+        server_id="public_server",
+        name="public_server",
+        server_name="public_server",
+        alias="public_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret=None,
+        authorization_url="https://provider.example/authorize",
+        token_url="https://provider.example/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "access_token": "tok",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="c",
+            redirect_uri="http://127.0.0.1:3000/cb",
+            client_id="real-client-id",
+            client_secret=placeholder,
+            code_verifier="cv",
+        )
+
+    call_args = mock_async_client.post.call_args
+    assert "client_secret" not in call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_exchange_token_surfaces_upstream_4xx_as_oauth_error_json():
+    """Cyrus Patch 3: when upstream /token returns 400 with AADSTS body, we
+    return that body verbatim with the same status — not a generic 500."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    server = MCPServer(
+        server_id="entra_server",
+        name="entra_server",
+        server_name="entra_server",
+        alias="entra_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret=None,
+        authorization_url="https://login.microsoftonline.com/tid/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    upstream_body = {
+        "error": "invalid_grant",
+        "error_description": "AADSTS70008: The provided authorization code or refresh token has expired",
+    }
+    fake_request = httpx.Request("POST", server.token_url)
+    fake_response = httpx.Response(400, json=upstream_body, request=fake_request)
+    raised = httpx.HTTPStatusError(
+        "400 Bad Request", request=fake_request, response=fake_response
+    )
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(side_effect=raised)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="bad-code",
+            redirect_uri="http://127.0.0.1:3000/cb",
+            client_id="real-client-id",
+            client_secret=None,
+            code_verifier="cv",
+        )
+
+    assert response.status_code == 400
+    assert json.loads(response.body) == upstream_body
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_exchange_token_handles_upstream_non_json_4xx():
+    """Cyrus Patch 3 edge: upstream returns 4xx with non-JSON body — we wrap it
+    as RFC 6749 invalid_request with the raw text in error_description."""
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+            exchange_token_with_server,
+        )
+        from litellm.proxy._types import MCPTransport
+        from litellm.types.mcp import MCPAuth
+        from litellm.types.mcp_server.mcp_server_manager import MCPServer
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    server = MCPServer(
+        server_id="entra_server",
+        name="entra_server",
+        server_name="entra_server",
+        alias="entra_server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="real-client-id",
+        client_secret=None,
+        authorization_url="https://login.microsoftonline.com/tid/oauth2/v2.0/authorize",
+        token_url="https://login.microsoftonline.com/tid/oauth2/v2.0/token",
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://proxy.litellm.example/"
+    mock_request.headers = {}
+
+    fake_request = httpx.Request("POST", server.token_url)
+    fake_response = httpx.Response(
+        502,
+        content=b"<html>upstream gateway error</html>",
+        request=fake_request,
+    )
+    raised = httpx.HTTPStatusError(
+        "502 Bad Gateway", request=fake_request, response=fake_response
+    )
+
+    mock_async_client = MagicMock()
+    mock_async_client.post = AsyncMock(side_effect=raised)
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=mock_async_client,
+    ):
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="authorization_code",
+            code="c",
+            redirect_uri="http://127.0.0.1:3000/cb",
+            client_id="real-client-id",
+            client_secret=None,
+            code_verifier="cv",
+        )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "invalid_request"
+    assert "<html>upstream gateway error</html>" in body["error_description"]

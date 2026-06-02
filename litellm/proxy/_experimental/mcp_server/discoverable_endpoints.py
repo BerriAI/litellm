@@ -3,6 +3,7 @@ import json
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
@@ -338,6 +339,57 @@ async def authorize_with_server(
     return RedirectResponse(final_url)
 
 
+async def _post_to_upstream_token_endpoint(token_url: str, token_data: Dict[str, Any]):
+    """POST to the upstream IdP /token endpoint.
+
+    Uses the pooled get_async_httpx_client and catches the wrapped
+    HTTPStatusError so the upstream `error` / `error_description` payload
+    (RFC 6749 §5.2) reaches the client. The wrapper turns any 4xx/5xx into
+    a MaskedHTTPStatusError before downstream code can read the response
+    body, which would otherwise surface as a generic 500 and hide the
+    actual AADSTS<code> / error_description from Entra/Okta.
+
+    Returns the parsed JSON dict on success, or a JSONResponse with the
+    upstream error body on 4xx/5xx (or a transport failure).
+    """
+    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    try:
+        response = await async_client.post(
+            token_url,
+            headers={"Accept": "application/json"},
+            data=token_data,
+        )
+    except httpx.HTTPStatusError as exc:
+        upstream_response = exc.response
+        try:
+            err_body = upstream_response.json()
+        except ValueError:
+            # MaskedHTTPStatusError (the wrapped form) carries a sanitized body
+            # on `.text`; fall back to the raw response text otherwise.
+            description = (
+                getattr(exc, "text", None)
+                or upstream_response.text
+                or "upstream token endpoint error"
+            )
+            err_body = {
+                "error": "invalid_request",
+                "error_description": description,
+            }
+        return JSONResponse(
+            err_body,
+            status_code=upstream_response.status_code,
+            headers=TOKEN_NO_CACHE_HEADERS,
+        )
+    except httpx.HTTPError as exc:
+        return JSONResponse(
+            {"error": "server_error", "error_description": str(exc)},
+            status_code=502,
+            headers=TOKEN_NO_CACHE_HEADERS,
+        )
+
+    return response.json()
+
+
 async def exchange_token_with_server(
     request: Request,
     mcp_server: MCPServer,
@@ -360,6 +412,12 @@ async def exchange_token_with_server(
     resolved_client_secret = (
         mcp_server.client_secret if mcp_server.client_secret else client_secret
     )
+    # Drop placeholder / empty secrets that come from LiteLLM's dummy /register
+    # response (or from in-flight clients that already cached "dummy" before
+    # the public-client branch deployed). Forwarding these to a real IdP yields
+    # a 401.
+    if resolved_client_secret in (None, "", "dummy"):
+        resolved_client_secret = None
 
     if grant_type == "refresh_token":
         if not refresh_token:
@@ -394,15 +452,13 @@ async def exchange_token_with_server(
         if code_verifier:
             token_data["code_verifier"] = code_verifier
 
-    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json"},
-        data=token_data,
+    upstream_result = await _post_to_upstream_token_endpoint(
+        mcp_server.token_url, token_data
     )
+    if isinstance(upstream_result, JSONResponse):
+        return upstream_result
 
-    response.raise_for_status()
-    token_response = response.json()
+    token_response = upstream_result
     access_token = token_response["access_token"]
 
     # Validate token response against server-configured rules before any storage.
@@ -473,6 +529,16 @@ async def register_client_with_server(
         "client_secret": "dummy",
         "redirect_uris": [f"{request_base_url}/callback"],
     }
+
+    # Public-client / PKCE-broker mode: configured client_id but no client_secret.
+    # Return the real client_id and OMIT client_secret so the downstream MCP
+    # client doesn't cache a placeholder and forward it to the upstream IdP.
+    if mcp_server.client_id and not mcp_server.client_secret:
+        return {
+            "client_id": mcp_server.client_id,
+            "redirect_uris": [f"{request_base_url}/callback"],
+            "token_endpoint_auth_method": "none",
+        }
 
     if mcp_server.client_id and mcp_server.client_secret:
         return dummy_return
@@ -929,6 +995,17 @@ def _build_oauth_authorization_server_response(
             mcp_server_name, client_ip=client_ip
         )
 
+    # Per RFC 8414 §2: token_endpoint_auth_methods_supported declares which
+    # client-authentication methods this auth server accepts at /token.
+    # Public clients (PKCE-broker, no client_secret stored) must advertise
+    # "none". Fall back to "client_secret_post" when the server can't be
+    # resolved (root /.well-known or unknown server name) — preserves legacy
+    # behavior for that case.
+    if mcp_server and mcp_server.client_id and not mcp_server.client_secret:
+        token_endpoint_auth_methods_supported = ["none"]
+    else:
+        token_endpoint_auth_methods_supported = ["client_secret_post"]
+
     return {
         "issuer": request_base_url,  # point to your proxy
         "authorization_endpoint": authorization_endpoint,
@@ -939,7 +1016,7 @@ def _build_oauth_authorization_server_response(
         ),
         "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+        "token_endpoint_auth_methods_supported": token_endpoint_auth_methods_supported,
         # Claude expects a registration endpoint, even if we just fake it
         "registration_endpoint": (
             f"{request_base_url}/{mcp_server_name}/register"
