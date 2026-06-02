@@ -2081,6 +2081,22 @@
         "interactions": true
       }
     },
+    "soniox": {
+      "display_name": "Soniox (`soniox`)",
+      "url": "https://docs.litellm.ai/docs/providers/soniox",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": true,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false
+      }
+    },
     "synthetic": {
       "display_name": "Synthetic (`synthetic`)",
       "endpoints": {
