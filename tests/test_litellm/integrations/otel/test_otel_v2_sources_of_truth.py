@@ -1,8 +1,6 @@
 """Tests for the OTel v2 sources of truth: span registry, semconv keys, config,
 and the typed StandardLoggingPayload adapter. These need no OTel SDK."""
 
-import pytest
-
 from litellm.integrations.otel import (
     BAGGAGE_PROMOTED_KEYS,
     DB,
@@ -92,11 +90,14 @@ def test_registry_hierarchy_shape():
     # guardrail runs before the LLM call exists, so it's a sibling of it.
     assert set(child_roles(SpanRole.PROXY_REQUEST)) == {
         SpanRole.LLM_CALL,
+        SpanRole.MCP_TOOL_CALL,
         SpanRole.GUARDRAIL,
         SpanRole.DB_CALL,
         SpanRole.SERVICE,
     }
     assert SPAN_REGISTRY[SpanRole.LLM_CALL].kind is LiteLLMSpanKind.CLIENT
+    # The proxy is an MCP client to the upstream tool server: CLIENT span.
+    assert SPAN_REGISTRY[SpanRole.MCP_TOOL_CALL].kind is LiteLLMSpanKind.CLIENT
     assert SPAN_REGISTRY[SpanRole.PROXY_REQUEST].kind is LiteLLMSpanKind.SERVER
     assert SPAN_REGISTRY[SpanRole.GUARDRAIL].parent is SpanRole.PROXY_REQUEST
     # An outbound datastore call is a CLIENT span; an internal service is INTERNAL.
@@ -143,6 +144,99 @@ def test_operation_resolution():
     assert resolve_operation("aembedding") is GenAIOperation.EMBEDDINGS
     assert resolve_operation("atext_completion") is GenAIOperation.TEXT_COMPLETION
     assert resolve_operation(None) is GenAIOperation.CHAT
+    # An MCP tool call is an ``execute_tool`` operation, not a chat completion.
+    assert resolve_operation("call_mcp_tool") is GenAIOperation.EXECUTE_TOOL
+
+
+# --- MCP tool-call (source of truth #1/#2/#3) ------------------------------- #
+
+
+def _mcp_payload(capture=False, **overrides):
+    payload = {
+        "call_type": "call_mcp_tool",
+        "status": "success",
+        "litellm_call_id": "mcp_call_1",
+        "response_cost": 0.01,
+        "metadata": {"user_api_key_team_id": "t1"},
+        "hidden_params": {},
+        "mcp_tool_call_metadata": {
+            "name": "get_weather",
+            "arguments": {"city": "Paris"},
+            "result": {"temp_c": 21},
+            "mcp_server_name": "weather-mcp",
+        },
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_mcp_method_values_match_wire_format():
+    from litellm.integrations.otel import MCP, MCPMethod
+
+    assert MCPMethod.TOOLS_CALL.value == "tools/call"
+    assert MCPMethod.TOOLS_LIST.value == "tools/list"
+    assert MCP.METHOD_NAME == "mcp.method.name"
+
+
+def test_mcp_tool_call_adapter_extracts_fields():
+    from litellm.integrations.otel import MCPToolCallSpanData
+
+    data = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload())
+    assert data.operation is GenAIOperation.EXECUTE_TOOL
+    assert data.method == "tools/call"
+    assert data.tool_name == "get_weather"
+    assert data.server_name == "weather-mcp"
+    assert data.response_cost == 0.01
+    assert data.identity.call_id == "mcp_call_1"
+    assert data.identity.team_id == "t1"
+    assert data.error is None
+
+
+def test_mcp_tool_call_content_gated_off_by_default():
+    # Arguments and result are sensitive tool I/O: withheld unless content capture
+    # is explicitly enabled, exactly like prompt/response bodies.
+    from litellm.integrations.otel import MCPToolCallSpanData
+
+    off = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload())
+    assert off.arguments_json is None and off.result_json is None
+
+    on = MCPToolCallSpanData.from_standard_logging_payload(
+        _mcp_payload(), capture_content=True
+    )
+    assert on.arguments_json is not None and '"Paris"' in on.arguments_json
+    assert on.result_json is not None and "21" in on.result_json
+
+
+def test_mcp_tool_call_failure_path():
+    from litellm.integrations.otel import MCPToolCallSpanData
+
+    data = MCPToolCallSpanData.from_standard_logging_payload(
+        _mcp_payload(
+            status="failure",
+            error_information={"error_class": "MCPError", "error_message": "boom"},
+        )
+    )
+    assert data.error is not None
+    assert data.error.error_type == "MCPError"
+    assert data.error.message == "boom"
+
+
+def test_is_mcp_tool_call_detection():
+    from litellm.integrations.otel import is_mcp_tool_call
+
+    assert is_mcp_tool_call(_mcp_payload()) is True
+    # call_type alone is enough even before the gateway stamps its metadata.
+    assert is_mcp_tool_call({"call_type": "call_mcp_tool"}) is True
+    assert is_mcp_tool_call({"call_type": "acompletion"}) is False
+    assert is_mcp_tool_call({}) is False
+
+
+def test_mcp_tool_call_span_name():
+    from litellm.integrations.otel import MCPToolCallSpanData
+    from litellm.integrations.otel.model.spans import mcp_tool_call_span_name
+
+    data = MCPToolCallSpanData.from_standard_logging_payload(_mcp_payload())
+    assert mcp_tool_call_span_name(data) == "tools/call get_weather"
 
 
 # --- typed adapter (source of truth #3) ------------------------------------- #
