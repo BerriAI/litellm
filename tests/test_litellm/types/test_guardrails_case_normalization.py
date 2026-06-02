@@ -3,7 +3,9 @@ Test case normalization in LitellmParams for all guardrail types
 """
 
 import pytest
-from litellm.types.guardrails import LitellmParams
+from pydantic import ValidationError
+
+from litellm.types.guardrails import BaseLitellmParams, LitellmParams
 
 
 class TestLitellmParamsCaseNormalization:
@@ -89,3 +91,38 @@ class TestLitellmParamsCaseNormalization:
             )
             assert params.on_disallowed_action in ["block", "rewrite"]
             assert params.on_disallowed_action.islower()
+
+
+class TestSensitiveDataRoutingValidation:
+    """on_sensitive_data='route' requires a target model to be set"""
+
+    def test_route_with_target_model_is_valid(self):
+        params = LitellmParams(
+            guardrail="presidio",
+            mode="pre_call",
+            on_sensitive_data="route",
+            sensitive_data_route_to_model="on-prem-model",
+        )
+        assert params.on_sensitive_data == "route"
+        assert params.sensitive_data_route_to_model == "on-prem-model"
+
+    def test_route_without_target_model_raises(self):
+        with pytest.raises(ValidationError, match="sensitive_data_route_to_model"):
+            LitellmParams(
+                guardrail="presidio",
+                mode="pre_call",
+                on_sensitive_data="route",
+            )
+
+    def test_base_params_route_without_target_model_raises(self):
+        with pytest.raises(ValidationError, match="sensitive_data_route_to_model"):
+            BaseLitellmParams(on_sensitive_data="route")
+
+    def test_block_without_target_model_is_valid(self):
+        params = LitellmParams(
+            guardrail="presidio",
+            mode="pre_call",
+            on_sensitive_data="block",
+        )
+        assert params.on_sensitive_data == "block"
+        assert params.sensitive_data_route_to_model is None

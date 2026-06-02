@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import Required, TypedDict
 
 from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
@@ -796,6 +796,14 @@ class BaseLitellmParams(
             "requests in the same session will continue routing to the same model."
         ),
     )
+
+    @model_validator(mode="after")
+    def validate_sensitive_data_routing(self) -> "BaseLitellmParams":
+        if self.on_sensitive_data == "route" and not self.sensitive_data_route_to_model:
+            raise ValueError(
+                "sensitive_data_route_to_model must be set when on_sensitive_data='route'"
+            )
+        return self
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
