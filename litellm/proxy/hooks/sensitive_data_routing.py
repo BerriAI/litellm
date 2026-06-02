@@ -49,15 +49,41 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
             )
         )
 
-    def _make_cache_key(self, session_id: str, api_key: Optional[str]) -> str:
-        tenant = api_key or "default"
+    def _make_cache_key(self, session_id: str, tenant: str) -> str:
         return f"{{{SENSITIVE_ROUTING_CACHE_PREFIX}:{tenant}:{session_id}}}:model"
 
+    @staticmethod
+    def _resolve_tenant(user_api_key_dict: Optional[UserAPIKeyAuth]) -> str:
+        """
+        Identify the authenticated principal the routing override belongs to.
+
+        API-key auth is scoped by the hashed key. JWT (and other keyless) auth
+        has no api_key, so fall back to a stable identity claim. Without this,
+        every keyless caller would share the ``default`` namespace and could read
+        or overwrite another principal's session routing.
+        """
+        if user_api_key_dict is None:
+            return "default"
+        if user_api_key_dict.api_key:
+            return user_api_key_dict.api_key
+        principal = [
+            f"{label}:{value}"
+            for label, value in (
+                ("user", user_api_key_dict.user_id),
+                ("team", user_api_key_dict.team_id),
+                ("org", user_api_key_dict.org_id),
+            )
+            if value
+        ]
+        return "|".join(principal) if principal else "default"
+
     async def _get_routed_model(
-        self, session_id: str, api_key: Optional[str]
+        self, session_id: str, user_api_key_dict: Optional[UserAPIKeyAuth]
     ) -> Optional[str]:
         """Get the model this session should be routed to, if any."""
-        cache_key = self._make_cache_key(session_id, api_key)
+        cache_key = self._make_cache_key(
+            session_id, self._resolve_tenant(user_api_key_dict)
+        )
 
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             try:
@@ -93,7 +119,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         self,
         session_id: str,
         model: str,
-        api_key: Optional[str] = None,
+        user_api_key_dict: Optional[UserAPIKeyAuth] = None,
         guardrail_name: Optional[str] = None,
     ) -> None:
         """
@@ -101,9 +127,11 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
 
         Called by guardrails when they detect sensitive data and want to
         route the session to a specific model. The override is scoped to the
-        requesting API key so sessions from different tenants cannot collide.
+        requesting principal so sessions from different tenants cannot collide.
         """
-        cache_key = self._make_cache_key(session_id, api_key)
+        cache_key = self._make_cache_key(
+            session_id, self._resolve_tenant(user_api_key_dict)
+        )
 
         verbose_proxy_logger.info(
             "SensitiveDataRoutingHandler: Setting session routing session_id=%s model=%s guardrail=%s ttl=%s",
@@ -149,8 +177,7 @@ class _PROXY_SensitiveDataRoutingHandler(CustomLogger):
         if session_id is None:
             return None
 
-        api_key = user_api_key_dict.api_key if user_api_key_dict is not None else None
-        routed_model = await self._get_routed_model(session_id, api_key)
+        routed_model = await self._get_routed_model(session_id, user_api_key_dict)
         if routed_model is None:
             return None
 

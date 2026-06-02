@@ -1560,11 +1560,7 @@ class ProxyLogging:
                 await sensitive_routing_hook.set_session_routing(
                     session_id=exc.session_id,
                     model=exc.route_to_model,
-                    api_key=(
-                        user_api_key_dict.api_key
-                        if user_api_key_dict is not None
-                        else None
-                    ),
+                    user_api_key_dict=user_api_key_dict,
                     guardrail_name=exc.guardrail_name,
                 )
             else:

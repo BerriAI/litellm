@@ -51,14 +51,15 @@ class TestSensitiveDataRoutingHandler:
 
     @pytest.mark.asyncio
     async def test_set_session_routing(self, handler):
+        key = UserAPIKeyAuth(api_key="hashed-key")
         await handler.set_session_routing(
             session_id="test-session-123",
             model="on-premise-model",
-            api_key="hashed-key",
+            user_api_key_dict=key,
             guardrail_name="test-guardrail",
         )
 
-        routed_model = await handler._get_routed_model("test-session-123", "hashed-key")
+        routed_model = await handler._get_routed_model("test-session-123", key)
         assert routed_model == "on-premise-model"
 
     def test_get_session_id_from_metadata(self):
@@ -95,7 +96,7 @@ class TestSensitiveDataRoutingHandler:
         await handler.set_session_routing(
             session_id="routed-session",
             model="on-premise-model",
-            api_key="test-key",
+            user_api_key_dict=user_api_key_dict,
         )
 
         data = {
@@ -278,7 +279,7 @@ class TestStickySessionRouting:
         await handler.set_session_routing(
             session_id=session_id,
             model="on-premise-model",
-            api_key="test-key",
+            user_api_key_dict=user_api_key_dict,
         )
 
         for i in range(5):
@@ -305,12 +306,12 @@ class TestStickySessionRouting:
         await handler.set_session_routing(
             session_id="session-a",
             model="on-premise-model-a",
-            api_key="test-key",
+            user_api_key_dict=user_api_key_dict,
         )
         await handler.set_session_routing(
             session_id="session-b",
             model="on-premise-model-b",
-            api_key="test-key",
+            user_api_key_dict=user_api_key_dict,
         )
 
         data_a = {"model": "gpt-4", "metadata": {"session_id": "session-a"}}
@@ -346,7 +347,7 @@ class TestStickySessionRouting:
         await handler.set_session_routing(
             session_id=shared_session,
             model="on-premise-model",
-            api_key="tenant-a",
+            user_api_key_dict=UserAPIKeyAuth(api_key="tenant-a"),
         )
 
         data_for_tenant_b = {
@@ -389,18 +390,42 @@ class TestCacheKeyAndTTL:
         key = handler._make_cache_key("test-session-123", "hashed-key")
         assert key == "{sensitive_route:hashed-key:test-session-123}:model"
 
-    def test_make_cache_key_defaults_when_no_api_key(self):
-        cache = MockInternalUsageCache()
-        handler = _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
-        key = handler._make_cache_key("test-session-123", None)
-        assert key == "{sensitive_route:default:test-session-123}:model"
-
     def test_make_cache_key_is_tenant_scoped(self):
         cache = MockInternalUsageCache()
         handler = _PROXY_SensitiveDataRoutingHandler(internal_usage_cache=cache)
         key_a = handler._make_cache_key("shared-session", "key-a")
         key_b = handler._make_cache_key("shared-session", "key-b")
         assert key_a != key_b
+
+    def test_resolve_tenant_prefers_api_key(self):
+        tenant = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(
+            UserAPIKeyAuth(api_key="hashed-key", user_id="alice")
+        )
+        assert tenant == "hashed-key"
+
+    def test_resolve_tenant_falls_back_to_jwt_principal(self):
+        tenant = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(
+            UserAPIKeyAuth(api_key=None, user_id="alice", team_id="t1", org_id="o1")
+        )
+        assert tenant == "user:alice|team:t1|org:o1"
+
+    def test_resolve_tenant_distinguishes_keyless_principals(self):
+        tenant_a = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(
+            UserAPIKeyAuth(api_key=None, user_id="alice")
+        )
+        tenant_b = _PROXY_SensitiveDataRoutingHandler._resolve_tenant(
+            UserAPIKeyAuth(api_key=None, user_id="bob")
+        )
+        assert tenant_a != tenant_b
+
+    def test_resolve_tenant_defaults_when_anonymous(self):
+        assert _PROXY_SensitiveDataRoutingHandler._resolve_tenant(None) == "default"
+        assert (
+            _PROXY_SensitiveDataRoutingHandler._resolve_tenant(
+                UserAPIKeyAuth(api_key=None)
+            )
+            == "default"
+        )
 
 
 class TestCustomGuardrailSessionIdExtraction:
@@ -501,7 +526,9 @@ class TestRedisCache:
         handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
             return_value="redis-model"
         )
-        result = await handler_with_redis._get_routed_model("session-123", "hashed-key")
+        result = await handler_with_redis._get_routed_model(
+            "session-123", UserAPIKeyAuth(api_key="hashed-key")
+        )
         assert result == "redis-model"
 
     @pytest.mark.asyncio
@@ -509,11 +536,12 @@ class TestRedisCache:
         self, handler_with_redis
     ):
         cache_key = "{sensitive_route:hashed-key:session-123}:model"
+        key = UserAPIKeyAuth(api_key="hashed-key")
         handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
             return_value="on-premise-model"
         )
 
-        first = await handler_with_redis._get_routed_model("session-123", "hashed-key")
+        first = await handler_with_redis._get_routed_model("session-123", key)
         assert first == "on-premise-model"
         assert handler_with_redis.internal_usage_cache._cache[cache_key] == (
             "on-premise-model"
@@ -522,7 +550,7 @@ class TestRedisCache:
         handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_get_cache = AsyncMock(
             side_effect=Exception("Redis went down")
         )
-        second = await handler_with_redis._get_routed_model("session-123", "hashed-key")
+        second = await handler_with_redis._get_routed_model("session-123", key)
         assert second == "on-premise-model"
 
     @pytest.mark.asyncio
@@ -533,7 +561,9 @@ class TestRedisCache:
         handler_with_redis.internal_usage_cache._cache[
             "{sensitive_route:hashed-key:session-123}:model"
         ] = "fallback-model"
-        result = await handler_with_redis._get_routed_model("session-123", "hashed-key")
+        result = await handler_with_redis._get_routed_model(
+            "session-123", UserAPIKeyAuth(api_key="hashed-key")
+        )
         assert result == "fallback-model"
 
     @pytest.mark.asyncio
@@ -544,7 +574,7 @@ class TestRedisCache:
         await handler_with_redis.set_session_routing(
             session_id="session-456",
             model="on-premise-model",
-            api_key="hashed-key",
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
             guardrail_name="test-guardrail",
         )
         handler_with_redis.internal_usage_cache.dual_cache.redis_cache.async_set_cache.assert_called_once()
@@ -559,7 +589,7 @@ class TestRedisCache:
         await handler_with_redis.set_session_routing(
             session_id="session-789",
             model="on-premise-model",
-            api_key="hashed-key",
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
         )
         cache_key = "{sensitive_route:hashed-key:session-789}:model"
         assert (
@@ -583,7 +613,7 @@ class TestPreCallHookEdgeCases:
         await handler.set_session_routing(
             session_id="same-model-session",
             model="gpt-4",
-            api_key="test-key",
+            user_api_key_dict=user_api_key_dict,
         )
         data = {
             "model": "gpt-4",
@@ -654,7 +684,9 @@ class TestProxyHandleSensitiveDataRouteException:
 
         assert result["model"] == "on-premise-model"
         assert (
-            await routing_hook._get_routed_model("sess-sticky", "tenant-a")
+            await routing_hook._get_routed_model(
+                "sess-sticky", UserAPIKeyAuth(api_key="tenant-a")
+            )
             == "on-premise-model"
         )
 
@@ -677,7 +709,10 @@ class TestProxyHandleSensitiveDataRouteException:
 
         assert result["model"] == "on-premise-model"
         assert (
-            await routing_hook._get_routed_model("sess-non-sticky", "tenant-a") is None
+            await routing_hook._get_routed_model(
+                "sess-non-sticky", UserAPIKeyAuth(api_key="tenant-a")
+            )
+            is None
         )
 
     @pytest.mark.asyncio
@@ -702,6 +737,51 @@ class TestProxyHandleSensitiveDataRouteException:
             await routing_hook._get_routed_model("sess-no-key", None)
             == "on-premise-model"
         )
+
+    @pytest.mark.asyncio
+    async def test_sticky_routing_scopes_jwt_users_by_principal(
+        self, proxy_logging, routing_hook
+    ):
+        proxy_logging.proxy_hook_mapping["sensitive_data_routing"] = routing_hook
+        exc = SensitiveDataRouteException(
+            route_to_model="on-premise-model",
+            session_id="shared-jwt-session",
+            guardrail_name="pii",
+            sticky_session_routing=True,
+        )
+        attacker = UserAPIKeyAuth(api_key=None, user_id="attacker", team_id="team-x")
+        await proxy_logging._handle_sensitive_data_route_exception(
+            exc,
+            {"model": "gpt-4", "metadata": {"session_id": "shared-jwt-session"}},
+            attacker,
+        )
+
+        victim = UserAPIKeyAuth(api_key=None, user_id="victim", team_id="team-y")
+        victim_data = {
+            "model": "gpt-4",
+            "metadata": {"session_id": "shared-jwt-session"},
+        }
+        result = await routing_hook.async_pre_call_hook(
+            user_api_key_dict=victim,
+            cache=DualCache(),
+            data=victim_data,
+            call_type="completion",
+        )
+        assert result is None
+        assert victim_data["model"] == "gpt-4"
+
+        attacker_data = {
+            "model": "gpt-4",
+            "metadata": {"session_id": "shared-jwt-session"},
+        }
+        result = await routing_hook.async_pre_call_hook(
+            user_api_key_dict=attacker,
+            cache=DualCache(),
+            data=attacker_data,
+            call_type="completion",
+        )
+        assert result is not None
+        assert result["model"] == "on-premise-model"
 
     @pytest.mark.asyncio
     async def test_sticky_routing_warns_when_hook_not_registered(self, proxy_logging):
