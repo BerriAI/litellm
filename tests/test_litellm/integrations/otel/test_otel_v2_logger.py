@@ -297,6 +297,22 @@ def test_mcp_tool_call_emits_client_span():
     assert "gen_ai.tool.call.result" not in span.attributes
 
 
+def test_mcp_tool_call_stateless_omits_session_id():
+    """A stateless MCP call carries no ``mcp-session-id``, so the span must omit
+    ``mcp.session.id`` rather than stamping an empty or ``None`` value."""
+    logger, exporter = _logger()
+    payload = _mcp_payload()
+    del payload["mcp_tool_call_metadata"]["mcp_session_id"]
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": payload}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert "mcp.session.id" not in span.attributes
+    assert span.attributes["mcp.method.name"] == "tools/call"
+
+
 def test_mcp_tool_call_is_not_logged_as_llm_call():
     """The MCP branch must short-circuit the LLM-call path: even if ``pre_call``
     opened a stray carrier for this id, the result is one MCP span, never an LLM
