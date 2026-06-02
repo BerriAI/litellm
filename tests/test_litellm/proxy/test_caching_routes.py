@@ -168,8 +168,8 @@ def test_cache_ping_no_cache_initialized():
 
         data = response.json()
         print("response data=", json.dumps(data, indent=4))
-        # HTTPException propagates directly; detail is a plain string in the response
-        assert "Cache not initialized" in str(data)
+        # FastAPI serialises HTTPException as {"detail": "<message>"}
+        assert data["detail"] == "Cache not initialized. litellm.cache is None"
     finally:
         litellm.cache = original_cache
 
