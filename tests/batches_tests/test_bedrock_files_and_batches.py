@@ -1,7 +1,7 @@
 # What is this?
 ## Unit Tests for OpenAI Batches API
 import asyncio
-import json
+import json as json_module
 import os
 import sys
 import traceback
@@ -36,6 +36,8 @@ class _CaptureAsyncHTTPHandler(AsyncHTTPHandler):
         self.event_hooks = None
         self.client_alias = "bedrock-test"
         self.put_calls = []
+        self.post_calls = []
+        self.batch_jobs = {}
 
     async def put(
         self,
@@ -67,6 +69,51 @@ class _CaptureAsyncHTTPHandler(AsyncHTTPHandler):
             status_code=200,
             headers={"Content-Length": str(content_length)},
             request=httpx.Request("PUT", url),
+        )
+
+    async def post(
+        self,
+        url: str,
+        data=None,
+        json=None,
+        params=None,
+        headers=None,
+        timeout=None,
+        stream: bool = False,
+        logging_obj=None,
+        files=None,
+        content=None,
+    ):
+        self.post_calls.append(
+            {
+                "url": url,
+                "data": data,
+                "json": json,
+                "params": params,
+                "headers": headers or {},
+                "timeout": timeout,
+                "stream": stream,
+                "content": content,
+            }
+        )
+        payload = json if json is not None else json_module.loads(data)
+        job_name = payload["jobName"]
+        job_arn = f"arn:aws:bedrock:us-west-2:941277531214:model-invocation-job/{job_name}"
+        self.batch_jobs[job_arn] = {
+            "jobArn": job_arn,
+            "jobName": job_name,
+            "modelId": payload["modelId"],
+            "roleArn": payload["roleArn"],
+            "status": "InProgress",
+            "submitTime": "2026-06-02T03:50:00Z",
+            "lastModifiedTime": "2026-06-02T03:55:00Z",
+            "inputDataConfig": payload["inputDataConfig"],
+            "outputDataConfig": payload["outputDataConfig"],
+        }
+        return httpx.Response(
+            status_code=200,
+            json={"jobArn": job_arn, "jobName": job_name, "status": "Submitted"},
+            request=httpx.Request("POST", url),
         )
 
 
@@ -123,42 +170,53 @@ async def test_async_file_and_batch():
     _current_dir = os.path.dirname(os.path.abspath(__file__))
     file_path = os.path.join(_current_dir, file_name)
     capture_client = _CaptureAsyncHTTPHandler()
-    with (
-        patch.dict(os.environ, _BEDROCK_TEST_AWS_ENV),
-        open(file_path, "rb") as batch_file,
-    ):
-        file_obj = await litellm.acreate_file(
-            file=batch_file,
-            purpose="batch",
-            custom_llm_provider="bedrock",
-            s3_bucket_name="litellm-proxy-941277531214",
-            client=capture_client,
-        )
-    assert len(capture_client.put_calls) == 1
-    print("CREATED FILE RESPONSE=", file_obj)
+    with patch.dict(os.environ, _BEDROCK_TEST_AWS_ENV):
+        with open(file_path, "rb") as batch_file:
+            file_obj = await litellm.acreate_file(
+                file=batch_file,
+                purpose="batch",
+                custom_llm_provider="bedrock",
+                s3_bucket_name="litellm-proxy-941277531214",
+                client=capture_client,
+            )
+        assert len(capture_client.put_calls) == 1
+        print("CREATED FILE RESPONSE=", file_obj)
 
-    # create batch
-    create_batch_response = await litellm.acreate_batch(
-        completion_window="24h",
-        endpoint="/v1/chat/completions",
-        input_file_id=file_obj.id,
-        metadata={"key1": "value1", "key2": "value2"},
-        custom_llm_provider="bedrock",
-        #########################################################
-        # bedrock specific params
-        #########################################################
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        aws_batch_role_arn="arn:aws:iam::941277531214:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV",
-    )
-    print("CREATED BATCH RESPONSE=", create_batch_response)
+        with patch(
+            "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+            return_value=capture_client,
+        ):
+            # create batch
+            create_batch_response = await litellm.acreate_batch(
+                completion_window="24h",
+                endpoint="/v1/chat/completions",
+                input_file_id=file_obj.id,
+                metadata={"key1": "value1", "key2": "value2"},
+                custom_llm_provider="bedrock",
+                #########################################################
+                # bedrock specific params
+                #########################################################
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                aws_batch_role_arn="arn:aws:iam::941277531214:role/service-role/AmazonBedrockExecutionRoleForAgents_BB9HNW6V4CV",
+            )
+            assert len(capture_client.post_calls) == 1
+            print("CREATED BATCH RESPONSE=", create_batch_response)
 
-    # retrieve batch
-    retrieve_batch_response = await litellm.aretrieve_batch(
-        batch_id=create_batch_response.id,
-        custom_llm_provider="bedrock",
-        model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
-    )
-    print("RETRIEVED BATCH RESPONSE=", retrieve_batch_response)
+            # retrieve batch
+            mock_bedrock_client = MagicMock()
+            mock_bedrock_client.get_model_invocation_job.side_effect = (
+                lambda jobIdentifier: capture_client.batch_jobs[jobIdentifier]
+            )
+            with patch("boto3.client", return_value=mock_bedrock_client):
+                retrieve_batch_response = await litellm.aretrieve_batch(
+                    batch_id=create_batch_response.id,
+                    custom_llm_provider="bedrock",
+                    model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                )
+            mock_bedrock_client.get_model_invocation_job.assert_called_once_with(
+                jobIdentifier=create_batch_response.id
+            )
+            print("RETRIEVED BATCH RESPONSE=", retrieve_batch_response)
 
     # Validate the response
     assert retrieve_batch_response.id == create_batch_response.id
@@ -299,8 +357,12 @@ def test_bedrock_batch_with_encryption_key_in_post_request():
         mock_response.raise_for_status.return_value = None
         return mock_response
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", side_effect=mock_post
+    with (
+        patch.dict(os.environ, _BEDROCK_TEST_AWS_ENV),
+        patch(
+            "litellm.llms.custom_httpx.http_handler.HTTPHandler.post",
+            side_effect=mock_post,
+        ),
     ):
         response = litellm.create_batch(
             completion_window="24h",
