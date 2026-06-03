@@ -1761,6 +1761,31 @@ class TestOpenTelemetry(unittest.TestCase):
         mock_tracer.start_span.assert_not_called()
 
 
+class TestOpenTelemetryToNs(unittest.TestCase):
+    """``_to_ns`` converts a span boundary to epoch nanoseconds. Service spans now
+    feed it real float/datetime windows, and a missing boundary arrives as
+    ``None`` — all three shapes must convert without raising the ``AttributeError``
+    a bare ``dt.timestamp()`` would on a float or ``None``."""
+
+    def setUp(self):
+        self.otel = OpenTelemetry()
+
+    def test_datetime_converts_to_epoch_ns(self):
+        dt = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(self.otel._to_ns(dt), int(dt.timestamp() * 1e9))
+
+    def test_float_epoch_seconds_scaled_to_ns(self):
+        self.assertEqual(self.otel._to_ns(1700.5), 1_700_500_000_000)
+
+    def test_int_epoch_seconds_scaled_to_ns(self):
+        self.assertEqual(self.otel._to_ns(1700), 1_700_000_000_000)
+
+    @patch("litellm.integrations.opentelemetry.datetime")
+    def test_none_falls_back_to_current_time(self, mock_datetime):
+        mock_datetime.now.return_value.timestamp.return_value = 1700.0
+        self.assertEqual(self.otel._to_ns(None), 1_700_000_000_000)
+
+
 class TestOpenTelemetryHeaderSplitting(unittest.TestCase):
     """Test suite for _get_headers_dictionary method"""
 

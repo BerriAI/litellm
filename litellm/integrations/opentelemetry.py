@@ -2668,6 +2668,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
 
     def _to_ns(self, dt):
+        if dt is None:
+            return int(datetime.now().timestamp() * 1e9)
+        if isinstance(dt, (int, float)):
+            return int(dt * 1e9)
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
