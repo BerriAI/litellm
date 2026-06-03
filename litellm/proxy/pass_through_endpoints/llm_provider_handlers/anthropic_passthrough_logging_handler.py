@@ -114,12 +114,13 @@ class AnthropicPassthroughLoggingHandler:
 
         handles streaming and non-streaming responses
         """
-        # Record the assembled response before cost calculation so that callbacks
-        # (e.g. _PROXY_track_cost_callback) always see complete_streaming_response
-        # and the dispatch_success_handlers dedup guard can fire even if pricing fails.
-        logging_obj.model_call_details["complete_streaming_response"] = (
-            litellm_model_response
-        )
+        # Only record complete_streaming_response for actual streaming responses.
+        # perform_redaction scrubs this field only when stream is True, so setting
+        # it on a non-streaming response would bypass message redaction.
+        if logging_obj.model_call_details.get("stream") is True:
+            logging_obj.model_call_details["complete_streaming_response"] = (
+                litellm_model_response
+            )
         try:
             # Get custom_llm_provider from logging object if available (e.g., azure_ai for Azure Anthropic)
             custom_llm_provider = logging_obj.model_call_details.get(

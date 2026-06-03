@@ -1148,7 +1148,10 @@ class TestStreamFalseDeduplication:
             EndpointType,
         )
 
-        logging_obj = self._make_logging_obj(stream=False)
+        # pass_through_request sets the stream flag before the streaming handler
+        # reconstructs the response; mirror that here.
+        logging_obj = self._make_logging_obj(stream=True)
+        logging_obj.model_call_details["stream"] = True
         all_chunks = list(self._build_chunks())
 
         result = AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
@@ -1249,7 +1252,9 @@ class TestStreamFalseDeduplication:
 
         would_skip = bool(
             logging_obj._is_assembled_stream_success(result=mock_response)
-            and logging_obj.model_call_details.get("has_dispatched_final_stream_success")
+            and logging_obj.model_call_details.get(
+                "has_dispatched_final_stream_success"
+            )
         )
         assert would_skip is True
 
@@ -1271,3 +1276,102 @@ class TestStreamFalseDeduplication:
         # With stream=False, _is_assembled_stream_success returns False even though
         # complete_streaming_response is present — the guard is permanently disabled.
         assert logging_obj._is_assembled_stream_success(result=mock_response) is False
+
+
+class TestNonStreamingResponseRedaction:
+    """
+    Regression tests ensuring _create_anthropic_response_logging_payload only sets
+    complete_streaming_response for streaming responses. perform_redaction scrubs
+    that field exclusively when model_call_details["stream"] is True, so storing it
+    on a non-streaming response would deliver the unredacted response to logging
+    callbacks when message logging is disabled.
+    """
+
+    @staticmethod
+    def _make_logging_obj(stream: bool) -> LiteLLMLoggingObj:
+        logging_obj = LiteLLMLoggingObj(
+            model="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "hello"}],
+            stream=stream,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="1245",
+        )
+        # pass_through_request mirrors the stream flag onto model_call_details,
+        # which is the key perform_redaction inspects.
+        logging_obj.model_call_details["stream"] = stream
+        return logging_obj
+
+    def test_non_streaming_does_not_set_complete_streaming_response(self):
+        from litellm.types.utils import ModelResponse
+
+        logging_obj = self._make_logging_obj(stream=False)
+        response = ModelResponse(model="claude-3-5-sonnet-20241022")
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            "complete_streaming_response" not in logging_obj.model_call_details
+        ), "non-streaming responses must not populate complete_streaming_response"
+
+    def test_streaming_sets_complete_streaming_response(self):
+        from litellm.types.utils import ModelResponse
+
+        logging_obj = self._make_logging_obj(stream=True)
+        response = ModelResponse(model="claude-3-5-sonnet-20241022")
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert (
+            logging_obj.model_call_details.get("complete_streaming_response")
+            is response
+        )
+
+    def test_non_streaming_response_is_redacted_when_message_logging_off(self):
+        from litellm.litellm_core_utils.redact_messages import (
+            redact_message_input_output_from_logging,
+        )
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = self._make_logging_obj(stream=False)
+        response = ModelResponse(
+            model="claude-3-5-sonnet-20241022",
+            choices=[Choices(message=Message(role="assistant", content="secret"))],
+        )
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="claude-3-5-sonnet-20241022",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        logging_obj.model_call_details["litellm_params"] = {
+            "metadata": {"headers": {"x-litellm-enable-message-redaction": True}}
+        }
+
+        redacted = redact_message_input_output_from_logging(
+            model_call_details=logging_obj.model_call_details,
+            result=response,
+        )
+
+        leaked = logging_obj.model_call_details.get("complete_streaming_response")
+        assert leaked is None
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
