@@ -146,6 +146,7 @@ if MCP_AVAILABLE:
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
+        MCPEnvVarScope,
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
@@ -483,6 +484,18 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
 
+    def _redact_global_env_var_values(mcp_server: LiteLLM_MCPServerTable) -> None:
+        """Blank admin-supplied ``scope="global"`` env var secrets in place.
+
+        Global entries hold the admin's plaintext credential (API key,
+        password, ...) and must never reach non-admin callers. Per-user
+        entries only carry a placeholder the user fills in themselves, so
+        their value is left intact.
+        """
+        for env_var in mcp_server.env_vars or []:
+            if env_var.scope == MCPEnvVarScope.global_:
+                env_var.value = ""
+
     def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """Best-effort detection for route-restricted virtual keys.
 
@@ -523,6 +536,7 @@ if MCP_AVAILABLE:
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        _redact_global_env_var_values(sanitized)
         return sanitized
 
     def _sanitize_mcp_server_list_for_non_admin(
@@ -554,6 +568,7 @@ if MCP_AVAILABLE:
         sanitized.allowed_tools = []
         sanitized.mcp_access_groups = []
         sanitized.teams = []
+        _redact_global_env_var_values(sanitized)
 
         sanitized.authorization_url = None
         sanitized.token_url = None

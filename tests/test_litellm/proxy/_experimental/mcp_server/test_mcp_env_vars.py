@@ -251,6 +251,55 @@ async def test_resolve_static_headers_missing_is_non_blocking_for_listing(
 
 
 @pytest.mark.asyncio
+async def test_resolve_static_headers_propagates_db_error_on_tool_call(
+    mock_server, monkeypatch
+):
+    """A DB failure on the tool-call path must surface as a real error, not be
+    masked as a "missing credentials" MCPMissingUserEnvVarsError (412)."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+
+    async def boom(server, user_api_key_auth):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", boom)
+
+    with pytest.raises(RuntimeError, match="db down"):
+        await manager._resolve_static_headers_with_env_vars(
+            mock_server, user_api_key_auth=object()
+        )
+
+
+@pytest.mark.asyncio
+async def test_resolve_static_headers_swallows_db_error_on_listing(
+    mock_server, monkeypatch
+):
+    """On the listing path a DB failure is non-blocking: globals interpolate
+    and unfilled per-user ${NAME} refs are left untouched."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+
+    async def boom(server, user_api_key_auth):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", boom)
+
+    headers = await manager._resolve_static_headers_with_env_vars(
+        mock_server, user_api_key_auth=object(), raise_on_missing=False
+    )
+    assert headers == {
+        "X-DB-URL": "postgres://${CORP_USERNAME}:${CORP_PASSWORD}@db.local/db",
+        "X-Other": "literal",
+    }
+
+
+@pytest.mark.asyncio
 async def test_resolve_static_headers_passthrough_when_no_env_vars():
     """Servers without env_vars should keep static_headers untouched."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (

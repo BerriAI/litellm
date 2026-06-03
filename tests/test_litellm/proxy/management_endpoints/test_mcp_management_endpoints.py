@@ -3319,6 +3319,39 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     assert sanitized.alias == server.alias
 
 
+@pytest.mark.parametrize(
+    "sanitizer_name",
+    ["_sanitize_mcp_server_for_non_admin", "_sanitize_mcp_server_for_virtual_key"],
+)
+def test_sanitize_masks_global_env_var_secrets(sanitizer_name):
+    """Non-admin and virtual-key views must never expose the admin-supplied
+    global env var secret, while per-user placeholders are left intact."""
+    import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
+
+    sanitizer = getattr(mgmt, sanitizer_name)
+
+    base = generate_mock_mcp_server_db_record()
+    server = LiteLLM_MCPServerTable(
+        **{
+            **base.model_dump(),
+            "env_vars": [
+                {"name": "ADMIN_API_KEY", "value": "super-secret", "scope": "global"},
+                {"name": "USER_TOKEN", "value": "placeholder-hint", "scope": "user"},
+            ],
+        }
+    )
+
+    sanitized = sanitizer(server)
+
+    by_name = {ev.name: ev for ev in sanitized.env_vars}
+    assert by_name["ADMIN_API_KEY"].value == ""
+    assert by_name["USER_TOKEN"].value == "placeholder-hint"
+
+    # The original object must not be mutated.
+    original_by_name = {ev.name: ev for ev in server.env_vars}
+    assert original_by_name["ADMIN_API_KEY"].value == "super-secret"
+
+
 def _make_env_var_server(
     *,
     server_id: str = "srv-1",

@@ -1562,7 +1562,21 @@ class MCPServerManager:
 
         user_values: Dict[str, str] = {}
         if referenced_user_vars:
-            user_values = await self._load_user_env_vars(server, user_api_key_auth)
+            try:
+                user_values = await self._load_user_env_vars(server, user_api_key_auth)
+            except Exception as exc:
+                # On the tool-call path a DB failure must surface as a real
+                # server error, not a misleading "set up your credentials" 412.
+                # On the listing path we stay best-effort and leave the
+                # unfilled ${NAME} references untouched so tools still appear.
+                if raise_on_missing:
+                    raise
+                verbose_logger.debug(
+                    "MCPServerManager: best-effort user env var load failed for "
+                    "server=%s: %s",
+                    server.server_id,
+                    exc,
+                )
 
             if raise_on_missing:
                 missing = sorted(
@@ -1586,11 +1600,11 @@ class MCPServerManager:
         server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
     ) -> Dict[str, str]:
-        """Best-effort lookup of the calling user's env var values for ``server``.
+        """Look up the calling user's env var values for ``server``.
 
-        Returns an empty dict when no user is available or the DB lookup
-        fails — callers detect missing values via name lookup, not by an
-        exception here.
+        Returns an empty dict when no user is available. DB errors propagate
+        so the caller can decide between failing the request (tool-call path)
+        and staying best-effort (listing path).
         """
         if user_api_key_auth is None:
             return {}
@@ -1605,17 +1619,7 @@ class MCPServerManager:
             get_user_env_vars,
         )
 
-        try:
-            return await get_user_env_vars(prisma_client, user_id, server.server_id)
-        except Exception as exc:
-            verbose_logger.debug(
-                "MCPServerManager: failed to load user env vars for "
-                "user=%s server=%s: %s",
-                user_id,
-                server.server_id,
-                exc,
-            )
-            return {}
+        return await get_user_env_vars(prisma_client, user_id, server.server_id)
 
     async def _create_mcp_client(
         self,
