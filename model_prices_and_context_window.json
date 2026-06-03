@@ -33471,6 +33471,7 @@
     },
     "vertex_ai/claude-haiku-4-5": {
         "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33492,6 +33493,7 @@
     },
     "vertex_ai/claude-haiku-4-5@20251001": {
         "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 2e-06,
         "cache_read_input_token_cost": 1e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33542,6 +33544,7 @@
     },
     "vertex_ai/claude-3-7-sonnet@20250219": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "deprecation_date": "2026-05-11",
         "input_cost_per_token": 3e-06,
@@ -33641,6 +33644,7 @@
     },
     "vertex_ai/claude-opus-4": {
         "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33666,6 +33670,7 @@
     },
     "vertex_ai/claude-opus-4-1": {
         "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
@@ -33683,6 +33688,7 @@
     },
     "vertex_ai/claude-opus-4-1@20250805": {
         "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
         "input_cost_per_token_batches": 7.5e-06,
@@ -33700,6 +33706,7 @@
     },
     "vertex_ai/claude-opus-4-5": {
         "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33726,6 +33733,7 @@
     },
     "vertex_ai/claude-opus-4-5@20251101": {
         "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33753,6 +33761,7 @@
     },
     "vertex_ai/claude-opus-4-6": {
         "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33780,6 +33789,7 @@
     },
     "vertex_ai/claude-opus-4-6@default": {
         "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33807,6 +33817,7 @@
     },
     "vertex_ai/claude-opus-4-7": {
         "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33834,6 +33845,7 @@
     },
     "vertex_ai/claude-opus-4-7@default": {
         "cache_creation_input_token_cost": 6.25e-06,
+        "cache_creation_input_token_cost_above_1hr": 1e-05,
         "cache_read_input_token_cost": 5e-07,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33917,6 +33929,7 @@
     },
     "vertex_ai/claude-sonnet-4-5": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
@@ -33943,6 +33956,7 @@
     },
     "vertex_ai/claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -33970,6 +33984,7 @@
     },
     "vertex_ai/claude-sonnet-4-5@20250929": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
@@ -33997,6 +34012,7 @@
     },
     "vertex_ai/claude-opus-4@20250514": {
         "cache_creation_input_token_cost": 1.875e-05,
+        "cache_creation_input_token_cost_above_1hr": 3e-05,
         "cache_read_input_token_cost": 1.5e-06,
         "input_cost_per_token": 1.5e-05,
         "litellm_provider": "vertex_ai-anthropic_models",
@@ -34022,6 +34038,7 @@
     },
     "vertex_ai/claude-sonnet-4": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
@@ -34051,6 +34068,7 @@
     },
     "vertex_ai/claude-sonnet-4@20250514": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "input_cost_per_token_above_200k_tokens": 6e-06,
@@ -41076,6 +41094,7 @@
     },
     "vertex_ai/claude-sonnet-4-6@default": {
         "cache_creation_input_token_cost": 3.75e-06,
+        "cache_creation_input_token_cost_above_1hr": 6e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "vertex_ai-anthropic_models",
