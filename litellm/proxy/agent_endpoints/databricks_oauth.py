@@ -23,6 +23,7 @@ Config example::
 """
 
 import asyncio
+import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -39,7 +40,6 @@ DATABRICKS_OAUTH_PARAM = "databricks_oauth"
 _DEFAULT_SCOPE = "all-apis"
 _TOKEN_EXPIRY_BUFFER_SECONDS = 60
 _DEFAULT_TTL_SECONDS = 3600
-_MIN_TTL_SECONDS = 60
 
 
 def _resolve_secret(value: Any) -> Optional[str]:
@@ -68,7 +68,10 @@ class DatabricksAppOAuthConfig:
 
     @property
     def cache_key(self) -> str:
-        return f"{self.token_url}|{self.client_id}|{self.scope}"
+        # Include a digest of the secret so a rotated client_secret yields a new
+        # key and forces a fresh token instead of serving the stale one.
+        secret_digest = hashlib.sha256(self.client_secret.encode()).hexdigest()[:16]
+        return f"{self.token_url}|{self.client_id}|{self.scope}|{secret_digest}"
 
 
 def parse_databricks_oauth_config(
@@ -136,6 +139,12 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
     def _get_lock(self, cache_key: str) -> asyncio.Lock:
         return self._locks.setdefault(cache_key, asyncio.Lock())
 
+    def _remove_key(self, key: str) -> None:
+        # Drop the per-key lock alongside the cached token so ``_locks`` stays
+        # bounded by the live key set rather than growing for every key ever seen.
+        super()._remove_key(key)
+        self._locks.pop(key, None)
+
     async def async_get_token(self, config: DatabricksAppOAuthConfig) -> str:
         cache_key = config.cache_key
 
@@ -149,7 +158,10 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
                 return cached
 
             token, ttl = await self._fetch_token(config)
-            self.set_cache(cache_key, token, ttl=ttl)
+            # ttl == 0 means the token's own lifetime is shorter than the
+            # refresh buffer; skip caching so we never hand out a stale token.
+            if ttl > 0:
+                self.set_cache(cache_key, token, ttl=ttl)
             return token
 
     async def _fetch_token(self, config: DatabricksAppOAuthConfig) -> Tuple[str, int]:
@@ -203,7 +215,7 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
         except (TypeError, ValueError):
             expires_in = _DEFAULT_TTL_SECONDS
 
-        ttl = max(expires_in - _TOKEN_EXPIRY_BUFFER_SECONDS, _MIN_TTL_SECONDS)
+        ttl = max(expires_in - _TOKEN_EXPIRY_BUFFER_SECONDS, 0)
         return access_token, ttl
 
 

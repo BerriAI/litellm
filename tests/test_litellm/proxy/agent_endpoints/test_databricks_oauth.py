@@ -361,6 +361,76 @@ async def test_invalid_expires_in_falls_back_to_default_ttl(expires_in):
     assert captured["ttl"] == 3600 - 60
 
 
+@pytest.mark.asyncio
+async def test_short_lived_token_not_cached():
+    """A token whose lifetime is below the refresh buffer is never cached."""
+    cache = DatabricksAppOAuthTokenCache()
+    config = _config()
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(return_value={"access_token": "short", "expires_in": 30})
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        await cache.async_get_token(config)
+        await cache.async_get_token(config)
+
+    assert cache.get_cache(config.cache_key) is None
+    assert client.post.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rotated_secret_forces_new_token():
+    """Rotating client_secret changes the cache key so a fresh token is minted."""
+    cache = DatabricksAppOAuthTokenCache()
+    old = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="old-secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    rotated = DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="new-secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+    assert old.cache_key != rotated.cache_key
+
+    clients = [_mock_httpx_client("old-token"), _mock_httpx_client("new-token")]
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        side_effect=lambda *a, **k: clients.pop(0),
+    ):
+        assert await cache.async_get_token(old) == "old-token"
+        assert await cache.async_get_token(rotated) == "new-token"
+
+
+@pytest.mark.asyncio
+async def test_lock_pruned_when_token_evicted():
+    """The per-key lock is removed when its cached token is deleted/evicted."""
+    cache = DatabricksAppOAuthTokenCache()
+    config = _config()
+    client = _mock_httpx_client("tok")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        await cache.async_get_token(config)
+
+    assert config.cache_key in cache._locks
+
+    cache.delete_cache(config.cache_key)
+
+    assert config.cache_key not in cache._locks
+
+
 # ---------------------------------------------------------------------------
 # Public helper
 # ---------------------------------------------------------------------------
