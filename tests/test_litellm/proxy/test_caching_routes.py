@@ -156,7 +156,7 @@ def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
 
 
 def test_cache_ping_no_cache_initialized():
-    """Test cache ping when no cache is initialized returns 503 with a clear message.
+    """Test cache ping when no cache is initialized returns 503 with ProxyException envelope.
 
     Verifies the exact response structure so that regressions in the error format
     (e.g. message moving to a different field, or extra internal details leaking)
@@ -173,20 +173,22 @@ def test_cache_ping_no_cache_initialized():
 
         data = response.json()
         print("response data=", json.dumps(data, indent=4))
-        # FastAPI serialises HTTPException as {"detail": "<message>"}
-        # Assert the complete response structure — not just a substring of the raw dict.
-        assert data["detail"] == "Cache not initialized. litellm.cache is None"
+        # ProxyException is serialised as {"error": {"message": "...", "type": ..., ...}}
+        assert "error" in data
+        error_details = json.loads(data["error"]["message"])
+        assert (
+            error_details["message"] == "Cache not initialized. litellm.cache is None"
+        )
     finally:
         litellm.cache = original_cache
 
 
 def test_cache_ping_no_cache_does_not_expose_internals():
-    """CWE-209: No-cache 503 must contain only the clean HTTPException detail.
+    """CWE-209: No-cache 503 must use the ProxyException envelope with no internal details.
 
-    Demonstrates the code path is still working correctly after the CWE-209 fix:
-    the HTTPException is re-raised as-is (caching_routes.py: except HTTPException: raise),
-    and the response contains exactly {"detail": "Cache not initialized. litellm.cache is None"}
-    with no tracebacks, source paths, or extra fields that could leak internals.
+    The null-cache path raises ProxyException directly (not HTTPException), so the
+    response is {"error": {"message": "...", ...}} — same envelope as other 503s from
+    this endpoint — with no tracebacks, source paths, or extra fields leaking.
     """
     original_cache = litellm.cache
     litellm.cache = None
@@ -207,9 +209,11 @@ def test_cache_ping_no_cache_does_not_expose_internals():
         )
 
         data = response.json()
-        # Response must be exactly the HTTPException payload — nothing more, nothing less
-        assert data == {"detail": "Cache not initialized. litellm.cache is None"}, (
-            f"Unexpected response structure: {data}"
+        # Response must use the ProxyException envelope
+        assert "error" in data, f"Expected ProxyException envelope, got: {data}"
+        error_details = json.loads(data["error"]["message"])
+        assert (
+            error_details["message"] == "Cache not initialized. litellm.cache is None"
         )
     finally:
         litellm.cache = original_cache
