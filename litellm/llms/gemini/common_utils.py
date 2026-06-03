@@ -116,11 +116,11 @@ def map_openai_size_to_gemini_image_config(
 
 
 def supports_gemini_image_size(model: str) -> bool:
-    # gemini-2.5-flash is a legacy model with reduced capability, a one-off
-    # exception. Newer Nano Banana and Imagen models all support imageSize, and
-    # newer Gemini image models are widely expected to support it too. Adding a
-    # model-map feature flag is not justified for this narrow case.
-    return "2.5-flash" not in model
+    try:
+        model_info = litellm.get_model_info(model=model)
+        return model_info.get("supports_image_size", True)
+    except Exception:
+        return True
 
 
 def is_gemini_image_model(model: str) -> bool:

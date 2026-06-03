@@ -12691,7 +12691,8 @@
         "litellm_provider": "deepinfra",
         "mode": "chat",
         "supports_tool_choice": true,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_image_size": false
     },
     "deepinfra/google/gemini-2.5-pro": {
         "max_tokens": 1000000,
@@ -15018,7 +15019,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_image_size": false
     },
     "gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -15068,7 +15070,8 @@
         "supports_vision": true,
         "supports_web_search": false,
         "tpm": 8000000,
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_image_size": false
     },
     "gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -15357,7 +15360,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_image_size": false
     },
     "gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -15407,7 +15411,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_image_size": false
     },
     "gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -15457,7 +15462,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_image_size": false
     },
     "gemini-live-2.5-flash-preview-native-audio-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -15608,7 +15614,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_image_size": false
     },
     "gemini-2.5-pro": {
         "cache_read_input_token_cost": 1.25e-07,
@@ -16618,7 +16625,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-image": {
         "cache_read_input_token_cost": 3e-08,
@@ -16674,7 +16682,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_image_size": false
     },
     "gemini/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,
@@ -16853,7 +16862,8 @@
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
         },
-        "supports_service_tier": true
+        "supports_service_tier": true,
+        "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-lite-preview-09-2025": {
         "cache_read_input_token_cost": 1e-08,
@@ -16905,7 +16915,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-preview-09-2025": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -16957,7 +16968,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_image_size": false
     },
     "gemini/gemini-flash-latest": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -17114,7 +17126,8 @@
             "search_context_size_low": 0.035,
             "search_context_size_medium": 0.035,
             "search_context_size_high": 0.035
-        }
+        },
+        "supports_image_size": false
     },
     "gemini/gemini-2.5-flash-preview-tts": {
         "input_cost_per_token": 3e-07,
@@ -26489,7 +26502,8 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_image_size": false
     },
     "oci/google.gemini-2.5-pro": {
         "input_cost_per_token": 1.25e-06,
@@ -26517,7 +26531,8 @@
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_vision": true,
-        "supports_native_streaming": true
+        "supports_native_streaming": true,
+        "supports_image_size": false
     },
     "oci/cohere.command-a-vision": {
         "input_cost_per_token": 1.56e-06,
@@ -27553,7 +27568,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "supports_image_size": false
     },
     "openrouter/google/gemini-2.5-pro": {
         "input_cost_per_audio_token": 7e-07,
@@ -29423,7 +29439,8 @@
         "mode": "responses",
         "supports_web_search": true,
         "supports_reasoning": false,
-        "supports_function_calling": true
+        "supports_function_calling": true,
+        "supports_image_size": false
     },
     "perplexity/xai/grok-4-1-fast-non-reasoning": {
         "litellm_provider": "perplexity",
@@ -30005,7 +30022,8 @@
         "supports_vision": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_image_size": false
     },
     "replicate/openai/gpt-oss-120b": {
         "input_cost_per_token": 1.8e-07,
@@ -32704,7 +32722,8 @@
         "supports_vision": true,
         "supports_function_calling": true,
         "supports_tool_choice": true,
-        "supports_response_schema": true
+        "supports_response_schema": true,
+        "supports_image_size": false
     },
     "vercel_ai_gateway/google/gemini-2.5-pro": {
         "input_cost_per_token": 2.5e-06,
@@ -34276,7 +34295,8 @@
         "supports_url_context": true,
         "supports_vision": true,
         "supports_web_search": false,
-        "tpm": 8000000
+        "tpm": 8000000,
+        "supports_image_size": false
     },
     "vertex_ai/gemini-3-pro-image-preview": {
         "input_cost_per_image": 0.0011,

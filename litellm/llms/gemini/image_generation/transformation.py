@@ -156,6 +156,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             )
             return request_body_obj.model_dump(exclude_none=True)
 
+    def _transform_image_usage(self, usage_metadata: dict):
+        return transform_gemini_image_usage(usage_metadata)
+
     def transform_image_generation_response(
         self,
         model: str,
