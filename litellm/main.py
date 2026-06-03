@@ -322,6 +322,20 @@ oci_transformation = OCIChatConfig()
 ovhcloud_transformation = OVHCloudChatConfig()
 lemonade_transformation = LemonadeChatConfig()
 
+
+def _get_cometapi_key_and_base(
+    api_key: Optional[str] = None, api_base: Optional[str] = None
+) -> Tuple[str, str]:
+    from litellm.llms.cometapi.common_utils import (
+        get_cometapi_api_base,
+        require_cometapi_api_key,
+    )
+
+    return require_cometapi_api_key(api_key or litellm.cometapi_key), (
+        get_cometapi_api_base(api_base)
+    )
+
+
 MOCK_RESPONSE_TYPE = Union[str, Exception, dict, ModelResponse, ModelResponseStream]
 ####### COMPLETION ENDPOINTS ################
 
@@ -2538,18 +2552,8 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream,
             )
         elif custom_llm_provider == "cometapi":
-            api_key = (
-                api_key
-                or litellm.cometapi_key
-                or get_secret_str("COMETAPI_KEY")
-                or litellm.api_key
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("COMETAPI_API_BASE")
-                or "https://api.cometapi.com/v1"
+            api_key, api_base = _get_cometapi_key_and_base(
+                api_key=api_key, api_base=api_base
             )
 
             ## COMPLETION CALL
@@ -5799,17 +5803,8 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "cometapi":
-            api_key = (
-                api_key
-                or litellm.cometapi_key
-                or get_secret_str("COMETAPI_KEY")
-                or litellm.api_key
-            )
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret_str("COMETAPI_API_BASE")
-                or "https://api.cometapi.com/v1"
+            api_key, api_base = _get_cometapi_key_and_base(
+                api_key=api_key, api_base=api_base
             )
             response = base_llm_http_handler.embedding(
                 model=model,
@@ -6378,16 +6373,38 @@ def adapter_completion(
 def moderation(
     input: str, model: Optional[str] = None, api_key: Optional[str] = None, **kwargs
 ) -> OpenAIModerationResponse:
-    # only supports open ai for now
-    api_key = (
-        api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or get_secret_str("OPENAI_API_KEY")
-    )
-
-    # Extract api_base from kwargs
     api_base = kwargs.get("api_base", None)
+    custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    _dynamic_api_key = None
+    _dynamic_api_base = None
+    try:
+        (
+            model,
+            custom_llm_provider,
+            _dynamic_api_key,
+            _dynamic_api_base,
+        ) = litellm.get_llm_provider(
+            model=model or "",
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            api_key=api_key,
+        )
+    except litellm.BadRequestError:
+        pass
+
+    if custom_llm_provider == "cometapi":
+        api_key, api_base = _get_cometapi_key_and_base(
+            api_key=api_key or _dynamic_api_key, api_base=api_base or _dynamic_api_base
+        )
+    else:
+        api_key = (
+            api_key
+            or _dynamic_api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+        api_base = api_base or _dynamic_api_base
 
     openai_client = kwargs.get("client", None)
     if openai_client is None:
@@ -6417,17 +6434,11 @@ async def amoderation(
 ) -> OpenAIModerationResponse:
     from openai import AsyncOpenAI
 
-    # only supports open ai for now
-    api_key = (
-        api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or get_secret_str("OPENAI_API_KEY")
-    )
     optional_params = GenericLiteLLMParams(**kwargs)
     litellm_logging_obj: Optional[LiteLLMLoggingObj] = kwargs.get(
         "litellm_logging_obj", None
     )
+    _dynamic_api_key = None
     _dynamic_api_base = None
     try:
         (
@@ -6445,6 +6456,21 @@ async def amoderation(
         # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
         pass
 
+    if custom_llm_provider == "cometapi":
+        api_key, api_base = _get_cometapi_key_and_base(
+            api_key=api_key or _dynamic_api_key,
+            api_base=optional_params.api_base or _dynamic_api_base,
+        )
+    else:
+        api_key = (
+            api_key
+            or _dynamic_api_key
+            or litellm.api_key
+            or litellm.openai_key
+            or get_secret_str("OPENAI_API_KEY")
+        )
+        api_base = optional_params.api_base or _dynamic_api_base
+
     openai_client = kwargs.get("client", None)
     if openai_client is None or not isinstance(openai_client, AsyncOpenAI):
         # call helper to get OpenAI client
@@ -6452,7 +6478,7 @@ async def amoderation(
         _openai_client: AsyncOpenAI = openai_chat_completions._get_openai_client(  # type: ignore
             is_async=True,
             api_key=api_key,
-            api_base=optional_params.api_base or _dynamic_api_base,
+            api_base=api_base,
         )
     else:
         _openai_client = openai_client
@@ -6554,7 +6580,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
 
 @client
-def transcription(
+def transcription(  # noqa: PLR0915
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
@@ -6695,21 +6721,24 @@ def transcription(
     elif custom_llm_provider == "openai" or (
         custom_llm_provider in litellm.openai_compatible_providers
     ):
-        api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret("OPENAI_BASE_URL")
-            or get_secret("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
-        )  # type: ignore
-        openai.organization = (
-            litellm.organization
-            or get_secret("OPENAI_ORGANIZATION")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )
-        # set API KEY
-
-        api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
+        if custom_llm_provider == "cometapi":
+            api_key, api_base = _get_cometapi_key_and_base(
+                api_key=api_key, api_base=api_base
+            )
+        else:
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret("OPENAI_BASE_URL")
+                or get_secret("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )  # type: ignore
+            openai.organization = (
+                litellm.organization
+                or get_secret("OPENAI_ORGANIZATION")
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )
+            api_key = api_key or litellm.api_key or litellm.openai_key or get_secret("OPENAI_API_KEY")  # type: ignore
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -6930,34 +6959,40 @@ def speech(  # noqa: PLR0915
                 model=model,
                 llm_provider=custom_llm_provider,
             )
-        api_base = (
-            api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
-            or litellm.api_base
-            or get_secret("OPENAI_BASE_URL")
-            or get_secret("OPENAI_API_BASE")
-            or "https://api.openai.com/v1"
-        )  # type: ignore
-        # set API KEY
-        api_key = (
-            api_key
-            or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
-            or litellm.openai_key
-            or get_secret("OPENAI_API_KEY")
-        )  # type: ignore
+        if custom_llm_provider == "cometapi":
+            api_key, api_base = _get_cometapi_key_and_base(
+                api_key=api_key, api_base=api_base
+            )
+            organization = None
+            project = None
+        else:
+            api_base = (
+                api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
+                or litellm.api_base
+                or get_secret("OPENAI_BASE_URL")
+                or get_secret("OPENAI_API_BASE")
+                or "https://api.openai.com/v1"
+            )  # type: ignore
+            api_key = (
+                api_key
+                or litellm.api_key  # for deepinfra/perplexity/anyscale we check in get_llm_provider and pass in the api key from there
+                or litellm.openai_key
+                or get_secret("OPENAI_API_KEY")
+            )  # type: ignore
 
-        organization = (
-            organization
-            or litellm.organization
-            or get_secret("OPENAI_ORGANIZATION")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )  # type: ignore
+            organization = (
+                organization
+                or litellm.organization
+                or get_secret("OPENAI_ORGANIZATION")
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )  # type: ignore
 
-        project = (
-            project
-            or litellm.project
-            or get_secret("OPENAI_PROJECT")
-            or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
-        )  # type: ignore
+            project = (
+                project
+                or litellm.project
+                or get_secret("OPENAI_PROJECT")
+                or None  # default - https://github.com/openai/openai-python/blob/284c1799070c723c6a553337134148a7ab088dd8/openai/util.py#L105
+            )  # type: ignore
 
         headers = headers or litellm.headers
 

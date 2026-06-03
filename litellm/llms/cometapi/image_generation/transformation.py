@@ -5,12 +5,13 @@ import httpx
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
 from litellm.types.utils import ImageObject, ImageResponse
+
+from ..common_utils import get_cometapi_complete_url, require_cometapi_api_key
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -21,9 +22,6 @@ else:
 
 
 class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
-    DEFAULT_BASE_URL: str = "https://api.cometapi.com"
-    IMAGE_GENERATION_ENDPOINT: str = "v1/images/generations"
-
     def get_supported_openai_params(
         self, model: str
     ) -> List[OpenAIImageGenerationOptionalParams]:
@@ -31,11 +29,16 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         https://api.cometapi.com/v1/images/generations
         """
         return [
+            "background",
+            "moderation",
             "n",
+            "output_compression",
+            "output_format",
             "quality",
             "response_format",
             "size",
             "style",
+            "user",
         ]
 
     def map_openai_params(
@@ -73,16 +76,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete url for the request
         """
-        complete_url: str = (
-            api_base
-            or get_secret_str("COMETAPI_BASE_URL")
-            or get_secret_str("COMETAPI_API_BASE")
-            or self.DEFAULT_BASE_URL
-        )
-
-        complete_url = complete_url.rstrip("/")
-        complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
-        return complete_url
+        return get_cometapi_complete_url(api_base, "images/generations")
 
     def validate_environment(
         self,
@@ -94,13 +88,7 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        final_api_key: Optional[str] = (
-            api_key
-            or get_secret_str("COMETAPI_KEY")
-            or get_secret_str("COMETAPI_API_KEY")
-        )
-        if not final_api_key:
-            raise ValueError("COMETAPI_KEY or COMETAPI_API_KEY is not set")
+        final_api_key = require_cometapi_api_key(api_key)
 
         headers["Authorization"] = f"Bearer {final_api_key}"
         headers["Content-Type"] = "application/json"

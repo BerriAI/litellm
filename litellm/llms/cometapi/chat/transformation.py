@@ -15,7 +15,7 @@ from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.utils import ModelResponse, ModelResponseStream
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
-from ..common_utils import CometAPIException
+from ..common_utils import CometAPIException, get_cometapi_complete_url
 
 
 class CometAPIConfig(OpenAIGPTConfig):
@@ -103,30 +103,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             str: The complete URL for the API call.
         """
-        # Default base
-        if api_base is None:
-            api_base = "https://api.cometapi.com/v1"
-        endpoint = "chat/completions"
-
-        # Normalize
-        api_base = api_base.rstrip("/")
-
-        # If endpoint already present, return as-is
-        if endpoint in api_base:
-            return api_base
-
-        # Ensure we include /v1 prefix when missing
-        if api_base.endswith("/v1"):
-            return f"{api_base}/{endpoint}"
-        if api_base.endswith("/v1/"):
-            return f"{api_base}{endpoint}"
-        # If user provided https://api.cometapi.com, add /v1
-        if api_base == "https://api.cometapi.com":
-            return f"{api_base}/v1/{endpoint}"
-        # Generic fallback: if '/v1' not in path, add it
-        if "/v1" not in api_base.split("//", 1)[-1]:
-            return f"{api_base}/v1/{endpoint}"
-        return f"{api_base}/{endpoint}"
+        return get_cometapi_complete_url(api_base, "chat/completions")
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
