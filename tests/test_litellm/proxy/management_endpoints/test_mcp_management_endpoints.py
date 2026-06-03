@@ -3613,9 +3613,10 @@ class TestComputeUserEnvVarStatus:
         assert names == {"CORP_USERNAME", "CORP_PASSWORD"}
         by_name = {spec.name: spec for spec in status.required}
         assert by_name["CORP_USERNAME"].is_set is True
-        assert by_name["CORP_USERNAME"].value == "alice"
         assert by_name["CORP_USERNAME"].description == "Your username"
         assert by_name["CORP_PASSWORD"].is_set is False
+        # Stored credentials are write-only: the secret is never echoed back.
+        assert "alice" not in status.model_dump_json()
         assert status.missing_count == 1
         assert status.server_id == "srv-1"
         assert status.server_name == "DB Server"
@@ -3696,10 +3697,12 @@ class TestGetMCPUserEnvVars:
         assert result.server_id == "srv-1"
         assert result.missing_count == 1
         assert {s.name for s in result.required} == {"CORP_USERNAME", "CORP_PASSWORD"}
-        # The single-server endpoint backs the fill-in modal, so it must echo the
-        # already-stored value back for pre-population.
+        # The single-server endpoint reports which credentials are set without
+        # ever echoing the decrypted secret back to the caller.
         by_name = {s.name: s for s in result.required}
-        assert by_name["CORP_USERNAME"].value == "alice"
+        assert by_name["CORP_USERNAME"].is_set is True
+        assert by_name["CORP_PASSWORD"].is_set is False
+        assert "alice" not in result.model_dump_json()
 
     @pytest.mark.asyncio
     async def test_missing_user_id_raises_400(self):
@@ -3968,9 +3971,8 @@ class TestListMCPUserEnvVarStatus:
             )
         by_name = {s.name: s for s in result[0].required}
         assert by_name["CORP_USERNAME"].is_set is True
-        assert by_name["CORP_USERNAME"].value is None
         assert by_name["CORP_PASSWORD"].is_set is False
-        assert by_name["CORP_PASSWORD"].value is None
+        assert "alice" not in result[0].model_dump_json()
 
 
 class TestMCPUserEnvVarsAccessControl:

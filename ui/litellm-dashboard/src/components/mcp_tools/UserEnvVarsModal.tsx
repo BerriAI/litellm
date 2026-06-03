@@ -47,11 +47,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
         const fetched = await getMCPUserEnvVars(accessToken, server.server_id);
         if (cancelled) return;
         setStatus(fetched);
-        const initial: Record<string, string> = {};
-        for (const spec of fetched?.required ?? []) {
-          initial[spec.name] = spec.value ?? "";
-        }
-        form.setFieldsValue(initial);
+        form.resetFields();
       } catch (err) {
         if (!cancelled) {
           NotificationsManager.fromBackend(
@@ -128,7 +124,8 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
           <>
             <Text className="text-sm text-gray-600 block">
               These values are private to you. Your admin configured this MCP
-              server to require these per-user credentials:
+              server to require these per-user credentials. Saved values are
+              never shown back; re-enter a value to update it.
             </Text>
             <Form
               form={form}
@@ -141,15 +138,22 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
                   key={spec.name}
                   name={spec.name}
                   label={
-                    <span className="font-mono text-sm font-semibold">
-                      {spec.name}
+                    <span className="flex items-center gap-2">
+                      <span className="font-mono text-sm font-semibold">
+                        {spec.name}
+                      </span>
+                      {spec.is_set && <Tag color="green">Set</Tag>}
                     </span>
                   }
                   extra={spec.description || undefined}
                   rules={[{ required: true, message: `${spec.name} is required` }]}
                 >
                   <Input.Password
-                    placeholder={spec.description || `Enter your ${spec.name}`}
+                    placeholder={
+                      spec.is_set
+                        ? "Enter a new value to overwrite"
+                        : spec.description || `Enter your ${spec.name}`
+                    }
                     visibilityToggle
                   />
                 </Form.Item>

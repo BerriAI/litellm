@@ -261,7 +261,6 @@ export interface MCPEnvVar {
 export interface MCPUserEnvVarSpec {
   name: string;
   description?: string | null;
-  value?: string | null;
   is_set: boolean;
 }
 

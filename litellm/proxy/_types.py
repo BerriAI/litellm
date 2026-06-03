@@ -1552,11 +1552,14 @@ class MCPUserEnvVarsRequest(LiteLLMPydanticObjectBase):
 
 
 class MCPUserEnvVarSpec(LiteLLMPydanticObjectBase):
-    """Describes one per-user env var slot for the calling user."""
+    """Describes one per-user env var slot for the calling user.
+
+    Stored values are write-only: the status only reports whether a value
+    ``is_set`` and never echoes the decrypted secret back to the client.
+    """
 
     name: str
     description: Optional[str] = None
-    value: Optional[str] = None  # current value if the user has set one
     is_set: bool = False
 
 
