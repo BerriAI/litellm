@@ -1,4 +1,9 @@
 {
+  "nanobridge": {
+    "base_url": "https://api.nanobridge.net/v1",
+    "api_key_env": "NANOBRIDGE_API_KEY",
+    "api_base_env": "NANOBRIDGE_API_BASE"
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",

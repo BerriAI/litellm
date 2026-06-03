@@ -488,9 +488,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
-        "rerank": false,
-        "a2a": false,
-        "interactions": false
+        "rerank": false
       }
     },
     "chutes": {
@@ -1592,6 +1590,24 @@
         "interactions": true
       }
     },
+    "nanobridge": {
+      "display_name": "Nanobridge (`nanobridge`)",
+      "url": "https://platform.nanobridge.net/#/api-docs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "nvidia_nim": {
       "display_name": "Nvidia NIM (`nvidia_nim`)",
       "url": "https://docs.litellm.ai/docs/providers/nvidia_nim",
@@ -2658,22 +2674,6 @@
         "embeddings": false,
         "image_generations": true,
         "image_edits": true,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false
-      }
-    },
-    "charity_engine": {
-      "display_name": "Charity Engine (`charity_engine`)",
-      "url": "https://docs.litellm.ai/docs/providers/charity_engine",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
         "moderations": false,

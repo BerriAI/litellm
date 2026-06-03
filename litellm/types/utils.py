@@ -3369,6 +3369,7 @@ class LlmProviders(str, Enum):
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
+    NANOBRIDGE = "nanobridge"
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"

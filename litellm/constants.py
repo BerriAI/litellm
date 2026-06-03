@@ -774,6 +774,7 @@ openai_compatible_endpoints: List = [
     "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
+    "https://api.nanobridge.net/v1",
     "https://api.poe.com/v1",
     "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
@@ -824,6 +825,7 @@ openai_compatible_providers: List = [
     "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
+    "nanobridge",  # Nanobridge - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
     "featherless_ai",
@@ -860,6 +862,7 @@ openai_text_completion_compatible_providers: List = (
         "tensormesh",
         "apertis",
         "nano-gpt",
+        "nanobridge",
         "poe",
         "chutes",
         "v0",
