@@ -530,3 +530,351 @@ def test_copilot_vision_request_header_with_type_image_url():
 
     assert headers["Copilot-Vision-Request"] == "true"
     assert headers["X-Initiator"] == "user"
+
+
+class TestGithubCopilotTransformResponse:
+    """
+    Tests for GithubCopilotConfig.transform_response handling of Anthropic-native
+    responses from newer Copilot models (e.g. claude-opus-4.7, claude-opus-4.8).
+
+    See: https://github.com/BerriAI/litellm/issues/29391
+    """
+
+    def _make_mock_response(self, json_data: dict, status_code: int = 200):
+        """Create a mock httpx.Response with the given JSON body."""
+        response = httpx.Response(
+            status_code=status_code,
+            json=json_data,
+            headers={"content-type": "application/json"},
+        )
+        return response
+
+    def _make_logging_obj(self):
+        """Create a mock logging object."""
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        return logging_obj
+
+    def test_transform_response_with_standard_choices(self):
+        """Standard OpenAI-format response with choices should work normally."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "chatcmpl-123",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": "github_copilot/claude-opus-4.5",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hello!"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.5",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "Hello!"
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_transform_response_no_choices_anthropic_native(self):
+        """
+        Newer Copilot models (opus-4.7, 4.8) may return Anthropic-native format
+        without choices. This must not crash with IndexError.
+        """
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_01ABC",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.7",
+            "content": [{"type": "text", "text": "H"}],
+            "stop_reason": "max_tokens",
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 1,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.7",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "H"
+        assert result.choices[0].finish_reason == "length"
+
+    def test_transform_response_empty_choices(self):
+        """Response with choices=[] should not crash."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_01ABC",
+            "model": "github_copilot/claude-opus-4.7",
+            "choices": [],
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 1,
+                "total_tokens": 15,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.7",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(result.choices) >= 1
+        assert result.choices[0].finish_reason == "length"
+
+    def test_transform_response_no_choices_no_content(self):
+        """
+        Response with neither choices nor content (usage-only) should not crash.
+        This is the exact case triggered by max_tokens=1 on newer models.
+        """
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_01ABC",
+            "model": "github_copilot/claude-opus-4.8",
+            "usage": {
+                "input_tokens": 14,
+                "output_tokens": 1,
+                "total_tokens": 15,
+            },
+            "copilot_usage": {
+                "token_details": [],
+                "total_nano_aiu": 9500000,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert len(result.choices) >= 1
+        assert result.choices[0].message.content == ""
+        assert result.choices[0].finish_reason == "length"
+
+    def test_transform_response_anthropic_native_tool_use(self):
+        """tool_use blocks must be converted to OpenAI tool_calls on the message."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_tool",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.8",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01ABC",
+                    "name": "get_weather",
+                    "input": {"location": "Boston, MA"},
+                }
+            ],
+            "stop_reason": "tool_use",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 20,
+                "total_tokens": 30,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "What's the weather?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].message.tool_calls is not None
+        assert len(result.choices[0].message.tool_calls) == 1
+        assert result.choices[0].message.tool_calls[0]["id"] == "toolu_01ABC"
+        assert (
+            result.choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+        )
+        assert (
+            '"Boston, MA"'
+            in result.choices[0].message.tool_calls[0]["function"]["arguments"]
+        )
+
+    def test_transform_response_anthropic_native_multiple_text_blocks(self):
+        """All text blocks must be concatenated, not only the first."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_multi_text",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.7",
+            "content": [
+                {"type": "text", "text": "Hello "},
+                {"type": "text", "text": "world!"},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 5,
+                "output_tokens": 3,
+                "total_tokens": 8,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.7",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "Hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "Hello world!"
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_transform_response_anthropic_native_thinking_then_text(self):
+        """Thinking blocks are preserved; following text is still extracted."""
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        response_json = {
+            "id": "msg_vrtx_thinking",
+            "type": "message",
+            "role": "assistant",
+            "model": "github_copilot/claude-opus-4.8",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "Let me reason about this.",
+                    "signature": "sig123",
+                },
+                {"type": "text", "text": "The answer is 42."},
+            ],
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 20,
+                "output_tokens": 10,
+                "total_tokens": 30,
+            },
+        }
+
+        raw_response = self._make_mock_response(response_json)
+        model_response = ModelResponse()
+
+        result = config.transform_response(
+            model="github_copilot/claude-opus-4.8",
+            raw_response=raw_response,
+            model_response=model_response,
+            logging_obj=self._make_logging_obj(),
+            request_data={},
+            messages=[{"role": "user", "content": "What is the answer?"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert result.choices[0].message.content == "The answer is 42."
+        assert result.choices[0].message.thinking_blocks is not None
+        assert len(result.choices[0].message.thinking_blocks) == 1
+        assert result.choices[0].finish_reason == "stop"
+
+    def test_transform_response_invalid_json_falls_through_to_super(self):
+        """
+        When raw_response.json() raises an exception (e.g. non-JSON body),
+        transform_response should delegate to super() without crashing.
+        """
+        config = GithubCopilotConfig()
+        config.authenticator = MagicMock()
+
+        raw_response = httpx.Response(
+            status_code=200,
+            content=b"not valid json at all",
+            headers={"content-type": "text/plain"},
+        )
+        model_response = ModelResponse()
+
+        with pytest.raises(Exception):
+            config.transform_response(
+                model="github_copilot/claude-opus-4.7",
+                raw_response=raw_response,
+                model_response=model_response,
+                logging_obj=self._make_logging_obj(),
+                request_data={},
+                messages=[{"role": "user", "content": "Hi"}],
+                optional_params={},
+                litellm_params={},
+                encoding=None,
+            )
