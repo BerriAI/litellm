@@ -412,6 +412,32 @@ def test_get_model_from_request_resolves_video_id_model_with_router():
     )
 
 
+def test_get_model_from_request_resolves_character_id_model_with_router():
+    from litellm.types.videos.utils import encode_character_id_with_provider
+
+    character_id = encode_character_id_with_provider(
+        character_id="character-provider-id",
+        provider="vertex_ai",
+        model_id="veo-3.1-generate-001",
+    )
+    llm_router = MagicMock()
+    llm_router.resolve_model_name_from_model_id.return_value = (
+        "gcp/google/veo-3.1-generate-001"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"character_id": character_id},
+            route="/v1/videos/characters/{character_id}",
+            llm_router=llm_router,
+        )
+        == "gcp/google/veo-3.1-generate-001"
+    )
+    llm_router.resolve_model_name_from_model_id.assert_called_once_with(
+        "veo-3.1-generate-001"
+    )
+
+
 def test_get_model_from_request_only_runs_media_decoders_for_matching_fields():
     with (
         patch(
