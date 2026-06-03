@@ -289,7 +289,8 @@ class _ProxyDBLogger(CustomLogger):
                 # per-turn costs are already tracked by individual aresponses/realtime calls.
                 if sl_object is None and (
                     not kwargs.get("model")
-                    or kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime")
+                    or kwargs.get("call_type")
+                    in ("_aresponses_websocket", "_arealtime")
                 ):
                     verbose_proxy_logger.warning(
                         "Cost tracking - skipping, no standard_logging_object and no model for call_type=%s",

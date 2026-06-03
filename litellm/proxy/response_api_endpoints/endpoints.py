@@ -1003,10 +1003,14 @@ async def responses_websocket_endpoint(
         try:
             first_message = await asyncio.wait_for(websocket.receive_text(), timeout=30)
         except asyncio.TimeoutError:
-            await websocket.close(code=1008, reason="Timed out waiting for first message")
+            await websocket.close(
+                code=1008, reason="Timed out waiting for first message"
+            )
             return
         except Exception:
-            await websocket.close(code=1008, reason="Client disconnected before sending first message")
+            await websocket.close(
+                code=1008, reason="Client disconnected before sending first message"
+            )
             return
 
         try:
