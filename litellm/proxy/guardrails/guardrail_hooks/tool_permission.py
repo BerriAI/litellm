@@ -63,50 +63,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         self.rules: List[ToolPermissionRule] = []
         self._compiled_rule_patterns: Dict[str, Dict[str, re.Pattern]] = {}
         self._compiled_rule_targets: Dict[str, Dict[str, Optional[re.Pattern]]] = {}
-        if rules:
-            for rule_item in rules:
-                if isinstance(rule_item, ToolPermissionRule):
-                    rule = rule_item
-                else:
-                    rule = ToolPermissionRule(**rule_item)
-                self.rules.append(rule)
-
-                compiled_target_patterns: Dict[str, Optional[re.Pattern]] = {
-                    "tool_name": None,
-                    "tool_type": None,
-                }
-                if rule.tool_name is not None:
-                    try:
-                        compiled_target_patterns["tool_name"] = re.compile(
-                            rule.tool_name
-                        )
-                    except re.error as exc:
-                        raise ValueError(
-                            f"Invalid regex for tool_name in rule '{rule.id}': {exc}"
-                        ) from exc
-                if rule.tool_type is not None:
-                    try:
-                        compiled_target_patterns["tool_type"] = re.compile(
-                            rule.tool_type
-                        )
-                    except re.error as exc:
-                        raise ValueError(
-                            f"Invalid regex for tool_type in rule '{rule.id}': {exc}"
-                        ) from exc
-                self._compiled_rule_targets[rule.id] = compiled_target_patterns
-
-                if rule.allowed_param_patterns:
-                    compiled_patterns: Dict[str, re.Pattern] = {}
-                    for path, pattern in rule.allowed_param_patterns.items():
-                        try:
-                            compiled_patterns[path] = re.compile(pattern)
-                        except re.error as exc:
-                            raise ValueError(
-                                f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}"
-                            ) from exc
-
-                    if compiled_patterns:
-                        self._compiled_rule_patterns[rule.id] = compiled_patterns
+        self._recompile_rules(rules)
 
         # Normalize to lowercase for case-insensitive handling
         self.default_action = (
@@ -133,6 +90,76 @@ class ToolPermissionGuardrail(CustomGuardrail):
         )
 
         return ToolPermissionGuardrailConfigModel
+
+    def _recompile_rules(self, rules: Optional[List]) -> None:
+        """Parse a raw rules list and rebuild compiled rule state."""
+        self.rules = []
+        self._compiled_rule_patterns = {}
+        self._compiled_rule_targets = {}
+        if not rules:
+            return
+        for rule_item in rules:
+            if isinstance(rule_item, ToolPermissionRule):
+                rule = rule_item
+            else:
+                rule = ToolPermissionRule(**rule_item)
+            self.rules.append(rule)
+
+            compiled_target_patterns: Dict[str, Optional[re.Pattern]] = {
+                "tool_name": None,
+                "tool_type": None,
+            }
+            if rule.tool_name is not None:
+                try:
+                    compiled_target_patterns["tool_name"] = re.compile(rule.tool_name)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex for tool_name in rule '{rule.id}': {exc}"
+                    ) from exc
+            if rule.tool_type is not None:
+                try:
+                    compiled_target_patterns["tool_type"] = re.compile(rule.tool_type)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex for tool_type in rule '{rule.id}': {exc}"
+                    ) from exc
+            self._compiled_rule_targets[rule.id] = compiled_target_patterns
+
+            if rule.allowed_param_patterns:
+                compiled_patterns: Dict[str, re.Pattern] = {}
+                for path, pattern in rule.allowed_param_patterns.items():
+                    try:
+                        compiled_patterns[path] = re.compile(pattern)
+                    except re.error as exc:
+                        raise ValueError(
+                            f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}"
+                        ) from exc
+                if compiled_patterns:
+                    self._compiled_rule_patterns[rule.id] = compiled_patterns
+
+    def update_in_memory_litellm_params(self, litellm_params: "LitellmParams") -> None:
+        """Update guardrail params in memory and recompile rule state.
+
+        Without this override the base-class setattr loop updates self.rules but
+        leaves self._compiled_rule_targets and self._compiled_rule_patterns
+        pointing at the old state, so rule changes made through PUT /guardrails
+        are silently ignored until the process reinitializes the guardrail.
+        """
+        super().update_in_memory_litellm_params(litellm_params)
+        if litellm_params.rules is not None:
+            self._recompile_rules(litellm_params.rules)
+        if litellm_params.default_action is not None:
+            self.default_action = (
+                litellm_params.default_action.lower()
+                if isinstance(litellm_params.default_action, str)
+                else litellm_params.default_action
+            )
+        if litellm_params.on_disallowed_action is not None:
+            self.on_disallowed_action = (
+                litellm_params.on_disallowed_action.lower()
+                if isinstance(litellm_params.on_disallowed_action, str)
+                else litellm_params.on_disallowed_action
+            )
 
     def _matches_regex(
         self, pattern: Optional[re.Pattern], value: Optional[str]
