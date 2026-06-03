@@ -13,12 +13,62 @@ from pydantic import BaseModel
 import litellm
 from litellm.cost_calculator import (
     completion_cost,
+    cost_per_token,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+
+def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
+    """
+    Router/proxy configs may use deployment ids like openai/openai/<model>. Cost lookup must
+    resolve to model_prices keys (e.g. gpt-5.5), not fail or multiply prefixes.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    prompt_usd, completion_usd = cost_per_token(
+        model="openai/openai/gpt-5.5",
+        prompt_tokens=100,
+        completion_tokens=50,
+        custom_llm_provider="openai",
+    )
+
+    assert prompt_usd + completion_usd > 0
+
+
+def test_cost_per_token_non_string_model_does_not_hang():
+    """
+    The provider-prefix dedup loop must not spin forever when `model` is a
+    non-string object (e.g. a MagicMock from a mocked transport). It should
+    return or raise promptly instead of looping on a truthy `.startswith()`.
+    """
+    import threading
+    from unittest.mock import MagicMock
+
+    result: dict = {}
+
+    def _run():
+        try:
+            cost_per_token(
+                model=MagicMock(),
+                prompt_tokens=10,
+                completion_tokens=5,
+                custom_llm_provider="anthropic",
+            )
+            result["status"] = "returned"
+        except Exception:
+            result["status"] = "raised"
+
+    worker = threading.Thread(target=_run, daemon=True)
+    worker.start()
+    worker.join(timeout=10)
+
+    assert not worker.is_alive(), "cost_per_token hung on a non-string model"
+    assert result.get("status") in ("returned", "raised")
 
 
 def test_completion_cost_uses_response_model_for_dynamic_routing():

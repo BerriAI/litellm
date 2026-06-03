@@ -420,3 +420,42 @@ async def test_add_team_callbacks_no_audit_when_disabled(monkeypatch):
         )
 
     assert audit_calls == []
+
+
+@pytest.mark.asyncio
+async def test_add_team_callbacks_writes_encrypted_callback_vars(monkeypatch):
+    """add_team_callbacks must encrypt callback_vars values before the DB write."""
+    from litellm.proxy.common_utils.callback_utils import decrypt_callback_vars
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "test-salt-32-bytes-aaaaaaaaaaaaaa")
+    mock_prisma = _patch_prisma(_team_row(team_id="team-1", metadata={"logging": []}))
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch("litellm.proxy.proxy_server.master_key", None),
+    ):
+        await add_team_callbacks(
+            data=AddTeamCallback(
+                callback_name="langfuse",
+                callback_type="success",
+                callback_vars={
+                    "langfuse_public_key": "pk-lf-real-public",
+                    "langfuse_secret_key": "sk-lf-real-secret",
+                },
+            ),
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            user_api_key_dict=_admin_auth(),
+            litellm_changed_by=None,
+        )
+
+    written = json.loads(
+        mock_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"]
+    )
+    cv = written["logging"][0]["callback_vars"]
+    assert cv["langfuse_secret_key"] != "sk-lf-real-secret"
+    assert cv["langfuse_public_key"] != "pk-lf-real-public"
+    recovered = decrypt_callback_vars(written)["logging"][0]["callback_vars"]
+    assert recovered["langfuse_secret_key"] == "sk-lf-real-secret"
+    assert recovered["langfuse_public_key"] == "pk-lf-real-public"

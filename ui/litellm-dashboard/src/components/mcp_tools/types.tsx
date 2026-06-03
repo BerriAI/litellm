@@ -105,6 +105,7 @@ export interface MCPInfo {
   description?: string;
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
+  tool_allowlist_enforced?: boolean;
 }
 
 // Define the structure for a single MCP tool
@@ -210,6 +211,7 @@ export interface MCPServer {
   allow_all_keys?: boolean;
   available_on_public_internet?: boolean;
   delegate_auth_to_upstream?: boolean;
+  oauth_passthrough?: boolean;
 
   /** Stdio-only fields (present when transport === 'stdio') */
   command?: string | null;

@@ -303,6 +303,25 @@ def test_get_messages_for_spend_logs_realtime_returns_messages(mock_should_store
 @patch(
     "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
 )
+def test_get_messages_for_spend_logs_strips_null_bytes(mock_should_store):
+    """Regression for PostgreSQL 22P05: NUL bytes must be stripped from messages."""
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {
+            "call_type": "_arealtime",
+            "messages": [{"role": "user", "content": "hello\x00world"}],
+        },
+    )
+    result = _get_messages_for_spend_logs_payload(payload)
+    assert "\\u0000" not in result
+    parsed = json.loads(result)
+    assert parsed[0]["content"] == "helloworld"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
 def test_get_messages_for_spend_logs_realtime_empty_when_disabled(mock_should_store):
     """
     Test that _get_messages_for_spend_logs_payload returns '{}' for realtime calls
@@ -368,6 +387,21 @@ def test_get_response_for_spend_logs_payload_truncates_large_base64(mock_should_
     assert len(truncated_value) < len(large_text)
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_value
     assert parsed["data"][0]["other_field"] == "value"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_response_for_spend_logs_payload_strips_null_bytes(mock_should_store):
+    """Regression for PostgreSQL 22P05: NUL bytes must be stripped from response."""
+    mock_should_store.return_value = True
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": {"content": "answer\x00here"}},
+    )
+    response_json = _get_response_for_spend_logs_payload(payload)
+    assert "\\u0000" not in response_json
+    assert json.loads(response_json)["content"] == "answerhere"
 
 
 @patch(
@@ -934,6 +968,36 @@ def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
     assert (
         metadata.get("litellm_overhead_time_ms") == test_overhead_ms
     ), f"Expected overhead '{test_overhead_ms}', got '{metadata.get('litellm_overhead_time_ms')}'"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_strips_null_bytes_from_request_tags():
+    """Regression for PostgreSQL 22P05: NUL bytes must be stripped from request_tags."""
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+                "tags": ["clean-tag", "bad\x00tag"],
+            }
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj={},
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    request_tags = payload.get("request_tags")
+    assert request_tags is not None
+    assert "\\u0000" not in request_tags
+    assert json.loads(request_tags) == ["clean-tag", "badtag"]
 
 
 @patch("litellm.proxy.proxy_server.master_key", None)
