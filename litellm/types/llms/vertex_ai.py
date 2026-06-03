@@ -20,6 +20,7 @@ class FunctionResponse(TypedDict, total=False):
     id: str
     name: Required[str]
     response: Optional[dict]
+    parts: List["FunctionResponsePartType"]
 
 
 class FunctionCall(TypedDict, total=False):
@@ -38,6 +39,11 @@ class FileDataType(TypedDict):
 class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
+
+
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
 
 
 class PartType(TypedDict, total=False):

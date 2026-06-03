@@ -212,6 +212,8 @@ async def test_text_message_blocked_by_guardrail_no_ai_response():
             "policy",
             "can't repeat",
             "cannot repeat",
+            "can't say",
+            "cannot say",
             "won't repeat",
             "can't assist",
             "can't help",

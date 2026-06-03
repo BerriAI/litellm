@@ -1515,7 +1515,7 @@ async def test_oauth_protected_resource_returns_empty_scopes_when_none():
     mock_request.headers = {}
 
     try:
-        response = _build_oauth_protected_resource_response(
+        response = await _build_oauth_protected_resource_response(
             request=mock_request,
             mcp_server_name="atlassian_mcp",
             use_standard_pattern=False,
@@ -2005,7 +2005,7 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
                 request=mock_request,
                 mcp_server_name=None,
             )
-            resource_response = _build_oauth_protected_resource_response(
+            resource_response = await _build_oauth_protected_resource_response(
                 request=mock_request,
                 mcp_server_name=None,
                 use_standard_pattern=False,

@@ -417,6 +417,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -973,6 +974,11 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     # End of startup event
     yield
 
+    # Shutdown event - drain in-flight requests before tearing down dependencies
+    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+    GracefulShutdownManager.start_shutdown()
+    await GracefulShutdownManager.wait_for_drain()
+
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
         try:
@@ -1265,7 +1271,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     headers = exc.headers
     error_dict = exc.to_dict()
     status_code = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
-    _close_dangling_otel_server_span(request, status_code)
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
     return JSONResponse(
         status_code=status_code,
         content={"error": error_dict},
@@ -1273,7 +1279,9 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     )
 
 
-def _close_dangling_otel_server_span(request: Request, status_code: int) -> None:
+def _close_dangling_otel_server_span(
+    request: Request, status_code: int, exc: Optional[Exception] = None
+) -> None:
     parent_otel_span = getattr(request.state, "parent_otel_span", None)
     if parent_otel_span is None:
         return
@@ -1296,6 +1304,10 @@ def _close_dangling_otel_server_span(request: Request, status_code: int) -> None
         open_telemetry_logger.set_response_status_code_attribute(
             parent_otel_span, status_code
         )
+        if status_code >= 400:
+            open_telemetry_logger.record_error_attributes_on_span(
+                parent_otel_span, exc, status_code
+            )
         parent_otel_span.set_status(
             Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK)
         )
@@ -1312,7 +1324,7 @@ def _close_dangling_otel_server_span(request: Request, status_code: int) -> None
 async def otel_request_validation_exception_handler(
     request: Request, exc: RequestValidationError
 ):
-    _close_dangling_otel_server_span(request, 422)
+    _close_dangling_otel_server_span(request, 422, exc=exc)
     return JSONResponse(
         status_code=422,
         content={"detail": jsonable_encoder(exc.errors())},
@@ -1326,7 +1338,7 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     verbose_proxy_logger.exception(
         "Unhandled exception in request: %s", type(exc).__name__
     )
-    _close_dangling_otel_server_span(request, 500)
+    _close_dangling_otel_server_span(request, 500, exc=exc)
     return JSONResponse(
         status_code=500,
         content={
@@ -15845,6 +15857,8 @@ async def _mcp_forward_as_path(path_segment: str, request: Request):
     )
 
     scope = dict(request.scope)
+    # Preserve the public request path for OAuth challenge URL selection.
+    scope["_original_path"] = scope.get("path", "")
     scope["path"] = f"/mcp/{path_segment}"
     return await _stream_mcp_asgi_response(
         handle_streamable_http_mcp, scope, request.receive
@@ -15992,6 +16006,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             )
             if toolset is not None:
                 scope = dict(request.scope)
+                scope["_original_path"] = scope.get("path", "")
                 scope["path"] = "/mcp"
                 token = _mcp_active_toolset_id.set(toolset.toolset_id)
                 try:

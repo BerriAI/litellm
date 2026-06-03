@@ -197,7 +197,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const handleNext = async () => {
     try {
       if (currentStep === 0) {
-        await form.validateFields(["agent_name"]);
+        await form.validateFields();
         const agentName = form.getFieldValue("agent_name");
         if (agentName && !newKeyName) {
           setNewKeyName(`${agentName}-key`);
