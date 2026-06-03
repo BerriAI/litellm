@@ -3,12 +3,17 @@ CRUD ENDPOINTS FOR SEARCH TOOLS
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
@@ -41,13 +46,61 @@ def _convert_datetime_to_str(value: Union[datetime, str, None]) -> Union[str, No
     return value
 
 
+async def _filter_visible_search_tools(
+    search_tools: List[SearchToolInfoResponse],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> List[SearchToolInfoResponse]:
+    """
+    Drop search tools the caller is not authorized to invoke, applying the same
+    key/team object_permission allowlists enforced on /search. Admins see all tools.
+    """
+    if user_api_key_dict.user_role in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    ):
+        return search_tools
+
+    from litellm.proxy.auth.auth_checks import (
+        can_user_view_search_tool,
+        get_team_object,
+    )
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    team_object: Optional[LiteLLM_TeamTable] = None
+    if user_api_key_dict.team_id:
+        team_object = await get_team_object(
+            team_id=user_api_key_dict.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=user_api_key_dict.parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    visible: List[SearchToolInfoResponse] = []
+    for tool in search_tools:
+        tool_name = tool.get("search_tool_name")
+        if tool_name and await can_user_view_search_tool(
+            search_tool_name=tool_name,
+            valid_token=user_api_key_dict,
+            team_object=team_object,
+        ):
+            visible.append(tool)
+    return visible
+
+
 @router.get(
     "/search_tools/list",
     tags=["Search Tools"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=ListSearchToolsResponse,
 )
-async def list_search_tools():
+async def list_search_tools(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     List all search tools that are available in the database and config file.
 
@@ -162,7 +215,11 @@ async def list_search_tools():
                 )
             )
 
-        return ListSearchToolsResponse(search_tools=search_tool_configs)
+        visible_search_tools = await _filter_visible_search_tools(
+            search_tool_configs, user_api_key_dict
+        )
+
+        return ListSearchToolsResponse(search_tools=visible_search_tools)
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting search tools: {e}")
         raise HTTPException(status_code=500, detail=str(e))
