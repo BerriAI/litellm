@@ -6,7 +6,9 @@ from ipaddress import ip_address
 from typing import Any, Dict, List, NoReturn, Optional
 from urllib.parse import ParseResult, urlparse, urlunparse
 
+import httpx
 from fastapi import HTTPException, Request
+from fastapi.responses import JSONResponse
 
 from litellm._logging import verbose_logger
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -63,6 +65,23 @@ def _oauth_invalid_request(
         detail["hint"] = hint
     detail.update(extra)
     raise HTTPException(status_code=400, detail=detail)
+
+
+def relay_oauth_token_error(response: httpx.Response) -> JSONResponse:
+    """Relay an upstream OAuth token-endpoint error to the client unchanged
+    (RFC 6749 §5.2). Masking it as a 500 hides the ``error`` field (e.g.
+    ``invalid_grant``) that clients rely on to drop a dead token and start a
+    new authorization flow.
+    """
+    try:
+        content = response.json()
+    except Exception:
+        content = {"error": "invalid_request", "error_description": response.text}
+    return JSONResponse(
+        status_code=response.status_code,
+        content=content,
+        headers=TOKEN_NO_CACHE_HEADERS,
+    )
 
 
 def _origin_label(scheme: str, netloc: str) -> str:

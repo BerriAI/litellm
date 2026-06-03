@@ -2661,3 +2661,73 @@ async def test_token_endpoint_sets_no_store_cache_control():
 
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["pragma"] == "no-cache"
+
+
+@pytest.mark.asyncio
+async def test_exchange_token_relays_upstream_oauth_error():
+    """An upstream OAuth error (e.g. 400 invalid_grant for an expired refresh
+    token) is relayed to the client per RFC 6749 §5.2, not masked as a 500, so
+    the client can drop the dead token and start a new authorization flow."""
+    import json
+
+    import httpx
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        exchange_token_with_server,
+    )
+    from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp import MCPAuth
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="t",
+        name="t",
+        server_name="t",
+        alias="t",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        client_id="cid",
+        client_secret="cs",
+        authorization_url="https://provider.com/oauth/authorize",
+        token_url="https://provider.com/oauth/token",
+    )
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://litellm.example.com/"
+    mock_request.headers = {}
+
+    # The async HTTP handler raises on an upstream 4xx (it calls
+    # raise_for_status internally; MaskedHTTPStatusError subclasses
+    # httpx.HTTPStatusError and preserves the upstream status + body).
+    upstream = httpx.Response(
+        status_code=400,
+        json={"error": "invalid_grant"},
+        request=httpx.Request("POST", server.token_url),
+    )
+    fake_http_client = MagicMock()
+    fake_http_client.post = AsyncMock(
+        side_effect=httpx.HTTPStatusError(
+            "400 Bad Request", request=upstream.request, response=upstream
+        )
+    )
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.discoverable_endpoints.get_async_httpx_client",
+        return_value=fake_http_client,
+    ):
+        response = await exchange_token_with_server(
+            request=mock_request,
+            mcp_server=server,
+            grant_type="refresh_token",
+            code=None,
+            redirect_uri=None,
+            client_id="cid",
+            client_secret=None,
+            code_verifier=None,
+            refresh_token="expired-refresh-token",
+        )
+
+    assert response.status_code == 400
+    assert json.loads(response.body) == {"error": "invalid_grant"}
+    # Error responses must not be cached either.
+    assert response.headers["cache-control"] == "no-store"
