@@ -84,7 +84,7 @@ class TestGeminiTTSTransformation:
         config = GoogleAIStudioGeminiConfig()
 
         non_default_params = {
-            "audio": {"voice": "Kore", "format": "pcm16", "languageCode": "en-US"}
+            "audio": {"voice": "Kore", "format": "pcm16", "language_code": "en-US"}
         }
         optional_params = {}
 
@@ -106,7 +106,7 @@ class TestGeminiTTSTransformation:
         config = GoogleAIStudioGeminiConfig()
 
         result = config._map_audio_params(
-            {"voice": "Kore", "format": "pcm16", "languageCode": "de-DE"}
+            {"voice": "Kore", "format": "pcm16", "language_code": "de-DE"}
         )
 
         assert result["languageCode"] == "de-DE"
@@ -387,7 +387,7 @@ class TestGeminiTTSSpeechConfigInRequestBody:
         config = VertexGeminiConfig()
 
         non_default_params = {
-            "audio": {"voice": "Puck", "format": "pcm16", "languageCode": "pt-BR"}
+            "audio": {"voice": "Puck", "format": "pcm16", "language_code": "pt-BR"}
         }
         optional_params = {}
 

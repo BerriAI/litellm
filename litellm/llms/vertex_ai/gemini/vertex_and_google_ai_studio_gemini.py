@@ -1111,7 +1111,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         {
             "voice": "alloy",
             "format": "mp3",
-            "languageCode": "en-US",
+            "language_code": "en-US",
         }
 
         Expected output:
@@ -1147,8 +1147,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             voice_config: VoiceConfig = {"prebuiltVoiceConfig": prebuilt_voice_config}
             speech_config["voiceConfig"] = voice_config
 
-        if "languageCode" in value:
-            speech_config["languageCode"] = value["languageCode"]
+        if "language_code" in value:
+            speech_config["languageCode"] = value["language_code"]
 
         return cast(dict, speech_config)
 
