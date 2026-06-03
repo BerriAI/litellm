@@ -578,7 +578,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                       />
                     </div>
                   ) : (
-                    <div className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <div
+                      data-testid="mcp-servers-grid"
+                      className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+                    >
                       {displayedServers.map((server) => (
                         <MCPServerCard
                           key={server.server_id}
