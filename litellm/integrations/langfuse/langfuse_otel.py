@@ -283,9 +283,9 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         if langfuse_host:
             # If LANGFUSE_HOST is provided, construct OTEL endpoint from it
-            if not langfuse_host.startswith("http"):
-                langfuse_host = "https://" + langfuse_host
-            endpoint = f"{langfuse_host.rstrip('/')}/api/public/otel"
+            endpoint = LangfuseOtelLogger._construct_langfuse_otel_endpoint(
+                langfuse_host
+            )
             verbose_logger.debug(f"Using Langfuse OTEL endpoint from host: {endpoint}")
         else:
             # Default to US cloud endpoint
@@ -332,9 +332,9 @@ class LangfuseOtelLogger(OpenTelemetry):
 
         if langfuse_host:
             # If LANGFUSE_HOST is provided, construct OTEL endpoint from it
-            if not langfuse_host.startswith("http"):
-                langfuse_host = "https://" + langfuse_host
-            endpoint = f"{langfuse_host.rstrip('/')}/api/public/otel"
+            endpoint = LangfuseOtelLogger._construct_langfuse_otel_endpoint(
+                langfuse_host
+            )
             verbose_logger.debug(f"Using Langfuse OTEL endpoint from host: {endpoint}")
         else:
             # Default to US cloud endpoint
@@ -365,6 +365,13 @@ class LangfuseOtelLogger(OpenTelemetry):
         auth_header = base64.b64encode(auth_string.encode()).decode()
         return f"Basic {auth_header}"
 
+    @staticmethod
+    def _construct_langfuse_otel_endpoint(langfuse_host: str) -> str:
+        """Build the Langfuse OTLP base endpoint from a host (scheme-tolerant)."""
+        if not langfuse_host.startswith("http"):
+            langfuse_host = "https://" + langfuse_host
+        return f"{langfuse_host.rstrip('/')}/api/public/otel"
+
     def construct_dynamic_otel_headers(
         self, standard_callback_dynamic_params: StandardCallbackDynamicParams
     ) -> Optional[dict]:
@@ -392,6 +399,23 @@ class LangfuseOtelLogger(OpenTelemetry):
             dynamic_headers["Authorization"] = auth_header
 
         return dynamic_headers
+
+    def construct_dynamic_otel_endpoint(
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[str]:
+        """
+        Construct a per-key/team Langfuse OTLP endpoint from the dynamic host.
+
+        Per-key Langfuse credentials are only valid against the host that issued
+        them, so the host must travel with the credentials. Returns None when no
+        per-key host is set, falling back to the env-configured endpoint.
+        """
+        dynamic_langfuse_host = standard_callback_dynamic_params.get("langfuse_host")
+        if not dynamic_langfuse_host:
+            return None
+        return LangfuseOtelLogger._construct_langfuse_otel_endpoint(
+            dynamic_langfuse_host
+        )
 
     def create_litellm_proxy_request_started_span(
         self,

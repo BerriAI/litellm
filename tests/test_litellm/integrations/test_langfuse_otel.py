@@ -392,6 +392,33 @@ class TestLangfuseOtelIntegration:
         # Should return an empty dict
         assert result == {}
 
+    def test_construct_dynamic_otel_endpoint_with_host(self):
+        """Per-key langfuse_host is turned into a normalized OTLP base endpoint."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+
+        eu = logger.construct_dynamic_otel_endpoint(
+            StandardCallbackDynamicParams(langfuse_host="https://cloud.langfuse.com")
+        )
+        assert eu == "https://cloud.langfuse.com/api/public/otel"
+
+        # scheme-less + trailing slash normalize identically to the env path
+        no_scheme = logger.construct_dynamic_otel_endpoint(
+            StandardCallbackDynamicParams(langfuse_host="us.cloud.langfuse.com/")
+        )
+        assert no_scheme == "https://us.cloud.langfuse.com/api/public/otel"
+
+    def test_construct_dynamic_otel_endpoint_without_host(self):
+        """No per-key host -> None, so the env endpoint is used."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+        assert (
+            logger.construct_dynamic_otel_endpoint(StandardCallbackDynamicParams())
+            is None
+        )
+
     def test_get_langfuse_otel_config_with_otel_host_priority(self):
         """LANGFUSE_OTEL_HOST should take priority over LANGFUSE_HOST."""
         with patch.dict(
