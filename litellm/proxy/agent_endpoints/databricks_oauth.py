@@ -23,6 +23,7 @@ Config example::
 """
 
 import asyncio
+import base64
 import hashlib
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
@@ -175,6 +176,9 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
             "Fetching Databricks App OAuth token from %s", config.token_url
         )
 
+        basic_auth = base64.b64encode(
+            f"{config.client_id}:{config.client_secret}".encode()
+        ).decode()
         try:
             response = await client.post(
                 config.token_url,
@@ -182,10 +186,11 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
                     "grant_type": "client_credentials",
                     "scope": config.scope,
                 },
-                auth=(config.client_id, config.client_secret),
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                headers={
+                    "Authorization": f"Basic {basic_auth}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
             )
-            response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise ValueError(
                 "Databricks App OAuth token request failed with status "
