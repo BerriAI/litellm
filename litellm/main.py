@@ -6472,6 +6472,7 @@ async def amoderation(
         "litellm_logging_obj", None
     )
     _dynamic_api_key = None
+    api_base: Optional[str] = None
     _dynamic_api_base = None
     try:
         (
