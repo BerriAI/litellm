@@ -730,13 +730,15 @@ async def test_subscribe_to_task_calls_pre_call_hook():
     mock_handler.client = mock_async_client
     mock_handler.post = AsyncMock()
 
+    async def _passthrough_iterator(response, **kwargs):
+        async for chunk in response:
+            yield chunk
+
     mock_proxy_logging = MagicMock()
     mock_proxy_logging.pre_call_hook = AsyncMock(
         side_effect=lambda user_api_key_dict, data, call_type: data
     )
-    mock_proxy_logging.post_call_success_hook = AsyncMock(
-        side_effect=lambda **kw: kw["response"]
-    )
+    mock_proxy_logging.async_post_call_streaming_iterator_hook = _passthrough_iterator
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
@@ -772,6 +774,80 @@ async def test_subscribe_to_task_calls_pre_call_hook():
     call_kwargs = mock_proxy_logging.pre_call_hook.await_args.kwargs
     assert call_kwargs.get("call_type") == "asend_message"
     assert call_kwargs.get("user_api_key_dict") == user_api_key_dict
+
+
+@pytest.mark.asyncio
+async def test_subscribe_to_task_runs_post_call_streaming_guardrail():
+    """tasks/resubscribe must route streamed events through the post-call
+    streaming hook so output guardrails configured on the agent inspect the
+    streamed task content. Regression: the SSE path previously returned the raw
+    upstream stream and bypassed guardrails entirely."""
+    import litellm
+    from litellm.integrations.custom_guardrail import CustomGuardrail
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    inspected: list = []
+
+    class _RecordingGuardrail(CustomGuardrail):
+        async def async_post_call_streaming_hook(self, user_api_key_dict, response):
+            inspected.append(response)
+            return response
+
+    guardrail = _RecordingGuardrail(
+        guardrail_name="record-a2a", default_on=True, event_hook="post_call"
+    )
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    async def fake_aiter_lines():
+        yield (
+            'data: {"jsonrpc":"2.0","id":"req-1","result":'
+            '{"kind":"message","parts":[{"kind":"text","text":"resubscribe-secret"}]}}'
+        )
+
+    mock_resp = AsyncMock()
+    mock_resp.is_success = True
+    mock_resp.aiter_lines = fake_aiter_lines
+    mock_resp.aclose = AsyncMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.client = mock_async_client
+    mock_handler.post = AsyncMock()
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+        stack.enter_context(patch.object(litellm, "callbacks", [guardrail]))
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert response.media_type == "text/event-stream"
+        async for _ in response.body_iterator:
+            pass
+
+    assert any("resubscribe-secret" in str(r) for r in inspected), (
+        "tasks/resubscribe streamed content was not passed to the post-call "
+        "streaming guardrail hook"
+    )
 
 
 @pytest.mark.asyncio

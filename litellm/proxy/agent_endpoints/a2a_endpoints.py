@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -150,6 +150,66 @@ async def _forward_jsonrpc(
     return result
 
 
+async def _a2a_sse_event_source(
+    agent_url: str,
+    body: dict,
+    request_id: Optional[Any] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> AsyncGenerator[dict, None]:
+    """Stream an upstream A2A SSE response as parsed JSON-RPC event dicts.
+
+    Upstream HTTP/JSON-RPC errors are surfaced as a single JSON-RPC error event
+    so the caller can relay them instead of breaking the stream.
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.agents import _normalize_a2a_jsonrpc_response
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        **(extra_headers or {}),
+    }
+    handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.A2A,
+        params={"timeout": None},
+    )
+    async_client = handler.client
+    req = async_client.build_request("POST", agent_url, json=body, headers=headers)
+    resp = await async_client.send(req, stream=True)
+    try:
+        if not resp.is_success:
+            error_body = await resp.aread()
+            error_event: Optional[dict] = None
+            try:
+                parsed = json.loads(error_body)
+                if isinstance(parsed, dict) and "error" in parsed:
+                    error_event = _normalize_a2a_jsonrpc_response(
+                        parsed, request_id=request_id
+                    )
+            except Exception:
+                error_event = None
+            yield error_event or {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32603, "message": resp.reason_phrase},
+            }
+            return
+        async for line in resp.aiter_lines():
+            stripped = line.strip()
+            if not stripped.startswith("data:"):
+                continue
+            payload = stripped[len("data:") :].strip()
+            if not payload:
+                continue
+            try:
+                yield json.loads(payload)
+            except Exception:
+                continue
+    finally:
+        await resp.aclose()
+
+
 async def _forward_jsonrpc_sse(
     agent_url: str,
     body: dict,
@@ -159,71 +219,60 @@ async def _forward_jsonrpc_sse(
     user_api_key_dict: Optional[Any] = None,
     request_data: Optional[dict] = None,
 ) -> StreamingResponse:
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.llms.custom_http import httpxSpecialProvider
+    event_source = _a2a_sse_event_source(
+        agent_url, body, request_id=request_id, extra_headers=extra_headers
+    )
 
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "text/event-stream",
-        **(extra_headers or {}),
-    }
+    def _serialize_chunk(chunk: Any) -> str:
+        return f"data: {json.dumps(chunk)}\n\n"
 
-    async def stream_events():
-        try:
-            handler = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.A2A,
-                params={"timeout": None},
+    def _serialize_error(proxy_exc: Any) -> str:
+        return (
+            "data: "
+            + json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32603,
+                        "message": getattr(proxy_exc, "message", str(proxy_exc)),
+                    },
+                }
             )
-            async_client = handler.client
-            req = async_client.build_request(
-                "POST", agent_url, json=body, headers=headers
+            + "\n\n"
+        )
+
+    if (
+        proxy_logging_obj is not None
+        and user_api_key_dict is not None
+        and request_data is not None
+    ):
+        # Route streamed events through the shared streaming generator so the
+        # post-call streaming hook (and therefore agent guardrails) inspects
+        # tasks/resubscribe output the same way message/stream does.
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        generator: AsyncGenerator[str, None] = (
+            ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=event_source,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=_serialize_chunk,
+                serialize_error=_serialize_error,
             )
-            resp = await async_client.send(req, stream=True)
-            try:
-                if not resp.is_success:
-                    error_body = await resp.aread()
-                    try:
-                        error_json = json.loads(error_body)
-                        if "error" in error_json:
-                            from litellm.types.agents import (
-                                _normalize_a2a_jsonrpc_response,
-                            )
+        )
+    else:
 
-                            error_json = _normalize_a2a_jsonrpc_response(
-                                error_json, request_id=request_id
-                            )
-                            yield f"data: {json.dumps(error_json)}\n\n"
-                            return
-                    except Exception:
-                        pass
-                    error_event = {
-                        "jsonrpc": "2.0",
-                        "id": request_id,
-                        "error": {"code": -32603, "message": resp.reason_phrase},
-                    }
-                    yield f"data: {json.dumps(error_event)}\n\n"
-                    return
-                async for line in resp.aiter_lines():
-                    yield line + "\n"
-            finally:
-                await resp.aclose()
-        except Exception as e:
-            if (
-                proxy_logging_obj is not None
-                and user_api_key_dict is not None
-                and request_data is not None
-            ):
-                try:
-                    await proxy_logging_obj.post_call_failure_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        original_exception=e,
-                        request_data=request_data,
-                    )
-                except Exception:
-                    pass
-            yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': -32603, 'message': str(e)}})}\n\n"
+        async def _passthrough() -> AsyncGenerator[str, None]:
+            async for chunk in event_source:
+                yield _serialize_chunk(chunk)
 
-    return StreamingResponse(stream_events(), media_type="text/event-stream")
+        generator = _passthrough()
+
+    return StreamingResponse(generator, media_type="text/event-stream")
 
 
 async def _handle_stream_message(
