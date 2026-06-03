@@ -139,21 +139,19 @@ class TestCometAPIConfig:
             {"role": "user", "content": "Hello, world!"}
         ]
 
-    def test_transform_request_extra_body_cannot_override_core_fields(self):
-        """Test extra_body cannot override the generated request body"""
+    def test_transform_request_extra_body_can_override_request_fields(self):
+        """Test extra_body preserves LiteLLM's existing override behavior"""
         config = CometAPIConfig()
 
-        with pytest.raises(
-            ValueError,
-            match="CometAPI extra_body cannot override request fields: model",
-        ):
-            config.transform_request(
-                model="cometapi/gpt-5.5",
-                messages=[{"role": "user", "content": "Hello, world!"}],
-                optional_params={"extra_body": {"model": "cometapi/gpt-5.5-all"}},
-                litellm_params={},
-                headers={},
-            )
+        transformed_request = config.transform_request(
+            model="cometapi/gpt-5.5",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            optional_params={"extra_body": {"model": "cometapi/gpt-5.5-all"}},
+            litellm_params={},
+            headers={},
+        )
+
+        assert transformed_request["model"] == "cometapi/gpt-5.5-all"
 
     def test_cache_control_flag_removal(self):
         """Test cache control flag removal from messages"""

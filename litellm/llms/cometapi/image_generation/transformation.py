@@ -189,16 +189,23 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
             additional_args={"complete_input_dict": request_data},
             original_response=response_data,
         )
+        response_data.update(
+            {
+                key: value
+                for key, value in {
+                    "size": optional_params.get("size"),
+                    "quality": optional_params.get("quality"),
+                    "output_format": optional_params.get(
+                        "output_format", optional_params.get("response_format")
+                    ),
+                }.items()
+                if value is not None
+            }
+        )
         image_response: ImageResponse = convert_to_model_response_object(  # type: ignore
             response_object=response_data,
             model_response_object=model_response,
             response_type="image_generation",
-        )
-
-        image_response.size = optional_params.get("size")
-        image_response.quality = optional_params.get("quality")
-        image_response.output_format = optional_params.get(
-            "output_format", optional_params.get("response_format")
         )
 
         return image_response

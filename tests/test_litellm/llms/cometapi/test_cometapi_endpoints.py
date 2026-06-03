@@ -297,7 +297,11 @@ def test_cometapi_image_generation_normalizes_null_usage_fields():
         model_response=ImageResponse(),
         logging_obj=MagicMock(),
         request_data={"prompt": "A small comet"},
-        optional_params={"size": "1024x1024"},
+        optional_params={
+            "output_format": "png",
+            "quality": "high",
+            "size": "1024x1024",
+        },
         litellm_params={},
         encoding=None,
     )
@@ -308,6 +312,9 @@ def test_cometapi_image_generation_normalizes_null_usage_fields():
     assert response.usage.input_tokens == 12
     assert response.usage.output_tokens == 100
     assert response.usage.total_tokens == 112
+    assert response.output_format == "png"
+    assert response.quality == "high"
+    assert response.size == "1024x1024"
 
 
 def test_cometapi_image_generation_handles_missing_usage():

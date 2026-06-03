@@ -44,13 +44,6 @@ class CometAPIConfig(OpenAIGPTConfig):
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
-        overlapping_keys = set(response).intersection(extra_body)
-        if overlapping_keys:
-            raise ValueError(
-                "CometAPI extra_body cannot override request fields: {}".format(
-                    ", ".join(sorted(overlapping_keys))
-                )
-            )
         response.update(extra_body)
         return response
 
