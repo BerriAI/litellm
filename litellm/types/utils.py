@@ -148,6 +148,10 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
+    supports_image_size: Optional[bool]
+    bedrock_output_config_effort_ceiling: Optional[
+        Literal["low", "medium", "high", "max", "xhigh"]
+    ]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -219,6 +223,12 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_priority: Optional[
         float
     ]  # OpenAI priority service tier pricing
+    regional_processing_uplift_multiplier_eu: Optional[
+        float
+    ]  # OpenAI EU data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    regional_processing_uplift_multiplier_us: Optional[
+        float
+    ]  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     output_cost_per_character: Optional[float]  # only for vertex ai models
     output_cost_per_audio_token: Optional[float]
     output_cost_per_token_above_128k_tokens: Optional[
@@ -2571,6 +2581,12 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Cost per query for the MCP server tool call
     """
 
+    mcp_session_id: Optional[str]
+    """
+    The MCP `mcp-session-id` of the stateful session this tool call ran in, when
+    the client is driving a stateful session. Absent for stateless calls.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -3171,6 +3187,7 @@ all_litellm_params = (
         "allowed_openai_params",
         "litellm_session_id",
         "use_litellm_proxy",
+        "use_chat_completions_api",
         "prompt_label",
         "shared_session",
         "search_tool_name",
@@ -3284,6 +3301,8 @@ class LlmProviders(str, Enum):
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
+    INCEPTION = "inception"
+    TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -3348,6 +3367,7 @@ class LlmProviders(str, Enum):
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
+    LANGFLOW = "langflow"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
@@ -3355,6 +3375,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
+    TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3395,6 +3416,7 @@ class SearchProviders(str, Enum):
     DUCKDUCKGO = "duckduckgo"
     SEARCHAPI = "searchapi"
     SERPER = "serper"
+    APISERPENT = "apiserpent"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3593,12 +3615,30 @@ class SpecialEnums(Enum):
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
     )
 
+    LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR = (
+        "litellm_proxy:passthrough;provider:{};unified_id,{};raw_id,{}"
+    )
+
 
 class ServiceTier(Enum):
     """Enum for service tier types used in cost calculations."""
 
     FLEX = "flex"
     PRIORITY = "priority"
+
+
+class DataResidency(Enum):
+    """
+    OpenAI data-residency / regional-processing regions.
+
+    Inferred from the OpenAI api_base host (eu.api.openai.com -> EU,
+    us.api.openai.com -> US). Used to apply the regional-processing
+    cost uplift (see ``regional_processing_uplift_multiplier_<region>``
+    on ModelInfo).
+    """
+
+    US = "us"
+    EU = "eu"
 
 
 LLMResponseTypes = Union[

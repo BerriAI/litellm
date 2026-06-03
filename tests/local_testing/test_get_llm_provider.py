@@ -478,3 +478,108 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base  # Should use the argument base
 
+
+# -------- Tests for Claude model pattern matching ---------
+
+
+class TestClaudeModelPatternMatching:
+    """
+    Tests for _matches_claude_model_pattern which routes future Claude models
+    to the Anthropic provider without requiring model_prices_and_context_window.json updates.
+    """
+
+    def test_matches_claude_opus_pattern(self):
+        """Test claude-opus-X-Y pattern matching."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-opus-4-7") is True
+        assert _matches_claude_model_pattern("claude-opus-4-9") is True
+        assert _matches_claude_model_pattern("claude-opus-5-1") is True
+
+    def test_matches_claude_sonnet_pattern(self):
+        """Test claude-sonnet-X-Y pattern matching."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-sonnet-4-6") is True
+        assert _matches_claude_model_pattern("claude-sonnet-5-0") is True
+
+    def test_matches_claude_haiku_pattern(self):
+        """Test claude-haiku-X-Y pattern matching."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-haiku-4-5") is True
+        assert _matches_claude_model_pattern("claude-haiku-5-0") is True
+
+    def test_matches_claude_with_date_suffix(self):
+        """Test claude model pattern with date suffix."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-opus-5-1-20270101") is True
+        assert _matches_claude_model_pattern("claude-sonnet-4-7-20260601") is True
+        assert _matches_claude_model_pattern("claude-haiku-4-6-20251201") is True
+
+    def test_matches_unknown_tier_name(self):
+        """A tier segment we don't know about today should still route to anthropic.
+
+        The pattern intentionally accepts any ``[a-z]+`` tier rather than a
+        hard-coded ``opus|sonnet|haiku`` list so a future tier (e.g. a new
+        "mini" line) is covered without a code change. This guards against a
+        regression back to hard-coded tier names.
+        """
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("claude-mini-4-5") is True
+        assert _matches_claude_model_pattern("claude-neptune-6-0") is True
+
+    def test_rejects_non_claude_models(self):
+        """Test that non-Claude models are not matched."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        assert _matches_claude_model_pattern("gpt-4") is False
+        assert _matches_claude_model_pattern("mistral-large") is False
+        assert _matches_claude_model_pattern("llama-3") is False
+
+    def test_rejects_invalid_claude_patterns(self):
+        """Test that invalid Claude model patterns are not matched."""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            _matches_claude_model_pattern,
+        )
+
+        # Wrong order (variant before name)
+        assert _matches_claude_model_pattern("claude-4-opus") is False
+        # Missing version numbers
+        assert _matches_claude_model_pattern("claude-opus") is False
+        # Old format (claude-3-opus instead of claude-opus-3)
+        assert _matches_claude_model_pattern("claude-3-opus-20240229") is False
+
+    def test_get_llm_provider_future_claude_model(self):
+        """Test that get_llm_provider routes future Claude models to anthropic."""
+        model, custom_llm_provider, dynamic_api_key, api_base = (
+            litellm.get_llm_provider(
+                model="claude-opus-4-9",
+            )
+        )
+        assert custom_llm_provider == "anthropic"
+        assert model == "claude-opus-4-9"
+
+    def test_get_llm_provider_future_claude_model_with_date(self):
+        """Test that get_llm_provider routes future Claude models with date suffix."""
+        model, custom_llm_provider, dynamic_api_key, api_base = (
+            litellm.get_llm_provider(
+                model="claude-opus-5-1-20270101",
+            )
+        )
+        assert custom_llm_provider == "anthropic"
+        assert model == "claude-opus-5-1-20270101"

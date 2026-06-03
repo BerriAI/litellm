@@ -79,6 +79,59 @@ def test_load_missing_key_raises_cassette_not_found():
         persister.load_cassette("never/recorded", yamlserializer)
 
 
+def test_load_refreshes_ttl_so_replayed_cassettes_do_not_expire():
+    """A successful read must slide the cassette's expiry forward.
+
+    Regression: ``load_cassette`` used a plain ``GET``, which does not
+    touch the key's TTL. A cassette that is only ever replayed (HIT/NOOP,
+    never re-recorded) therefore expired exactly ``CASSETTE_TTL_SECONDS``
+    after its last *write* no matter how often it was read, and whichever
+    CI run crossed that 24h boundary re-recorded it live — a spurious VCR
+    MISS on otherwise-deterministic cassettes. Reading must refresh the
+    TTL so an actively-used cassette never expires.
+    """
+    fake, persister = _persister_with_fake_redis()
+    cassette_id = "tests/llm_translation/test_x/test_ttl_refresh"
+    key = redis_key_for(cassette_id)
+
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+    # Simulate a cassette written ~most-of-a-day ago: only a little TTL left.
+    fake.expire(key, 60)
+    assert fake.ttl(key) <= 60
+
+    persister.load_cassette(cassette_id, yamlserializer)
+
+    refreshed = fake.ttl(key)
+    assert CASSETTE_TTL_SECONDS - 5 <= refreshed <= CASSETTE_TTL_SECONDS
+
+
+def test_load_ttl_refresh_failure_does_not_break_load():
+    """A failed TTL refresh must never turn a successful load into a miss."""
+
+    class _RefreshFailsRedis:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def get(self, *args, **kwargs):
+            return self._inner.get(*args, **kwargs)
+
+        def set(self, *args, **kwargs):
+            return self._inner.set(*args, **kwargs)
+
+        def expire(self, *args, **kwargs):
+            raise RedisConnectionError("simulated outage")
+
+    client = _RefreshFailsRedis(fakeredis.FakeStrictRedis())
+    persister = make_redis_persister(client=client)
+    cassette_id = "tests/llm_translation/test_x/test_ttl_refresh_fail"
+
+    persister.save_cassette(cassette_id, _sample_cassette_dict(), yamlserializer)
+    requests, responses = persister.load_cassette(cassette_id, yamlserializer)
+
+    assert len(requests) == 1
+    assert len(responses) == 1
+
+
 def test_redis_key_normalizes_path_passed_by_pytest_recording():
     raw = "tests/llm_translation/cassettes/test_anthropic/test_streaming.yaml"
     assert (
