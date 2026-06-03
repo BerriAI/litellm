@@ -471,6 +471,11 @@ jobs:
       - run:
           name: Run tests
           command: |
+            # On a "rerun failed tests" build a parallel node can receive no
+            # tests, so the test command never creates test-results. Pre-create it
+            # so store_test_results doesn't fail the node on a missing path.
+            mkdir -p test-results
+
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
 
             echo "$TEST_FILES" | circleci tests run \
