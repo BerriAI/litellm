@@ -2407,6 +2407,109 @@ class TestUpdateMCPServer:
             assert result.alias == "Updated Test Server"
 
 
+class TestAddMCPServerAtomicity:
+    """A committed MCP server must survive a post-write registry refresh failure.
+
+    Regression: add_mcp_server inserted the row and then reloaded the whole
+    registry from the database inside the same try block. One unrelated malformed
+    row made the reload raise, so the endpoint returned 500 even though the new
+    row was already persisted. Callers assumed failure and retried, creating
+    duplicate servers.
+    """
+
+    @pytest.mark.asyncio
+    async def test_create_succeeds_when_registry_refresh_fails(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="echo",
+            url="https://echo.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+        )
+        created_server = generate_mock_mcp_server_db_record(
+            server_id="created-1", alias="echo"
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.reload_servers_from_database = AsyncMock(
+            side_effect=Exception("malformed pre-existing row")
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+                AsyncMock(return_value=created_server),
+            ) as create_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            result = await add_mcp_server(payload=payload, user_api_key_dict=admin)
+
+        create_mock.assert_awaited_once()
+        mock_manager.reload_servers_from_database.assert_awaited_once()
+        assert result.server_id == "created-1"
+
+    @pytest.mark.asyncio
+    async def test_create_500s_and_skips_registry_when_db_write_fails(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        payload = NewMCPServerRequest(
+            alias="echo",
+            url="https://echo.example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        admin = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.reload_servers_from_database = AsyncMock()
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+                AsyncMock(side_effect=Exception("db down")),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await add_mcp_server(payload=payload, user_api_key_dict=admin)
+
+        assert exc_info.value.status_code == 500
+        mock_manager.add_server.assert_not_awaited()
+        mock_manager.reload_servers_from_database.assert_not_awaited()
+
+
 class TestHealthCheckServers:
     """Test suite for health check servers endpoint"""
 

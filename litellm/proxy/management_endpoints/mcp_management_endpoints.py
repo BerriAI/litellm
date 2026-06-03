@@ -1471,23 +1471,34 @@ if MCP_AVAILABLE:
         payload.submitted_by = None
         payload.submitted_at = None
 
-        # Attempt to create the mcp server
+        # The database write is the commit point: if it fails nothing was
+        # persisted and the request is a genuine failure.
         try:
             new_mcp_server = await create_mcp_server(
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
-            await global_mcp_server_manager.add_server(new_mcp_server)
-
-            # Ensure registry is up to date by reloading from database
-            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error creating mcp server: {str(e)}"},
             )
+
+        # Registry refresh is best-effort: the row is already committed, so a
+        # failure here (e.g. an unrelated malformed row in the table) must not
+        # surface as a 500 and orphan the created server, which would push the
+        # caller to retry and create duplicates.
+        try:
+            await global_mcp_server_manager.add_server(new_mcp_server)
+            await global_mcp_server_manager.reload_servers_from_database()
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"MCP server {new_mcp_server.server_id} created but in-memory "
+                f"registry refresh failed: {str(e)}"
+            )
+
         return _redact_mcp_credentials(new_mcp_server)
 
     @router.post(
