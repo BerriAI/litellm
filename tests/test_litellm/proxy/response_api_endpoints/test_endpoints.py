@@ -572,3 +572,125 @@ class TestResponsesWSFirstFrameModelAuth:
             request_data={"model": "gpt-4o-mini"},
             route="/v1/responses",
         )
+
+
+class TestReadWSModelFromFirstFrameErrors:
+    @pytest.mark.asyncio
+    async def test_timeout_closes_without_error_frame(self):
+        import asyncio
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=asyncio.TimeoutError())
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.send_text.assert_not_awaited()
+        ws.close.assert_awaited_once_with(
+            code=1008, reason="Timed out waiting for first message"
+        )
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_sends_error_and_closes(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value="this is not json")
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        payload = json.loads(ws.send_text.await_args.args[0])
+        assert payload["error"]["message"] == "First message is not valid JSON."
+        ws.close.assert_awaited_once_with(
+            code=1008, reason="Invalid JSON in first message"
+        )
+
+    @pytest.mark.asyncio
+    async def test_missing_model_sends_error_and_closes(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "response.create", "input": []})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        payload = json.loads(ws.send_text.await_args.args[0])
+        assert "No model provided" in payload["error"]["message"]
+        ws.close.assert_awaited_once_with(code=1008, reason="No model provided")
+
+    @pytest.mark.asyncio
+    async def test_valid_first_frame_returns_model_and_raw(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        raw = json.dumps({"type": "response.create", "model": "gpt-4o", "input": []})
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=raw)
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result == ("gpt-4o", raw)
+        ws.send_text.assert_not_awaited()
+        ws.close.assert_not_awaited()
+
+
+class TestManagedResponsesSameProvider:
+    def _handler(self, model, custom_llm_provider=None):
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        return ManagedResponsesWebSocketHandler(
+            websocket=MagicMock(),
+            model=model,
+            logging_obj=MagicMock(),
+            custom_llm_provider=custom_llm_provider,
+        )
+
+    def test_none_model_treated_as_same_provider(self):
+        assert self._handler("openai/gpt-4o")._same_provider(None) is True
+
+    def test_identical_model_is_same_provider(self):
+        assert self._handler("openai/gpt-4o")._same_provider("openai/gpt-4o") is True
+
+    def test_same_provider_different_model(self):
+        assert self._handler("gpt-4o")._same_provider("gpt-4o-mini") is True
+
+    def test_different_provider_is_not_same(self):
+        assert (
+            self._handler("gpt-4o")._same_provider("vertex_ai/gemini-2.0-flash")
+            is False
+        )
+
+    def test_inject_credentials_keeps_provider_for_same_provider_model(self):
+        handler = self._handler("gpt-4o", custom_llm_provider="openai")
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
+        assert call_kwargs["custom_llm_provider"] == "openai"
+
+    def test_inject_credentials_drops_provider_for_cross_provider_model(self):
+        handler = self._handler("gpt-4o", custom_llm_provider="openai")
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
+        assert "custom_llm_provider" not in call_kwargs
