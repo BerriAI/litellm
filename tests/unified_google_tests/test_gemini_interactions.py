@@ -16,7 +16,9 @@ class TestGeminiInteractions(BaseInteractionsTest):
 
     def get_model(self) -> str:
         """Return the Gemini model string."""
-        return "gemini/gemini-2.5-flash"
+        return (
+            f"gemini/{os.environ.get('CI_CD_DEFAULT_GEMINI_MODEL', 'gemini-2.5-flash')}"
+        )
 
     def get_api_key(self) -> str:
         """Return the Gemini API key from environment."""

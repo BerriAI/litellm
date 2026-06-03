@@ -72,7 +72,10 @@ def test_batch_completions_models():
 def test_batch_completion_models_all_responses():
     try:
         responses = batch_completion_models_all_responses(
-            models=["gemini/gemini-2.5-flash-lite", "claude-haiku-4-5-20251001"],
+            models=[
+                f"gemini/{os.environ.get('CI_CD_DEFAULT_GEMINI_MODEL', 'gemini-2.5-flash')}",
+                "claude-haiku-4-5-20251001",
+            ],
             messages=[{"role": "user", "content": "write a poem"}],
             max_tokens=10,
         )
