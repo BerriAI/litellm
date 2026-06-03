@@ -4,6 +4,7 @@ title: "LiteLLM Labs: Announcing Lite-Harness SDK — Unified API for Claude Cod
 date: 2026-06-02T09:00:00
 authors:
   - krrish
+  - ishaan-alt
 description: "One SDK. Swap between Claude Code, Codex, and Pi AI by changing a string. Pairs with the LiteLLM AI Gateway for keys, budgets, logs, and fallbacks."
 tags: [litellm-labs, product, agents, sdk, ai-gateway]
 hide_table_of_contents: true
@@ -66,7 +67,16 @@ async for message in query(
 
 ## LiteLLM AI Gateway
 
-Lite-Harness supports proxy'ing harnesses via LiteLLM AI Gateway. This enables easy model swapping, cost controls and logging. 
+Lite-Harness supports proxy'ing harnesses via LiteLLM AI Gateway. This enables easy model swapping, cost controls and logging.
+
+Point Lite-Harness at your gateway by setting two environment variables:
+
+```bash
+export LITELLM_API_BASE=https://litellm.your-company.com/v1
+export LITELLM_API_KEY=sk-litellm-...
+```
+
+Then call as usual — every underlying model request routes through the gateway:
 
 ```python
 from lite_harness import query, AgentOptions
