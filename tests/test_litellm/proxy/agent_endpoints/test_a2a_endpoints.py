@@ -869,3 +869,115 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
     full = "".join(chunks)
     assert "error" in full
     assert "-32001" in full or "Task not found" in full
+
+
+@pytest.mark.asyncio
+async def test_task_methods_forward_caller_identity_headers():
+    """Task operations must forward X-LiteLLM-User-Id and X-LiteLLM-Team-Id so the
+    upstream agent can scope resources to the authenticated caller."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("tasks/get", {"id": "task-1"})
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test", user_id="user-abc", team_id="team-xyz"
+    )
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    posted_headers = mock_handler.post.call_args.kwargs.get("headers") or {}
+    assert posted_headers.get("X-LiteLLM-User-Id") == "user-abc"
+    assert posted_headers.get("X-LiteLLM-Team-Id") == "team-xyz"
+
+
+@pytest.mark.asyncio
+async def test_push_notification_config_set_rejects_http_url():
+    """tasks/pushNotificationConfig/set must reject non-HTTPS callback URLs to prevent SSRF."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock(
+        "tasks/pushNotificationConfig/set",
+        {"taskId": "task-1", "url": "http://internal-webhook.example.com/hook"},
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        with pytest.raises(HTTPException) as exc_info:
+            await invoke_agent_a2a(
+                agent_id="test-agent",
+                request=mock_request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "HTTPS" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_push_notification_config_set_rejects_private_ip():
+    """tasks/pushNotificationConfig/set must reject callback URLs pointing to private IP ranges."""
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock(
+        "tasks/pushNotificationConfig/set",
+        {"taskId": "task-1", "url": "https://192.168.1.100/hook"},
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        with pytest.raises(HTTPException) as exc_info:
+            await invoke_agent_a2a(
+                agent_id="test-agent",
+                request=mock_request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "private" in exc_info.value.detail.lower()

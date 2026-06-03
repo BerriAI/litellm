@@ -5,8 +5,10 @@ Allows clients to invoke agents through LiteLLM using the A2A protocol.
 The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM.
 """
 
+import ipaddress
 import json
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -30,6 +32,43 @@ _PASCAL_TO_WIRE: Dict[str, str] = {
     "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
     "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
 }
+
+
+def _validate_push_notification_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise HTTPException(
+            status_code=400,
+            detail="Push notification URL must use HTTPS",
+        )
+    hostname = parsed.hostname or ""
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Push notification URL must not point to a private or reserved address",
+            )
+    except ValueError:
+        if hostname in ("localhost",) or hostname.endswith(".local"):
+            raise HTTPException(
+                status_code=400,
+                detail="Push notification URL must not point to localhost",
+            )
+
+
+def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str]:
+    headers: Dict[str, str] = {}
+    if user_api_key_dict.user_id:
+        headers["X-LiteLLM-User-Id"] = user_api_key_dict.user_id
+    if user_api_key_dict.team_id:
+        headers["X-LiteLLM-Team-Id"] = user_api_key_dict.team_id
+    return headers
 
 
 def _jsonrpc_error(
@@ -659,14 +698,24 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 return _jsonrpc_error(
                     request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
                 )
+            if method == "tasks/pushNotificationConfig/set":
+                callback_url = (params or {}).get("url") or (params or {}).get(
+                    "pushNotificationConfig", {}
+                ).get("url")
+                if callback_url:
+                    _validate_push_notification_url(callback_url)
             forward_body = {
                 "jsonrpc": "2.0",
                 "id": request_id,
                 "method": method,
                 "params": params,
             }
+            caller_headers = merge_agent_headers(
+                dynamic_headers=_caller_identity_headers(user_api_key_dict) or None,
+                static_headers=agent_extra_headers or None,
+            )
             result = await _forward_jsonrpc(
-                agent_url, forward_body, extra_headers=agent_extra_headers
+                agent_url, forward_body, extra_headers=caller_headers
             )
             if method == "agent/getAuthenticatedExtendedCard":
                 if isinstance(result.get("result"), dict) and "url" in result["result"]:
@@ -707,11 +756,15 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 "method": method,
                 "params": params,
             }
+            sse_caller_headers = merge_agent_headers(
+                dynamic_headers=_caller_identity_headers(user_api_key_dict) or None,
+                static_headers=agent_extra_headers or None,
+            )
             return await _forward_jsonrpc_sse(
                 agent_url,
                 forward_body,
                 request_id=request_id,
-                extra_headers=agent_extra_headers,
+                extra_headers=sse_caller_headers,
                 proxy_logging_obj=proxy_logging_obj,
                 user_api_key_dict=user_api_key_dict,
                 request_data=data,
