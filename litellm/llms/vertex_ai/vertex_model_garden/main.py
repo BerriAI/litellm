@@ -114,33 +114,18 @@ class VertexAIModelGardenModels(VertexBase):
             openai_like_chat_completions = OpenAILikeChatHandler()
 
             ## CONSTRUCT API BASE
+            # Skip _check_custom_proxy: its ":verb" URL construction corrupts a
+            # user-supplied api_base (e.g. Vertex MG dedicated endpoint), and
+            # OpenAILikeChatHandler already appends "/chat/completions".
             stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
-            default_api_base = create_vertex_url(
-                vertex_location=vertex_location or "us-central1",
-                vertex_project=vertex_project or project_id,
-                stream=stream,
-                model=model,
-            )
-
-            if len(default_api_base.split(":")) > 1:
-                endpoint = default_api_base.split(":")[-1]
-            else:
-                endpoint = ""
-
-            _, api_base = self._check_custom_proxy(
-                api_base=api_base,
-                custom_llm_provider="vertex_ai",
-                gemini_api_key=None,
-                endpoint=endpoint,
-                stream=stream,
-                auth_header=None,
-                url=default_api_base,
-                model=model,
-                vertex_project=vertex_project or project_id,
-                vertex_location=vertex_location or "us-central1",
-                vertex_api_version="v1beta1",
-            )
+            if api_base is None:
+                api_base = create_vertex_url(
+                    vertex_location=vertex_location or "us-central1",
+                    vertex_project=vertex_project or project_id,
+                    stream=stream,
+                    model=model,
+                )
             # Publisher/catalog models: model id must be sent in the JSON body (OpenAPI route).
             # Single-segment endpoint ids: model is encoded in the URL path; body model stays empty.
             if not _vertex_model_garden_model_id_in_json_body(model):

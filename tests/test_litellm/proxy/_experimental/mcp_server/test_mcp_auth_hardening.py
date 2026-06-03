@@ -145,7 +145,7 @@ def test_target_servers_use_oauth2_excludes_m2m(m2m, expected):
         # M2M server -> False (no anonymous passthrough); interactive -> True.
         assert (
             MCPRequestHandler._target_servers_use_oauth2(
-                path="/mcp", mcp_servers=["s1"]
+                path="/mcp", mcp_servers=["s1"], client_ip=None
             )
             is expected
         )

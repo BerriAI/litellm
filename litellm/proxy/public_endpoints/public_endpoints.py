@@ -5,7 +5,7 @@ from importlib.resources import files
 from typing import Any, Dict, List, Optional
 
 import litellm
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
@@ -211,7 +211,7 @@ async def public_model_hub():
     tags=["[beta] Agents", "public"],
     response_model=List[AgentCard],
 )
-async def get_agents():
+async def get_agents(request: Request):
     import litellm
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
@@ -219,12 +219,16 @@ async def get_agents():
 
     if litellm.public_agent_groups is None:
         return []
-    agent_card_list = [
-        agent.agent_card_params
+
+    proxy_base = str(request.base_url).rstrip("/")
+    return [
+        {
+            **(agent.agent_card_params or {}),
+            "url": f"{proxy_base}/a2a/{agent.agent_id}",
+        }
         for agent in agents
         if agent.agent_id in litellm.public_agent_groups
     ]
-    return agent_card_list
 
 
 @router.get(
