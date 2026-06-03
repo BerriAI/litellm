@@ -532,6 +532,7 @@ async def common_checks(  # noqa: PLR0915
         route=route,
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
+        llm_router=llm_router,
     )
 
     # 1. If team is blocked
