@@ -39,13 +39,7 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 # itself run under a live cassette context.
 _VCR_AUTO_MARKER_SKIP_FILES = frozenset({"test_vcr_redis_persister.py"})
 
-# Tests that observe live cross-call provider state (e.g. prompt-cache
-# warm-up between two consecutive calls); replay can't reproduce that state.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
-    "::test_prompt_caching",
-    "TestBedrockInvokeNovaJson::test_json_response_pydantic_obj",
-    "::test_bedrock_converse__streaming_passthrough",
-)
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 _verbose_state = VerboseReporterState()

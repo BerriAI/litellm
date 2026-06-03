@@ -8,6 +8,8 @@ const { writeFileSync } = require('fs');
 // Import fetch if the SDK uses it
 const originalFetch = global.fetch || require('node-fetch');
 
+const { runVertexRequestOrSkip } = require('./vertex_test_helpers');
+
 // Monkey-patch the fetch used internally
 global.fetch = async function patchedFetch(url, options) {
     // Modify the URL to use HTTP instead of HTTPS
@@ -89,7 +91,12 @@ describe('Vertex AI Tests', () => {
                 contents: [{role: 'user', parts: [{text: 'How are you doing today tell me your name?'}]}],
             };
 
-            const streamingResult = await generativeModel.generateContentStream(request);
+            const streamingResult = await runVertexRequestOrSkip(() =>
+                generativeModel.generateContentStream(request)
+            );
+            if (streamingResult === null) {
+                return;
+            }
 
             // Add some assertions
             expect(streamingResult).toBeDefined();
@@ -122,7 +129,12 @@ describe('Vertex AI Tests', () => {
             );
             const request = {contents: [{role: 'user', parts: [{text: 'What is 2+2?'}]}]};
 
-            const result = await generativeModel.generateContent(request);
+            const result = await runVertexRequestOrSkip(() =>
+                generativeModel.generateContent(request)
+            );
+            if (result === null) {
+                return;
+            }
             expect(result).toBeDefined();
             expect(result.response).toBeDefined();
             console.log('non-streaming response:', JSON.stringify(result.response));

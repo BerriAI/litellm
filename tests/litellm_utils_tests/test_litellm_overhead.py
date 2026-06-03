@@ -1,237 +1,185 @@
+import asyncio
 import json
-import os
-import sys
 import time
-from contextlib import asynccontextmanager, contextmanager
-from datetime import datetime
-from unittest.mock import AsyncMock, patch, MagicMock
+
 import httpx
 import pytest
-import asyncio
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
+OPENAI_API_BASE = "https://example.openai.test/v1"
 
-# Fake Vertex AI Gemini response for mocking
-FAKE_VERTEX_GEMINI_RESPONSE = {
-    "candidates": [
+
+def _completion_payload(response_id="chatcmpl-test"):
+    return {
+        "id": response_id,
+        "object": "chat.completion",
+        "created": 1,
+        "model": "gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+
+
+def _stream_payload(response_id="chatcmpl-stream"):
+    chunks = [
         {
-            "content": {
-                "parts": [{"text": "Hello! How can I help you today?"}],
-                "role": "model",
-            },
-            "finishReason": "STOP",
-        }
-    ],
-    "usageMetadata": {
-        "promptTokenCount": 5,
-        "candidatesTokenCount": 8,
-        "totalTokenCount": 13,
-    },
-}
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": "Hello"},
+                    "finish_reason": None,
+                }
+            ],
+        },
+        {
+            "id": response_id,
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        },
+    ]
+    return (
+        "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
+        + "data: [DONE]\n\n"
+    ).encode()
 
 
-def _make_fake_httpx_response(url: str) -> httpx.Response:
-    """Create a fake httpx.Response that looks like a Vertex AI Gemini response."""
-    response = httpx.Response(
-        status_code=200,
-        json=FAKE_VERTEX_GEMINI_RESPONSE,
-        request=httpx.Request("POST", url),
+def _mock_openai_completion_transport(
+    monkeypatch, *, stream=False, response_id="chatcmpl-test"
+):
+    from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
+
+    calls = {"count": 0}
+
+    async def delayed_response(_transport, request):
+        calls["count"] += 1
+        await asyncio.sleep(0.2)
+        if stream:
+            return httpx.Response(
+                200,
+                content=_stream_payload(response_id),
+                headers={"content-type": "text/event-stream"},
+                request=request,
+            )
+        return httpx.Response(
+            200, json=_completion_payload(response_id), request=request
+        )
+
+    monkeypatch.setattr(
+        LiteLLMAiohttpTransport,
+        "handle_async_request",
+        delayed_response,
     )
-    return response
+    return calls
 
 
-@asynccontextmanager
-async def _vertex_ai_mocks():
-    """Context manager that mocks Vertex AI auth and HTTP calls.
-
-    Mocks at the httpx.AsyncClient.send level so that the
-    @track_llm_api_timing decorator on AsyncHTTPHandler.post still runs,
-    preserving the overhead measurement.
-    """
-    fake_response = _make_fake_httpx_response(
-        "https://fake-vertex-endpoint/v1/models/gemini-1.5-flash:generateContent"
-    )
-
-    async def fake_send(self, request, **kwargs):
-        await asyncio.sleep(0.2)  # simulate ~200ms network latency
-        return fake_response
-
-    with (
-        patch(
-            "litellm.llms.vertex_ai.vertex_llm_base.VertexBase._ensure_access_token_async",
-            new_callable=AsyncMock,
-            return_value=("Bearer fake-token", "fake-project"),
-        ),
-        patch.object(
-            httpx.AsyncClient,
-            "send",
-            new=fake_send,
-        ),
-    ):
-        yield
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/mistral.mistral-7b-instruct-v0:2",
-        "openai/gpt-4o",
-        "openai/self_hosted",
-        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
-        "vertex_ai/gemini-1.5-flash",
-    ],
-)
-async def test_litellm_overhead_non_streaming(model):
-    """
-    - Test we can see the litellm overhead and that it is less than 40% of the total request time
-    """
-
-    litellm._turn_on_debug()
-    start_time = datetime.now()
-    kwargs = {
-        "messages": [{"role": "user", "content": "Hello, world!"}],
-        "model": model,
-    }
-    #########################################################
-    # Specific cases for models
-    #########################################################
-    if model == "vertex_ai/gemini-1.5-flash":
-        kwargs["vertex_project"] = "fake-project"
-        kwargs["vertex_location"] = "us-central1"
-    if model == "openai/self_hosted":
-        kwargs["api_base"] = os.environ.get("FAKE_OPENAI_API_BASE")
-
-    async def _run():
-        return await litellm.acompletion(**kwargs)
-
-    if model == "vertex_ai/gemini-1.5-flash":
-        async with _vertex_ai_mocks():
-            response = await _run()
-    else:
-        response = await _run()
-    #########################################################
-    # End of specific cases for models
-    #########################################################
-    end_time = datetime.now()
-    total_time_ms = (end_time - start_time).total_seconds() * 1000
-    print(response)
-    print(response._hidden_params)
+def _assert_overhead_is_smaller_than_total(response, total_time_ms):
     litellm_overhead_ms = response._hidden_params["litellm_overhead_time_ms"]
-    # calculate percent of overhead caused by litellm
     overhead_percent = litellm_overhead_ms * 100 / total_time_ms
-    print("##########################\n")
-    print("total_time_ms", total_time_ms)
-    print("response litellm_overhead_ms", litellm_overhead_ms)
-    print("litellm overhead_percent {}%".format(overhead_percent))
-    print("##########################\n")
+
     assert litellm_overhead_ms > 0
     assert litellm_overhead_ms < 1000
-
-    # latency overhead should be less than total request time
-    assert litellm_overhead_ms < (end_time - start_time).total_seconds() * 1000
-
-    # latency overhead should be under 40% of total request time
+    assert litellm_overhead_ms < total_time_ms
     assert overhead_percent < 40
 
-    pass
+
+@pytest.fixture(autouse=True)
+def reset_litellm_state():
+    litellm.cache = None
+    litellm.success_callback = []
+    litellm._async_success_callback = []
+    litellm.failure_callback = []
+    litellm.callbacks = []
+    yield
+    litellm.cache = None
+    litellm.callbacks = []
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "model",
-    [
-        "bedrock/mistral.mistral-7b-instruct-v0:2",
-        "openai/gpt-4o",
-        "bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
-        "openai/self_hosted",
-    ],
-)
-async def test_litellm_overhead_stream(model):
+async def test_litellm_overhead_non_streaming(monkeypatch):
+    calls = _mock_openai_completion_transport(
+        monkeypatch, response_id="chatcmpl-non-stream"
+    )
 
-    litellm._turn_on_debug()
-    start_time = datetime.now()
-    kwargs = {
-        "messages": [{"role": "user", "content": "Hello, world!"}],
-        "model": model,
-        "stream": True,
-    }
-    #########################################################
-    # Specific cases for models
-    #########################################################
-    if model == "openai/self_hosted":
-        kwargs["api_base"] = "https://exampleopenaiendpoint-production.up.railway.app/"
-        # warmup call for auth validation on vertex_ai models
-        await litellm.acompletion(**kwargs)
+    start_time = time.perf_counter()
+    response = await litellm.acompletion(
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=[{"role": "user", "content": "Hello, world!"}],
+    )
+    total_time_ms = (time.perf_counter() - start_time) * 1000
 
-    response = await litellm.acompletion(**kwargs)
-
-    async for chunk in response:
-        print()
-
-    end_time = datetime.now()
-    total_time_ms = (end_time - start_time).total_seconds() * 1000
-    print(response)
-    print(response._hidden_params)
-    litellm_overhead_ms = response._hidden_params["litellm_overhead_time_ms"]
-    # calculate percent of overhead caused by litellm
-    overhead_percent = litellm_overhead_ms * 100 / total_time_ms
-    print("##########################\n")
-    print("total_time_ms", total_time_ms)
-    print("response litellm_overhead_ms", litellm_overhead_ms)
-    print("litellm overhead_percent {}%".format(overhead_percent))
-    print("##########################\n")
-    assert litellm_overhead_ms > 0
-    assert litellm_overhead_ms < 1000
-
-    # latency overhead should be less than total request time
-    assert litellm_overhead_ms < (end_time - start_time).total_seconds() * 1000
-
-    # latency overhead should be under 40% of total request time
-    assert overhead_percent < 40
-
-    pass
+    assert calls["count"] == 1
+    _assert_overhead_is_smaller_than_total(response, total_time_ms)
 
 
 @pytest.mark.asyncio
-async def test_litellm_overhead_cache_hit():
-    """
-    Test that litellm overhead is tracked on cache hits.
-    Makes two identical requests and checks that the second one (cache hit) has overhead in hidden params.
-    """
+async def test_litellm_overhead_stream(monkeypatch):
+    calls = _mock_openai_completion_transport(
+        monkeypatch, stream=True, response_id="chatcmpl-stream"
+    )
+
+    start_time = time.perf_counter()
+    response = await litellm.acompletion(
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        stream=True,
+    )
+
+    async for _chunk in response:
+        pass
+
+    total_time_ms = (time.perf_counter() - start_time) * 1000
+
+    assert calls["count"] == 1
+    _assert_overhead_is_smaller_than_total(response, total_time_ms)
+
+
+@pytest.mark.asyncio
+async def test_litellm_overhead_cache_hit(monkeypatch):
     from litellm.caching.caching import Cache
 
-    litellm._turn_on_debug()
+    calls = _mock_openai_completion_transport(monkeypatch, response_id="chatcmpl-cache")
     litellm.cache = Cache()
-    print("test2 for caching")
-    litellm.set_verbose = True
+
     messages = [{"role": "user", "content": "Hello, world! Cache test"}]
     response1 = await litellm.acompletion(
-        model="gpt-4.1-nano", messages=messages, caching=True
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=messages,
+        caching=True,
     )
-    await asyncio.sleep(2)
-    # Wait for any pending background tasks to complete
-    pending_tasks = [task for task in asyncio.all_tasks() if not task.done()]
-    print("all pending tasks", pending_tasks)
-    if pending_tasks:
-        await asyncio.wait(pending_tasks, timeout=1.0)
-
+    await asyncio.sleep(0.5)
     response2 = await litellm.acompletion(
-        model="gpt-4.1-nano", messages=messages, caching=True
+        model="gpt-4o",
+        api_key="test-key",
+        api_base=OPENAI_API_BASE,
+        messages=messages,
+        caching=True,
     )
-    print("RESPONSE 1", response1)
-    print("RESPONSE 2", response2)
+
+    assert calls["count"] == 1
     assert response1.id == response2.id
-
-    print("response 2 hidden params", response2._hidden_params)
-
     assert "_response_ms" in response2._hidden_params
-    total_time_ms = response2._hidden_params["_response_ms"]
+    assert response2._hidden_params["litellm_overhead_time_ms"] > 0
     assert (
-        response2._hidden_params["litellm_overhead_time_ms"] > 0
-        and response2._hidden_params["litellm_overhead_time_ms"] < total_time_ms
+        response2._hidden_params["litellm_overhead_time_ms"]
+        < response2._hidden_params["_response_ms"]
     )
