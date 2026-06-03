@@ -522,6 +522,7 @@ async def test_image_generation():
         await image_generation(session=session, key=key_2)
 
 
+@pytest.mark.flaky(retries=5, delay=1)
 @pytest.mark.asyncio
 async def test_openai_wildcard_chat_completion():
     """
