@@ -641,6 +641,7 @@ async def acompletion(  # noqa: PLR0915
         if (
             custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "text-completion-codestral"
+            or custom_llm_provider == "text-completion-inception"
         ) and isinstance(response, TextCompletionResponse):
             response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                 response_object=response,
@@ -1491,7 +1492,9 @@ def completion(  # type: ignore # noqa: PLR0915
             provider.value for provider in LlmProviders
         ]:
             provider_config = ProviderConfigManager.get_provider_chat_config(
-                model=model, provider=LlmProviders(custom_llm_provider)
+                model=model,
+                provider=LlmProviders(custom_llm_provider),
+                base_model=base_model,
             )
 
         if provider_config is not None:
@@ -1550,6 +1553,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
+            "base_model": base_model,
         }
         optional_params = get_optional_params(
             **optional_param_args, **non_default_params
@@ -1670,6 +1674,10 @@ def completion(  # type: ignore # noqa: PLR0915
                 reasoning_summary=_reasoning_summary_for_bridge,
             )
 
+        # Use base_model (the true underlying model) for Azure model-type
+        # detection when the deployment name differs from the model name.
+        _azure_detection_model = base_model or model
+
         if responses_api_model_info.get("mode") == "responses":
             from litellm.completion_extras import responses_api_bridge
 
@@ -1713,7 +1721,9 @@ def completion(  # type: ignore # noqa: PLR0915
             and OpenAIGPT5Config.is_model_gpt_5_model(model)
         ) or (
             custom_llm_provider == "azure"
-            and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model)
+            and litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
+                _azure_detection_model
+            )
         ):
             optional_params, _ = strip_reasoning_summary_aliases_from_optional_params(
                 optional_params
@@ -1766,7 +1776,9 @@ def completion(  # type: ignore # noqa: PLR0915
             if max_retries is not None:
                 optional_params["max_retries"] = max_retries
 
-            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+            if litellm.AzureOpenAIO1Config().is_o_series_model(
+                model=_azure_detection_model
+            ):
                 ## LOAD CONFIG - if set
                 config = litellm.AzureOpenAIO1Config.get_config()
                 for k, v in config.items():
@@ -3792,6 +3804,68 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
+        elif custom_llm_provider == "text-completion-inception":
+            passed_api_base = (
+                api_base
+                or optional_params.pop("api_base", None)
+                or optional_params.pop("base_url", None)
+            )
+            api_base = (
+                passed_api_base
+                or get_secret_str("INCEPTION_API_BASE")
+                or "https://api.inceptionlabs.ai/v1"
+            )
+            # FIM is served at `/v1/fim/completions`; the OpenAI client appends
+            # `/completions`, so point it at the `/v1/fim` base.
+            api_base = api_base.rstrip("/")
+            if not api_base.endswith("/fim"):
+                api_base += "/fim"
+
+            # Don't forward the server-managed Inception key to a caller-supplied
+            # api_base; only resolve it for the default/server base, or when the
+            # caller passes their own key.
+            if passed_api_base is None or api_key:
+                api_key = (
+                    api_key
+                    or litellm.api_key
+                    or litellm.inception_key
+                    or get_secret("INCEPTION_API_KEY")
+                )
+
+            _response = openai_text_completions.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,  # type: ignore[arg-type]
+                custom_llm_provider="text-completion-inception",
+                api_base=api_base,
+                acompletion=acompletion,
+                client=client,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+            )
+
+            if (
+                optional_params.get("stream", False) is False
+                and acompletion is False
+                and text_completion is False
+            ):
+                _response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
+                    response_object=_response, model_response_object=model_response
+                )
+
+            if optional_params.get("stream", False) or acompletion is True:
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=_response,
+                    additional_args={"headers": headers},
+                )
+            response = _response
         elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
             # boto3 reads keys from .env
             # sagemaker_chat: HF Messages API endpoints
@@ -4492,6 +4566,39 @@ def completion(  # type: ignore # noqa: PLR0915
                 client=client,
             )
 
+        elif custom_llm_provider == "langflow":
+            # LangFlow - Visual AI Agent Platform
+            from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+            (
+                api_base,
+                api_key,
+            ) = LangFlowConfig()._get_openai_compatible_provider_info(
+                api_base=api_base or litellm.api_base,
+                api_key=api_key or litellm.api_key,
+            )
+
+            headers = headers or litellm.headers
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
@@ -5115,6 +5222,24 @@ def embedding(  # noqa: PLR0915
                 optional_params=optional_params,
                 client=client,
                 aembedding=aembedding,
+            )
+        elif custom_llm_provider == "oci":
+            if headers is None:
+                headers = {}
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
             )
         elif custom_llm_provider == "cohere" or custom_llm_provider == "cohere_chat":
             cohere_key = (
@@ -5795,22 +5920,6 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params={},
-            )
-        elif custom_llm_provider == "oci":
-            response = base_llm_http_handler.embedding(
-                model=model,
-                input=input,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-                logging_obj=logging,
-                timeout=timeout,
-                model_response=EmbeddingResponse(),
-                optional_params=optional_params,
-                client=client,
-                aembedding=aembedding,
-                litellm_params=litellm_params_dict,
-                headers=headers,
             )
         elif custom_llm_provider in litellm._custom_providers:
             custom_handler: Optional[CustomLLM] = None
@@ -6602,8 +6711,7 @@ def transcription(
         api_key=api_key,
     )  # type: ignore
 
-    if dynamic_api_key is not None:
-        api_key = dynamic_api_key
+    api_key = dynamic_api_key if dynamic_api_key is not None else api_key
 
     optional_params = get_optional_params_transcription(
         model=model,
@@ -6643,7 +6751,7 @@ def transcription(
         provider=LlmProviders(custom_llm_provider),
     )
 
-    if custom_llm_provider == "azure":
+    if custom_llm_provider == "azure" and provider_config is None:
         # azure configs
         api_base = api_base or litellm.api_base or get_secret_str("AZURE_API_BASE")
 
