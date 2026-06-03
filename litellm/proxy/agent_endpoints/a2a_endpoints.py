@@ -458,11 +458,12 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'"
             )
 
-        request_id = body.get("id")
-        method = body.get("method")
+        request_id: Optional[str] = body.get("id")
+        method: Optional[str] = body.get("method")
         params = body.get("params", {})
 
-        method = _PASCAL_TO_WIRE.get(method, method)
+        if method:
+            method = _PASCAL_TO_WIRE.get(method, method)
 
         if params and method in {"message/send", "message/stream"}:
             # extract any litellm params from the params - eg. 'guardrails'
@@ -572,9 +573,10 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         # 1. Admin-configured extra_headers: forward named headers from client request
         if agent.extra_headers:
             for header_name in agent.extra_headers:
-                val = normalized.get(header_name.lower())
+                header_name_str = str(header_name)
+                val = normalized.get(header_name_str.lower())
                 if val is not None:
-                    dynamic_headers[header_name] = val
+                    dynamic_headers[header_name_str] = val
 
         # 2. Convention-based forwarding: x-a2a-{agent_id_or_name}-{header_name}
         #    Matches both agent_id (UUID) and agent_name (alias), case-insensitive.
@@ -621,7 +623,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             from a2a.types import MessageSendParams, SendMessageRequest
 
             a2a_request = SendMessageRequest(
-                id=request_id,
+                id=request_id or "",
                 params=MessageSendParams(**params),
             )
             # Defer spend-log until after post_call_success_hook so guardrail
@@ -661,7 +663,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         elif method == "message/stream":
             return await _handle_stream_message(
                 api_base=agent_url,
-                request_id=request_id,
+                request_id=request_id or "",
                 params=params,
                 litellm_params=litellm_params,
                 agent_id=agent.agent_id,
