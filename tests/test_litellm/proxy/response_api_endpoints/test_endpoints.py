@@ -349,33 +349,36 @@ class TestWSSessionCostTracking:
 
 
 class TestWSModelExtraction:
-    """Test that first-frame model extraction handles both flat and nested formats."""
-
-    def _extract_model(self, first_event: dict):
-        """Mirror the extraction logic from endpoints.py."""
-        nested = first_event.get("response")
-        return (
-            nested.get("model")
-            if isinstance(nested, dict)
-            else None
-        ) or first_event.get("model")
+    """Test _extract_model_from_first_ws_event for flat and nested frame formats."""
 
     def test_flat_format_extracts_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
         event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
-        assert self._extract_model(event) == "gpt-4o"
+        assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
     def test_nested_format_extracts_model(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
         event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
-        assert self._extract_model(event) == "gpt-4o"
+        assert _extract_model_from_first_ws_event(event) == "gpt-4o"
 
     def test_nested_format_takes_precedence_over_flat(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
         event = {
             "type": "response.create",
             "model": "flat-model",
             "response": {"model": "nested-model"},
         }
-        assert self._extract_model(event) == "nested-model"
+        assert _extract_model_from_first_ws_event(event) == "nested-model"
 
     def test_no_model_returns_none(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
         event = {"type": "response.create", "input": "hello"}
-        assert self._extract_model(event) is None
+        assert _extract_model_from_first_ws_event(event) is None

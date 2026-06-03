@@ -935,6 +935,18 @@ async def cancel_response(
         )
 
 
+def _extract_model_from_first_ws_event(first_event: dict) -> Optional[str]:
+    """Extract model from a response.create WS event, handling flat and nested formats.
+
+    Flat:   {"type": "response.create", "model": "gpt-4o", ...}
+    Nested: {"type": "response.create", "response": {"model": "gpt-4o", ...}}
+    """
+    nested = first_event.get("response")
+    return (
+        nested.get("model") if isinstance(nested, dict) else None
+    ) or first_event.get("model")
+
+
 @router.websocket("/v1/responses")
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
@@ -1014,12 +1026,7 @@ async def responses_websocket_endpoint(
             await websocket.close(code=1008, reason="Invalid JSON in first message")
             return
 
-        nested = first_event.get("response")
-        model = (
-            nested.get("model")
-            if isinstance(nested, dict)
-            else None
-        ) or first_event.get("model")
+        model = _extract_model_from_first_ws_event(first_event)
         if not model:
             await websocket.send_text(
                 json.dumps(
