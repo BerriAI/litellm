@@ -804,6 +804,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             "prompt": "A cute baby sea otter",
             "n": 1,
             "size": "1024x1024",
+            "imageConfig": {"aspectRatio": "9:16", "imageSize": "1K"},
         }
 
         response = client_no_auth.post("/v1/images/generations", json=test_data)
@@ -813,6 +814,7 @@ def test_img_gen(mock_aimage_generation, client_no_auth):
             prompt="A cute baby sea otter",
             n=1,
             size="1024x1024",
+            imageConfig={"aspectRatio": "9:16", "imageSize": "1K"},
             metadata=mock.ANY,
             proxy_server_request=mock.ANY,
             secret_fields=mock.ANY,
