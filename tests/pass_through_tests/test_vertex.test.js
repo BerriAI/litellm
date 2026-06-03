@@ -68,7 +68,7 @@ describe('Vertex AI Tests', () => {
         async () => {
             const vertexAI = new VertexAI({
                 project: 'litellm-ci-cd',
-                location: 'us-central1',
+                location: 'global',
                 apiEndpoint: "localhost:4000/vertex-ai"
             });
 
@@ -111,7 +111,7 @@ describe('Vertex AI Tests', () => {
         async () => {
             const vertexAI = new VertexAI({
                 project: 'litellm-ci-cd',
-                location: 'us-central1',
+                location: 'global',
                 apiEndpoint: "localhost:4000/vertex-ai"
             });
             const customHeaders = new Headers({"x-litellm-api-key": "sk-1234"});

@@ -103,7 +103,7 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     vertexai.init(
         project="litellm-ci-cd",
-        location="us-central1",
+        location="global",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
     )
@@ -143,7 +143,7 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
 
     vertexai.init(
         project="litellm-ci-cd",
-        location="us-central1",
+        location="global",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
     )
@@ -182,7 +182,7 @@ async def test_vertex_ai_pass_through_endpoint_context_caching():
 
     vertexai.init(
         project="litellm-ci-cd",
-        location="us-central1",
+        location="global",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
     )
