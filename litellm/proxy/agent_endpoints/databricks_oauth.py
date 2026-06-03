@@ -145,6 +145,10 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
         super()._remove_key(key)
         self._locks.pop(key, None)
 
+    def flush_cache(self) -> None:
+        super().flush_cache()
+        self._locks.clear()
+
     async def async_get_token(self, config: DatabricksAppOAuthConfig) -> str:
         cache_key = config.cache_key
 

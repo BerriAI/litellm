@@ -431,6 +431,27 @@ async def test_lock_pruned_when_token_evicted():
     assert config.cache_key not in cache._locks
 
 
+@pytest.mark.asyncio
+async def test_flush_cache_clears_locks():
+    """flush_cache drops the per-key locks alongside the cached tokens."""
+    cache = DatabricksAppOAuthTokenCache()
+    config = _config()
+    client = _mock_httpx_client("tok")
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        await cache.async_get_token(config)
+
+    assert config.cache_key in cache._locks
+
+    cache.flush_cache()
+
+    assert cache._locks == {}
+    assert cache.get_cache(config.cache_key) is None
+
+
 # ---------------------------------------------------------------------------
 # Public helper
 # ---------------------------------------------------------------------------
