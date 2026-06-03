@@ -1127,7 +1127,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: UserApiKeyCache,
-    route: str,
+    route: Optional[str] = "",
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
@@ -1171,9 +1171,6 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # Check budget limits
-        await _check_end_user_budget(end_user_obj=return_obj, route=route)
-
         return return_obj
 
     # Fetch from database
@@ -1204,14 +1201,9 @@ async def get_end_user_object(
             model_type=LiteLLM_EndUserTable,
         )
 
-        # Check budget limits
-        await _check_end_user_budget(end_user_obj=_response, route=route)
-
         return _response
 
-    except Exception as e:
-        if isinstance(e, litellm.BudgetExceededError):
-            raise e
+    except Exception:
         return None
 
 
@@ -1308,8 +1300,6 @@ async def _end_user_id_exists_in_db(
         )
         if end_user_obj is not None:
             return True
-    except litellm.BudgetExceededError:
-        raise
     except Exception as e:
         verbose_proxy_logger.debug(
             f"end_user validation: get_end_user_object lookup failed: {e}"

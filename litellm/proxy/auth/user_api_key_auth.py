@@ -1762,8 +1762,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 async def _safe_fetch(label: str, awaitable):
     """Run an awaitable and return its result. Re-raises authentication /
     authorization failures (HTTPException, ProxyException,
-    BudgetExceededError — which ``get_end_user_object`` raises for
-    end-user budget violations) so they propagate to the caller.
+    BudgetExceededError) so they propagate to the caller.
     Other exceptions (e.g. transient DB errors fetching context) are
     swallowed with a debug log and ``None`` is returned so
     ``common_checks`` can still run against whatever limits are recorded
