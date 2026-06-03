@@ -20,6 +20,18 @@ from litellm.types.utils import all_litellm_params
 
 router = APIRouter()
 
+_PASCAL_TO_WIRE: Dict[str, str] = {
+    "GetTask": "tasks/get",
+    "ListTasks": "tasks/list",
+    "CancelTask": "tasks/cancel",
+    "SubscribeToTask": "tasks/resubscribe",
+    "CreateTaskPushNotificationConfig": "tasks/pushNotificationConfig/set",
+    "GetTaskPushNotificationConfig": "tasks/pushNotificationConfig/get",
+    "ListTaskPushNotificationConfigs": "tasks/pushNotificationConfig/list",
+    "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
+    "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
+}
+
 
 def _jsonrpc_error(
     request_id: Optional[str],
@@ -76,13 +88,20 @@ async def _forward_jsonrpc(
     headers = {"Content-Type": "application/json", **(extra_headers or {})}
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.post(agent_url, json=body, headers=headers)
-        resp.raise_for_status()
-        return resp.json()
+        try:
+            result = resp.json()
+        except Exception:
+            resp.raise_for_status()
+            raise
+        if not resp.is_success and "error" not in result:
+            resp.raise_for_status()
+        return result
 
 
 async def _forward_jsonrpc_sse(
     agent_url: str,
     body: dict,
+    request_id: Optional[str] = None,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> StreamingResponse:
     headers = {
@@ -92,11 +111,24 @@ async def _forward_jsonrpc_sse(
     }
 
     async def stream_events():
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("POST", agent_url, json=body, headers=headers) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    yield line + "\n"
+        try:
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream("POST", agent_url, json=body, headers=headers) as resp:
+                    if not resp.is_success:
+                        error_body = await resp.aread()
+                        try:
+                            error_json = json.loads(error_body)
+                            if "error" in error_json:
+                                yield f"data: {json.dumps(error_json)}\n\n"
+                                return
+                        except Exception:
+                            pass
+                        yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': resp.status_code, 'message': resp.reason_phrase}})}\n\n"
+                        return
+                    async for line in resp.aiter_lines():
+                        yield line + "\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': -32603, 'message': str(e)}})}\n\n"
 
     return StreamingResponse(stream_events(), media_type="text/event-stream")
 
@@ -370,18 +402,6 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         method = body.get("method")
         params = body.get("params", {})
 
-        # Normalize PascalCase aliases to the canonical slash-style wire format
-        _PASCAL_TO_WIRE = {
-            "GetTask": "tasks/get",
-            "ListTasks": "tasks/list",
-            "CancelTask": "tasks/cancel",
-            "SubscribeToTask": "tasks/resubscribe",
-            "CreateTaskPushNotificationConfig": "tasks/pushNotificationConfig/set",
-            "GetTaskPushNotificationConfig": "tasks/pushNotificationConfig/get",
-            "ListTaskPushNotificationConfigs": "tasks/pushNotificationConfig/list",
-            "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
-            "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
-        }
         method = _PASCAL_TO_WIRE.get(method, method)
 
         if params and method in {"message/send", "message/stream"}:
@@ -637,7 +657,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 )
             forward_body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
             return await _forward_jsonrpc_sse(
-                agent_url, forward_body, extra_headers=agent_extra_headers
+                agent_url, forward_body, request_id=request_id, extra_headers=agent_extra_headers
             )
 
         else:

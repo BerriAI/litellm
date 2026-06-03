@@ -651,3 +651,91 @@ async def test_pascal_method_names_normalize_to_wire_format(pascal_method: str, 
             f"Expected '{expected_wire_method}' forwarded for PascalCase '{pascal_method}', "
             f"but got '{forwarded_body['method']}'"
         )
+
+
+@pytest.mark.asyncio
+async def test_task_method_upstream_jsonrpc_error_on_http_4xx_is_relayed():
+    """When upstream returns HTTP 4xx with a JSON-RPC error body, the error body
+    must be relayed to the client unchanged, not replaced with a generic string."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("tasks/get", {"id": "nonexistent"})
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    upstream_error = {"jsonrpc": "2.0", "id": "req-1", "error": {"code": -32001, "message": "Task not found"}}
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_error
+    mock_http_response.is_success = False
+    mock_http_response.raise_for_status = MagicMock(side_effect=Exception("404 Not Found"))
+
+    mock_http_client = AsyncMock()
+    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+    mock_http_client.__aexit__ = AsyncMock(return_value=False)
+    mock_http_client.post = AsyncMock(return_value=mock_http_response)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["error"]["code"] == -32001
+    assert body["error"]["message"] == "Task not found"
+
+
+@pytest.mark.asyncio
+async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
+    """When upstream returns a non-2xx response for tasks/resubscribe, the SSE
+    stream must yield a JSON-RPC error event instead of silently breaking."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    mock_stream_response = MagicMock()
+    mock_stream_response.is_success = False
+    mock_stream_response.status_code = 404
+    mock_stream_response.reason_phrase = "Not Found"
+    mock_stream_response.aread = AsyncMock(return_value=b'{"jsonrpc":"2.0","error":{"code":-32001,"message":"Task not found"}}')
+    mock_stream_response.__aenter__ = AsyncMock(return_value=mock_stream_response)
+    mock_stream_response.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http_client = AsyncMock()
+    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+    mock_http_client.__aexit__ = AsyncMock(return_value=False)
+    mock_http_client.stream = MagicMock(return_value=mock_stream_response)
+
+    chunks = []
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert response.media_type == "text/event-stream"
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+
+    full = "".join(chunks)
+    assert "error" in full
+    assert "-32001" in full or "Task not found" in full
