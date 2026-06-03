@@ -25,6 +25,7 @@ from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.agents import (
     AgentConfig,
+    AgentKeySummary,
     AgentMakePublicResponse,
     AgentResponse,
     MakeAgentsPublicRequest,
@@ -66,6 +67,30 @@ def _build_merged_agent_card(
 
 
 router = APIRouter()
+
+
+async def _attach_keys_to_agents(agents: List[AgentResponse], prisma_client) -> None:
+    """Attach each agent's virtual keys, derived from the key table's agent_id
+    foreign key. Mirrors how spend is joined into the agent response so the UI
+    never has to cross-reference a full key dump client-side. Only non-secret
+    fields are exposed (alias, masked key_name, hashed token)."""
+    agent_ids = [agent.agent_id for agent in agents]
+    if not agent_ids:
+        return
+    key_rows = await prisma_client.db.litellm_verificationtoken.find_many(
+        where={"agent_id": {"in": agent_ids}},
+    )
+    keys_by_agent: Dict[str, List[AgentKeySummary]] = {}
+    for row in key_rows:
+        keys_by_agent.setdefault(row.agent_id, []).append(
+            AgentKeySummary(
+                token=row.token,
+                key_alias=row.key_alias,
+                key_name=row.key_name,
+            )
+        )
+    for agent in agents:
+        agent.keys = keys_by_agent.get(agent.agent_id)
 
 
 def _redact_sensitive_agent_fields(
@@ -226,6 +251,7 @@ async def get_agents(
                 for agent in returned_agents:
                     if agent.agent_id in spend_map:
                         agent.spend = spend_map[agent.agent_id]
+                await _attach_keys_to_agents(returned_agents, prisma_client)
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
@@ -501,6 +527,8 @@ async def get_agent_by_id(
             raise HTTPException(
                 status_code=404, detail=f"Agent with ID {agent_id} not found"
             )
+
+        await _attach_keys_to_agents([agent], prisma_client)
 
         # Redact sensitive fields for non-admin users
         is_admin = (

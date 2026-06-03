@@ -4987,6 +4987,7 @@ async def list_keys(
     access_group_id: Optional[str] = Query(
         None, description="Filter keys by access group ID"
     ),
+    agent_id: Optional[str] = Query(None, description="Filter keys by agent ID"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
@@ -5095,6 +5096,7 @@ async def list_keys(
             status=status,
             project_id=project_id,
             access_group_id=access_group_id,
+            agent_id=agent_id,
             use_substring_matching=use_substring_matching,
         )
 
@@ -5333,6 +5335,7 @@ def _build_key_filter_conditions(
     include_created_by_keys: bool = False,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
 ) -> Dict[str, Union[str, Dict[str, Any], List[Dict[str, Any]]]]:
     """Build filter conditions for key listing.
@@ -5443,6 +5446,8 @@ def _build_key_filter_conditions(
         where = {"AND": [where, {"project_id": project_id}]}
     if access_group_id:
         where = {"AND": [where, {"access_group_ids": {"hasSome": [access_group_id]}}]}
+    if agent_id and isinstance(agent_id, str):
+        where = {"AND": [where, {"agent_id": agent_id}]}
 
     verbose_proxy_logger.debug(f"Filter conditions: {where}")
     return where
@@ -5472,6 +5477,7 @@ async def _list_key_helper(
     status: Optional[str] = None,
     project_id: Optional[str] = None,
     access_group_id: Optional[str] = None,
+    agent_id: Optional[str] = None,
     use_substring_matching: bool = False,
 ) -> KeyListResponseObject:
     """
@@ -5508,6 +5514,7 @@ async def _list_key_helper(
         include_created_by_keys=include_created_by_keys,
         project_id=project_id,
         access_group_id=access_group_id,
+        agent_id=agent_id,
         use_substring_matching=use_substring_matching,
     )
 

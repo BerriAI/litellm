@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.endpoints import (
+    _attach_keys_to_agents,
     _check_agent_management_permission,
     get_agent_daily_activity,
     router,
@@ -275,6 +276,52 @@ async def test_get_agent_daily_activity_with_agent_names(monkeypatch):
     }
 
 
+@pytest.mark.asyncio
+async def test_attach_keys_to_agents_groups_by_agent_and_omits_secret():
+    """
+    The agents response must carry each agent's attached virtual keys (derived
+    from the key table's agent_id FK), grouped per agent, exposing only
+    non-secret summary fields. Agents with no key get None so the UI renders
+    "Needs Setup" rather than a stale badge.
+    """
+
+    class _Row:
+        def __init__(self, token, agent_id, key_alias, key_name):
+            self.token = token
+            self.agent_id = agent_id
+            self.key_alias = key_alias
+            self.key_name = key_name
+            self.user_id = "secret-owner"  # extra field that must NOT leak
+
+    agent_with_keys = _sample_agent_response(agent_id="agent-1")
+    agent_without_keys = _sample_agent_response(agent_id="agent-2")
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[
+            _Row("hash-aaa", "agent-1", "primary", "sk-...aaa"),
+            _Row("hash-bbb", "agent-1", "backup", "sk-...bbb"),
+        ]
+    )
+
+    await _attach_keys_to_agents([agent_with_keys, agent_without_keys], mock_prisma)
+
+    # Query is scoped to the agents being returned, not the whole key table.
+    where = mock_prisma.db.litellm_verificationtoken.find_many.call_args.kwargs["where"]
+    assert where == {"agent_id": {"in": ["agent-1", "agent-2"]}}
+
+    # agent-1 gets both of its keys; agent-2 gets None.
+    assert agent_without_keys.keys is None
+    assert agent_with_keys.keys is not None
+    assert {k.token for k in agent_with_keys.keys} == {"hash-aaa", "hash-bbb"}
+    assert {k.key_alias for k in agent_with_keys.keys} == {"primary", "backup"}
+
+    # Only summary fields are exposed; the row's user_id must not be carried.
+    summary = agent_with_keys.keys[0]
+    assert not hasattr(summary, "user_id")
+    assert set(summary.model_dump().keys()) == {"token", "key_alias", "key_name"}
+
+
 # ---------- RBAC enforcement tests ----------
 
 
@@ -301,6 +348,9 @@ class TestAgentRBACInternalUser:
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
+            )
+            mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+                return_value=[]
             )
             resp = self.internal_client.get(
                 "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
