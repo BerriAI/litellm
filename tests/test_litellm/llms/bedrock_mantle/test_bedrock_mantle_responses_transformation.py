@@ -136,6 +136,24 @@ class TestBedrockMantleResponsesAuth:
         cfg = BedrockMantleResponsesAPIConfig()
         assert cfg.supports_native_websocket() is False
 
+    def test_file_search_routes_to_emulation(self):
+        # Mantle cannot reach OpenAI's vector stores, so a native file_search
+        # tool forwarded as-is gets a 400. The config must opt out of native
+        # file_search so LiteLLM's emulation handles it instead of forwarding.
+        from litellm.responses.file_search.emulated_handler import (
+            should_use_emulated_file_search,
+        )
+
+        cfg = BedrockMantleResponsesAPIConfig()
+        assert cfg.supports_native_file_search() is False
+        assert (
+            should_use_emulated_file_search(
+                tools=[{"type": "file_search", "vector_store_ids": ["vs_1"]}],
+                provider_config=cfg,
+            )
+            is True
+        )
+
 
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self):
