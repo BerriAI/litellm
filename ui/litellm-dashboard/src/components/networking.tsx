@@ -10119,7 +10119,7 @@ export const listMCPUserCredentials = async (
 export const getMCPUserEnvVars = async (
   accessToken: string,
   serverId: string,
-): Promise<MCPUserEnvVarsStatus | null> => {
+): Promise<MCPUserEnvVarsStatus> => {
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
     : `/v1/mcp/server/${serverId}/user-env-vars`;
@@ -10127,7 +10127,15 @@ export const getMCPUserEnvVars = async (
     method: "GET",
     headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
   });
-  if (!response.ok) return null;
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const detail = (err as { detail?: unknown })?.detail;
+    const message =
+      typeof detail === "string"
+        ? detail
+        : (detail as { error?: string })?.error || "Failed to load env vars";
+    throw new Error(message);
+  }
   return response.json();
 };
 

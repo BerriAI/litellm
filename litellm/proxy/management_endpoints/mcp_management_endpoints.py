@@ -2248,13 +2248,13 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
+        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         server = await get_mcp_server(prisma_client, server_id)
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
-        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         stored = await get_user_env_vars(prisma_client, user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values=stored)
 
@@ -2279,13 +2279,13 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
+        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         server = await get_mcp_server(prisma_client, server_id)
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
-        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         # Filter to only known per-user var names declared by the admin —
         # never persist arbitrary keys the user invents.
         _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
@@ -2316,13 +2316,13 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
+        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         server = await get_mcp_server(prisma_client, server_id)
         if server is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
-        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         await delete_user_env_vars(prisma_client, user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values={})
 

@@ -4141,3 +4141,31 @@ class TestMCPUserEnvVarsAccessControl:
             )
         assert result.server_id == "srv-1"
         access_list_mock.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_admin_gets_403_not_404_for_inaccessible_server(self):
+        """Authorization must run before the existence check so a non-admin
+        cannot distinguish "server does not exist" (404) from "server exists but
+        you lack access" (403) and enumerate server IDs."""
+        get_mcp_server_mock = AsyncMock(return_value=None)
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(mgmt_endpoints, "get_mcp_server", get_mcp_server_mock),
+            patch.object(
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[]),
+            ),
+        ):
+            with pytest.raises(HTTPException) as exc:
+                await mgmt_endpoints.get_mcp_user_env_vars(
+                    server_id="srv-1",
+                    user_api_key_dict=generate_mock_user_api_key_auth(
+                        user_id="alice",
+                        user_role=LitellmUserRoles.INTERNAL_USER,
+                    ),
+                )
+        assert exc.value.status_code == 403
+        get_mcp_server_mock.assert_not_awaited()
