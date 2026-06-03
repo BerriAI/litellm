@@ -3,7 +3,7 @@ name = "litellm"
 version = "1.88.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
-requires-python = ">=3.10, <3.14"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -14,7 +14,6 @@ dependencies = [
     # deps. Reproducibility for our Docker/CI comes from `uv.lock`.
     # When changing a floor, verify it installs + imports on every supported
     # Python with: `uv pip install --resolution=lowest-direct .`
-    "fastuuid>=0.14.0,<1.0",
     "httpx>=0.28.0,<1.0",
     "openai>=2.20.0,<3.0.0",
     "python-dotenv>=1.0.0,<2.0",
