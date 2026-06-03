@@ -935,6 +935,60 @@ async def cancel_response(
         )
 
 
+async def _read_ws_model_from_first_frame(
+    websocket: WebSocket,
+) -> Optional[tuple]:
+    """Read the first WS frame and return (model, raw_message), or None on error.
+
+    Sends an appropriate error frame and closes the socket before returning None.
+    """
+    try:
+        first_message = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+    except asyncio.TimeoutError:
+        await websocket.close(code=1008, reason="Timed out waiting for first message")
+        return None
+    except Exception:
+        await websocket.close(
+            code=1008, reason="Client disconnected before sending first message"
+        )
+        return None
+
+    try:
+        first_event = json.loads(first_message)
+    except json.JSONDecodeError:
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "First message is not valid JSON.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="Invalid JSON in first message")
+        return None
+
+    model = _extract_model_from_first_ws_event(first_event)
+    if not model:
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="No model provided")
+        return None
+
+    return model, first_message
+
+
 def _extract_model_from_first_ws_event(first_event: dict) -> Optional[str]:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
@@ -994,57 +1048,12 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
-    # If model was not supplied via query param, read the first frame and
-    # extract it from the response.create event. This matches OpenAI's
-    # behaviour where the bearer token scopes the connection and the model
-    # is declared inside the first message.
     first_message: Optional[str] = None
     if not model:
-        try:
-            first_message = await asyncio.wait_for(websocket.receive_text(), timeout=30)
-        except asyncio.TimeoutError:
-            await websocket.close(
-                code=1008, reason="Timed out waiting for first message"
-            )
+        result = await _read_ws_model_from_first_frame(websocket)
+        if result is None:
             return
-        except Exception:
-            await websocket.close(
-                code=1008, reason="Client disconnected before sending first message"
-            )
-            return
-
-        try:
-            first_event = json.loads(first_message)
-        except json.JSONDecodeError:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error": {
-                            "type": "invalid_request_error",
-                            "message": "First message is not valid JSON.",
-                        },
-                    }
-                )
-            )
-            await websocket.close(code=1008, reason="Invalid JSON in first message")
-            return
-
-        model = _extract_model_from_first_ws_event(first_event)
-        if not model:
-            await websocket.send_text(
-                json.dumps(
-                    {
-                        "type": "error",
-                        "error": {
-                            "type": "invalid_request_error",
-                            "message": "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
-                        },
-                    }
-                )
-            )
-            await websocket.close(code=1008, reason="No model provided")
-            return
+        model, first_message = result
 
     data: Dict[str, Any] = {
         "model": model,
