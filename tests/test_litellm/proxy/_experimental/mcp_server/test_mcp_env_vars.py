@@ -106,6 +106,17 @@ def test_build_env_var_setup_url_prepends_proxy_base_url(monkeypatch):
     assert "fill_env_vars=abc-123" in url
 
 
+def test_build_env_var_setup_url_encodes_unsafe_server_id(monkeypatch):
+    from urllib.parse import parse_qs, urlsplit
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    server_id = "a&b=c #d/e"
+    url = _u("build_env_var_setup_url")(server_id)
+    assert "a&b=c #d/e" not in url
+    parsed = parse_qs(urlsplit(url).query)
+    assert parsed["fill_env_vars"] == [server_id]
+
+
 def test_missing_user_env_vars_error_message_is_friendly():
     with pytest.raises(_u("MCPMissingUserEnvVarsError")) as exc_info:
         raise _u("MCPMissingUserEnvVarsError")(
