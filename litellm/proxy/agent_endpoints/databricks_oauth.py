@@ -164,9 +164,13 @@ class DatabricksAppOAuthTokenCache(InMemoryCache):
 
             token, ttl = await self._fetch_token(config)
             # ttl == 0 means the token's own lifetime is shorter than the
-            # refresh buffer; skip caching so we never hand out a stale token.
+            # refresh buffer; skip caching so we never hand out a stale token,
+            # and drop the lock we just created since no cached entry will ever
+            # trigger _remove_key to clean it up.
             if ttl > 0:
                 self.set_cache(cache_key, token, ttl=ttl)
+            else:
+                self._locks.pop(cache_key, None)
             return token
 
     async def _fetch_token(self, config: DatabricksAppOAuthConfig) -> Tuple[str, int]:

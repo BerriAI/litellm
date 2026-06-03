@@ -372,7 +372,8 @@ async def test_invalid_expires_in_falls_back_to_default_ttl(expires_in):
 
 @pytest.mark.asyncio
 async def test_short_lived_token_not_cached():
-    """A token whose lifetime is below the refresh buffer is never cached."""
+    """A token whose lifetime is below the refresh buffer is never cached and
+    leaves no per-key lock behind."""
     cache = DatabricksAppOAuthTokenCache()
     config = _config()
     client = _mock_http_handler(access_token="short", expires_in=30)
@@ -385,6 +386,7 @@ async def test_short_lived_token_not_cached():
         await cache.async_get_token(config)
 
     assert cache.get_cache(config.cache_key) is None
+    assert config.cache_key not in cache._locks
     assert client.post.await_count == 2
 
 
