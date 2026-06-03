@@ -496,6 +496,15 @@ if MCP_AVAILABLE:
             if env_var.scope == MCPEnvVarScope.global_:
                 env_var.value = ""
 
+    def _user_is_full_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        """True only for ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` returns False.
+
+        Global env var secrets pre-fill the admin edit form, so a full admin
+        must see them, but a read-only admin gets the same redacted view as
+        any other non-managing caller.
+        """
+        return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
     def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """Best-effort detection for route-restricted virtual keys.
 
@@ -1000,6 +1009,10 @@ if MCP_AVAILABLE:
         if not _user_has_admin_view(user_api_key_dict):
             return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
 
+        if not _user_is_full_admin(user_api_key_dict):
+            for server in redacted_mcp_servers:
+                _redact_global_env_var_values(server)
+
         return redacted_mcp_servers
 
     @router.get(
@@ -1387,6 +1400,8 @@ if MCP_AVAILABLE:
             return _sanitize_mcp_server_for_virtual_key(redacted)
         if not _user_has_admin_view(user_api_key_dict):
             return _sanitize_mcp_server_for_non_admin(redacted)
+        if not _user_is_full_admin(user_api_key_dict):
+            _redact_global_env_var_values(redacted)
         return redacted
 
     @router.post(

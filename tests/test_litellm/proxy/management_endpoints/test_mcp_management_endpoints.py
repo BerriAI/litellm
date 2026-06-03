@@ -3451,6 +3451,112 @@ def test_sanitize_masks_global_env_var_secrets(sanitizer_name):
     assert original_by_name["ADMIN_API_KEY"].value == "super-secret"
 
 
+def _server_with_env_vars(server_id: str = "srv-env"):
+    base = generate_mock_mcp_server_db_record(server_id=server_id)
+    return LiteLLM_MCPServerTable(
+        **{
+            **base.model_dump(),
+            "env_vars": [
+                {"name": "ADMIN_API_KEY", "value": "super-secret", "scope": "global"},
+                {"name": "USER_TOKEN", "value": "placeholder-hint", "scope": "user"},
+            ],
+        }
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role, expected_global_value",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
+    ],
+)
+async def test_fetch_single_mcp_server_redacts_global_env_for_view_only_admin(
+    user_role, expected_global_value
+):
+    """Read-only admins must not receive admin-supplied global env var secrets;
+    full admins still see them so the edit form can pre-fill."""
+    server = _server_with_env_vars()
+
+    health_result = generate_mock_mcp_server_db_record(server_id=server.server_id)
+    health_result.status = "healthy"
+    health_result.last_health_check = datetime.now()
+    health_result.health_check_error = None
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_server",
+            AsyncMock(return_value=server),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+            AsyncMock(return_value=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.health_check_server",
+            AsyncMock(return_value=health_result),
+        ),
+    ):
+        result = await mgmt_endpoints.fetch_mcp_server(
+            request=_make_mock_request(),
+            server_id=server.server_id,
+            user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+        )
+
+    by_name = {ev.name: ev for ev in result.env_vars}
+    assert by_name["ADMIN_API_KEY"].value == expected_global_value
+    # Per-user placeholders are always preserved.
+    assert by_name["USER_TOKEN"].value == "placeholder-hint"
+    # The source record must never be mutated.
+    assert {ev.name: ev.value for ev in server.env_vars}[
+        "ADMIN_API_KEY"
+    ] == "super-secret"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role, expected_global_value",
+    [
+        (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
+        (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
+    ],
+)
+async def test_fetch_all_mcp_servers_redacts_global_env_for_view_only_admin(
+    user_role, expected_global_value
+):
+    server = _server_with_env_vars()
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+            return_value="view_all",
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.get_all_mcp_servers_unfiltered",
+            AsyncMock(return_value=[server]),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            None,
+        ),
+    ):
+        result = await mgmt_endpoints.fetch_all_mcp_servers(
+            user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+        )
+
+    by_name = {ev.name: ev for ev in result[0].env_vars}
+    assert by_name["ADMIN_API_KEY"].value == expected_global_value
+    assert by_name["USER_TOKEN"].value == "placeholder-hint"
+    assert {ev.name: ev.value for ev in server.env_vars}[
+        "ADMIN_API_KEY"
+    ] == "super-secret"
+
+
 def _make_env_var_server(
     *,
     server_id: str = "srv-1",
