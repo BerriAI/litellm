@@ -2,6 +2,7 @@
 """
 Test to verify the Google GenAI transformation logic for generateContent parameters
 """
+
 import os
 import sys
 
@@ -644,3 +645,157 @@ def test_validate_environment_with_extra_headers():
     assert "X-Custom-Header" in result, "Extra headers should be merged"
     assert result["X-Custom-Header"] == "custom-value"
     assert "Content-Type" in result
+
+
+def test_google_maps_tool_uses_response_format():
+    """
+    Test that when googleMaps is in tools and structured output is requested,
+    the config uses responseFormat instead of responseMimeType + responseJsonSchema.
+
+    The Gemini API rejects googleMaps + responseMimeType: 'application/json' with:
+    "Google Maps tool with a response mime type: 'application/json' is unsupported"
+    """
+    config = GoogleGenAIConfig()
+
+    generate_content_config_dict = {
+        "responseMimeType": "application/json",
+        "responseJsonSchema": {
+            "type": "object",
+            "properties": {
+                "places": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "cid": {"type": "number"},
+                            "rating": {"type": "string"},
+                        },
+                        "required": ["title", "rating", "cid"],
+                    },
+                }
+            },
+            "required": ["places"],
+        },
+        "temperature": 1.0,
+    }
+
+    tools = [{"googleMaps": {}}]
+
+    result = config.transform_generate_content_request(
+        model="gemini/gemini-3.1-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "Find restaurants"}]}],
+        tools=tools,
+        generate_content_config_dict=generate_content_config_dict,
+    )
+
+    gen_config = result["generationConfig"]
+
+    assert "responseMimeType" not in gen_config
+    assert "responseJsonSchema" not in gen_config
+    assert "responseFormat" in gen_config
+    assert gen_config["responseFormat"]["text"]["mimeType"] == "APPLICATION_JSON"
+    assert "schema" in gen_config["responseFormat"]["text"]
+    assert gen_config["responseFormat"]["text"]["schema"]["type"] == "object"
+    assert gen_config["temperature"] == 1.0
+
+
+def test_google_maps_tool_with_enable_widget_uses_response_format():
+    """Test responseFormat is used when googleMaps has enableWidget: true."""
+    config = GoogleGenAIConfig()
+
+    generate_content_config_dict = {
+        "responseMimeType": "application/json",
+        "responseJsonSchema": {
+            "type": "object",
+            "properties": {"places": {"type": "array"}},
+        },
+    }
+
+    tools = [{"googleMaps": {"enableWidget": True}}]
+
+    result = config.transform_generate_content_request(
+        model="gemini/gemini-3.1-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "Find restaurants"}]}],
+        tools=tools,
+        generate_content_config_dict=generate_content_config_dict,
+    )
+
+    gen_config = result["generationConfig"]
+    assert "responseMimeType" not in gen_config
+    assert "responseFormat" in gen_config
+    assert gen_config["responseFormat"]["text"]["mimeType"] == "APPLICATION_JSON"
+
+
+def test_no_google_maps_keeps_response_mime_type():
+    """Test that without googleMaps, responseMimeType is preserved unchanged."""
+    config = GoogleGenAIConfig()
+
+    generate_content_config_dict = {
+        "responseMimeType": "application/json",
+        "responseJsonSchema": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        },
+        "temperature": 0.5,
+    }
+
+    tools = [{"googleSearch": {}}]
+
+    result = config.transform_generate_content_request(
+        model="gemini/gemini-3.1-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "Search something"}]}],
+        tools=tools,
+        generate_content_config_dict=generate_content_config_dict,
+    )
+
+    gen_config = result["generationConfig"]
+    assert "responseMimeType" in gen_config
+    assert gen_config["responseMimeType"] == "application/json"
+    assert "responseFormat" not in gen_config
+
+
+def test_google_maps_without_structured_output_unchanged():
+    """Test that googleMaps without response schema doesn't add responseFormat."""
+    config = GoogleGenAIConfig()
+
+    generate_content_config_dict = {
+        "temperature": 1.0,
+    }
+
+    tools = [{"googleMaps": {}}]
+
+    result = config.transform_generate_content_request(
+        model="gemini/gemini-3.1-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "Find restaurants"}]}],
+        tools=tools,
+        generate_content_config_dict=generate_content_config_dict,
+    )
+
+    gen_config = result["generationConfig"]
+    assert "responseFormat" not in gen_config
+    assert "responseMimeType" not in gen_config
+    assert gen_config["temperature"] == 1.0
+
+
+def test_google_maps_with_text_plain_mime_type_unchanged():
+    """Test that googleMaps + text/plain responseMimeType is not converted."""
+    config = GoogleGenAIConfig()
+
+    generate_content_config_dict = {
+        "responseMimeType": "text/plain",
+        "temperature": 1.0,
+    }
+
+    tools = [{"googleMaps": {}}]
+
+    result = config.transform_generate_content_request(
+        model="gemini/gemini-3.1-flash-lite",
+        contents=[{"role": "user", "parts": [{"text": "Find restaurants"}]}],
+        tools=tools,
+        generate_content_config_dict=generate_content_config_dict,
+    )
+
+    gen_config = result["generationConfig"]
+    assert gen_config["responseMimeType"] == "text/plain"
+    assert "responseFormat" not in gen_config

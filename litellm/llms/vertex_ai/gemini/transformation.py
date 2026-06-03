@@ -1109,6 +1109,17 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k] = v
 
 
+def _has_google_maps_tool(tools: Optional[Any]) -> bool:
+    """Check if googleMaps is present in the tools list."""
+    if not tools:
+        return False
+    if isinstance(tools, list):
+        for tool in tools:
+            if isinstance(tool, dict) and "googleMaps" in tool:
+                return True
+    return False
+
+
 def _transform_request_body(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
@@ -1196,6 +1207,23 @@ def _transform_request_body(  # noqa: PLR0915
                     generation_config["mediaResolution"] = media_resolution_value[
                         "level"
                     ]
+
+        # Gemini API rejects googleMaps + responseMimeType: 'application/json'.
+        # Convert to the newer responseFormat structure which supports this combination.
+        if (
+            custom_llm_provider == "gemini"
+            and generation_config is not None
+            and _has_google_maps_tool(tools)
+            and generation_config.get("response_mime_type") == "application/json"
+        ):
+            schema = generation_config.pop("response_json_schema", None)
+            if schema is None:
+                schema = generation_config.pop("response_schema", None)
+            generation_config.pop("response_mime_type", None)
+            response_format_value: dict = {"text": {"mimeType": "APPLICATION_JSON"}}
+            if schema is not None:
+                response_format_value["text"]["schema"] = schema
+            generation_config["responseFormat"] = response_format_value
 
         data = RequestBody(contents=content)
         # Vertex rejects system_instruction/tools/toolConfig alongside cachedContent.

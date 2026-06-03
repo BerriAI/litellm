@@ -95,6 +95,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             "automatic_function_calling",
             "thinking_config",
             "image_config",
+            "response_format",
         ]
 
     def map_generate_content_optional_params(
@@ -353,6 +354,63 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
                 parameters=deepcopy(value), add_property_ordering=True
             )
 
+    @staticmethod
+    def _has_google_maps_tool(tools: Optional[Any]) -> bool:
+        """Check if googleMaps is present in the tools list."""
+        from litellm.llms.vertex_ai.gemini.transformation import _has_google_maps_tool
+
+        return _has_google_maps_tool(tools)
+
+    @staticmethod
+    def _use_response_format_for_google_maps(
+        generate_content_config_dict: Dict,
+    ) -> None:
+        """
+        Convert responseMimeType + responseJsonSchema/responseSchema to the newer
+        responseFormat structure when googleMaps tool is present.
+
+        The Gemini API rejects googleMaps + responseMimeType: 'application/json'
+        with error "Google Maps tool with a response mime type: 'application/json'
+        is unsupported". The newer responseFormat structure works correctly.
+        """
+        mime_key = next(
+            (
+                k
+                for k in ("responseMimeType", "response_mime_type")
+                if k in generate_content_config_dict
+            ),
+            None,
+        )
+        if mime_key is None:
+            return
+
+        mime_value = generate_content_config_dict[mime_key]
+        if mime_value != "application/json":
+            return
+
+        schema_key = next(
+            (
+                k
+                for k in (
+                    "responseJsonSchema",
+                    "response_json_schema",
+                    "responseSchema",
+                    "response_schema",
+                )
+                if k in generate_content_config_dict
+            ),
+            None,
+        )
+
+        schema = generate_content_config_dict.pop(schema_key) if schema_key else None
+        generate_content_config_dict.pop(mime_key)
+
+        response_format: Dict[str, Any] = {"text": {"mimeType": "APPLICATION_JSON"}}
+        if schema is not None:
+            response_format["text"]["schema"] = schema
+
+        generate_content_config_dict["responseFormat"] = response_format
+
     def transform_generate_content_request(
         self,
         model: str,
@@ -367,6 +425,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         )
 
         self._normalize_response_schema(generate_content_config_dict, model)
+
+        if self._has_google_maps_tool(tools):
+            self._use_response_format_for_google_maps(generate_content_config_dict)
 
         typed_generate_content_request = GenerateContentRequestDict(
             model=model,
