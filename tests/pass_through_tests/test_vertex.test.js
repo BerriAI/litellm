@@ -56,6 +56,9 @@ beforeAll(() => {
     loadVertexAiCredentials();
 });
 
+// Configure Jest to retry flaky tests up to 3 times (useful for 429 rate limiting)
+jest.retryTimes(3);
+
 // Non-streaming Vertex generateContent can exceed 5s in CI / under load
 const VERTEX_TEST_TIMEOUT_MS = 30000;
 
@@ -78,7 +81,7 @@ describe('Vertex AI Tests', () => {
             };
 
             const generativeModel = vertexAI.getGenerativeModel(
-                { model: 'gemini-2.5-flash-lite' },
+                { model: 'gemini-3.1-flash-lite' },
                 requestOptions
             );
 
@@ -114,7 +117,7 @@ describe('Vertex AI Tests', () => {
             const customHeaders = new Headers({"x-litellm-api-key": "sk-1234"});
             const requestOptions = {customHeaders: customHeaders};
             const generativeModel = vertexAI.getGenerativeModel(
-                {model: 'gemini-2.5-flash-lite'},
+                {model: 'gemini-3.1-flash-lite'},
                 requestOptions
             );
             const request = {contents: [{role: 'user', parts: [{text: 'What is 2+2?'}]}]};
