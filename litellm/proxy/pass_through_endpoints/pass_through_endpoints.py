@@ -1142,6 +1142,9 @@ async def pass_through_request(  # noqa: PLR0915
         verbose_proxy_logger.debug("response.headers= %s", response.headers)
 
         if _is_streaming_response(response) is True:
+            logging_obj.stream = True
+            logging_obj.model_call_details["stream"] = True
+
             try:
                 response.raise_for_status()
             except httpx.HTTPStatusError as e:

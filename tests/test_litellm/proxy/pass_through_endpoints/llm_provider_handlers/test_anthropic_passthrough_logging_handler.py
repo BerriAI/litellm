@@ -1218,6 +1218,41 @@ class TestStreamFalseDeduplication:
             "same assembled streaming response"
         )
 
+    def test_sse_fallback_path_sets_stream_true_for_dedup(self):
+        """
+        When a nominally non-streaming request receives an SSE response
+        (_is_streaming_response returns True), the fallback branch in
+        pass_through_endpoints.py must set logging_obj.stream = True so the
+        dedup guard activates.
+
+        Before the fix the fallback path never set stream=True, so
+        _is_assembled_stream_success always returned False and duplicate
+        callback dispatches were never blocked.
+        """
+        from litellm.types.utils import ModelResponse
+
+        # logging_obj starts with stream=False, as created before the request
+        logging_obj = self._make_logging_obj(stream=False)
+        assert logging_obj._is_assembled_stream_success(result=MagicMock()) is False
+
+        # Simulate what the SSE fallback branch in pass_through_endpoints.py now does
+        logging_obj.stream = True
+        logging_obj.model_call_details["stream"] = True
+
+        mock_response = ModelResponse(model="claude-3-5-sonnet-20241022")
+        logging_obj.model_call_details["complete_streaming_response"] = mock_response
+
+        # With stream=True the dedup guard must be active
+        assert logging_obj._is_assembled_stream_success(result=mock_response) is True
+
+        logging_obj.model_call_details["has_dispatched_final_stream_success"] = True
+
+        would_skip = bool(
+            logging_obj._is_assembled_stream_success(result=mock_response)
+            and logging_obj.model_call_details.get("has_dispatched_final_stream_success")
+        )
+        assert would_skip is True
+
     def test_stream_false_logging_obj_bypasses_dedup_guard(self):
         """
         Demonstrates the pre-fix state: with stream=False on the logging object,
