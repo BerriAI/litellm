@@ -26,6 +26,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
 from litellm.types.proxy.guardrails.guardrail_hooks.promptguard import (
     PromptGuardConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.sensitive_data_routing import (
+    SensitiveDataRoutingConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
 )
@@ -107,6 +110,7 @@ class SupportedGuardrailIntegrations(Enum):
     QOSTODIAN_NEXUS = "qostodian_nexus"
     RUBRIK = "rubrik"
     VIGIL_GUARD = "vigil_guard"
+    SENSITIVE_DATA_ROUTING = "sensitive_data_routing"
 
 
 class Role(Enum):
@@ -805,6 +809,7 @@ class LitellmParams(
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
     VigilGuardGuardrailConfigModel,
+    SensitiveDataRoutingConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
