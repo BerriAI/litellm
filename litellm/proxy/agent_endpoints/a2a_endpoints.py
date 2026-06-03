@@ -103,6 +103,9 @@ async def _forward_jsonrpc_sse(
     body: dict,
     request_id: Optional[str] = None,
     extra_headers: Optional[Dict[str, str]] = None,
+    proxy_logging_obj: Optional[Any] = None,
+    user_api_key_dict: Optional[Any] = None,
+    request_data: Optional[dict] = None,
 ) -> StreamingResponse:
     headers = {
         "Content-Type": "application/json",
@@ -113,7 +116,9 @@ async def _forward_jsonrpc_sse(
     async def stream_events():
         try:
             async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream("POST", agent_url, json=body, headers=headers) as resp:
+                async with client.stream(
+                    "POST", agent_url, json=body, headers=headers
+                ) as resp:
                     if not resp.is_success:
                         error_body = await resp.aread()
                         try:
@@ -128,6 +133,19 @@ async def _forward_jsonrpc_sse(
                     async for line in resp.aiter_lines():
                         yield line + "\n"
         except Exception as e:
+            if (
+                proxy_logging_obj is not None
+                and user_api_key_dict is not None
+                and request_data is not None
+            ):
+                try:
+                    await proxy_logging_obj.post_call_failure_hook(
+                        user_api_key_dict=user_api_key_dict,
+                        original_exception=e,
+                        request_data=request_data,
+                    )
+                except Exception:
+                    pass
             yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': -32603, 'message': str(e)}})}\n\n"
 
     return StreamingResponse(stream_events(), media_type="text/event-stream")
@@ -625,18 +643,25 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 return _jsonrpc_error(
                     request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
                 )
-            forward_body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            forward_body = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params,
+            }
             result = await _forward_jsonrpc(
                 agent_url, forward_body, extra_headers=agent_extra_headers
             )
             if method == "agent/getAuthenticatedExtendedCard":
                 if isinstance(result.get("result"), dict) and "url" in result["result"]:
-                    result["result"]["url"] = (
-                        f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
-                    )
+                    result["result"][
+                        "url"
+                    ] = f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
             from litellm.types.agents import LiteLLMSendMessageResponse
 
-            response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
+            response = LiteLLMSendMessageResponse.from_dict(
+                result, request_id=request_id
+            )
             response = await proxy_logging_obj.post_call_success_hook(
                 user_api_key_dict=user_api_key_dict,
                 data=data,
@@ -655,9 +680,25 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 return _jsonrpc_error(
                     request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
                 )
-            forward_body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            await proxy_logging_obj.pre_call_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=data,
+                call_type="asend_message",
+            )
+            forward_body = {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "method": method,
+                "params": params,
+            }
             return await _forward_jsonrpc_sse(
-                agent_url, forward_body, request_id=request_id, extra_headers=agent_extra_headers
+                agent_url,
+                forward_body,
+                request_id=request_id,
+                extra_headers=agent_extra_headers,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
             )
 
         else:

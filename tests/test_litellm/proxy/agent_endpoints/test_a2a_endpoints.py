@@ -397,7 +397,12 @@ def _base_patches(agent: MagicMock):
 
 
 async def _add_proxy_data(data, **kwargs):
-    data["proxy_server_request"] = {"url": "http://localhost:4000", "method": "POST", "headers": {}, "body": {}}
+    data["proxy_server_request"] = {
+        "url": "http://localhost:4000",
+        "method": "POST",
+        "headers": {},
+        "body": {},
+    }
     data.setdefault("metadata", {})
     return data
 
@@ -409,7 +414,10 @@ async def _add_proxy_data(data, **kwargs):
         ("tasks/get", {"id": "task-1"}),
         ("tasks/list", {"contextId": "ctx-1"}),
         ("tasks/cancel", {"id": "task-1"}),
-        ("tasks/pushNotificationConfig/set", {"taskId": "task-1", "url": "https://webhook.example.com"}),
+        (
+            "tasks/pushNotificationConfig/set",
+            {"taskId": "task-1", "url": "https://webhook.example.com"},
+        ),
         ("tasks/pushNotificationConfig/get", {"taskId": "task-1", "id": "cfg-1"}),
         ("tasks/pushNotificationConfig/list", {"taskId": "task-1"}),
         ("tasks/pushNotificationConfig/delete", {"taskId": "task-1", "id": "cfg-1"}),
@@ -418,7 +426,11 @@ async def _add_proxy_data(data, **kwargs):
 async def test_task_methods_forward_jsonrpc(method: str, params: dict):
     from litellm.proxy._types import UserAPIKeyAuth
 
-    upstream_response = {"jsonrpc": "2.0", "id": "req-1", "result": {"id": "task-1", "status": {"state": "completed"}}}
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
     agent = _make_agent_mock()
     mock_request = _make_request_mock(method, params)
 
@@ -436,7 +448,12 @@ async def test_task_methods_forward_jsonrpc(method: str, params: dict):
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
-        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
+                return_value=mock_http_client,
+            )
+        )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
@@ -489,7 +506,12 @@ async def test_subscribe_to_task_returns_sse_stream():
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
-        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
+                return_value=mock_http_client,
+            )
+        )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
@@ -507,6 +529,77 @@ async def test_subscribe_to_task_returns_sse_stream():
     full = "".join(chunks)
     assert "working" in full
     assert "completed" in full
+
+
+@pytest.mark.asyncio
+async def test_subscribe_to_task_calls_pre_call_hook():
+    """tasks/resubscribe must run pre_call_hook so guardrails configured on
+    the agent are enforced before streaming begins."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    async def fake_aiter_lines():
+        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}'
+
+    mock_stream_response = MagicMock()
+    mock_stream_response.is_success = True
+    mock_stream_response.aiter_lines = fake_aiter_lines
+    mock_stream_response.__aenter__ = AsyncMock(return_value=mock_stream_response)
+    mock_stream_response.__aexit__ = AsyncMock(return_value=False)
+
+    mock_http_client = AsyncMock()
+    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
+    mock_http_client.__aexit__ = AsyncMock(return_value=False)
+    mock_http_client.stream = MagicMock(return_value=mock_stream_response)
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type: data
+    )
+    mock_proxy_logging.post_call_success_hook = AsyncMock(
+        side_effect=lambda **kw: kw["response"]
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
+                return_value=mock_http_client,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                mock_proxy_logging,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        assert response.media_type == "text/event-stream"
+        async for _ in response.body_iterator:
+            pass
+
+    assert mock_proxy_logging.pre_call_hook.called
+    calls = mock_proxy_logging.pre_call_hook.call_args_list
+    assert any(
+        c.kwargs.get("call_type") == "asend_message"
+        and c.kwargs.get("user_api_key_dict") == user_api_key_dict
+        for c in calls
+    ), "pre_call_hook must be called with call_type='asend_message' for tasks/resubscribe"
 
 
 @pytest.mark.asyncio
@@ -537,7 +630,12 @@ async def test_get_extended_agent_card_rewrites_url():
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
-        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
+                return_value=mock_http_client,
+            )
+        )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
@@ -594,7 +692,9 @@ async def test_unknown_method_returns_jsonrpc_error():
         ("GetExtendedAgentCard", "agent/getAuthenticatedExtendedCard"),
     ],
 )
-async def test_pascal_method_names_normalize_to_wire_format(pascal_method: str, expected_wire_method: str):
+async def test_pascal_method_names_normalize_to_wire_format(
+    pascal_method: str, expected_wire_method: str
+):
     from litellm.proxy._types import UserAPIKeyAuth
 
     agent = _make_agent_mock()
@@ -625,7 +725,12 @@ async def test_pascal_method_names_normalize_to_wire_format(pascal_method: str, 
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
-        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
+                return_value=mock_http_client,
+            )
+        )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
@@ -663,12 +768,18 @@ async def test_task_method_upstream_jsonrpc_error_on_http_4xx_is_relayed():
     mock_request = _make_request_mock("tasks/get", {"id": "nonexistent"})
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
-    upstream_error = {"jsonrpc": "2.0", "id": "req-1", "error": {"code": -32001, "message": "Task not found"}}
+    upstream_error = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "error": {"code": -32001, "message": "Task not found"},
+    }
 
     mock_http_response = MagicMock()
     mock_http_response.json.return_value = upstream_error
     mock_http_response.is_success = False
-    mock_http_response.raise_for_status = MagicMock(side_effect=Exception("404 Not Found"))
+    mock_http_response.raise_for_status = MagicMock(
+        side_effect=Exception("404 Not Found")
+    )
 
     mock_http_client = AsyncMock()
     mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
@@ -678,7 +789,12 @@ async def test_task_method_upstream_jsonrpc_error_on_http_4xx_is_relayed():
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
-        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
+                return_value=mock_http_client,
+            )
+        )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
@@ -708,7 +824,9 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
     mock_stream_response.is_success = False
     mock_stream_response.status_code = 404
     mock_stream_response.reason_phrase = "Not Found"
-    mock_stream_response.aread = AsyncMock(return_value=b'{"jsonrpc":"2.0","error":{"code":-32001,"message":"Task not found"}}')
+    mock_stream_response.aread = AsyncMock(
+        return_value=b'{"jsonrpc":"2.0","error":{"code":-32001,"message":"Task not found"}}'
+    )
     mock_stream_response.__aenter__ = AsyncMock(return_value=mock_stream_response)
     mock_stream_response.__aexit__ = AsyncMock(return_value=False)
 
@@ -721,7 +839,12 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
-        stack.enter_context(patch("litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient", return_value=mock_http_client))
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
+                return_value=mock_http_client,
+            )
+        )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
