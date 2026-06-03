@@ -76,6 +76,7 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
+import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 
 const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
@@ -10114,8 +10115,6 @@ export const listMCPUserCredentials = async (
 // ============================================================
 // MCP per-user env vars (/v1/mcp/server/{id}/user-env-vars)
 // ============================================================
-
-import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 
 export const getMCPUserEnvVars = async (
   accessToken: string,
