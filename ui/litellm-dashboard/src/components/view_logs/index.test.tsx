@@ -1,8 +1,11 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import moment from "moment";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
+import { uiSpendLogsCall } from "../networking";
+import { useLogFilterLogic } from "./log_filter_logic";
 
 const mockHandleFilterResetFromHook = vi.fn();
 vi.mock("./log_filter_logic", async (importOriginal) => {
@@ -117,6 +120,12 @@ describe("SpendLogsTable", () => {
   });
 
   describe("Quick Select time range", () => {
+    // uiSpendLogsCall fires from the real useLogFilterLogic query, so restore it here.
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import("./log_filter_logic")>("./log_filter_logic");
+      vi.mocked(useLogFilterLogic).mockImplementation(actual.useLogFilterLogic);
+    });
+
     const waitForWindowSeconds = async (minMinutes: number) => {
       let diff = -1;
       await waitFor(() => {
