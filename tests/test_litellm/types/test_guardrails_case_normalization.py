@@ -126,3 +126,20 @@ class TestSensitiveDataRoutingValidation:
         )
         assert params.on_sensitive_data == "block"
         assert params.sensitive_data_route_to_model is None
+
+    def test_on_sensitive_data_is_case_normalized(self):
+        params = LitellmParams(
+            guardrail="presidio",
+            mode="pre_call",
+            on_sensitive_data="Route",
+            sensitive_data_route_to_model="on-prem-model",
+        )
+        assert params.on_sensitive_data == "route"
+
+    def test_on_sensitive_data_uppercase_block_normalized(self):
+        params = LitellmParams(
+            guardrail="presidio",
+            mode="pre_call",
+            on_sensitive_data="BLOCK",
+        )
+        assert params.on_sensitive_data == "block"

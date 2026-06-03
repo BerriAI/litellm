@@ -1462,47 +1462,56 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
+            deferred_route_exc: Optional[SensitiveDataRouteException] = None
             for _callback in caps.resolved_callbacks:
                 start_time = time.time()
-                if isinstance(_callback, CustomGuardrail) and data is not None:
-                    # Skip guardrails managed by a pipeline
-                    if (
-                        _callback.guardrail_name
-                        and _callback.guardrail_name in pipeline_managed
-                    ):
-                        continue
+                try:
+                    if isinstance(_callback, CustomGuardrail) and data is not None:
+                        # Skip guardrails managed by a pipeline
+                        if (
+                            _callback.guardrail_name
+                            and _callback.guardrail_name in pipeline_managed
+                        ):
+                            continue
 
-                    result = await self._process_guardrail_callback(
-                        callback=_callback,
-                        data=data,  # type: ignore
-                        user_api_key_dict=user_api_key_dict,
-                        call_type=call_type,
-                        event_type=GuardrailEventHooks.pre_call,
-                    )
-                    if result is None:
-                        continue
-                    data = result
-
-                elif (
-                    _callback is not None
-                    and isinstance(_callback, CustomLogger)
-                    and "async_pre_call_hook" in vars(_callback.__class__)
-                    and _callback.__class__.async_pre_call_hook
-                    != CustomLogger.async_pre_call_hook
-                ):
-                    if call_type == "call_mcp_tool" and user_api_key_dict is None:
-                        continue
-
-                    response = await _callback.async_pre_call_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,  # type: ignore
-                        call_type=call_type,  # type: ignore
-                    )
-                    if response is not None:
-                        data = await self.process_pre_call_hook_response(
-                            response=response, data=data, call_type=call_type
+                        result = await self._process_guardrail_callback(
+                            callback=_callback,
+                            data=data,  # type: ignore
+                            user_api_key_dict=user_api_key_dict,
+                            call_type=call_type,
+                            event_type=GuardrailEventHooks.pre_call,
                         )
+                        if result is None:
+                            continue
+                        data = result
+
+                    elif (
+                        _callback is not None
+                        and isinstance(_callback, CustomLogger)
+                        and "async_pre_call_hook" in vars(_callback.__class__)
+                        and _callback.__class__.async_pre_call_hook
+                        != CustomLogger.async_pre_call_hook
+                    ):
+                        if call_type == "call_mcp_tool" and user_api_key_dict is None:
+                            continue
+
+                        response = await _callback.async_pre_call_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            cache=self.call_details["user_api_key_cache"],
+                            data=data,  # type: ignore
+                            call_type=call_type,  # type: ignore
+                        )
+                        if response is not None:
+                            data = await self.process_pre_call_hook_response(
+                                response=response, data=data, call_type=call_type
+                            )
+                except SensitiveDataRouteException as e:
+                    # Defer the reroute until remaining guardrails have run so later
+                    # security checks are not skipped; the first reroute wins and a
+                    # later guardrail that blocks still propagates.
+                    if deferred_route_exc is None:
+                        deferred_route_exc = e
+                    continue
 
                 end_time = time.time()
                 duration = end_time - start_time
@@ -1517,6 +1526,11 @@ class ProxyLogging:
                         start_time=start_time,
                         end_time=end_time,
                     )
+
+            if deferred_route_exc is not None and data is not None:
+                data = await self._handle_sensitive_data_route_exception(
+                    deferred_route_exc, data, user_api_key_dict
+                )
 
             if data is not None:
                 self._process_guardrail_metadata(data)

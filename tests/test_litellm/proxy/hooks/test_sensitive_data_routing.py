@@ -858,3 +858,111 @@ class TestProxyHandleSensitiveDataRouteException:
 
         assert result["model"] == "on-premise-model"
         mock_warning.assert_called_once()
+
+
+class _RoutingGuardrail(CustomGuardrail):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.handle_sensitive_data_detection(request_data=data)
+
+
+class _RecordingGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.ran = False
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        self.ran = True
+        return None
+
+
+class _BlockingGuardrail(CustomGuardrail):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.ran = False
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        from litellm.exceptions import GuardrailRaisedException
+
+        self.ran = True
+        raise GuardrailRaisedException(
+            message="blocked", guardrail_name=self.guardrail_name
+        )
+
+
+class TestPreCallHookDeferredRouting:
+    """Guardrails after the one that triggers routing must still run."""
+
+    @pytest.fixture
+    def proxy_logging(self):
+        from litellm.proxy.utils import ProxyLogging
+
+        return ProxyLogging(user_api_key_cache=DualCache())
+
+    @pytest.fixture(autouse=True)
+    def restore_callbacks(self):
+        import litellm
+
+        original = litellm.callbacks
+        litellm.callbacks = []
+        yield
+        litellm.callbacks = original
+
+    @pytest.mark.asyncio
+    async def test_later_guardrail_runs_and_routing_applied(self, proxy_logging):
+        import litellm
+
+        router = _RoutingGuardrail(
+            guardrail_name="router",
+            default_on=True,
+            event_hook="pre_call",
+            on_sensitive_data="route",
+            sensitive_data_route_to_model="on-prem-model",
+            sticky_session_routing=False,
+        )
+        recorder = _RecordingGuardrail(
+            guardrail_name="recorder",
+            default_on=True,
+            event_hook="pre_call",
+        )
+        litellm.callbacks = [router, recorder]
+
+        data = {"model": "gpt-4", "metadata": {"session_id": "sess-defer"}}
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="tenant-a"),
+            data=data,
+            call_type="completion",
+        )
+
+        assert recorder.ran is True
+        assert result["model"] == "on-prem-model"
+        assert result["metadata"]["sensitive_data_routing_applied"] is True
+
+    @pytest.mark.asyncio
+    async def test_later_blocking_guardrail_overrides_routing(self, proxy_logging):
+        import litellm
+        from litellm.exceptions import GuardrailRaisedException
+
+        router = _RoutingGuardrail(
+            guardrail_name="router",
+            default_on=True,
+            event_hook="pre_call",
+            on_sensitive_data="route",
+            sensitive_data_route_to_model="on-prem-model",
+            sticky_session_routing=False,
+        )
+        blocker = _BlockingGuardrail(
+            guardrail_name="blocker",
+            default_on=True,
+            event_hook="pre_call",
+        )
+        litellm.callbacks = [router, blocker]
+
+        data = {"model": "gpt-4", "metadata": {"session_id": "sess-block"}}
+        with pytest.raises(GuardrailRaisedException):
+            await proxy_logging.pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="tenant-a"),
+                data=data,
+                call_type="completion",
+            )
+
+        assert blocker.ran is True

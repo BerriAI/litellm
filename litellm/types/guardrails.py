@@ -850,6 +850,7 @@ class LitellmParams(
         "default_action",
         "on_disallowed_action",
         "unreachable_fallback",
+        "on_sensitive_data",
         mode="before",
         check_fields=False,
     )
