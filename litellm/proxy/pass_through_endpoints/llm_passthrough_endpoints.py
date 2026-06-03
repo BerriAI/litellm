@@ -598,6 +598,45 @@ async def is_streaming_request_fn(request: Request) -> bool:
     return False
 
 
+def _resolve_anthropic_api_key_from_router() -> Optional[str]:
+    """Find an Anthropic ``api_key`` from a deployed Anthropic model in
+    ``llm_router.model_list``.
+
+    Returns the first non-empty ``api_key`` found on a deployment whose model
+    string identifies an Anthropic-compatible model (``anthropic/...`` or a
+    bare ``claude...`` model name). ``os.environ/...`` placeholders are
+    resolved via ``get_secret_str``. Returns ``None`` if no key is available.
+
+    Used by ``anthropic_proxy_route`` as a fallback for the UI add-model flow,
+    which stores the api_key on the deployment without setting
+    ``use_in_pass_through=true`` (LIT-3550).
+    """
+    try:
+        from litellm.proxy.proxy_server import llm_router
+    except Exception:
+        return None
+    if llm_router is None:
+        return None
+    try:
+        for deployment in llm_router.model_list or []:
+            litellm_params = deployment.get("litellm_params") or {}
+            model = (litellm_params.get("model") or "").lower()
+            if not (model.startswith("anthropic/") or model.startswith("claude")):
+                continue
+            api_key = litellm_params.get("api_key")
+            if not api_key:
+                continue
+            if isinstance(api_key, str) and api_key.startswith("os.environ/"):
+                resolved = get_secret_str(api_key)
+                if resolved:
+                    return resolved
+                continue
+            return api_key
+    except Exception:
+        return None
+    return None
+
+
 @router.api_route(
     "/anthropic/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
@@ -632,21 +671,44 @@ async def anthropic_proxy_route(
         )
     )
 
-    # Add or update query parameters
+    # Resolve the upstream Anthropic credential. Prefer credentials set
+    # explicitly via set_pass_through_credentials (i.e. a deployment with
+    # use_in_pass_through: true or an entry in pass_through_endpoints); fall
+    # back to any deployed Anthropic model in llm_router whose api_key is
+    # set. The UI add-model flow does NOT set use_in_pass_through, so without
+    # the fallback the client virtual key would be forwarded to Anthropic and
+    # rejected with "Invalid bearer token" (LIT-3550).
     anthropic_api_key = passthrough_endpoint_router.get_credentials(
         custom_llm_provider="anthropic",
         region_name=None,
     )
+    if anthropic_api_key is None:
+        anthropic_api_key = _resolve_anthropic_api_key_from_router()
 
     ## check for streaming
     is_streaming_request = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
     auth_header = AnthropicModelInfo.get_auth_header(anthropic_api_key or None)
+    if auth_header is None:
+        # Refuse with a clean 401 rather than silently forwarding the client
+        # virtual key as the upstream credential (LIT-3550).
+        raise ProxyException(
+            message=(
+                "No Anthropic API key configured for /anthropic passthrough. "
+                "Set ANTHROPIC_API_KEY (or ANTHROPIC_AUTH_TOKEN) in the proxy "
+                "environment, add an Anthropic model with an api_key on the "
+                "proxy, or configure a pass-through credential via the LiteLLM "
+                "UI / config."
+            ),
+            type="auth_error",
+            param="ANTHROPIC_API_KEY",
+            code="401",
+        )
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers=auth_header if auth_header is not None else {},
+        custom_headers=auth_header,
         _forward_headers=True,
         is_streaming_request=is_streaming_request,
     )  # dynamically construct pass-through endpoint based on incoming path

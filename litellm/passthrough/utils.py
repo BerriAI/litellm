@@ -65,11 +65,50 @@ class BasePassthroughUtils:
         Also handles 'x-pass-' prefixed headers which are always forwarded
         with the prefix stripped, regardless of forward_headers setting.
         e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
+
+        Security (LIT-3550): when ``headers`` (operator-controlled, e.g.
+        an upstream provider credential set by the per-provider passthrough
+        route) contains any credential header, ALL inbound credential
+        headers are dropped before merging. Inbound credential headers
+        carry the LiteLLM virtual key, not the upstream provider
+        credential, and must never reach the provider -- otherwise the
+        upstream rejects the request as an invalid token (the underlying
+        LIT-3550 / Anthropic passthrough symptom).
         """
         if forward_headers is True:
             # Header We Should NOT forward
             request_headers.pop("content-length", None)
             request_headers.pop("host", None)
+
+            # HTTP header names are case-insensitive (RFC 9110); compare
+            # in lowercase to avoid duplicate-but-different-case header
+            # pairs in the merged dict.
+            custom_header_names_lower = {h.lower() for h in headers}
+
+            # Treat any credential header set on ``headers`` as the
+            # authoritative upstream auth and drop inbound credential
+            # headers of *any* type so the LiteLLM virtual key cannot
+            # leak upstream.
+            _credential_headers = {
+                "authorization",
+                "api-key",
+                "x-api-key",
+                "x-goog-api-key",
+            }
+            operator_set_credential = bool(
+                custom_header_names_lower & _credential_headers
+            )
+
+            for header_name in list(request_headers.keys()):
+                lname = header_name.lower()
+                if lname in custom_header_names_lower:
+                    # Operator-set header wins; drop the inbound to
+                    # avoid case-mismatched duplicates at the HTTP layer.
+                    request_headers.pop(header_name, None)
+                elif operator_set_credential and lname in _credential_headers:
+                    # Defense in depth: never forward the inbound LiteLLM
+                    # virtual key as an upstream credential.
+                    request_headers.pop(header_name, None)
 
             # Combine request headers with custom headers
             headers = {**request_headers, **headers}
