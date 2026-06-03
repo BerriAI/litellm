@@ -1333,6 +1333,45 @@ async def test_push_notification_config_set_rejects_private_ip():
     assert "blocked address" in exc_info.value.detail.lower()
 
 
+@pytest.mark.asyncio
+async def test_push_notification_config_set_validates_nested_url_when_top_level_present():
+    """A safe top-level params.url must not let a private pushNotificationConfig.url bypass SSRF checks.
+
+    Both URL-bearing fields are forwarded to the agent, so both must be validated independently.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock(
+        "tasks/pushNotificationConfig/set",
+        {
+            "taskId": "task-1",
+            "url": "https://1.1.1.1/hook",
+            "pushNotificationConfig": {"url": "https://192.168.1.100/hook"},
+        },
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        with pytest.raises(HTTPException) as exc_info:
+            await invoke_agent_a2a(
+                agent_id="test-agent",
+                request=mock_request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "blocked address" in exc_info.value.detail.lower()
+
+
 def test_push_notification_config_set_rejects_private_dns_resolution():
     from fastapi import HTTPException
 

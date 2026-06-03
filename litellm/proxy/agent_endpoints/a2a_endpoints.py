@@ -737,13 +737,14 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                         status_code=400,
                         detail="pushNotificationConfig must be an object",
                     )
-                callback_url = params.get("url") or push_config.get("url")
-                if callback_url is not None and not isinstance(callback_url, str):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="Push notification URL must be a string",
-                    )
-                if callback_url:
+                for callback_url in (params.get("url"), push_config.get("url")):
+                    if not callback_url:
+                        continue
+                    if not isinstance(callback_url, str):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Push notification URL must be a string",
+                        )
                     _validate_push_notification_url(callback_url)
             forward_body = {
                 "jsonrpc": "2.0",
