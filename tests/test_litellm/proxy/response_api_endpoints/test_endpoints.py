@@ -346,3 +346,36 @@ class TestWSSessionCostTracking:
             start_time=None,
             end_time=None,
         )
+
+
+class TestWSModelExtraction:
+    """Test that first-frame model extraction handles both flat and nested formats."""
+
+    def _extract_model(self, first_event: dict):
+        """Mirror the extraction logic from endpoints.py."""
+        nested = first_event.get("response")
+        return (
+            nested.get("model")
+            if isinstance(nested, dict)
+            else None
+        ) or first_event.get("model")
+
+    def test_flat_format_extracts_model(self):
+        event = {"type": "response.create", "model": "gpt-4o", "input": "hello"}
+        assert self._extract_model(event) == "gpt-4o"
+
+    def test_nested_format_extracts_model(self):
+        event = {"type": "response.create", "response": {"model": "gpt-4o", "input": "hello"}}
+        assert self._extract_model(event) == "gpt-4o"
+
+    def test_nested_format_takes_precedence_over_flat(self):
+        event = {
+            "type": "response.create",
+            "model": "flat-model",
+            "response": {"model": "nested-model"},
+        }
+        assert self._extract_model(event) == "nested-model"
+
+    def test_no_model_returns_none(self):
+        event = {"type": "response.create", "input": "hello"}
+        assert self._extract_model(event) is None

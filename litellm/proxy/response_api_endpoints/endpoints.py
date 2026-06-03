@@ -1014,7 +1014,12 @@ async def responses_websocket_endpoint(
             await websocket.close(code=1008, reason="Invalid JSON in first message")
             return
 
-        model = first_event.get("model")
+        nested = first_event.get("response")
+        model = (
+            nested.get("model")
+            if isinstance(nested, dict)
+            else None
+        ) or first_event.get("model")
         if not model:
             await websocket.send_text(
                 json.dumps(
