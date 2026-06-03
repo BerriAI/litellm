@@ -1345,7 +1345,13 @@ def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
                 "https://litellm.example.com/ui/mcp/oauth/callback",
             )
         assert exc_info.value.status_code == 400
-        assert exc_info.value.detail == "invalid_request"
+        detail = exc_info.value.detail
+        assert isinstance(detail, dict)
+        assert detail.get("error") == "invalid_request"
+        assert "error_description" in detail
+        assert "redirect_uri origin" in detail["error_description"]
+        assert "proxy origin" in detail["error_description"]
+        assert "hint" in detail
 
     matching = [r for r in caplog.records if "rejecting redirect_uri" in r.getMessage()]
     assert len(matching) == 1, (
@@ -1509,7 +1515,7 @@ async def test_oauth_protected_resource_returns_empty_scopes_when_none():
     mock_request.headers = {}
 
     try:
-        response = _build_oauth_protected_resource_response(
+        response = await _build_oauth_protected_resource_response(
             request=mock_request,
             mcp_server_name="atlassian_mcp",
             use_standard_pattern=False,
@@ -1999,7 +2005,7 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
                 request=mock_request,
                 mcp_server_name=None,
             )
-            resource_response = _build_oauth_protected_resource_response(
+            resource_response = await _build_oauth_protected_resource_response(
                 request=mock_request,
                 mcp_server_name=None,
                 use_standard_pattern=False,
