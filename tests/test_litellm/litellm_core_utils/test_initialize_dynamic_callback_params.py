@@ -100,9 +100,32 @@ def test_non_string_values_are_not_flagged():
     assert params.get("langsmith_sampling_rate") == 0.5
 
 
-def test_turn_off_message_logging_not_extracted_from_request():
-    """turn_off_message_logging is admin-only — must not be settable via request."""
+def test_turn_off_message_logging_extracted_from_top_level_kwargs_true():
+    """turn_off_message_logging=True in top-level kwargs is picked up (admin callback_vars path)."""
     kwargs = {"turn_off_message_logging": True}
+    params = initialize_standard_callback_dynamic_params(kwargs)
+    assert params.get("turn_off_message_logging") is True
+
+
+def test_turn_off_message_logging_extracted_from_top_level_kwargs_false():
+    """turn_off_message_logging=False (as bool or string) is picked up from top-level kwargs.
+
+    This is the key fix: admin-configured callback_vars set turn_off_message_logging at the
+    top level of kwargs (litellm_pre_call_utils.py line 1733) to override global redaction.
+    The proxy already strips any client-supplied falsy value before admin vars are applied.
+    """
+    for value in (False, "False", "false"):
+        params = initialize_standard_callback_dynamic_params({"turn_off_message_logging": value})
+        assert params.get("turn_off_message_logging") is False, f"failed for value={value!r}"
+
+
+def test_turn_off_message_logging_not_extracted_from_metadata():
+    """turn_off_message_logging in request metadata is NOT picked up.
+
+    Clients can populate metadata in their request body, so we must not read
+    turn_off_message_logging from the metadata fallback path.
+    """
+    kwargs = {"metadata": {"turn_off_message_logging": False}}
     params = initialize_standard_callback_dynamic_params(kwargs)
     assert params.get("turn_off_message_logging") is None
 
