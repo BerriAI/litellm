@@ -237,6 +237,24 @@ class AnthropicMessagesHandler(BaseTranslation):
                     texts_to_check.append(text_str)
                     task_mappings.append((msg_idx, int(content_idx)))
 
+                # Anthropic tool_result blocks carry their text under "content"
+                # (string or list of blocks), not "text". Without this, tool
+                # outputs (file reads, API responses) bypass guardrail scanning.
+                if content_item.get("type") == "tool_result":
+                    tool_result_content = content_item.get("content")
+                    if isinstance(tool_result_content, str):
+                        texts_to_check.append(tool_result_content)
+                        task_mappings.append((msg_idx, int(content_idx)))
+                    elif isinstance(tool_result_content, list):
+                        for block in tool_result_content:
+                            if isinstance(block, dict):
+                                block_text = block.get("text")
+                                if block_text is not None:
+                                    texts_to_check.append(block_text)
+                                    task_mappings.append(
+                                        (msg_idx, int(content_idx))
+                                    )
+
                 # Extract images
                 if content_item.get("type") == "image":
                     source = content_item.get("source", {})
