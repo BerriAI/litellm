@@ -409,12 +409,18 @@ class LangfuseOtelLogger(OpenTelemetry):
         Per-key Langfuse credentials are only valid against the host that issued
         them, so the host must travel with the credentials. Returns None when no
         per-key host is set, falling back to the env-configured endpoint.
+
+        Prefers ``langfuse_base_url`` (the Langfuse v3 naming) and falls back to
+        the deprecated ``langfuse_host`` for backward compatibility, mirroring the
+        SDK's own ``base_url`` -> ``host`` resolution order.
         """
-        dynamic_langfuse_host = standard_callback_dynamic_params.get("langfuse_host")
-        if not dynamic_langfuse_host:
+        dynamic_langfuse_base_url = standard_callback_dynamic_params.get(
+            "langfuse_base_url"
+        ) or standard_callback_dynamic_params.get("langfuse_host")
+        if not dynamic_langfuse_base_url:
             return None
         return LangfuseOtelLogger._construct_langfuse_otel_endpoint(
-            dynamic_langfuse_host
+            dynamic_langfuse_base_url
         )
 
     def create_litellm_proxy_request_started_span(

@@ -419,6 +419,31 @@ class TestLangfuseOtelIntegration:
             is None
         )
 
+    def test_construct_dynamic_otel_endpoint_with_base_url(self):
+        """Per-key langfuse_base_url (the Langfuse v3 naming) is honored."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+        endpoint = logger.construct_dynamic_otel_endpoint(
+            StandardCallbackDynamicParams(
+                langfuse_base_url="https://us.cloud.langfuse.com"
+            )
+        )
+        assert endpoint == "https://us.cloud.langfuse.com/api/public/otel"
+
+    def test_construct_dynamic_otel_endpoint_base_url_preferred_over_host(self):
+        """When both are set, langfuse_base_url wins (mirrors the SDK's resolution order)."""
+        from litellm.types.utils import StandardCallbackDynamicParams
+
+        logger = LangfuseOtelLogger()
+        endpoint = logger.construct_dynamic_otel_endpoint(
+            StandardCallbackDynamicParams(
+                langfuse_base_url="https://us.cloud.langfuse.com",
+                langfuse_host="https://cloud.langfuse.com",
+            )
+        )
+        assert endpoint == "https://us.cloud.langfuse.com/api/public/otel"
+
     def test_get_langfuse_otel_config_with_otel_host_priority(self):
         """LANGFUSE_OTEL_HOST should take priority over LANGFUSE_HOST."""
         with patch.dict(
