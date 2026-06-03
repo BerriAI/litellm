@@ -444,7 +444,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               const scope = entry?.scope === "user" ? "user" : "global";
               acc.push({
                 name,
-                value: String(entry?.value ?? ""),
+                value: scope === "user" ? "" : String(entry?.value ?? ""),
                 scope,
                 description: (entry?.description as string | undefined) || undefined,
               });

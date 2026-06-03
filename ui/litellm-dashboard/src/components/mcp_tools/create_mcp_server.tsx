@@ -65,7 +65,7 @@ const normalizeEnvVars = (list: unknown): EnvVarEntry[] => {
     const scope = (entry as Record<string, unknown>).scope === "user" ? "user" : "global";
     out.push({
       name,
-      value: String((entry as Record<string, unknown>).value ?? ""),
+      value: scope === "user" ? "" : String((entry as Record<string, unknown>).value ?? ""),
       scope,
       description: ((entry as Record<string, unknown>).description as string | undefined) || undefined,
     });
