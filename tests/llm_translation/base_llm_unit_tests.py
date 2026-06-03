@@ -31,6 +31,13 @@ from abc import ABC, abstractmethod
 from openai import OpenAI
 
 
+def _skip_live_prompt_caching_test():
+    if os.environ.get("LITELLM_RUN_LIVE_PROMPT_CACHING_TESTS") != "1":
+        pytest.skip("Live prompt-caching E2E tests are opt-in")
+    if os.environ.get("CASSETTE_REDIS_URL"):
+        pytest.skip("Live prompt-caching E2E tests cannot run under VCR replay")
+
+
 def _usage_format_tests(usage: litellm.Usage):
     """
     OpenAI prompt caching
@@ -960,6 +967,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
+        _skip_live_prompt_caching_test()
         print("test_prompt_caching")
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching

@@ -23,9 +23,15 @@ import pytest
 import litellm
 
 
+def _skip_live_prompt_caching_test():
+    if os.environ.get("LITELLM_RUN_LIVE_PROMPT_CACHING_TESTS") != "1":
+        pytest.skip("Live prompt-caching E2E tests are opt-in")
+    if os.environ.get("CASSETTE_REDIS_URL"):
+        pytest.skip("Live prompt-caching E2E tests cannot run under VCR replay")
+
+
 # Large document for caching tests (needs 1024+ tokens for Claude models)
-LARGE_DOCUMENT_FOR_CACHING = (
-    """
+LARGE_DOCUMENT_FOR_CACHING = """
 This is a comprehensive legal agreement between Party A and Party B.
 
 ARTICLE 1: DEFINITIONS
@@ -77,9 +83,7 @@ ARTICLE 9: GENERAL PROVISIONS
 9.5 Waiver of any provision shall not constitute ongoing waiver.
 
 IN WITNESS WHEREOF, the parties have executed this Agreement.
-"""
-    * 8
-)  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+""" * 8  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
 
 
 class BaseAnthropicMessagesPromptCachingTest(ABC):
@@ -130,6 +134,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         This validates that the cache_control field is being passed through
         correctly and the provider is creating a cache.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
@@ -167,6 +172,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
 
         This validates that caching is working end-to-end.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
@@ -207,6 +213,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         """
         E2E test: Prompt caching with system message should work.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
 
         messages = [
@@ -268,6 +275,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         This validates that cache_creation_input_tokens and cache_read_input_tokens
         are correctly returned in the streaming response's message_delta event.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
@@ -365,6 +373,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         """
         E2E test: Second streaming call should return cache_read_input_tokens > 0.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
@@ -443,6 +452,7 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
         didn't include cache fields in message_start, causing clients to think caching
         wasn't supported.
         """
+        _skip_live_prompt_caching_test()
         litellm._turn_on_debug()
 
         messages = self.get_messages_with_cache_control()
