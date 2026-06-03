@@ -8643,6 +8643,12 @@ class ProviderConfigManager:
             )
 
             return DeepSeekAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DASHSCOPE == provider:
+            from litellm.llms.dashscope.messages.transformation import (
+                DashScopeAnthropicMessagesConfig,
+            )
+
+            return DashScopeAnthropicMessagesConfig()
         return None
 
     @staticmethod
