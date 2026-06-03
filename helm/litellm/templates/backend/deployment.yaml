@@ -19,7 +19,8 @@ spec:
       labels:
         {{- include "litellm.backend.selectorLabels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "litellm.serviceAccountName" . }}
+      serviceAccountName: {{ include "litellm.backend.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccounts.backend.automount }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}

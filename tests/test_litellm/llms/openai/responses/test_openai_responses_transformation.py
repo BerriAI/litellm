@@ -247,6 +247,7 @@ class TestOpenAIResponsesAPIConfig:
 
         assert "Authorization" in result
         assert result["Authorization"] == f"Bearer {api_key}"
+        assert result["Content-Type"] == "application/json"
 
         # Test with empty headers
         headers = {}

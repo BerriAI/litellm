@@ -265,3 +265,112 @@ class TestCanTeamMemberExecuteKeyManagementEndpoint:
             user_api_key_cache=MagicMock(),
             existing_key_row=existing_key_row,
         )
+
+
+class TestEnforceMemberCanAssignAccessGroups:
+    """Opt-in gate controlling whether a non-admin team member may set
+    `access_group_ids` on a key (generate/update/regenerate)."""
+
+    AG_PERMISSION = KeyManagementRoutes.KEY_ACCESS_GROUP_ASSIGNMENT.value
+
+    def _user(self, role="internal_user", user_id="user-a"):
+        u = MagicMock()
+        u.user_role = role
+        u.user_id = user_id
+        return u
+
+    def _team(self, team_member_permissions, team_id="team-a"):
+        team = MagicMock()
+        team.team_id = team_id
+        team.team_member_permissions = team_member_permissions
+        return team
+
+    def test_no_access_group_ids_is_noop(self, monkeypatch):
+        """When no access groups are requested the gate never raises, even
+        for a gated member with no opt-in permission."""
+        from litellm.proxy.management_endpoints import key_management_endpoints
+
+        monkeypatch.setattr(
+            key_management_endpoints,
+            "_get_user_in_team",
+            lambda **kwargs: Member(role="user", user_id="user-a"),
+        )
+
+        # Both None and empty list are no-ops.
+        for access_group_ids in (None, []):
+            TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+                user_api_key_dict=self._user(),
+                team_table=self._team([]),
+                access_group_ids=access_group_ids,
+            )
+
+    def test_proxy_admin_bypasses(self, monkeypatch):
+        """Proxy admins may assign access groups regardless of team opt-in."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(role=LitellmUserRoles.PROXY_ADMIN.value),
+            team_table=self._team([]),
+            access_group_ids=["ag-1"],
+        )
+
+    def test_personal_key_out_of_scope(self):
+        """Personal (non-team) keys are not gated by team-member permissions."""
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(),
+            team_table=None,
+            access_group_ids=["ag-1"],
+        )
+
+    def test_team_admin_bypasses(self, monkeypatch):
+        """Team admins may assign access groups even without the opt-in perm."""
+        from litellm.proxy.management_endpoints import key_management_endpoints
+
+        monkeypatch.setattr(
+            key_management_endpoints,
+            "_get_user_in_team",
+            lambda **kwargs: Member(role="admin", user_id="user-a"),
+        )
+
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(),
+            team_table=self._team([]),
+            access_group_ids=["ag-1"],
+        )
+
+    def test_member_denied_without_opt_in(self, monkeypatch):
+        """A non-admin member without the opt-in permission gets a 403."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints import key_management_endpoints
+
+        monkeypatch.setattr(
+            key_management_endpoints,
+            "_get_user_in_team",
+            lambda **kwargs: Member(role="user", user_id="user-a"),
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+                user_api_key_dict=self._user(),
+                team_table=self._team(["/key/generate", "/key/update"]),
+                access_group_ids=["ag-1"],
+            )
+        assert exc.value.status_code == 403
+        assert self.AG_PERMISSION in str(exc.value.detail)
+
+    def test_member_allowed_with_opt_in(self, monkeypatch):
+        """A non-admin member is allowed once the team opts in via the perm."""
+        from litellm.proxy.management_endpoints import key_management_endpoints
+
+        monkeypatch.setattr(
+            key_management_endpoints,
+            "_get_user_in_team",
+            lambda **kwargs: Member(role="user", user_id="user-a"),
+        )
+
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(),
+            team_table=self._team(["/key/generate", self.AG_PERMISSION]),
+            access_group_ids=["ag-1"],
+        )
