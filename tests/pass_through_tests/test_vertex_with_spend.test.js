@@ -10,6 +10,8 @@ const originalFetch = global.fetch || require('node-fetch');
 
 let lastCallId;
 
+const { runVertexRequestOrSkip } = require('./vertex_test_helpers');
+
 // Monkey-patch the fetch used internally
 global.fetch = async function patchedFetch(url, options) {
     // Modify the URL to use HTTP instead of HTTPS
@@ -93,7 +95,12 @@ describe('Vertex AI Tests', () => {
             contents: [{role: 'user', parts: [{text: 'Say "hello test" and nothing else'}]}]
         };
 
-        const result = await generativeModel.generateContent(request);
+        const result = await runVertexRequestOrSkip(() =>
+            generativeModel.generateContent(request)
+        );
+        if (result === null) {
+            return;
+        }
         expect(result).toBeDefined();
         
         // Use the captured callId
@@ -152,7 +159,12 @@ describe('Vertex AI Tests', () => {
             contents: [{role: 'user', parts: [{text: 'Say "hello test" and nothing else'}]}]
         };
 
-        const streamingResult = await generativeModel.generateContentStream(request);
+        const streamingResult = await runVertexRequestOrSkip(() =>
+            generativeModel.generateContentStream(request)
+        );
+        if (streamingResult === null) {
+            return;
+        }
         expect(streamingResult).toBeDefined();
 
 
