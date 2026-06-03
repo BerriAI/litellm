@@ -52,11 +52,11 @@ class Authenticator:
             GetAccessTokenError: If unable to obtain an access token after retries.
         """
         try:
-            with open(self.access_token_file, "r") as f:
+            with open(self.access_token_file) as f:
                 access_token = f.read().strip()
                 if access_token:
                     return access_token
-        except IOError:
+        except OSError:
             verbose_logger.warning(
                 "No existing access token found or error reading file"
             )
@@ -68,7 +68,7 @@ class Authenticator:
                 try:
                     with open(self.access_token_file, "w") as f:
                         f.write(access_token)
-                except IOError:
+                except OSError:
                     verbose_logger.error("Error saving access token to file")
                 return access_token
             except (GetDeviceCodeError, GetAccessTokenError, RefreshAPIKeyError) as e:
@@ -91,7 +91,7 @@ class Authenticator:
             GetAPIKeyError: If unable to obtain an API key.
         """
         try:
-            with open(self.api_key_file, "r") as f:
+            with open(self.api_key_file) as f:
                 api_key_info = json.load(f)
                 if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
                     return api_key_info.get("token")
@@ -101,7 +101,7 @@ class Authenticator:
                         message="API key expired",
                         status_code=401,
                     )
-        except IOError:
+        except OSError:
             verbose_logger.warning("No API key file found or error opening file")
         except (json.JSONDecodeError, KeyError) as e:
             verbose_logger.warning(f"Error reading API key from file: {str(e)}")
@@ -120,7 +120,7 @@ class Authenticator:
                     message="API key response missing token",
                     status_code=401,
                 )
-        except IOError as e:
+        except OSError as e:
             verbose_logger.error(f"Error saving API key to file: {str(e)}")
             raise GetAPIKeyError(
                 message=f"Failed to save API key: {str(e)}",
@@ -140,12 +140,12 @@ class Authenticator:
             Optional[str]: The GitHub Copilot API endpoint, or None if not found.
         """
         try:
-            with open(self.api_key_file, "r") as f:
+            with open(self.api_key_file) as f:
                 api_key_info = json.load(f)
                 endpoints = api_key_info.get("endpoints", {})
                 api_endpoint = endpoints.get("api")
                 return api_endpoint
-        except (IOError, json.JSONDecodeError, KeyError) as e:
+        except (OSError, json.JSONDecodeError, KeyError) as e:
             verbose_logger.warning(f"Error reading API endpoint from file: {str(e)}")
             return None
 

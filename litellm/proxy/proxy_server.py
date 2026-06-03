@@ -1610,7 +1610,7 @@ try:
                     ):
                         continue
                     try:
-                        with open(file_path, "r", encoding="utf-8") as f:
+                        with open(file_path, encoding="utf-8") as f:
                             content = f.read()
 
                         # Replace the asset prefix with the server root path
@@ -3432,7 +3432,7 @@ class ProxyConfig:
         Load and parse a YAML file
         """
         try:
-            with open(file_path, "r") as file:
+            with open(file_path) as file:
                 return yaml.safe_load(file) or {}
         except Exception as e:
             raise Exception(f"Error loading yaml file {file_path}: {str(e)}")
@@ -3455,7 +3455,7 @@ class ProxyConfig:
         # Load existing config
         ## Yaml
         if os.path.exists(f"{file_path}"):
-            with open(f"{file_path}", "r") as config_file:
+            with open(f"{file_path}") as config_file:
                 config = yaml.safe_load(config_file)
         elif file_path is not None:
             raise Exception(f"Config file not found: {file_path}")
@@ -6254,7 +6254,7 @@ class ProxyConfig:
                 # Count providers in config
                 provider_count = sum(
                     1
-                    for k in new_config.keys()
+                    for k in new_config
                     if k != "provider_aliases" and k != "description"
                 )
                 verbose_proxy_logger.info(
@@ -15311,7 +15311,7 @@ async def reload_anthropic_beta_headers(
         await invalidate_config_param("anthropic_beta_headers_reload_config")
 
         provider_count = sum(
-            1 for k in new_config.keys() if k not in ["provider_aliases", "description"]
+            1 for k in new_config if k not in ["provider_aliases", "description"]
         )
         verbose_proxy_logger.info(
             f"Anthropic beta headers config reloaded successfully in current pod. Providers: {provider_count}"

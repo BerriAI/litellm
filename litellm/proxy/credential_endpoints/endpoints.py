@@ -285,9 +285,7 @@ def update_db_credential(
     # update litellm params
     if encrypted_credential.credential_values:
         # Encrypt any sensitive values
-        encrypted_params = {
-            k: v for k, v in encrypted_credential.credential_values.items()
-        }
+        encrypted_params = dict(encrypted_credential.credential_values.items())
 
         merged_credential.credential_values.update(encrypted_params)
 

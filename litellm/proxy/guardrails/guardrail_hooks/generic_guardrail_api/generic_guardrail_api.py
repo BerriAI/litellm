@@ -268,7 +268,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Dynamically iterate through GenericGuardrailAPIMetadata fields
         # and extract matching fields from the source metadata
         # Fields in metadata are already prefixed with 'user_api_key_'
-        for field_name in GenericGuardrailAPIMetadata.__annotations__.keys():
+        for field_name in GenericGuardrailAPIMetadata.__annotations__:
             value = metadata_dict.get(field_name)
             if value is not None:
                 result_metadata[field_name] = value  # type: ignore[literal-required]

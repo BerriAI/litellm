@@ -355,7 +355,7 @@ async def new_end_user(
         _user_data = data.dict(exclude_none=True)
 
         for k, v in _user_data.items():
-            if k not in BudgetNewRequest.model_fields.keys():
+            if k not in BudgetNewRequest.model_fields:
                 new_end_user_obj[k] = v
 
         ## Handle Object Permission - MCP Servers, Vector Stores etc.
@@ -595,10 +595,10 @@ async def update_end_user(
             # budget_id is for linking to existing budget, not for creating new budget
             if k == "budget_id":
                 update_end_user_table_data[k] = v
-            elif k in LiteLLM_BudgetTable.model_fields.keys():
+            elif k in LiteLLM_BudgetTable.model_fields:
                 budget_table_data[k] = v
 
-            elif k in LiteLLM_EndUserTable.model_fields.keys():
+            elif k in LiteLLM_EndUserTable.model_fields:
                 update_end_user_table_data[k] = v
 
         ## Handle object permission updates (MCP servers, vector stores, etc.)

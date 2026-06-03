@@ -92,9 +92,9 @@ class Authenticator:
 
     def _read_auth_file(self) -> Optional[Dict[str, Any]]:
         try:
-            with open(self.auth_file, "r") as f:
+            with open(self.auth_file) as f:
                 return json.load(f)
-        except IOError:
+        except OSError:
             return None
         except json.JSONDecodeError as exc:
             verbose_logger.warning("Invalid ChatGPT auth file: %s", exc)
@@ -104,7 +104,7 @@ class Authenticator:
         try:
             with open(self.auth_file, "w") as f:
                 json.dump(data, f)
-        except IOError as exc:
+        except OSError as exc:
             verbose_logger.error("Failed to write ChatGPT auth file: %s", exc)
 
     def _is_token_expired(self, auth_data: Dict[str, Any], access_token: str) -> bool:

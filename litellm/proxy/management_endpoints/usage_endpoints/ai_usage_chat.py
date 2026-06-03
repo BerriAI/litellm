@@ -312,7 +312,7 @@ def _accumulate_breakdown(
     for day in results:
         for key, entry in day.get("breakdown", {}).get(dimension, {}).items():
             if key not in totals:
-                totals[key] = {f: 0.0 for f in fields}
+                totals[key] = dict.fromkeys(fields, 0.0)
             m = entry.get("metrics", {})
             for f in fields:
                 totals[key][f] += m.get(f, 0)

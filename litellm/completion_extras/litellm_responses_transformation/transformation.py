@@ -332,7 +332,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["tool_choice"] = (  # type: ignore[assignment]
                     self._normalize_tool_choice_for_responses_api(value)
                 )
-            elif key in ResponsesAPIOptionalRequestParams.__annotations__.keys():
+            elif key in ResponsesAPIOptionalRequestParams.__annotations__:
                 responses_api_request[key] = value  # type: ignore
             elif key == "previous_response_id":
                 responses_api_request["previous_response_id"] = value

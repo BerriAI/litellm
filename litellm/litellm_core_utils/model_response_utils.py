@@ -47,7 +47,7 @@ def is_model_response_stream_empty(model_response: ModelResponseStream) -> bool:
 
     # Check for any non-base fields that are set
     # Access model_fields on the class, not the instance, to avoid Pydantic 2.11+ deprecation warnings
-    for model_response_field in type(model_response).model_fields.keys():
+    for model_response_field in type(model_response).model_fields:
         # Skip base fields that are always set
         if model_response_field in BASE_FIELDS:
             continue

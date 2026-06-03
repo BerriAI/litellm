@@ -52,7 +52,7 @@ class BudgetManager:
             # Check if user dict file exists
             if os.path.isfile("user_cost.json"):
                 # Load the user dict
-                with open("user_cost.json", "r") as json_file:
+                with open("user_cost.json") as json_file:
                     self.user_dict = json.load(json_file)
             else:
                 self.print_verbose("User Dictionary not found!")
