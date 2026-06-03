@@ -1,13 +1,19 @@
+import asyncio
+import contextlib
 import json
 import os
+import socket
 import sys
+import threading
+import time
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-from fastapi import Request, UploadFile
+import uvicorn
+from fastapi import FastAPI, Request, Response, UploadFile
 from starlette.datastructures import Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -3075,3 +3081,113 @@ def test_get_response_headers_strips_server_and_date():
     assert lowered["content-type"] == "application/json"
     assert lowered["x-request-id"] == "req_abc"
     assert lowered["anthropic-ratelimit-requests-remaining"] == "100"
+
+
+def test_get_response_headers_sanitizes_custom_headers():
+    """Regression: the non-streaming passthrough finalizer passes
+    dict(fastapi_response.headers) as custom_headers, and an empty FastAPI
+    Response carries a default content-length: 0. Custom headers must run through
+    the same exclusion list as upstream headers so framework defaults can't
+    override the real body length, while genuine litellm metadata still passes."""
+    upstream_headers = httpx.Headers(
+        {"content-type": "application/json", "content-length": "42"}
+    )
+    custom_headers = {
+        "content-length": "0",
+        "transfer-encoding": "chunked",
+        "x-litellm-call-id": "call-123",
+        "x-litellm-version": "1.2.3",
+    }
+
+    result = HttpPassThroughEndpointHelpers.get_response_headers(
+        upstream_headers, custom_headers=custom_headers
+    )
+
+    lowered = {k.lower(): v for k, v in result.items()}
+    assert "content-length" not in lowered
+    assert "transfer-encoding" not in lowered
+    assert lowered["x-litellm-call-id"] == "call-123"
+    assert lowered["x-litellm-version"] == "1.2.3"
+
+
+@contextlib.contextmanager
+def _serve_app(app: FastAPI):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", 0))
+    host, port = sock.getsockname()
+    server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
+
+    def _run() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(server.serve(sockets=[sock]))
+
+    thread = threading.Thread(target=_run, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 30
+        while not server.started:
+            if not thread.is_alive():
+                raise RuntimeError("passthrough test server failed to start")
+            if time.time() > deadline:
+                raise TimeoutError("passthrough test server did not start in time")
+            time.sleep(0.05)
+        yield f"http://{host}:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
+        sock.close()
+
+
+def test_bedrock_passthrough_nonempty_body_survives_real_http_serialization():
+    """Regression for the v1.85.0 Bedrock passthrough Content-Length bug.
+
+    The non-streaming finalizer merges dict(fastapi_response.headers) into the
+    response, and the placeholder Response carries content-length: 0. If that
+    leaks past get_response_headers it overrides the real upstream length, and
+    uvicorn/h11 aborts any non-empty body with 'Response content longer than
+    Content-Length', so the client sees a 200 with an empty/truncated body. Unit
+    assertions on the response object miss this because it only surfaces once the
+    ASGI server serializes over a socket, so this drives a real server."""
+    upstream_body = json.dumps(
+        {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "hello from bedrock"}],
+                }
+            }
+        }
+    ).encode()
+
+    placeholder = Response()
+    placeholder.headers["x-litellm-call-id"] = "test-call-id"
+
+    app = FastAPI()
+
+    @app.get("/bedrock/passthrough")
+    async def _bedrock_passthrough() -> Response:
+        return Response(
+            content=upstream_body,
+            status_code=200,
+            headers=HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=httpx.Headers(
+                    {
+                        "content-type": "application/json",
+                        "content-length": str(len(upstream_body)),
+                        "x-amzn-requestid": "bedrock-request-id",
+                    }
+                ),
+                custom_headers=dict(placeholder.headers),
+            ),
+        )
+
+    with _serve_app(app) as base_url:
+        response = httpx.get(f"{base_url}/bedrock/passthrough", timeout=10)
+
+    assert response.status_code == 200
+    assert response.content == upstream_body
+    assert int(response.headers["content-length"]) == len(upstream_body)
+    assert response.headers["x-amzn-requestid"] == "bedrock-request-id"
+    assert response.headers["x-litellm-call-id"] == "test-call-id"
