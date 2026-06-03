@@ -3614,7 +3614,7 @@ class TestClearMCPUserEnvVars:
         assert all(not spec.is_set for spec in result.required)
 
     @pytest.mark.asyncio
-    async def test_delete_error_is_swallowed(self):
+    async def test_delete_db_error_propagates(self):
         server = _make_env_var_server(
             env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
@@ -3628,15 +3628,15 @@ class TestClearMCPUserEnvVars:
             patch.object(
                 mgmt_endpoints,
                 "delete_user_env_vars",
-                AsyncMock(side_effect=Exception("already gone")),
+                AsyncMock(side_effect=Exception("db down")),
             ),
         ):
-            # Should not raise even though delete blows up.
-            result = await mgmt_endpoints.clear_mcp_user_env_vars(
-                server_id="srv-1",
-                user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
-            )
-        assert result.missing_count == 2
+            # A real DB failure must surface, not be masked as a successful clear.
+            with pytest.raises(Exception, match="db down"):
+                await mgmt_endpoints.clear_mcp_user_env_vars(
+                    server_id="srv-1",
+                    user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
+                )
 
     @pytest.mark.asyncio
     async def test_missing_user_id_raises_400(self):

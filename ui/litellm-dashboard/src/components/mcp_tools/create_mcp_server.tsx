@@ -434,8 +434,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
-      payload.static_headers = staticHeaders;
-      payload.env_vars = envVars;
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 

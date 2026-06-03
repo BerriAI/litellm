@@ -2172,9 +2172,7 @@ if MCP_AVAILABLE:
         static_headers = getattr(server, "static_headers", None) or {}
         if isinstance(static_headers, str):
             try:
-                import json as _json
-
-                static_headers = _json.loads(static_headers) or {}
+                static_headers = json.loads(static_headers) or {}
             except (ValueError, TypeError):
                 static_headers = {}
         referenced = collect_env_var_references(strings=static_headers.values())
@@ -2304,10 +2302,7 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server {server_id} not found"},
             )
         await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
-        try:
-            await delete_user_env_vars(prisma_client, user_id, server_id)
-        except Exception:
-            pass  # Already deleted / didn't exist
+        await delete_user_env_vars(prisma_client, user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values={})
 
     @router.get(

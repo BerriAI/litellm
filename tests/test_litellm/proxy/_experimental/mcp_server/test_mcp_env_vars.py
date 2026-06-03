@@ -430,7 +430,7 @@ def _mock_env_vars_prisma(row=None):
     prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(return_value=row)
     prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_mcpuserenvvars.upsert = AsyncMock()
-    prisma.db.litellm_mcpuserenvvars.delete = AsyncMock()
+    prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()
     return prisma
 
 
@@ -529,16 +529,16 @@ async def test_get_user_env_vars_bulk_empty_ids_short_circuits():
 
 
 @pytest.mark.asyncio
-async def test_delete_user_env_vars_calls_unique_key():
+async def test_delete_user_env_vars_is_idempotent_delete_many():
+    """Delete must use ``delete_many`` so a missing row is a no-op rather than
+    raising RecordNotFound; real DB errors are left to propagate."""
     from litellm.proxy._experimental.mcp_server.db import delete_user_env_vars
 
     prisma = _mock_env_vars_prisma()
     await delete_user_env_vars(prisma, "alice", "srv-1")
-    prisma.db.litellm_mcpuserenvvars.delete.assert_awaited_once()
-    call = prisma.db.litellm_mcpuserenvvars.delete.call_args
-    assert call.kwargs["where"] == {
-        "user_id_server_id": {"user_id": "alice", "server_id": "srv-1"}
-    }
+    prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
+    call = prisma.db.litellm_mcpuserenvvars.delete_many.call_args
+    assert call.kwargs["where"] == {"user_id": "alice", "server_id": "srv-1"}
 
 
 # ── REST exception handling ───────────────────────────────────────────────

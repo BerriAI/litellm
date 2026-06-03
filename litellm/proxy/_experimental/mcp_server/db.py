@@ -1073,7 +1073,11 @@ async def delete_user_env_vars(
     user_id: str,
     server_id: str,
 ) -> None:
-    """Remove the calling user's env var values for ``server_id``."""
-    await prisma_client.db.litellm_mcpuserenvvars.delete(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+    """Remove the calling user's env var values for ``server_id``.
+
+    Uses ``delete_many`` so a missing row is a no-op; real DB errors still
+    propagate to the caller instead of being silently swallowed.
+    """
+    await prisma_client.db.litellm_mcpuserenvvars.delete_many(
+        where={"user_id": user_id, "server_id": server_id}
     )
