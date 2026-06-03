@@ -30,6 +30,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
+    _check_end_user_budget,
     _delete_cache_key_object,
     _get_user_role,
     _is_model_cost_zero,
@@ -2583,6 +2584,14 @@ async def _run_post_custom_auth_checks(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+        # common_checks() enforces the end-user budget, but the centralized
+        # gate skips it for custom-auth deployments unless
+        # custom_auth_run_common_checks is set. Enforce it here on that path
+        # so an over-budget end user can't keep making requests.
+        if end_user_object is not None and not general_settings.get(
+            "custom_auth_run_common_checks", False
+        ):
+            await _check_end_user_budget(end_user_obj=end_user_object, route=route)
 
     # 2. Check token expiry
     if valid_token.expires is not None:
