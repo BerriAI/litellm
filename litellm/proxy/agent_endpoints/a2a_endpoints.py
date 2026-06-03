@@ -56,6 +56,21 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str
     return headers
 
 
+def _forwarding_headers(
+    user_api_key_dict: UserAPIKeyAuth,
+    request_data: dict,
+    agent_extra_headers: Optional[Dict[str, str]],
+) -> Optional[Dict[str, str]]:
+    dynamic_headers = _caller_identity_headers(user_api_key_dict)
+    trace_id = request_data.get("litellm_trace_id")
+    if trace_id:
+        dynamic_headers["X-LiteLLM-Trace-Id"] = str(trace_id)
+    return merge_agent_headers(
+        dynamic_headers=dynamic_headers or None,
+        static_headers=agent_extra_headers or None,
+    )
+
+
 def _jsonrpc_error(
     request_id: Optional[Any],
     code: int,
@@ -716,9 +731,10 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 "method": method,
                 "params": params,
             }
-            caller_headers = merge_agent_headers(
-                dynamic_headers=_caller_identity_headers(user_api_key_dict) or None,
-                static_headers=agent_extra_headers or None,
+            caller_headers = _forwarding_headers(
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+                agent_extra_headers=agent_extra_headers,
             )
             result = await _forward_jsonrpc(
                 agent_url, forward_body, extra_headers=caller_headers
@@ -757,9 +773,10 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 "method": method,
                 "params": params,
             }
-            sse_caller_headers = merge_agent_headers(
-                dynamic_headers=_caller_identity_headers(user_api_key_dict) or None,
-                static_headers=agent_extra_headers or None,
+            sse_caller_headers = _forwarding_headers(
+                user_api_key_dict=user_api_key_dict,
+                request_data=data,
+                agent_extra_headers=agent_extra_headers,
             )
             return await _forward_jsonrpc_sse(
                 agent_url,

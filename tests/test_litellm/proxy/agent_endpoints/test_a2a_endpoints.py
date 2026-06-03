@@ -1156,6 +1156,81 @@ async def test_task_methods_forward_caller_identity_headers():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["tasks/get", "tasks/resubscribe"])
+async def test_task_methods_forward_trace_header(method: str):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock(method, {"id": "task-1"})
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    async def add_proxy_data_with_trace(data, **kwargs):
+        data = await _add_proxy_data(data, **kwargs)
+        data["litellm_trace_id"] = "trace-123"
+        return data
+
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+
+    async def fake_aiter_lines():
+        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}'
+
+    mock_resp = AsyncMock()
+    mock_resp.is_success = True
+    mock_resp.aiter_lines = fake_aiter_lines
+    mock_resp.aclose = AsyncMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = mock_async_client
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+                new=AsyncMock(side_effect=add_proxy_data_with_trace),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+        if method == "tasks/resubscribe":
+            async for _ in response.body_iterator:
+                pass
+
+    if method == "tasks/resubscribe":
+        forwarded_headers = mock_async_client.build_request.call_args.kwargs["headers"]
+    else:
+        forwarded_headers = mock_handler.post.call_args.kwargs["headers"]
+    assert forwarded_headers.get("X-LiteLLM-Trace-Id") == "trace-123"
+
+
+@pytest.mark.asyncio
 async def test_push_notification_config_set_rejects_http_url():
     """tasks/pushNotificationConfig/set must reject non-HTTPS callback URLs to prevent SSRF."""
     from fastapi import HTTPException
