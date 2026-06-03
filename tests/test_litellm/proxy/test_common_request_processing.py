@@ -2332,14 +2332,11 @@ class TestAsyncStreamingDataGeneratorFastPath:
             yield b"event: a\ndata: {}\n\n"
             raise httpx.ReadTimeout("Request timed out")
 
-        async def _iterator_hook(*args, **kwargs):
-            return _raise_iter()
+        async def mock_hook(response, *args, **kwargs):
+            async for chunk in response:
+                yield chunk
 
-        monkeypatch.setattr(
-            proxy_logging_obj,
-            "async_post_call_streaming_iterator_hook",
-            _iterator_hook,
-        )
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_hook
 
         logging_obj = MagicMock()
         logging_obj.async_failure_handler = AsyncMock()
