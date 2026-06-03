@@ -2120,11 +2120,11 @@ def test_gemini_3_1_flash_lite_pricing():
     ):
         model_info = litellm.model_cost.get(model_name)
         assert model_info is not None, f"Missing model pricing entry: {model_name}"
-        assert model_info["input_cost_per_token"] == 4.5e-07
-        assert model_info["input_cost_per_audio_token"] == 9e-07
-        assert model_info["output_cost_per_token"] == 2.7e-06
-        assert model_info["output_cost_per_reasoning_token"] == 2.7e-06
-        assert model_info["cache_read_input_token_cost"] == 4.5e-08
+        assert model_info["input_cost_per_token"] == 2.5e-07
+        assert model_info["input_cost_per_audio_token"] == 5e-07
+        assert model_info["output_cost_per_token"] == 1.5e-06
+        assert model_info["output_cost_per_reasoning_token"] == 1.5e-06
+        assert model_info["cache_read_input_token_cost"] == 2.5e-08
         assert model_info["max_input_tokens"] == 1048576
 
 

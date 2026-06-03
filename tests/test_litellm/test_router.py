@@ -2376,6 +2376,74 @@ def test_get_deployment_model_info_base_model_flow():
             # Should return None when no model info is found
             assert result is None
 
+    # Test Case 6: custom_model_info present but litellm_model_name_model_info is None
+    # (model has custom pricing in config but is not in built-in model_prices_and_context_window.json)
+    mock_custom_pricing_only = {
+        "input_cost_per_token": 1.74e-06,
+        "output_cost_per_token": 3.48e-06,
+        "cache_read_input_token_cost": 1.45e-08,
+        "mode": "chat",
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"custom-model-id": mock_custom_pricing_only},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            # Model NOT in built-in cost map — raise exception
+            mock_get_model_info.side_effect = Exception("Model not in cost map")
+
+            result = router.get_deployment_model_info(
+                model_id="custom-model-id", model_name="unknown-model"
+            )
+
+            # Should return custom_model_info even when litellm_model_name_model_info is None
+            assert result is not None
+            assert result["input_cost_per_token"] == 1.74e-06
+            assert result["output_cost_per_token"] == 3.48e-06
+            assert result["cache_read_input_token_cost"] == 1.45e-08
+            assert result["mode"] == "chat"
+
+    # Test Case 7: custom_model_info with base_model but litellm_model_name_model_info None
+    mock_custom_with_base = {
+        "base_model": "some-base-model",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+    }
+    mock_base_info = {
+        "key": "some-base-model",
+        "max_tokens": 8192,
+        "mode": "chat",
+        "litellm_provider": "openai",
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"custom-with-base": mock_custom_with_base},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+
+            def get_info_side_effect(model):
+                if model == "some-base-model":
+                    return mock_base_info
+                raise Exception("Model not in cost map")
+
+            mock_get_model_info.side_effect = get_info_side_effect
+
+            result = router.get_deployment_model_info(
+                model_id="custom-with-base", model_name="unknown-model"
+            )
+
+            # Should return custom_model_info merged with base model info
+            assert result is not None
+            assert (
+                result["input_cost_per_token"] == 0.01
+            )  # From custom (overrides base)
+            assert result["max_tokens"] == 8192  # From base model
+            assert result["litellm_provider"] == "openai"  # From base model
+
     print("✓ All base model flow test cases passed!")
 
 

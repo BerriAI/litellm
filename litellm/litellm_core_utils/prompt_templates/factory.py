@@ -1670,15 +1670,15 @@ def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     if gemini_call_id:
         _function_response["id"] = gemini_call_id
 
-    # Create part with function_response, and optionally inline_data for images (Computer Use)
     _part: VertexPartType = {"function_response": _function_response}
 
-    # For Computer Use, if we have images/files, we need separate parts:
-    # - One part with function_response
-    # - One part per inline_data item
-    # Gemini's PartType is a oneof, so we can't have both in the same part
+    # For multimodal function responses, Gemini expects media parts nested
+    # inside functionResponse.parts instead of sibling content parts.
     if inline_data_list:
-        return [_part] + [{"inline_data": d} for d in inline_data_list]
+        _function_response["parts"] = [
+            {"inline_data": inline_data} for inline_data in inline_data_list
+        ]
+        return [_part]
 
     return _part
 
