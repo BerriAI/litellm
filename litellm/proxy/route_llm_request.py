@@ -423,7 +423,11 @@ async def route_request(
 
     await add_shared_session_to_data(data)
 
-    raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
+raise_if_mock_testing_params_disallowed(data, allowed=mock_testing_params_allowed())
+
+    # Propagate route_type so downstream filters (protocol_routing) can inspect
+    # the incoming protocol without changing existing function signatures.
+    data["_route_type"] = route_type
 
     data.pop("enable_tag_filtering", None)
 
