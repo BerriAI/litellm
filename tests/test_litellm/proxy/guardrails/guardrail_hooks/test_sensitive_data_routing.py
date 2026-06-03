@@ -11,6 +11,9 @@ from litellm.proxy.guardrails.guardrail_hooks.sensitive_data_routing import (
     initialize_guardrail,
 )
 from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
+from litellm.types.proxy.guardrails.guardrail_hooks.sensitive_data_routing import (
+    SensitiveDataRoutingConfigModel,
+)
 
 ON_PREM = "on-prem-model"
 USER_KEY = UserAPIKeyAuth()
@@ -83,6 +86,17 @@ async def test_custom_regex_match_reroutes():
 async def test_keyword_match_is_case_insensitive():
     g = _make_guardrail(prebuilt_patterns=None, keywords=["confidential"])
     data = _request("this memo is CONFIDENTIAL")
+    result = await _hook(g, data)
+    assert result is not None and result["model"] == ON_PREM
+
+
+@pytest.mark.asyncio
+async def test_non_dict_messages_are_skipped():
+    g = _make_guardrail()
+    data = {
+        "model": "gpt-4o",
+        "messages": ["not-a-dict", {"role": "user", "content": "ssn 123-45-6789"}],
+    }
     result = await _hook(g, data)
     assert result is not None and result["model"] == ON_PREM
 
@@ -180,6 +194,17 @@ def test_only_supports_pre_call_event_hook():
         _make_guardrail(event_hook=GuardrailEventHooks.post_call)
 
 
+def test_initializer_requires_guardrail_name():
+    params = LitellmParams(
+        guardrail="sensitive_data_routing", mode="pre_call", on_premise_model=ON_PREM
+    )
+    with pytest.raises(ValueError):
+        initialize_guardrail(
+            litellm_params=params,
+            guardrail={"guardrail_name": "", "litellm_params": {}},
+        )
+
+
 def test_initializer_requires_on_premise_model():
     params = LitellmParams(guardrail="sensitive_data_routing", mode="pre_call")
     with pytest.raises(ValueError):
@@ -187,6 +212,12 @@ def test_initializer_requires_on_premise_model():
             litellm_params=params,
             guardrail={"guardrail_name": "sdr", "litellm_params": {}},
         )
+
+
+def test_config_model_is_exposed_for_ui():
+    config_model = SensitiveDataRoutingGuardrail.get_config_model()
+    assert config_model is SensitiveDataRoutingConfigModel
+    assert config_model.ui_friendly_name() == "Sensitive Data Routing"
 
 
 def test_initializer_builds_guardrail_from_config():

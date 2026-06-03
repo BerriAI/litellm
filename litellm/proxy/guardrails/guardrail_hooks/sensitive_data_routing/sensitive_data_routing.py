@@ -49,7 +49,11 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
         super().__init__(
             guardrail_name=guardrail_name or "sensitive_data_routing",
             supported_event_hooks=[GuardrailEventHooks.pre_call],
-            event_hook=event_hook or GuardrailEventHooks.pre_call,
+            event_hook=(
+                GuardrailEventHooks(event_hook)
+                if event_hook is not None
+                else GuardrailEventHooks.pre_call
+            ),
             default_on=default_on,
             **kwargs,
         )
