@@ -604,12 +604,14 @@ def _resolve_anthropic_api_key_from_router() -> Optional[str]:
 
     Returns the first non-empty ``api_key`` found on a deployment whose model
     string identifies an Anthropic-compatible model (``anthropic/...`` or a
-    bare ``claude...`` model name). ``os.environ/...`` placeholders are
-    resolved via ``get_secret_str``. Returns ``None`` if no key is available.
+    bare ``claude...`` model name). Returns ``None`` if no usable key is
+    available.
 
     Used by ``anthropic_proxy_route`` as a fallback for the UI add-model flow,
     which stores the api_key on the deployment without setting
-    ``use_in_pass_through=true`` (LIT-3550).
+    ``use_in_pass_through=true`` (LIT-3550). ``os.environ/...`` placeholders are
+    already resolved by ``Router.set_model_list`` before deployments land in
+    ``model_list`` (router.py:~8227), so this helper only sees concrete secrets.
     """
     try:
         from litellm.proxy.proxy_server import llm_router
@@ -626,10 +628,11 @@ def _resolve_anthropic_api_key_from_router() -> Optional[str]:
             api_key = litellm_params.get("api_key")
             if not api_key:
                 continue
+            # Skip any deployment whose api_key did not resolve (Router stores
+            # the raw "os.environ/..." string back into litellm_params when
+            # get_secret returns None — see router.py:~8230). Returning that
+            # literal would forward a nonsense credential upstream.
             if isinstance(api_key, str) and api_key.startswith("os.environ/"):
-                resolved = get_secret_str(api_key)
-                if resolved:
-                    return resolved
                 continue
             return api_key
     except Exception:

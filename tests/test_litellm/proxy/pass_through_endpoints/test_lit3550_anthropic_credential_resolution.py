@@ -169,7 +169,10 @@ class TestResolveAnthropicApiKeyFromRouter:
         ])
         assert _resolve_anthropic_api_key_from_router() is None
 
-    def test_resolves_os_environ_placeholder(self, monkeypatch):
+    def test_router_pre_resolves_os_environ_placeholder(self, monkeypatch):
+        """Router.set_model_list resolves os.environ/... placeholders before
+        the helper sees them (router.py ~L8227). The helper sees the
+        already-resolved concrete secret."""
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             _resolve_anthropic_api_key_from_router,
         )
@@ -185,20 +188,24 @@ class TestResolveAnthropicApiKeyFromRouter:
         ])
         assert _resolve_anthropic_api_key_from_router() == "sk-ant-from-env"
 
-    def test_skips_anthropic_deployment_with_unresolved_env_placeholder(self, monkeypatch):
-        """If the env placeholder cannot be resolved, that deployment is
-        skipped and the function continues searching (does NOT return the
-        literal ``os.environ/...`` string)."""
+    def test_skips_deployment_with_unresolved_env_placeholder_literal(self, monkeypatch):
+        """Router stores the raw "os.environ/..." literal back into
+        litellm_params when get_secret returns None (router.py ~L8230). The
+        helper must skip such deployments and never return the literal as a
+        credential — that would forward nonsense upstream."""
         from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
             _resolve_anthropic_api_key_from_router,
         )
-        monkeypatch.delenv("MISSING_ANTHROPIC_KEY", raising=False)
-        self._set_router([
+        # Manually craft a model_list entry that already contains the literal
+        # os.environ/... string (i.e. Router could not resolve it). The helper
+        # must skip this and find the next usable key.
+        import litellm.proxy.proxy_server as proxy_server
+        proxy_server.llm_router = type("FakeRouter", (), {"model_list": [
             {
                 "model_name": "claude-a",
                 "litellm_params": {
                     "model": "anthropic/claude-sonnet-4-5",
-                    "api_key": "os.environ/MISSING_ANTHROPIC_KEY",
+                    "api_key": "os.environ/MISSING_ANTHROPIC_KEY",  # literal — unresolved
                 },
             },
             {
@@ -208,7 +215,7 @@ class TestResolveAnthropicApiKeyFromRouter:
                     "api_key": "sk-ant-fallback",
                 },
             },
-        ])
+        ]})()
         assert _resolve_anthropic_api_key_from_router() == "sk-ant-fallback"
 
     def test_matches_bare_claude_model_name(self):

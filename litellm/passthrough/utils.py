@@ -74,6 +74,15 @@ class BasePassthroughUtils:
         credential, and must never reach the provider -- otherwise the
         upstream rejects the request as an invalid token (the underlying
         LIT-3550 / Anthropic passthrough symptom).
+
+        Scope note: this stripping applies to every passthrough provider that
+        routes through this helper (Anthropic, Cohere, Mistral, OpenAI,
+        Vertex AI, etc.) -- not only Anthropic. The set of recognised
+        credential headers is conservative (``authorization`` /
+        ``api-key`` / ``x-api-key`` / ``x-goog-api-key``) and excludes
+        AWS SigV4 session tokens (``x-amz-security-token``), which Bedrock
+        signs as part of the request and does not treat as a standalone
+        bearer credential.
         """
         if forward_headers is True:
             # Header We Should NOT forward
