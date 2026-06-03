@@ -1657,6 +1657,19 @@ class ManagedResponsesWebSocketHandler:
             # cross-connection multi-turn when spend logs are committed)
             call_kwargs["previous_response_id"] = previous_response_id
 
+    def _same_provider(self, model: Optional[str]) -> bool:
+        """Return True if model uses the same LLM provider as self.model."""
+        if model is None or model == self.model:
+            return True
+        try:
+            from litellm import get_llm_provider
+
+            _, event_provider, _, _ = get_llm_provider(model=model)
+            _, conn_provider, _, _ = get_llm_provider(model=self.model)
+            return event_provider == conn_provider
+        except Exception:
+            return model == self.model
+
     def _inject_credentials(
         self, call_kwargs: Dict[str, Any], model: Optional[str] = None
     ) -> None:
@@ -1668,9 +1681,11 @@ class ManagedResponsesWebSocketHandler:
         if self.timeout is not None:
             call_kwargs["timeout"] = self.timeout
         # Only force connection-level custom_llm_provider when the per-event model
-        # hasn't switched providers. If the event overrides to a different model,
-        # let litellm re-resolve the provider from the model string.
-        if self.custom_llm_provider is not None and model == self.model:
+        # uses the same provider as the connection model. If the provider differs
+        # (e.g., connection is vertex_ai but event says openai/gpt-4), let litellm
+        # re-resolve from the model string. Same-provider model variants (e.g.,
+        # vertex_ai/gemini-2.0 -> vertex_ai/gemini-1.5) still inherit the provider.
+        if self.custom_llm_provider is not None and self._same_provider(model):
             call_kwargs["custom_llm_provider"] = self.custom_llm_provider
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
