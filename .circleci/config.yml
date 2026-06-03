@@ -182,7 +182,14 @@ jobs:
       - run:
           name: Run Windows-specific test
           command: |
-            uv run --no-sync python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
+            uv run --no-sync python -m pytest tests/windows_tests/ -v
+      - run:
+          name: Guard against MAX_PATH-busting packaged wheel paths
+          environment:
+            UV_HTTP_TIMEOUT: "300"
+          command: |
+            uv build --wheel --out-dir dist
+            uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
 
   local_testing_part1:
     docker:
@@ -242,8 +249,15 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_part1_coverage.xml
-            mv .coverage local_testing_part1_coverage
+            # When CI reruns only the failed tests, a parallel node can receive
+            # zero tests and pytest never writes coverage. Emit empty placeholders
+            # so persist_to_workspace and the downstream coverage combine stay green.
+            if [ -f coverage.xml ]; then
+              mv coverage.xml local_testing_part1_coverage.xml
+              mv .coverage local_testing_part1_coverage
+            else
+              touch local_testing_part1_coverage.xml local_testing_part1_coverage
+            fi
 
       # Store test results
       - store_test_results:
@@ -307,8 +321,15 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_part2_coverage.xml
-            mv .coverage local_testing_part2_coverage
+            # When CI reruns only the failed tests, a parallel node can receive
+            # zero tests and pytest never writes coverage. Emit empty placeholders
+            # so persist_to_workspace and the downstream coverage combine stay green.
+            if [ -f coverage.xml ]; then
+              mv coverage.xml local_testing_part2_coverage.xml
+              mv .coverage local_testing_part2_coverage
+            else
+              touch local_testing_part2_coverage.xml local_testing_part2_coverage
+            fi
 
       # Store test results
       - store_test_results:
@@ -457,6 +478,11 @@ jobs:
       - run:
           name: Run tests
           command: |
+            # On a "rerun failed tests" build a parallel node can receive no
+            # tests, so the test command never creates test-results. Pre-create it
+            # so store_test_results doesn't fail the node on a missing path.
+            mkdir -p test-results
+
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
 
             echo "$TEST_FILES" | circleci tests run \

@@ -3147,6 +3147,7 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    imageConfig: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[list] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -3183,6 +3184,7 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
+        "imageConfig": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -4537,6 +4539,18 @@ def get_optional_params(  # noqa: PLR0915
         )
     elif custom_llm_provider == "text-completion-codestral":
         optional_params = litellm.CodestralTextCompletionConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+
+    elif custom_llm_provider == "text-completion-inception":
+        optional_params = litellm.InceptionTextCompletionConfig().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
             model=model,
@@ -6083,6 +6097,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "provider_specific_entry", None
                 ),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
+                supports_image_size=_model_info.get("supports_image_size", None),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
@@ -6637,6 +6652,14 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("CODESTRAL_API_KEY")
+        elif (
+            custom_llm_provider == "inception"
+            or custom_llm_provider == "text-completion-inception"
+        ):
+            if "INCEPTION_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("INCEPTION_API_KEY")
         elif custom_llm_provider == "deepseek":
             if "DEEPSEEK_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8291,6 +8314,7 @@ class ProviderConfigManager:
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
+            LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
             LlmProviders.TEXT_COMPLETION_OPENAI: (
                 lambda: litellm.OpenAITextCompletionConfig(),
@@ -8354,6 +8378,10 @@ class ProviderConfigManager:
             LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
             LlmProviders.TEXT_COMPLETION_CODESTRAL: (
                 lambda: litellm.CodestralTextCompletionConfig(),
+                False,
+            ),
+            LlmProviders.TEXT_COMPLETION_INCEPTION: (
+                lambda: litellm.InceptionTextCompletionConfig(),
                 False,
             ),
             LlmProviders.SAMBANOVA: (lambda: litellm.SambanovaConfig(), False),
@@ -8928,6 +8956,8 @@ class ProviderConfigManager:
             return litellm.FireworksAITextCompletionConfig()
         elif LlmProviders.TOGETHER_AI == provider:
             return litellm.TogetherAITextCompletionConfig()
+        elif LlmProviders.TEXT_COMPLETION_INCEPTION == provider:
+            return litellm.InceptionTextCompletionConfig()
         return litellm.OpenAITextCompletionConfig()
 
     @staticmethod
