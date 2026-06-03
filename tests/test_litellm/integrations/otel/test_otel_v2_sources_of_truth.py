@@ -195,15 +195,17 @@ def _mcp_payload(capture=False, **overrides):
         "status": "success",
         "litellm_call_id": "mcp_call_1",
         "response_cost": 0.01,
-        "metadata": {"user_api_key_team_id": "t1"},
-        "hidden_params": {},
-        "mcp_tool_call_metadata": {
-            "name": "get_weather",
-            "arguments": {"city": "Paris"},
-            "result": {"temp_c": 21},
-            "mcp_server_name": "weather-mcp",
-            "mcp_session_id": "sess-abc123",
+        "metadata": {
+            "user_api_key_team_id": "t1",
+            "mcp_tool_call_metadata": {
+                "name": "get_weather",
+                "arguments": {"city": "Paris"},
+                "result": {"temp_c": 21},
+                "mcp_server_name": "weather-mcp",
+                "mcp_session_id": "sess-abc123",
+            },
         },
+        "hidden_params": {},
     }
     payload.update(overrides)
     return payload
