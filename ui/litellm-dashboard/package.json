@@ -7,7 +7,7 @@
     "dev:webpack": "next dev --webpack",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "test": "vitest",
     "test:dot": "vitest --reporter=dot",
     "test:watch": "vitest -w",
@@ -49,6 +49,7 @@
     "uuid": "14.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "9.39.2",
     "@playwright/test": "1.58.1",
     "@tailwindcss/forms": "0.5.11",
     "@testing-library/dom": "10.4.1",
@@ -68,7 +69,7 @@
     "autoprefixer": "10.4.24",
     "dotenv": "17.2.3",
     "eslint": "9.39.2",
-    "eslint-config-next": "15.5.10",
+    "eslint-config-next": "16.2.6",
     "eslint-config-prettier": "10.1.8",
     "eslint-plugin-unused-imports": "4.3.0",
     "jsdom": "27.4.0",
@@ -77,6 +78,7 @@
     "prettier": "3.2.5",
     "tailwindcss": "3.4.19",
     "typescript": "5.9.3",
+    "typescript-eslint": "8.60.1",
     "vite": "7.3.2",
     "vitest": "3.2.4"
   },
