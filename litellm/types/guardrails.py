@@ -797,6 +797,24 @@ class BaseLitellmParams(
         ),
     )
 
+    @field_validator(
+        "mode",
+        "default_action",
+        "on_disallowed_action",
+        "unreachable_fallback",
+        "on_sensitive_data",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def normalize_lowercase(cls, v):
+        """Normalize string and list fields to lowercase for ALL guardrail types."""
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [x.lower() if isinstance(x, str) else x for x in v]
+        return v
+
     @model_validator(mode="after")
     def validate_sensitive_data_routing(self) -> "BaseLitellmParams":
         if self.on_sensitive_data == "route" and not self.sensitive_data_route_to_model:
@@ -844,24 +862,6 @@ class LitellmParams(
     mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
-
-    @field_validator(
-        "mode",
-        "default_action",
-        "on_disallowed_action",
-        "unreachable_fallback",
-        "on_sensitive_data",
-        mode="before",
-        check_fields=False,
-    )
-    @classmethod
-    def normalize_lowercase(cls, v):
-        """Normalize string and list fields to lowercase for ALL guardrail types."""
-        if isinstance(v, str):
-            return v.lower()
-        if isinstance(v, list):
-            return [x.lower() if isinstance(x, str) else x for x in v]
-        return v
 
     @field_validator("timeout", mode="before", check_fields=False)
     @classmethod

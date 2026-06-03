@@ -118,6 +118,17 @@ class TestSensitiveDataRoutingValidation:
         with pytest.raises(ValidationError, match="sensitive_data_route_to_model"):
             BaseLitellmParams(on_sensitive_data="route")
 
+    def test_base_params_normalize_on_sensitive_data_case(self):
+        params = BaseLitellmParams(
+            on_sensitive_data="Route",
+            sensitive_data_route_to_model="on-prem-model",
+        )
+        assert params.on_sensitive_data == "route"
+
+    def test_base_params_capitalized_route_without_target_model_raises(self):
+        with pytest.raises(ValidationError, match="sensitive_data_route_to_model"):
+            BaseLitellmParams(on_sensitive_data="ROUTE")
+
     def test_block_without_target_model_is_valid(self):
         params = LitellmParams(
             guardrail="presidio",

@@ -968,6 +968,43 @@ class TestPreCallHookDeferredRouting:
         assert blocker.ran is True
 
     @pytest.mark.asyncio
+    async def test_routing_guardrail_records_service_span(self, proxy_logging):
+        import litellm
+        from litellm.types.services import ServiceTypes
+
+        class _SlowRoutingGuardrail(CustomGuardrail):
+            async def async_pre_call_hook(
+                self, user_api_key_dict, cache, data, call_type
+            ):
+                await asyncio.sleep(0.02)
+                self.handle_sensitive_data_detection(request_data=data)
+
+        router = _SlowRoutingGuardrail(
+            guardrail_name="router",
+            default_on=True,
+            event_hook="pre_call",
+            on_sensitive_data="route",
+            sensitive_data_route_to_model="on-prem-model",
+            sticky_session_routing=False,
+        )
+        litellm.callbacks = [router]
+
+        recorded = AsyncMock()
+        proxy_logging.service_logging_obj.async_service_success_hook = recorded
+
+        data = {"model": "gpt-4", "metadata": {"session_id": "sess-span"}}
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="tenant-a"),
+            data=data,
+            call_type="completion",
+        )
+
+        assert result["model"] == "on-prem-model"
+        recorded.assert_called_once()
+        assert recorded.call_args.kwargs["call_type"] == "_SlowRoutingGuardrail"
+        assert recorded.call_args.kwargs["service"] == ServiceTypes.PROXY_PRE_CALL
+
+    @pytest.mark.asyncio
     async def test_routing_recorded_as_intervention_not_prometheus_error(
         self, proxy_logging
     ):

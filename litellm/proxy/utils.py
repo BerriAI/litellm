@@ -1511,10 +1511,11 @@ class ProxyLogging:
                 except SensitiveDataRouteException as e:
                     # Defer the reroute until remaining guardrails have run so later
                     # security checks are not skipped; the first reroute wins and a
-                    # later guardrail that blocks still propagates.
+                    # later guardrail that blocks still propagates. Fall through to the
+                    # service-span recording below so the triggering guardrail is still
+                    # timed like every other callback.
                     if deferred_route_exc is None:
                         deferred_route_exc = e
-                    continue
 
                 end_time = time.time()
                 duration = end_time - start_time
