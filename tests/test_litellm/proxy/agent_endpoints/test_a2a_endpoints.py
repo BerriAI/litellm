@@ -1103,8 +1103,10 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
             chunks.append(chunk)
 
     full = "".join(chunks)
-    assert "error" in full
-    assert "-32001" in full or "Task not found" in full
+    body = json.loads(full.removeprefix("data: ").strip())
+    assert body["id"] == "req-1"
+    assert body["error"]["code"] == -32001
+    assert body["error"]["message"] == "Task not found"
 
 
 @pytest.mark.asyncio

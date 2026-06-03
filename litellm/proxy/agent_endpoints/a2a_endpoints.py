@@ -185,6 +185,13 @@ async def _forward_jsonrpc_sse(
                     try:
                         error_json = json.loads(error_body)
                         if "error" in error_json:
+                            from litellm.types.agents import (
+                                _normalize_a2a_jsonrpc_response,
+                            )
+
+                            error_json = _normalize_a2a_jsonrpc_response(
+                                error_json, request_id=request_id
+                            )
                             yield f"data: {json.dumps(error_json)}\n\n"
                             return
                     except Exception:
