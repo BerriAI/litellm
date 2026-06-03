@@ -249,15 +249,17 @@ def _mcp_payload(**overrides):
         "status": "success",
         "litellm_call_id": "mcp_1",
         "response_cost": 0.01,
-        "metadata": {"user_api_key_team_id": "t1"},
-        "hidden_params": {},
-        "mcp_tool_call_metadata": {
-            "name": "get_weather",
-            "arguments": {"city": "Paris"},
-            "result": {"temp_c": 21},
-            "mcp_server_name": "weather-mcp",
-            "mcp_session_id": "sess-abc123",
+        "metadata": {
+            "user_api_key_team_id": "t1",
+            "mcp_tool_call_metadata": {
+                "name": "get_weather",
+                "arguments": {"city": "Paris"},
+                "result": {"temp_c": 21},
+                "mcp_server_name": "weather-mcp",
+                "mcp_session_id": "sess-abc123",
+            },
         },
+        "hidden_params": {},
     }
     payload.update(overrides)
     return payload
@@ -302,7 +304,7 @@ def test_mcp_tool_call_stateless_omits_session_id():
     ``mcp.session.id`` rather than stamping an empty or ``None`` value."""
     logger, exporter = _logger()
     payload = _mcp_payload()
-    del payload["mcp_tool_call_metadata"]["mcp_session_id"]
+    del payload["metadata"]["mcp_tool_call_metadata"]["mcp_session_id"]
     asyncio.run(
         logger.async_log_success_event(
             {"standard_logging_object": payload}, None, None, None
@@ -358,6 +360,31 @@ def test_mcp_tool_call_deduped_on_repeat():
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
     assert len(exporter.get_finished_spans()) == 1
+
+
+def test_mcp_tool_call_metadata_read_from_nested_metadata_not_top_level():
+    """``mcp_tool_call_metadata`` lives under ``StandardLoggingPayload.metadata``;
+    a top-level copy (the pre-fix shape the reader used to look at) must be ignored
+    so the reader can't silently regress to producing an empty ``tools/call`` span
+    with no session id, tool name, or server name."""
+    logger, exporter = _logger()
+    payload = _mcp_payload()
+    # Move the real metadata to the top level only, mirroring the old buggy read
+    # location. ``call_type`` still classifies this as an MCP call, so the span is
+    # emitted, but none of its fields are reachable from the wrong nesting level.
+    payload["mcp_tool_call_metadata"] = payload["metadata"].pop(
+        "mcp_tool_call_metadata"
+    )
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": payload}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/call"
+    assert "mcp.session.id" not in span.attributes
+    assert "gen_ai.tool.name" not in span.attributes
+    assert LiteLLM.MCP_SERVER_NAME not in span.attributes
 
 
 def test_pre_call_idempotent_keeps_first_span():
