@@ -195,9 +195,9 @@ class TestBedrockMantleResponsesRegistry:
         assert cfg is None
 
     def test_registry_returns_config_for_future_frontier_model(self):
-        # Forward-compatibility: an unseen frontier model (e.g. gpt-6) must get the
-        # native Responses config without a code change, since frontier models on
-        # Mantle are Responses-only. The gate excludes gpt-oss, not allow-lists gpt-5.
+        # Forward-compatibility: an unseen OpenAI gpt frontier model (e.g. gpt-6) must
+        # get the native Responses config without a code change. The gate allow-lists
+        # the openai.gpt- family (minus gpt-oss), so gpt-6 matches automatically.
         from litellm.utils import ProviderConfigManager
 
         cfg = ProviderConfigManager.get_provider_responses_api_config(
@@ -205,6 +205,28 @@ class TestBedrockMantleResponsesRegistry:
             model="openai.gpt-6",
         )
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "nvidia.nemotron-nano-9b-v2",
+            "mistral.ministral-3-3b-instruct",
+            "google.gemma-3-27b-it",
+            "zai.glm-4.6",
+        ],
+    )
+    def test_registry_returns_none_for_non_openai_models(self, model):
+        # Regression for the chat-only families on Mantle. These models 400 on
+        # /openai/v1/responses and are served on /v1/chat/completions, so the
+        # registry must NOT hand them the Responses config; they fall through to
+        # None and keep the chat-completions emulation.
+        from litellm.utils import ProviderConfigManager
+
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model=model,
+        )
+        assert cfg is None
 
     def test_registry_returns_none_when_model_is_none(self):
         # By-id operations (delete/get/cancel) call with model=None; keep returning
