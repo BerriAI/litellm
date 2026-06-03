@@ -8686,9 +8686,8 @@ class Router:
                         self._update_deployment_indices_after_removal(
                             model_id=deployment_id, removal_idx=removal_idx
                         )
-                        self._remove_deployment_from_wildcard_state(
-                            model_id=deployment_id
-                        )
+
+                self._remove_deployment_from_wildcard_state(model_id=deployment_id)
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)

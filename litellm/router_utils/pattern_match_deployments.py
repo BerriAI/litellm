@@ -75,7 +75,7 @@ class PatternMatchRouter:
             self.patterns[regex] = []
         self.patterns[regex].append(llm_deployment)
 
-    def remove_deployment(self, model_id: str) -> int:
+    def remove_deployment(self, model_id: Optional[str]) -> int:
         """
         Remove every stored entry whose model_info.id equals model_id.
 
