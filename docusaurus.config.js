@@ -8,12 +8,60 @@ const lightCodeTheme = require('prism-react-renderer/themes/vsLight');
 // @ts-ignore
 const darkCodeTheme = require('prism-react-renderer/themes/nightOwl');
 
-const algoliaAppId = process.env.ALGOLIA_APP_ID;
-const algoliaApiKey = process.env.ALGOLIA_API_KEY;
-const algoliaIndexName = process.env.ALGOLIA_INDEX_NAME;
-// conditional check, docs should work if these keys are missing.
-const hasAlgoliaSearch =
-  Boolean(algoliaAppId) && Boolean(algoliaApiKey) && Boolean(algoliaIndexName);
+const inkeepApiKey = process.env.INKEEP_API_KEY;
+// Conditional check: docs should work if this key is missing.
+const hasInkeepSearch = Boolean(inkeepApiKey);
+
+const inkeepConfig = {
+  baseSettings: {
+    apiKey: inkeepApiKey,
+    organizationDisplayName: 'liteLLM',
+    primaryBrandColor: '#4965f5',
+    theme: {
+      styles: [
+        {
+          key: "custom-theme",
+          type: "style",
+          value: `
+            .ikp-chat-button__button {
+              margin-right: 80px !important;
+            }
+          `,
+        },
+      ],
+      syntaxHighlighter: {
+        lightTheme: lightCodeTheme,
+        darkTheme: darkCodeTheme,
+      },
+    },
+  },
+  searchSettings: {
+    searchBarPlaceholder: 'Search docs, guides, API reference...',
+    debounceTimeMs: 0,
+    maxResults: 7 
+  },
+  aiChatSettings: {
+    aiAssistantName: 'LiteLLM AI',
+    chatSubjectName: 'LiteLLM',
+    aiAssistantAvatar: '/img/favicon.ico',
+    placeholder: 'Ask anything about LiteLLM...',
+    introMessage: 'Hi! I can help you with LiteLLM — proxy setup, model routing, caching, spend tracking, and more. What would you like to know?',
+    exampleQuestions: [
+      'How do I set up the LiteLLM proxy?',
+      'How do I route requests across multiple models?',
+      'How do I enable response caching?',
+      'How do I track spend per team or API key?',
+    ],
+    exampleQuestionsLabel: 'Common questions',
+    isFirstExampleQuestionHighlighted: true,
+    shouldOpenLinksInNewTab: true,
+    isCopyChatButtonVisible: true,
+    isShareButtonVisible: false,
+    prompts: [
+      'You are a helpful assistant specializing in LiteLLM. Answer questions about setup, configuration, model routing, the proxy server, caching, logging, and spend tracking. When referencing configuration options, include YAML or Python code examples where helpful. If a question is outside the scope of LiteLLM, politely redirect the user to the relevant docs or GitHub.',
+    ],
+  },
+};
 
 /** @type {import('@docusaurus/types').Config} */
 const config = {
@@ -38,13 +86,29 @@ const config = {
     locales: ['en'],
   },
   plugins: [
+    require('./plugins/optimize-images'),
+    ...(hasInkeepSearch
+      ? [
+          [
+            '@inkeep/cxkit-docusaurus',
+            {
+              SearchBar: {
+                ...inkeepConfig,
+              },
+              ChatButton: {
+                ...inkeepConfig,
+              },
+            },
+          ],
+        ]
+      : []),
     [
       '@docusaurus/plugin-ideal-image',
       {
-        quality: 100,
-        max: 1920, // max resized image's size.
-        min: 640, // min resized image's size. if original is lower, use that size.
-        steps: 2, // the max number of images generated between min and max (inclusive)
+        quality: 75,
+        max: 1280,
+        min: 640,
+        steps: 2,
         disableInDev: false,
       },
     ],
@@ -204,7 +268,16 @@ const config = {
     ],
   ],
 
-  // Algolia search comes from preset-classic when themeConfig.algolia is set.
+  future: {
+    experimental_faster: {
+      swcJsLoader: true,
+      swcJsMinimizer: true,
+      swcHtmlMinimizer: true,
+      lightningCssMinimizer: true,
+      mdxCrossCompilerCache: true,
+    },
+  },
+
   themes: ['@docusaurus/theme-mermaid'],
   markdown: {
     mermaid: true,
@@ -216,7 +289,7 @@ const config = {
       src: 'https://www.feedbackrocket.io/sdk/v1.2.js',
       'data-fr-id': 'GQwepB0f0L-x_ZH63kR_V',
       'data-fr-theme': 'dynamic',
-    },
+    }
   ],
 
   themeConfig:
@@ -248,10 +321,10 @@ const config = {
           {
             position: 'left',
             label: 'Enterprise',
-            to: 'docs/enterprise',
+            to: "docs/enterprise"
           },
-          {to: '/release_notes', label: 'Changelog', position: 'left'},
-          {to: '/blog', label: 'Blog', position: 'left'},
+          { to: '/release_notes', label: 'Changelog', position: 'left' },
+          { to: '/blog', label: 'Blog', position: 'left' },
           {
             href: 'https://docs.litellm-agent-platform.ai/',
             label: 'LiteLLM Agent Platform',
@@ -269,23 +342,11 @@ const config = {
             className: 'header-discord-link',
             'aria-label': 'Discord / Slack community',
           },
-          // Shown on mobile; hidden on desktop via custom.css (sidebar has search).
-          ...(hasAlgoliaSearch
+          ...(hasInkeepSearch
             ? [{type: 'search', position: 'right'}]
             : []),
         ],
       },
-      ...(hasAlgoliaSearch
-        ? {
-            algolia: {
-              appId: algoliaAppId,
-              apiKey: algoliaApiKey,
-              indexName: algoliaIndexName,
-              contextualSearch: true,
-              searchPagePath: 'search',
-            },
-          }
-        : {}),
       footer: {
         style: 'dark',
         links: [

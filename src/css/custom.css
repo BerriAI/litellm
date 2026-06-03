@@ -683,17 +683,23 @@ video {
 }
 
 /* =========================================
-   SEARCH BAR — navbar on mobile, sidebar on desktop
-   DocSearch color overrides live in src/css/docsearch-overrides.css
-   (loaded after Algolia CSS via src/theme/SearchBar/index.js).
-   SSR-safe: both mount in HTML; media queries pick one before JS hydrates.
-   (Sidebar search visibility is in DocSidebar/styles.module.css)
+   SEARCH BAR — hide from navbar (it lives in sidebar)
    ========================================= */
-@media (min-width: 997px) {
-  [class^='navbarSearchContainer'],
-  [class*='navbarSearchContainer'] {
-    display: none !important;
-  }
+[class^='navbarSearchContainer'],
+[class*='navbarSearchContainer'] {
+  display: none !important;
+}
+
+/* =========================================
+   INKEEP AI CHAT BUTTON — minimal floating style
+   ========================================= */
+.ikp-chat-button__button {
+  width: 42px !important;
+  height: 42px !important;
+  border-radius: 50% !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18) !important;
+  margin-right: 1rem !important;
+  margin-bottom: 1rem !important;
 }
 
 /* =========================================

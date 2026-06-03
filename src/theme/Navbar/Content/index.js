@@ -11,6 +11,9 @@ import NavbarItem from '@theme/NavbarItem';
 import NavbarColorModeToggle from '@theme/Navbar/ColorModeToggle';
 import NavbarMobileSidebarToggle from '@theme/Navbar/MobileSidebar/Toggle';
 import NavbarLogo from '@theme/Navbar/Logo';
+import NavbarSearch from '@theme/Navbar/Search';
+import SearchBar from '@theme/SearchBar';
+
 function useNavbarItems() {
   return useThemeConfig().navbar.items;
 }
@@ -38,6 +41,7 @@ export default function NavbarContent() {
   const mobileSidebar = useNavbarMobileSidebar();
   const items = useNavbarItems();
   const [leftItems, rightItems] = splitNavbarItems(items);
+  const searchBarItem = items.find((item) => item.type === 'search');
 
   return (
     <div className="navbar__inner">
@@ -56,6 +60,11 @@ export default function NavbarContent() {
       <div className="navbar__right-col">
         <NavbarItems items={rightItems} />
         <NavbarColorModeToggle />
+        {!searchBarItem && (
+          <NavbarSearch>
+            <SearchBar />
+          </NavbarSearch>
+        )}
       </div>
     </div>
   );

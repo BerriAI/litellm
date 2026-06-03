@@ -2,4 +2,3 @@ User-agent: *
 Allow: /
 
 Sitemap: https://docs.litellm.ai/sitemap.xml
-# Algolia-Crawler-Verif: 0B3A48744DF44565
