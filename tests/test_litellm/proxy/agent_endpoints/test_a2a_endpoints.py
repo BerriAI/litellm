@@ -1108,6 +1108,43 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
 
 
 @pytest.mark.asyncio
+async def test_forward_jsonrpc_sse_fallback_error_uses_jsonrpc_error_code():
+    mock_resp = AsyncMock()
+    mock_resp.is_success = False
+    mock_resp.status_code = 503
+    mock_resp.reason_phrase = "Service Unavailable"
+    mock_resp.aread = AsyncMock(return_value=b"upstream unavailable")
+    mock_resp.aclose = AsyncMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.client = mock_async_client
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+        return_value=mock_handler,
+    ):
+        from litellm.proxy.agent_endpoints.a2a_endpoints import _forward_jsonrpc_sse
+
+        response = await _forward_jsonrpc_sse(
+            agent_url="http://backend-agent:10001",
+            body={"jsonrpc": "2.0", "id": "req-1", "method": "tasks/resubscribe"},
+            request_id="req-1",
+        )
+
+        chunks = []
+        async for chunk in response.body_iterator:
+            chunks.append(chunk)
+
+    body = json.loads("".join(chunks).removeprefix("data: ").strip())
+    assert body["error"]["code"] == -32603
+    assert body["error"]["message"] == "Service Unavailable"
+
+
+@pytest.mark.asyncio
 async def test_task_methods_forward_caller_identity_headers():
     """Task operations must forward X-LiteLLM-User-Id and X-LiteLLM-Team-Id so the
     upstream agent can scope resources to the authenticated caller."""

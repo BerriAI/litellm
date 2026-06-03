@@ -189,7 +189,12 @@ async def _forward_jsonrpc_sse(
                             return
                     except Exception:
                         pass
-                    yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': resp.status_code, 'message': resp.reason_phrase}})}\n\n"
+                    error_event = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {"code": -32603, "message": resp.reason_phrase},
+                    }
+                    yield f"data: {json.dumps(error_event)}\n\n"
                     return
                 async for line in resp.aiter_lines():
                     yield line + "\n"
