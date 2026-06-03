@@ -15,7 +15,16 @@ import os
 from typing import Any
 
 from litellm._logging import verbose_logger
+from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
+    OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
+)
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+# Tokens that put the HTTP instrumentation on the new (stable) HTTP semantic
+# conventions. ``http`` switches fully to the new attributes; ``http/dup`` emits
+# both new and legacy. Either one makes ``_report_new`` true, which is what gates
+# the ``error.type`` (and ``http.response.status_code``) attributes on server spans.
+_HTTP_SEMCONV_OPT_IN_TOKENS = ("http", "http/dup")
 
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
@@ -88,6 +97,29 @@ def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
         pass
 
 
+def _ensure_http_semconv_opt_in() -> None:
+    """Opt the FastAPI/ASGI instrumentation into the new HTTP semantic conventions.
+
+    The instrumentation only stamps ``error.type`` (and the new
+    ``http.response.status_code``) on a server span when the HTTP semconv opt-in
+    is active; in the default mode it emits the legacy ``http.status_code`` and no
+    error attribute, so failed requests (5xx) carry no machine-readable error
+    marker. LiteLLM's own otel spans already use the new names, so aligning the
+    instrumentation keeps every server-span attribute consistent.
+
+    The opt-in lives in ``OTEL_SEMCONV_STABILITY_OPT_IN``, a comma-separated,
+    multi-category flag that also carries the gen-ai opt-in, so append rather than
+    overwrite, and leave an operator who has already chosen an http mode untouched.
+    This MUST run before ``instrument_app``, which reads the flag once.
+    """
+    raw = os.environ.get(OTEL_SEMCONV_STABILITY_OPT_IN_ENV, "")
+    tokens = [token.strip() for token in raw.split(",") if token.strip()]
+    if any(token in _HTTP_SEMCONV_OPT_IN_TOKENS for token in tokens):
+        return
+    tokens.append("http")
+    os.environ[OTEL_SEMCONV_STABILITY_OPT_IN_ENV] = ",".join(tokens)
+
+
 def instrument_fastapi_app(app: Any) -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
@@ -111,6 +143,8 @@ def instrument_fastapi_app(app: Any) -> None:
         # ``proxy_server``'s unconditional ``import`` of this module crash when the
         # package is absent, even with the gate off.
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+        _ensure_http_semconv_opt_in()
 
         excluded_urls = (
             os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")

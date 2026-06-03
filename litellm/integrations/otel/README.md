@@ -100,7 +100,13 @@ becomes the global, so server spans export to that backend too.
    scrapes, and asset fetches don't flood traces. Entries are substring-matched, so
    `/metrics` also drops the `/model/metrics` admin-analytics spans. Set
    `OTEL_PYTHON_FASTAPI_EXCLUDED_URLS` to override the whole set (e.g. `""` to trace
-   everything, or your own comma-separated path list).
+   everything, or your own comma-separated path list). Before instrumenting, the mount
+   also opts the instrumentation into the new HTTP semantic conventions
+   (`mount._ensure_http_semconv_opt_in`) by appending `http` to
+   `OTEL_SEMCONV_STABILITY_OPT_IN` if no http mode is set, so server spans carry
+   `http.response.status_code` and an `error.type` on 5xx (the default mode emits the
+   legacy `http.status_code` and no error attribute). Set that env var to `http/dup`
+   to keep the legacy attribute alongside the new ones.
 2. **Startup** (`proxy_server.proxy_startup_event`): after the config (and
    callbacks) is loaded, the already-registered preset `OpenTelemetryV2` logger
    is reused — or a generic one reading `OTEL_*` envs is built when no preset is
