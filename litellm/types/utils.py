@@ -148,6 +148,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
+    supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[
         Literal["low", "medium", "high", "max", "xhigh"]
     ]
@@ -3300,6 +3301,8 @@ class LlmProviders(str, Enum):
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
+    INCEPTION = "inception"
+    TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
