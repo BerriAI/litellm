@@ -1080,26 +1080,7 @@ class TestCiscoAIDefenseMCPMode:
 
     @pytest.mark.asyncio
     async def test_mcp_response_hook_through_real_logging_wrapper(self):
-        """Production-shape regression: real CallToolResult via MCPPostCallResponseObject.
-
-        The previous raw-list test used ``SimpleNamespace(mcp_tool_call_response=[...])``,
-        which already gives us a clean list of dict content items — that
-        masked a Pydantic v2 coercion subtlety in the real dispatcher
-        (``litellm_logging.async_post_mcp_tool_call_hook``):
-
-        Because ``MCPPostCallResponseObject.mcp_tool_call_response`` is typed
-        as ``List[Union[MCPTextContent, MCPImageContent, MCPEmbeddedResource]]``,
-        passing a ``CallToolResult`` BaseModel triggers Pydantic to iterate
-        the source model and store the resulting ``(field_name, value)``
-        tuples in the list — e.g. ``[('meta', None), ('content', [TextContent(...)]),
-        ('structuredContent', None), ('isError', False)]``. The earlier fix
-        called Cisco but serialized those tuples as text content, so the
-        inspect API saw garbage like ``{"type":"text","text":"('content', [...])"}``
-        instead of the real tool output.
-
-        This test wires the real LiteLLM types together (no shims) and
-        asserts the wire payload contains the actual tool text.
-        """
+        """Real dispatcher shape must send content and structuredContent."""
         from mcp.types import CallToolResult, TextContent
 
         from litellm.types.mcp import MCPPostCallResponseObject
