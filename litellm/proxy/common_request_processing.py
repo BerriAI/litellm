@@ -2068,8 +2068,8 @@ class ProxyBaseLLMRequestProcessing:
                     target=_litellm_logging_obj.failure_handler,
                     args=(e, traceback_exception),
                 ).start()
-                asyncio.create_task(
-                    _litellm_logging_obj.async_failure_handler(e, traceback_exception)
+                await _litellm_logging_obj.async_failure_handler(
+                    e, traceback_exception
                 )
 
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
