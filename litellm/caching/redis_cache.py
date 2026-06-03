@@ -115,20 +115,15 @@ class RedisCircuitBreaker:
     OPEN = "open"
     HALF_OPEN = "half_open"
 
-    def __init__(
-        self, failure_threshold: int, recovery_timeout: int, enabled: bool = True
-    ) -> None:
+    def __init__(self, failure_threshold: int, recovery_timeout: int) -> None:
         self.failure_threshold = failure_threshold
         self.recovery_timeout = recovery_timeout
-        self.enabled = enabled
         self._failure_count = 0
         self._opened_at: Optional[float] = None
         self._state = self.CLOSED
 
     def is_open(self) -> bool:
         """Returns True if Redis calls should be skipped."""
-        if not self.enabled:
-            return False
         if self._state == self.HALF_OPEN:
             # Probe already in flight — fast-fail all concurrent requests.
             # Only the one call that caused the OPEN→HALF_OPEN transition
@@ -142,8 +137,6 @@ class RedisCircuitBreaker:
         return False
 
     def record_failure(self) -> None:
-        if not self.enabled:
-            return
         self._failure_count += 1
         self._opened_at = time.time()
         if self._failure_count >= self.failure_threshold:
@@ -157,8 +150,6 @@ class RedisCircuitBreaker:
             self._state = self.OPEN
 
     def record_success(self) -> None:
-        if not self.enabled:
-            return
         if self._state == self.HALF_OPEN:
             verbose_logger.info("Redis circuit breaker CLOSED — Redis recovered")
         self._failure_count = 0
@@ -174,6 +165,8 @@ def _redis_circuit_breaker_guard(method):  # type: ignore
 
     @functools.wraps(method)
     async def wrapper(self, *args, **kwargs):  # type: ignore
+        if not REDIS_CIRCUIT_BREAKER_ENABLED:
+            return await method(self, *args, **kwargs)
         if self._circuit_breaker.is_open():
             raise Exception(
                 f"Redis circuit breaker is open — skipping {method.__name__}"
@@ -253,7 +246,6 @@ class RedisCache(BaseCache):
         self._circuit_breaker = RedisCircuitBreaker(
             failure_threshold=REDIS_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
             recovery_timeout=REDIS_CIRCUIT_BREAKER_RECOVERY_TIMEOUT,
-            enabled=REDIS_CIRCUIT_BREAKER_ENABLED,
         )
 
         self._setup_health_pings()
