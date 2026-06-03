@@ -1,0 +1,28 @@
+name: Wheel path length
+
+# Fails if the built wheel contains any path long enough to break the Windows
+# 260-char MAX_PATH limit at install time. See
+# .github/scripts/check_wheel_path_length.py for the rationale (issues #21941,
+# #22039, #29536, #29553).
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - litellm_oss_branch
+
+permissions:
+  contents: read
+
+jobs:
+  check-wheel-path-length:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Build wheel
+        run: uv build --wheel --out-dir dist
+      - name: Guard against MAX_PATH-busting packaged paths
+        run: python .github/scripts/check_wheel_path_length.py dist
