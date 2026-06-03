@@ -17,6 +17,7 @@ export default function UISettings() {
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
+  const alwaysIncludeStreamUsageProperty = schema?.properties?.always_include_stream_usage;
   const forwardLLMProviderAuthHeadersProperty =
     schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
@@ -28,6 +29,7 @@ export default function UISettings() {
   const scopeUserSearchProperty = schema?.properties?.scope_user_search_to_org;
   const disableCustomApiKeysProperty = schema?.properties?.disable_custom_api_keys;
   const values = data?.values ?? {};
+  const isAlwaysIncludeStreamUsage = Boolean(values.always_include_stream_usage);
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
   const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
   const isAgentsDisabled = Boolean(values.disable_agents_for_internal_users);
@@ -75,6 +77,20 @@ export default function UISettings() {
   const handleToggleForwardClientHeaders = (checked: boolean) => {
     updateSettings(
       { forward_client_headers_to_llm_api: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleToggleAlwaysIncludeStreamUsage = (checked: boolean) => {
+    updateSettings(
+      { always_include_stream_usage: checked },
       {
         onSuccess: () => {
           NotificationManager.success("UI settings updated successfully");
@@ -284,21 +300,38 @@ export default function UISettings() {
           </Space>
 
           <Space align="start" size="middle">
-            <Switch
-              checked={Boolean(values.forward_client_headers_to_llm_api)}
-              disabled={isUpdating}
-              loading={isUpdating}
-              onChange={handleToggleForwardClientHeaders}
-              aria-label={forwardClientHeadersProperty?.description ?? "Forward client headers to LLM API"}
-            />
-            <Space direction="vertical" size={4}>
-              <Typography.Text strong>Forward client headers to LLM API</Typography.Text>
-              <Typography.Text type="secondary">
-                {forwardClientHeadersProperty?.description ??
-                  "Forwards client headers (Authorization, anthropic-beta, and x-* custom headers) to the upstream LLM. Enable for Claude Code with a Max subscription (forwards the OAuth token) or to pass custom/tracing headers through to the provider. Independent of the BYOK toggle — enable only the one(s) you need."}
-              </Typography.Text>
+              <Switch
+                checked={Boolean(values.forward_client_headers_to_llm_api)}
+                disabled={isUpdating}
+                loading={isUpdating}
+                onChange={handleToggleForwardClientHeaders}
+                aria-label={forwardClientHeadersProperty?.description ?? "Forward client headers to LLM API"}
+              />
+              <Space direction="vertical" size={4}>
+                <Typography.Text strong>Forward client headers to LLM API</Typography.Text>
+                <Typography.Text type="secondary">
+                  {forwardClientHeadersProperty?.description ??
+                    "Forwards client headers (Authorization, anthropic-beta, and x-* custom headers) to the upstream LLM. Enable for Claude Code with a Max subscription (forwards the OAuth token) or to pass custom/tracing headers through to the provider. Independent of the BYOK toggle — enable only the one(s) you need."}
+                </Typography.Text>
+              </Space>
             </Space>
-          </Space>
+
+            <Space align="start" size="middle">
+              <Switch
+                checked={isAlwaysIncludeStreamUsage}
+                disabled={isUpdating}
+                loading={isUpdating}
+                onChange={handleToggleAlwaysIncludeStreamUsage}
+                aria-label={alwaysIncludeStreamUsageProperty?.description ?? "Always include stream usage"}
+              />
+              <Space direction="vertical" size={4}>
+                <Typography.Text strong>Always include stream usage</Typography.Text>
+                <Typography.Text type="secondary">
+                  {alwaysIncludeStreamUsageProperty?.description ??
+                    "If enabled, usage is included in stream responses."}
+                </Typography.Text>
+              </Space>
+            </Space>
 
           <Space align="start" size="middle">
             <Switch

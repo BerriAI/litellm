@@ -2540,6 +2540,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, forwards client headers (e.g. Authorization) to the LLM API. Required for Claude Code with Max subscription.",
     )
+    always_include_stream_usage: Optional[bool] = Field(
+        None,
+        description="If True, automatically includes usage information in all streaming responses.",
+    )
     mcp_required_fields: Optional[List[str]] = Field(
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",

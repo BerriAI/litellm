@@ -41,12 +41,16 @@ const buildSettingsResponse = (overrides?: Partial<Record<string, unknown>>) => 
         require_auth_for_public_ai_hub: {
           description: "Require authentication for public AI Hub",
         },
+        always_include_stream_usage: {
+          description: "Always include stream usage",
+        },
       },
     },
     values: {
       disable_model_add_for_internal_users: false,
       disable_team_admin_delete_team_user: false,
       require_auth_for_public_ai_hub: false,
+      always_include_stream_usage: false,
     },
   },
   isLoading: false,
@@ -74,6 +78,7 @@ describe("UISettings", () => {
     expect(screen.getByRole("switch", { name: "Disable model add for internal users" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Disable team admin delete team user" })).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Require authentication for public AI Hub" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Always include stream usage" })).toBeInTheDocument();
   });
 
   it("should toggle setting and call update", () => {
@@ -155,6 +160,35 @@ describe("UISettings", () => {
 
     expect(mutateMock).toHaveBeenCalledWith(
       { require_auth_for_public_ai_hub: true },
+      expect.objectContaining({
+        onSuccess: expect.any(Function),
+        onError: expect.any(Function),
+      }),
+    );
+    expect(NotificationManager.success).toHaveBeenCalledWith("UI settings updated successfully");
+  });
+
+  it("should toggle always include stream usage setting and call update", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+
+    render(<UISettings />);
+
+    const toggle = screen.getByRole("switch", { name: "Always include stream usage" });
+
+    act(() => {
+      fireEvent.click(toggle);
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { always_include_stream_usage: true },
       expect.objectContaining({
         onSuccess: expect.any(Function),
         onError: expect.any(Function),
