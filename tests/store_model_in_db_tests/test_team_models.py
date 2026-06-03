@@ -31,7 +31,7 @@ async def test_team_model_alias():
         json={
             "model_name": "gpt-4o-team1",
             "litellm_params": {
-                "model": "gpt-4o",
+                "model": os.environ.get("CI_CD_DEFAULT_OPENAI_MODEL", "gpt-4o-mini"),
                 "api_key": os.getenv("OPENAI_API_KEY"),
             },
         },
