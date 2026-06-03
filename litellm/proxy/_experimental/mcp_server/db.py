@@ -234,14 +234,14 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server: Optional[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_unique(
-            where={
-                "server_id": server_id,
-            }
-        )
+    mcp_server = await prisma_client.db.litellm_mcpservertable.find_unique(
+        where={
+            "server_id": server_id,
+        }
     )
-    return mcp_server
+    if mcp_server is None:
+        return None
+    return LiteLLM_MCPServerTable(**mcp_server.model_dump())
 
 
 async def get_mcp_servers(

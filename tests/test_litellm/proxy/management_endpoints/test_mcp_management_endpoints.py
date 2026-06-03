@@ -23,6 +23,8 @@ sys.path.insert(
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
+    MCPEnvVar,
+    MCPEnvVarScope,
     MCPTransport,
     NewMCPServerRequest,
     UpdateMCPServerRequest,
@@ -1104,6 +1106,103 @@ class TestListMCPServers:
             assert result.server_id == "allowed_config_server"
             assert result.status == "healthy"
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
+
+    @pytest.mark.asyncio
+    async def test_fetch_single_mcp_server_redacts_global_env_vars_for_non_admin(self):
+        """A non-admin GET /v1/mcp/server/{id} for a server with env_vars must
+        not 500. ``db.get_mcp_server`` returns the raw Prisma model whose JSONB
+        ``env_vars`` deserialize to plain dicts; the non-admin sanitizer reads
+        ``env_var.scope`` as an attribute, so the model must be wrapped in
+        ``LiteLLM_MCPServerTable`` (parsing the dicts into ``MCPEnvVar``) before
+        sanitization. Global secrets are blanked; per-user placeholders survive.
+        """
+
+        # Mirror what Prisma returns: a model whose JSONB ``env_vars`` are
+        # plain dicts, not parsed ``MCPEnvVar`` objects. ``model_construct``
+        # skips validation so the dicts survive verbatim.
+        raw_prisma_model = LiteLLM_MCPServerTable.model_construct(
+            server_id="env-server",
+            server_name="Env Server",
+            alias="Env Server",
+            transport=MCPTransport.http,
+            url="https://env.example.com/mcp",
+            static_headers={
+                "Authorization": "Bearer ${GLOBAL_KEY}",
+                "X-User": "${USER_KEY}",
+            },
+            env_vars=[
+                {"name": "GLOBAL_KEY", "value": "super-secret", "scope": "global"},
+                {
+                    "name": "USER_KEY",
+                    "value": "",
+                    "scope": "user",
+                    "description": "your key",
+                },
+            ],
+        )
+        assert isinstance(raw_prisma_model.env_vars[0], dict)
+
+        mock_prisma_client = MagicMock()
+        mock_prisma_client.db.litellm_mcpservertable.find_unique = AsyncMock(
+            return_value=raw_prisma_model
+        )
+
+        mock_health_result = generate_mock_mcp_server_db_record(
+            server_id="env-server", alias="Env Server"
+        )
+        mock_health_result.status = "healthy"
+        mock_health_result.last_health_check = datetime.now()
+        mock_health_result.health_check_error = None
+
+        mock_manager = MagicMock()
+        mock_manager.add_server = AsyncMock()
+        mock_manager.health_check_server = AsyncMock(return_value=mock_health_result)
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=mock_prisma_client,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+                mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_all_mcp_servers_for_user",
+                AsyncMock(
+                    return_value=[
+                        generate_mock_mcp_server_db_record(server_id="env-server")
+                    ]
+                ),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._user_has_admin_view",
+                return_value=False,
+            ),
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_mcp_server,
+            )
+
+            result = await fetch_mcp_server(
+                request=_make_mock_request(),
+                server_id="env-server",
+                user_api_key_dict=mock_user_auth,
+            )
+
+        assert result.server_id == "env-server"
+        env_by_name = {e.name: e for e in result.env_vars}
+        assert isinstance(env_by_name["GLOBAL_KEY"], MCPEnvVar)
+        assert env_by_name["GLOBAL_KEY"].scope == MCPEnvVarScope.global_
+        # Global admin secret must be blanked for non-admin viewers.
+        assert env_by_name["GLOBAL_KEY"].value == ""
+        # Per-user placeholder carries no secret, so it is left intact.
+        assert env_by_name["USER_KEY"].scope == MCPEnvVarScope.user
+        assert env_by_name["USER_KEY"].value == ""
 
 
 class TestTeamScopedMCPServerAccess:
