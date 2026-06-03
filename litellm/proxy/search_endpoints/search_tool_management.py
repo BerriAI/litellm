@@ -167,22 +167,25 @@ async def list_search_tools(
                 f"Could not get config-defined search tools: {e}"
             )
 
-        for search_tool in config_search_tools:
-            tool_name = search_tool.get("search_tool_name")
+        for config_search_tool in config_search_tools:
+            tool_name = config_search_tool.get("search_tool_name")
             if tool_name:
-                litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+                litellm_params_dict = dict(config_search_tool.get("litellm_params", {}))
                 masked_litellm_params_dict = _get_masked_values(
                     litellm_params_dict,
                     unmasked_length=4,
                     number_of_asterisks=4,
                 )
+                config_tool_info = config_search_tool.get("search_tool_info")
 
                 search_tool_configs.append(
                     SearchToolInfoResponse(
                         search_tool_id=None,
                         search_tool_name=tool_name,
                         litellm_params=masked_litellm_params_dict,
-                        search_tool_info=search_tool.get("search_tool_info"),
+                        search_tool_info=(
+                            dict(config_tool_info) if config_tool_info else None
+                        ),
                         created_at=None,
                         updated_at=None,
                         is_from_config=True,
@@ -195,8 +198,8 @@ async def list_search_tools(
             if tool.get("search_tool_name") not in db_tool_names
         ]
 
-        for search_tool in search_tools_from_db:
-            litellm_params_dict = dict(search_tool.get("litellm_params", {}))
+        for db_search_tool in search_tools_from_db:
+            litellm_params_dict = dict(db_search_tool.get("litellm_params", {}))
             masked_litellm_params_dict = _get_masked_values(
                 litellm_params_dict,
                 unmasked_length=4,
@@ -205,12 +208,16 @@ async def list_search_tools(
 
             search_tool_configs.append(
                 SearchToolInfoResponse(
-                    search_tool_id=search_tool.get("search_tool_id"),
-                    search_tool_name=search_tool.get("search_tool_name", ""),
+                    search_tool_id=db_search_tool.get("search_tool_id"),
+                    search_tool_name=db_search_tool.get("search_tool_name", ""),
                     litellm_params=masked_litellm_params_dict,
-                    search_tool_info=search_tool.get("search_tool_info"),
-                    created_at=_convert_datetime_to_str(search_tool.get("created_at")),
-                    updated_at=_convert_datetime_to_str(search_tool.get("updated_at")),
+                    search_tool_info=db_search_tool.get("search_tool_info"),
+                    created_at=_convert_datetime_to_str(
+                        db_search_tool.get("created_at")
+                    ),
+                    updated_at=_convert_datetime_to_str(
+                        db_search_tool.get("updated_at")
+                    ),
                     is_from_config=False,
                 )
             )
