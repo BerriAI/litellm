@@ -1194,6 +1194,36 @@ class LiteLLMProxyRequestSetup:
         return tags
 
     @staticmethod
+    def apply_key_tags_pre_auth(
+        request_data: dict,
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> None:
+        """Merge key metadata tags into request_data before _tag_max_budget_check."""
+        key_metadata = user_api_key_dict.metadata
+        if not key_metadata:
+            return
+
+        key_tags = key_metadata.get("tags")
+        if not key_tags or not isinstance(key_tags, list):
+            return
+
+        _metadata_variable_name = get_metadata_variable_name_from_kwargs(request_data)
+        metadata = request_data.get(_metadata_variable_name)
+        if isinstance(metadata, str):
+            parsed = safe_json_loads(metadata)
+            metadata = parsed if isinstance(parsed, dict) else {}
+            request_data[_metadata_variable_name] = metadata
+        elif not isinstance(metadata, dict):
+            metadata = {}
+            request_data[_metadata_variable_name] = metadata
+
+        existing_tags = metadata.get("tags")
+        metadata["tags"] = LiteLLMProxyRequestSetup._merge_tags(
+            request_tags=existing_tags if isinstance(existing_tags, list) else None,
+            tags_to_add=key_tags,
+        )
+
+    @staticmethod
     def apply_client_tag_policy_pre_auth(
         request: Request,
         request_data: dict,

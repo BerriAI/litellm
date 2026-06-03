@@ -29,6 +29,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -337,13 +338,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _supports_effort_level(model: str, level: str) -> bool:
-        """Check ``supports_{level}_reasoning_effort`` in the model map.
+    def _supports_model_capability(model: str, key: str) -> bool:
+        """Check a boolean capability ``key`` in the model map.
 
         Strips bedrock/vertex prefixes so a provider-routed Claude still
         resolves to the Anthropic model-map entry.
         """
-        key = f"supports_{level}_reasoning_effort"
         try:
             if _supports_factory(
                 model=model,
@@ -372,8 +372,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except Exception:
             pass
         try:
-            import litellm
-
             for cand in candidates:
                 if cand in litellm.model_cost and (
                     litellm.model_cost[cand].get(key) is True
@@ -382,6 +380,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except Exception:
             pass
         return False
+
+    @staticmethod
+    def _supports_effort_level(model: str, level: str) -> bool:
+        """Check ``supports_{level}_reasoning_effort`` in the model map."""
+        return AnthropicConfig._supports_model_capability(
+            model, f"supports_{level}_reasoning_effort"
+        )
 
     @staticmethod
     def _validate_effort_for_model(model: str, effort: Optional[str]) -> Optional[str]:
@@ -400,7 +405,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _model_supports_effort_param(model: str) -> bool:
-        """Whether the model accepts ``output_config.effort`` at all."""
+        """Whether the model accepts ``output_config.effort`` at all.
+
+        A model qualifies if its map entry advertises ``supports_output_config``
+        or any ``supports_*_reasoning_effort`` flag. The two are independent
+        signals: e.g. Claude Opus 4.5 supports ``output_config`` without
+        advertising a non-default (max/xhigh) effort level.
+        """
+        if AnthropicConfig._supports_model_capability(model, "supports_output_config"):
+            return True
         return any(
             AnthropicConfig._supports_effort_level(model, level)
             for level in ("low", "minimal", "medium", "high", "xhigh", "max")
@@ -667,6 +680,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _input_schema["type"] = "object"
                 if "properties" not in _input_schema:
                     _input_schema["properties"] = {}
+
+            # Inline legacy / OpenAPI $refs before the allow-list filter strips
+            # their backing def blocks (https://github.com/BerriAI/litellm/issues/26692).
+            _input_schema = unpack_legacy_defs(_input_schema, copy=True)
 
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
