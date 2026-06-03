@@ -701,6 +701,10 @@ class LiteLLMRoutes(enum.Enum):
             "/v2/guardrails/list",
             "/project/list",
             "/project/info",
+            # Read-only search tool routes power the Search Tools UI page.
+            # Create/update/delete and test_connection stay admin-only.
+            "/search_tools/list",
+            "/search_tools/ui/available_providers",
         ]
         + spend_tracking_routes
         + key_management_routes
