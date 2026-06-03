@@ -599,6 +599,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             "tasks/pushNotificationConfig/get",
             "tasks/pushNotificationConfig/list",
             "tasks/pushNotificationConfig/delete",
+            "agent/getAuthenticatedExtendedCard",
         }:
             if not agent_url:
                 return _jsonrpc_error(
@@ -608,7 +609,26 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             result = await _forward_jsonrpc(
                 agent_url, forward_body, extra_headers=agent_extra_headers
             )
-            return JSONResponse(content=result)
+            if method == "agent/getAuthenticatedExtendedCard":
+                if isinstance(result.get("result"), dict) and "url" in result["result"]:
+                    result["result"]["url"] = (
+                        f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+                    )
+            from litellm.types.agents import LiteLLMSendMessageResponse
+
+            response = LiteLLMSendMessageResponse.from_dict(result, request_id=request_id)
+            response = await proxy_logging_obj.post_call_success_hook(
+                user_api_key_dict=user_api_key_dict,
+                data=data,
+                response=response,
+            )
+            return JSONResponse(
+                content=(
+                    response.model_dump(mode="json", exclude_none=True)
+                    if hasattr(response, "model_dump")
+                    else response
+                )
+            )
 
         elif method == "tasks/resubscribe":
             if not agent_url:
@@ -620,21 +640,6 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 agent_url, forward_body, extra_headers=agent_extra_headers
             )
 
-        elif method == "agent/getAuthenticatedExtendedCard":
-            if not agent_url:
-                return _jsonrpc_error(
-                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
-                )
-            forward_body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-            result = await _forward_jsonrpc(
-                agent_url, forward_body, extra_headers=agent_extra_headers
-            )
-            if isinstance(result.get("result"), dict) and "url" in result["result"]:
-                result["result"]["url"] = (
-                    f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
-                )
-            return JSONResponse(content=result)
-
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")
 
@@ -642,4 +647,12 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error invoking agent: {e}")
+        try:
+            await proxy_logging_obj.post_call_failure_hook(
+                user_api_key_dict=user_api_key_dict,
+                original_exception=e,
+                request_data=body,
+            )
+        except Exception:
+            pass
         return _jsonrpc_error(body.get("id"), -32603, f"Internal error: {str(e)}", 500)
