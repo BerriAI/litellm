@@ -1145,6 +1145,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             voice_config: VoiceConfig = {"prebuiltVoiceConfig": prebuilt_voice_config}
             speech_config["voiceConfig"] = voice_config
 
+        if "languageCode" in value:
+            speech_config["languageCode"] = value["languageCode"]
+
         return cast(dict, speech_config)
 
     def map_openai_params(  # noqa: PLR0915
