@@ -876,12 +876,20 @@ class CustomGuardrail(CustomLogger):
         Guardrails signal intentional blocks by raising:
         - GuardrailRaisedException (generic guardrail API, tool permission)
         - BlockedPiiEntityError (Presidio PII detection)
+        - SensitiveDataRouteException (sensitive-data reroute to on-premise model)
         - HTTPException with status 400 (content policy violation)
         - ModifyResponseException (passthrough mode violation)
         """
         if isinstance(e, ModifyResponseException):
             return True
-        if isinstance(e, (GuardrailRaisedException, BlockedPiiEntityError)):
+        if isinstance(
+            e,
+            (
+                GuardrailRaisedException,
+                BlockedPiiEntityError,
+                SensitiveDataRouteException,
+            ),
+        ):
             return True
         if (
             HTTPException is not None
