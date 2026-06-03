@@ -1012,6 +1012,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {}) or {}
         proxy_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # Fallback: check litellm_metadata (used by /v1/messages and other
+        # LITELLM_METADATA_ROUTES).
+        if proxy_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            proxy_span = _litellm_metadata.get("litellm_parent_otel_span", None)
+
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -2717,6 +2724,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         traceparent = headers.get("traceparent", None)
         _metadata = litellm_params.get("metadata", {}) or {}
         parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # Fallback: check litellm_metadata (used by /v1/messages and other
+        # LITELLM_METADATA_ROUTES that store proxy-internal metadata
+        # separately from the provider's native "metadata" field).
+        if parent_otel_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            parent_otel_span = _litellm_metadata.get("litellm_parent_otel_span", None)
 
         # Priority 1: Explicit parent span from metadata
         if parent_otel_span is not None:
