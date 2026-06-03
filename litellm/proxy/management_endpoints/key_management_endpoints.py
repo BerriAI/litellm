@@ -894,7 +894,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 user_api_key_dict.user_role is not None
                 and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             )
-            if not _is_proxy_admin:
+            _org_inherited_from_team = (
+                team_table is not None
+                and team_table.organization_id is not None
+                and data.organization_id == team_table.organization_id
+            )
+            if not _is_proxy_admin and not _org_inherited_from_team:
                 await _validate_caller_can_assign_key_org(
                     user_api_key_dict=user_api_key_dict,
                     organization_id=data.organization_id,

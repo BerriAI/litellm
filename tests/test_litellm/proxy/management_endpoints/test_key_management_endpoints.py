@@ -3094,6 +3094,249 @@ async def test_generate_key_with_object_permission():
     assert "object_permission" not in key_data
 
 
+@pytest.mark.asyncio
+async def test_generate_key_team_member_inherits_org_skips_membership_check():
+    """Regression: a team member creating a key for an org-scoped team must not
+    be blocked by the org-membership check.
+
+    When ``organization_id`` is inherited from the key's team (via
+    ``apply_enterprise_key_management_params`` -> ``add_team_organization_id``),
+    the caller already passed team-level authorization. Requiring an explicit
+    ``LiteLLM_OrganizationMembership`` row on top of that broke the normal admin
+    workflow (admins only add users to teams). This asserts the org-membership
+    check is skipped when the org id came from the caller's team.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    org_id = "org-from-team"
+
+    # Team belongs to an org; caller is a team member but NOT an explicit member
+    # of that organization (the regression scenario).
+    mock_team_table = MagicMock()
+    mock_team_table.organization_id = org_id
+    mock_team_table.metadata = None
+
+    mock_validate_org = AsyncMock()
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "alice",
+            "team_id": "team-1",
+        }
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_search_tools_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
+            mock_validate_org,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_org_object",
+            new_callable=AsyncMock,
+            return_value=MagicMock(litellm_budget_table=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_org_key_limits",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            mock_generate_key,
+        ),
+    ):
+        result = await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                user_id="alice",
+                team_id="team-1",
+                organization_id=org_id,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="alice",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+            ),
+            litellm_changed_by=None,
+            team_table=mock_team_table,
+        )
+
+    # Key creation proceeded for the team member ...
+    mock_generate_key.assert_awaited_once()
+    assert result is not None
+    # ... and the org-membership check was bypassed because organization_id was
+    # inherited from the caller's team.
+    mock_validate_org.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_key_foreign_org_without_team_still_enforces_membership():
+    """VERIA-55: a caller assigning a key to an organization that was NOT
+    inherited from a team must still pass the org-membership check.
+
+    This guards the IDOR fix: ``team_table is None`` (or an org id that does not
+    match the team) means the org id did not come from team context, so the
+    explicit membership validation must run.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    foreign_org_id = "someone-elses-org"
+
+    mock_validate_org = AsyncMock()
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "alice",
+            "team_id": None,
+        }
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
+            mock_validate_org,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_org_object",
+            new_callable=AsyncMock,
+            return_value=MagicMock(litellm_budget_table=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_org_key_limits",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            mock_generate_key,
+        ),
+    ):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                user_id="alice",
+                organization_id=foreign_org_id,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="alice",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    # No team context -> the org-membership check must still run.
+    mock_validate_org.assert_awaited_once()
+    assert mock_validate_org.call_args.kwargs["organization_id"] == foreign_org_id
+
+
+@pytest.mark.asyncio
+async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_membership():
+    """VERIA-55: when a team is present but its organization_id differs from the
+    organization_id on the key request, the org-membership check must still run."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    team_org_id = "other-org"
+    foreign_org_id = "someone-elses-org"
+
+    mock_team_table = MagicMock()
+    mock_team_table.organization_id = team_org_id
+    mock_team_table.metadata = None
+
+    mock_validate_org = AsyncMock()
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "alice",
+            "team_id": "team-1",
+        }
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_search_tools_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm_enterprise.proxy.management_endpoints.key_management_endpoints.apply_enterprise_key_management_params",
+            side_effect=lambda data, team_table: data,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
+            mock_validate_org,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_org_object",
+            new_callable=AsyncMock,
+            return_value=MagicMock(litellm_budget_table=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_org_key_limits",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            mock_generate_key,
+        ),
+    ):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                user_id="alice",
+                team_id="team-1",
+                organization_id=foreign_org_id,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="alice",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+            ),
+            litellm_changed_by=None,
+            team_table=mock_team_table,
+        )
+
+    mock_validate_org.assert_awaited_once()
+    assert mock_validate_org.call_args.kwargs["organization_id"] == foreign_org_id
+
+
 # ============================================
 # Organization Key Limit Tests
 # ============================================
