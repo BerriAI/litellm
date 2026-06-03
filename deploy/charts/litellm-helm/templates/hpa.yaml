@@ -16,7 +16,11 @@ spec:
   behavior:
     {{- toYaml .Values.autoscaling.behavior | nindent 4 }}
   {{- end }}
+  {{- if coalesce .Values.autoscaling.metrics .Values.autoscaling.targetCPUUtilizationPercentage .Values.autoscaling.targetMemoryUtilizationPercentage }}
   metrics:
+    {{- with .Values.autoscaling.metrics }}
+    {{- toYaml . | nindent 4 }}
+    {{- else }}
     {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
     - type: Resource
       resource:
@@ -33,4 +37,6 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
     {{- end }}
+    {{- end }}
+  {{- end }}
 {{- end }}
