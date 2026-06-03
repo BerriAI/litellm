@@ -40,10 +40,13 @@ from litellm.batches.batch_utils import (
     _get_file_content_as_dictionary,
     _get_models_from_batch_input_file_content,
 )
-from litellm.exceptions import RateLimitErrorCategory, RateLimitType
+from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
-from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
+)
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 if TYPE_CHECKING:
@@ -444,14 +447,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 "reset_at": reset_time_formatted,
             },
             category=RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT,
-            # The batch limiter's `limit_type` arg is a hard-typed string —
-            # always either "requests" or "tokens" — so we map it directly
-            # onto the public enum without hitting the helper's None branch.
-            rate_limit_type=(
-                RateLimitType.TOKENS
-                if limit_type == "tokens"
-                else RateLimitType.REQUESTS
-            ),
+            rate_limit_type=map_v3_rate_limit_type(limit_type),
             model=resolved_model,
             llm_provider=llm_provider,
         )
