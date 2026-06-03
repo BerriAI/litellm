@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import Mock, patch
 
 
@@ -243,3 +242,19 @@ def test_default_fallback_type_is_general():
             fallbacks=fallbacks_config, model_group="claude-4-sonnet"
         )
         assert result == ["bedrock-claude-sonnet-4"]
+
+
+def test_string_fallbacks_do_not_mutate_router_config():
+    """String fallback entries should not be popped from router config."""
+    from litellm.proxy.auth.model_checks import get_all_fallbacks
+
+    fallbacks_config = ["generic-fallback"]
+    router = create_mock_router(fallbacks=fallbacks_config)
+
+    assert get_all_fallbacks("primary-model", llm_router=router) == [
+        "generic-fallback"
+    ]
+    assert router.fallbacks == ["generic-fallback"]
+    assert get_all_fallbacks("primary-model", llm_router=router) == [
+        "generic-fallback"
+    ]

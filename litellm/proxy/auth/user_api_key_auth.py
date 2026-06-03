@@ -12,7 +12,7 @@ import fnmatch
 import re
 import secrets
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, Iterator, List, Optional, Set, Tuple, Union, cast
 
 import fastapi
 from fastapi import HTTPException, Request, WebSocket, status
@@ -61,6 +61,7 @@ from litellm.proxy.auth.auth_utils import (
     route_in_additonal_public_routes,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.proxy.auth.model_checks import get_all_fallbacks
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -1032,24 +1033,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         else None
                     )
 
-                    # Check if model has zero cost - if so, skip all budget checks
                     model = _get_model_from_request_context(
                         request_data=request_data,
                         route=route,
                         request=request,
                         llm_router=llm_router,
                     )
-                    skip_budget_checks = False
-                    if model is not None and llm_router is not None:
-                        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
-                        skip_budget_checks = _is_model_cost_zero(
-                            model=model, llm_router=llm_router
+                    skip_budget_checks = _should_skip_budget_checks(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                        llm_router=llm_router,
+                    )
+                    if skip_budget_checks:
+                        verbose_proxy_logger.info(
+                            f"Skipping all budget checks for zero-cost model: {model}"
                         )
-                        if skip_budget_checks:
-                            verbose_proxy_logger.info(
-                                f"Skipping all budget checks for zero-cost model: {model}"
-                            )
 
                     # Fetch project object for JWT path if project_id is set
                     _jwt_project_obj = None
@@ -1450,24 +1449,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         f"User={valid_token.user_id} has been deactivated via SCIM. Keys owned by this user cannot be used."
                     )
 
-            # Check 2a. Check if model has zero cost - if so, skip all budget checks
             model = _get_model_from_request_context(
                 request_data=request_data,
                 route=route,
                 request=request,
                 llm_router=llm_router,
             )
-            skip_budget_checks = False
-            if model is not None and llm_router is not None:
-                from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
-                skip_budget_checks = _is_model_cost_zero(
-                    model=model, llm_router=llm_router
+            skip_budget_checks = _should_skip_budget_checks(
+                request_data=request_data,
+                route=route,
+                request=request,
+                llm_router=llm_router,
+            )
+            if skip_budget_checks:
+                verbose_proxy_logger.info(
+                    f"Skipping all budget checks for zero-cost model: {model}"
                 )
-                if skip_budget_checks:
-                    verbose_proxy_logger.info(
-                        f"Skipping all budget checks for zero-cost model: {model}"
-                    )
 
             # Check 3. Check if user is in their team budget
             if not skip_budget_checks and valid_token.team_member_spend is not None:
@@ -2166,9 +2163,113 @@ def _should_skip_budget_checks(
         request=request,
         llm_router=llm_router,
     )
-    if model is not None and llm_router is not None:
-        return _is_model_cost_zero(model=model, llm_router=llm_router)
-    return False
+    if model is None or llm_router is None:
+        return False
+
+    if not _is_model_cost_zero(model=model, llm_router=llm_router):
+        return False
+
+    fallback_models = _get_budget_relevant_fallback_models(
+        model=model,
+        request_data=request_data,
+        llm_router=llm_router,
+    )
+    if fallback_models and not _is_model_cost_zero(
+        model=fallback_models,
+        llm_router=llm_router,
+    ):
+        verbose_proxy_logger.debug(
+            "Budget checks will run for zero-cost model %s because one or more "
+            "configured fallback models can incur cost: %s",
+            model,
+            fallback_models,
+        )
+        return False
+
+    return True
+
+
+def _get_budget_relevant_fallback_models(
+    model: Union[str, List[str]],
+    request_data: dict,
+    llm_router: Any,
+) -> List[str]:
+    """Return request/router fallback models that can be reached from ``model``.
+
+    A zero-cost primary model must not skip budget checks if a fallback can
+    route the same request to a paid model.
+    """
+
+    fallback_names: List[str] = []
+    model_names = [model] if isinstance(model, str) else model
+    seen_router_models: Set[str] = set()
+    router_model_queue = list(model_names)
+
+    override_settings = request_data.get("router_settings_override")
+    for fallback_key in ROUTER_FALLBACK_FIELDS:
+        request_fallbacks = list(
+            iter_router_fallback_model_names(request_data.get(fallback_key))
+        )
+        fallback_names.extend(request_fallbacks)
+        router_model_queue.extend(request_fallbacks)
+        if isinstance(override_settings, dict):
+            override_fallbacks = list(
+                iter_router_fallback_model_names(override_settings.get(fallback_key))
+            )
+            fallback_names.extend(override_fallbacks)
+            router_model_queue.extend(override_fallbacks)
+
+    while router_model_queue:
+        model_name = router_model_queue.pop(0)
+        if not isinstance(model_name, str):
+            continue
+        if model_name in seen_router_models:
+            continue
+        seen_router_models.add(model_name)
+
+        for fallback_type in ("general", "context_window", "content_policy"):
+            router_fallbacks = _get_router_configured_fallback_models(
+                model_name=model_name,
+                llm_router=llm_router,
+                fallback_type=fallback_type,
+            )
+            fallback_names.extend(router_fallbacks)
+            router_model_queue.extend(router_fallbacks)
+
+    return list(dict.fromkeys(fallback_names))
+
+
+def _get_router_configured_fallback_models(
+    model_name: str,
+    llm_router: Any,
+    fallback_type: str,
+) -> List[str]:
+    """Return router fallback models for standard and generic fallback shapes."""
+
+    fallback_models = list(
+        iter_router_fallback_model_names(
+            get_all_fallbacks(
+                model=model_name,
+                llm_router=llm_router,
+                fallback_type=fallback_type,
+            )
+        )
+    )
+
+    fallback_attr = {
+        "general": "fallbacks",
+        "context_window": "context_window_fallbacks",
+        "content_policy": "content_policy_fallbacks",
+    }.get(fallback_type)
+    fallbacks_config = getattr(llm_router, fallback_attr, []) if fallback_attr else []
+    if isinstance(fallbacks_config, list):
+        for entry in fallbacks_config:
+            if isinstance(entry, str):
+                fallback_models.append(entry)
+            elif isinstance(entry, dict) and isinstance(entry.get("model"), str):
+                fallback_models.append(entry["model"])
+
+    return list(dict.fromkeys(fallback_models))
 
 
 @tracer.wrap()

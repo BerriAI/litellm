@@ -11,6 +11,10 @@ import copy
 
 import litellm
 from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+from litellm.proxy.auth.user_api_key_auth import (
+    _get_budget_relevant_fallback_models,
+    _should_skip_budget_checks,
+)
 from litellm.router import Router
 
 
@@ -183,3 +187,400 @@ class TestUnmappedModelBudgetEnforcement:
 
         result = _is_model_cost_zero(model="paid-model", llm_router=mock_router)
         assert result is False
+
+    def test_zero_cost_model_with_paid_router_fallback_enforces_budget(self):
+        """A free primary must not bypass budgets when router fallback is paid."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-fallback",
+                    "litellm_params": {
+                        "model": "openai/paid-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                },
+            ],
+            fallbacks=[{"free-primary": ["paid-fallback"]}],
+        )
+
+        assert (
+            _is_model_cost_zero(model="free-primary", llm_router=router) is True
+        )
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-primary"},
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_budget_checks_run_without_router_context(self):
+        """Missing router context must not skip budget checks."""
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-primary"},
+                route="/chat/completions",
+                request=None,
+                llm_router=None,
+            )
+            is False
+        )
+
+    def test_paid_primary_model_enforces_budget_without_checking_fallbacks(self):
+        """Paid primary models keep budget checks enabled regardless of fallbacks."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "paid-primary",
+                    "litellm_params": {
+                        "model": "openai/paid-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                }
+            ]
+        )
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "paid-primary"},
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_zero_cost_model_with_zero_cost_router_fallback_skips_budget(self):
+        """All-zero primary/fallback chain keeps the existing skip behavior."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "free-fallback",
+                    "litellm_params": {
+                        "model": "openai/free-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+            ],
+            fallbacks=[{"free-primary": ["free-fallback"]}],
+        )
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-primary"},
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is True
+        )
+
+    def test_zero_cost_model_with_transitive_paid_fallback_enforces_budget(self):
+        """A paid fallback later in the router chain keeps budget checks enabled."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "free-fallback",
+                    "litellm_params": {
+                        "model": "openai/free-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-fallback",
+                    "litellm_params": {
+                        "model": "openai/paid-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                },
+            ],
+            fallbacks=[
+                {"free-primary": ["free-fallback"]},
+                {"free-fallback": ["paid-fallback"]},
+            ],
+        )
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-primary"},
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_zero_cost_model_with_paid_request_fallback_enforces_budget(self):
+        """Client-provided paid fallbacks also keep budget checks enabled."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-fallback",
+                    "litellm_params": {
+                        "model": "openai/paid-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                },
+            ]
+        )
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={
+                    "model": "free-primary",
+                    "fallbacks": [{"free-primary": ["paid-fallback"]}],
+                },
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_request_fallback_with_transitive_paid_router_fallback_enforces_budget(
+        self,
+    ):
+        """Request fallback models are also checked through router fallback chains."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "free-request-fallback",
+                    "litellm_params": {
+                        "model": "openai/free-request-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-router-fallback",
+                    "litellm_params": {
+                        "model": "openai/paid-router-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                },
+            ],
+            fallbacks=[
+                {"free-request-fallback": ["paid-router-fallback"]},
+            ],
+        )
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={
+                    "model": "free-primary",
+                    "fallbacks": [{"free-primary": ["free-request-fallback"]}],
+                },
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_zero_cost_model_with_paid_generic_router_fallback_enforces_budget(self):
+        """Generic router fallback lists are checked beyond the first entry."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "free-generic-fallback",
+                    "litellm_params": {
+                        "model": "openai/free-generic-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-generic-fallback",
+                    "litellm_params": {
+                        "model": "openai/paid-generic-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                },
+            ],
+        )
+        router.fallbacks = ["free-generic-fallback", "paid-generic-fallback"]
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-primary"},
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_zero_cost_model_with_paid_generic_dict_fallback_enforces_budget(self):
+        """Generic router fallback dict entries are included in budget checks."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-dict-fallback",
+                    "litellm_params": {
+                        "model": "openai/paid-dict-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                },
+            ],
+            fallbacks=[{"model": "paid-dict-fallback"}],
+        )
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={"model": "free-primary"},
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_zero_cost_model_with_paid_override_fallback_enforces_budget(self):
+        """Per-request router overrides are included in budget checks."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                },
+                {
+                    "model_name": "paid-override-fallback",
+                    "litellm_params": {
+                        "model": "openai/paid-override-fallback",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.000001,
+                        "output_cost_per_token": 0.000002,
+                    },
+                },
+            ]
+        )
+
+        assert (
+            _should_skip_budget_checks(
+                request_data={
+                    "model": "free-primary",
+                    "router_settings_override": {
+                        "fallbacks": [{"free-primary": ["paid-override-fallback"]}]
+                    },
+                },
+                route="/chat/completions",
+                request=None,
+                llm_router=router,
+            )
+            is False
+        )
+
+    def test_budget_fallback_discovery_ignores_non_string_model_entries(self):
+        """Defensive fallback traversal tolerates malformed model lists."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "free-primary",
+                    "litellm_params": {
+                        "model": "openai/free-primary",
+                        "api_key": "sk-fake",
+                        "input_cost_per_token": 0.0,
+                        "output_cost_per_token": 0.0,
+                    },
+                }
+            ]
+        )
+
+        assert (
+            _get_budget_relevant_fallback_models(
+                model=["free-primary", {"bad": "shape"}],
+                request_data={},
+                llm_router=router,
+            )
+            == []
+        )

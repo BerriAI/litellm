@@ -1551,6 +1551,72 @@ class TestJWTOAuth2Coexistence:
             assert result.user_id == "jwt-human-user"
 
     @pytest.mark.asyncio
+    async def test_jwt_auth_builder_uses_budget_skip_helper_result(self):
+        """Non-admin JWT auth should also defer budget skipping to one helper."""
+        from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        general_settings = {
+            "enable_oauth2_auth": True,
+            "enable_jwt_auth": True,
+        }
+
+        mock_jwt_result = {
+            "is_proxy_admin": False,
+            "team_object": None,
+            "user_object": None,
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": "jwt-team",
+            "user_id": "jwt-human-user",
+            "end_user_id": None,
+            "org_id": None,
+            "team_membership": None,
+            "jwt_claims": {"sub": "user1"},
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", None),
+            patch("litellm.proxy.proxy_server.llm_router", None),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+                return_value=mock_jwt_result,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._should_skip_budget_checks",
+                return_value=True,
+            ) as mock_should_skip,
+        ):
+            litellm.proxy.proxy_server.jwt_handler.update_environment(
+                prisma_client=None,
+                user_api_key_cache=DualCache(),
+                litellm_jwtauth=LiteLLM_JWTAuth(),
+            )
+
+            result = await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=f"Bearer {jwt_token}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "free-primary"},
+            )
+
+        mock_should_skip.assert_called_once()
+        assert result.user_id == "jwt-human-user"
+
+    @pytest.mark.asyncio
     async def test_routing_override_routes_matching_jwt_to_oauth2(self):
         """
         When routing_overrides match JWT claims, route JWT-shaped token to OAuth2.
@@ -2362,6 +2428,88 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
                 f"on the async hot path — use async_{_m}() instead"
             )
 
+    finally:
+        for k, v in _originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_standard_auth_builder_uses_budget_skip_helper_result():
+    """Standard key auth should defer zero-cost budget skipping to one helper."""
+    from starlette.datastructures import URL
+    from starlette.requests import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+
+    api_key = "sk-test-budget-skip-helper"
+    valid_token = UserAPIKeyAuth(
+        api_key=api_key,
+        token=api_key,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    mock_cache = AsyncMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=valid_token)
+    mock_cache.async_set_cache = AsyncMock(return_value=None)
+    mock_cache.delete_cache = MagicMock()
+
+    mock_proxy_logging_obj = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache = MagicMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache = AsyncMock()
+    mock_proxy_logging_obj.internal_usage_cache.dual_cache.async_delete_cache = (
+        AsyncMock()
+    )
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    _attrs = {
+        "prisma_client": MagicMock(),
+        "user_api_key_cache": mock_cache,
+        "proxy_logging_obj": mock_proxy_logging_obj,
+        "master_key": "sk-master-key",
+        "general_settings": {},
+        "llm_model_list": [],
+        "llm_router": None,
+        "open_telemetry_logger": None,
+        "model_max_budget_limiter": MagicMock(),
+        "user_custom_auth": None,
+        "jwt_handler": None,
+        "litellm_proxy_admin_name": "admin",
+    }
+    _originals = {k: getattr(_proxy_server_mod, k, None) for k in _attrs}
+
+    try:
+        for k, v in _attrs.items():
+            setattr(_proxy_server_mod, k, v)
+
+        request = Request(scope={"type": "http"})
+        request._url = URL(url="/chat/completions")
+
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_key_object",
+                new_callable=AsyncMock,
+                return_value=valid_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._should_skip_budget_checks",
+                return_value=True,
+            ) as mock_should_skip,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=request,
+                api_key=f"Bearer {api_key}",
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "free-primary"},
+            )
+
+        mock_should_skip.assert_called_once()
+        assert result.user_role == LitellmUserRoles.INTERNAL_USER
     finally:
         for k, v in _originals.items():
             setattr(_proxy_server_mod, k, v)
