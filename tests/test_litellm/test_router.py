@@ -1009,8 +1009,14 @@ async def test_ageneric_api_call_deployment_model_overrides_alias():
         ]
     )
 
+    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+        # Simulate the alias leaking into kwargs (as happens when
+        # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
+        # calling the helper through async_function_with_fallbacks).
+        kwargs["model"] = "not-gemini-2.5-flash"
+
     with patch.object(router, "async_get_available_deployment") as mock_dep, \
-         patch.object(router, "_update_kwargs_with_deployment"), \
+         patch.object(router, "_update_kwargs_with_deployment", side_effect=inject_alias_into_kwargs), \
          patch.object(router, "async_routing_strategy_pre_call_checks"), \
          patch.object(router, "_get_client", return_value=None):
         mock_dep.return_value = {

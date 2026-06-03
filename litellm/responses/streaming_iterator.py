@@ -1780,8 +1780,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        call_kwargs.pop("model", None)
-        model = self.model
+        model = call_kwargs.pop("model", None) or self.model
 
         previous_response_id: Optional[str] = call_kwargs.pop(
             "previous_response_id", None
