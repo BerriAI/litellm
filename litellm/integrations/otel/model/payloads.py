@@ -95,6 +95,8 @@ class LLMUsage:
 class SpanError:
     error_type: str | None = None
     message: str | None = None
+    rate_limit_category: str | None = None
+    rate_limit_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -498,6 +500,8 @@ def _parse_error(payload: "StandardLoggingPayload") -> SpanError | None:
     return SpanError(
         error_type=as_str(info.get("error_class")) or as_str(info.get("error_code")),
         message=as_str(info.get("error_message")) or as_str(payload.get("error_str")),
+        rate_limit_category=as_str(info.get("error_rate_limit_category")),
+        rate_limit_type=as_str(info.get("error_rate_limit_type")),
     )
 
 
