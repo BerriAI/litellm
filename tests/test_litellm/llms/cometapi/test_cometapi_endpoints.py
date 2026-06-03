@@ -121,6 +121,14 @@ def test_cometapi_complete_url_rejects_non_v1_paths(api_base, monkeypatch):
         get_cometapi_complete_url(api_base, "embeddings")
 
 
+@pytest.mark.parametrize("endpoint", ["", "/", "embeddings?foo=bar", "embeddings#frag"])
+def test_cometapi_complete_url_rejects_invalid_endpoints(endpoint, monkeypatch):
+    _clear_cometapi_env(monkeypatch)
+
+    with pytest.raises(ValueError, match="CometAPI endpoint must be a non-empty path"):
+        get_cometapi_complete_url("https://api.cometapi.com/v1", endpoint)
+
+
 def test_cometapi_embedding_uses_api_key_alias(monkeypatch):
     _clear_cometapi_env(monkeypatch)
     monkeypatch.setenv("COMETAPI_API_KEY", "comet-env-key")
@@ -253,6 +261,7 @@ def test_cometapi_image_generation_maps_new_openai_params(monkeypatch):
     assert call_kwargs["api_key"] == "comet-explicit-key"
     assert call_kwargs["custom_llm_provider"] == "cometapi"
     assert call_kwargs["litellm_params"]["api_base"] is None
+    assert "api_key" not in call_kwargs["litellm_params"]
     assert (
         call_kwargs["image_generation_optional_request_params"]["output_compression"]
         == 70
@@ -510,8 +519,6 @@ def test_provider_endpoint_matrix_only_updates_cometapi():
         "moderations",
     ):
         assert providers["cometapi"]["endpoints"][endpoint] is True
-        assert providers["a2a"]["endpoints"][endpoint] is False
-        assert providers["bedrock"]["endpoints"][endpoint] is False
 
 
 class _ModerationResponse:

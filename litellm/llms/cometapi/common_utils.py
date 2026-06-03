@@ -25,6 +25,9 @@ def get_cometapi_api_base(api_base: Optional[str] = None) -> str:
 def get_cometapi_complete_url(api_base: Optional[str], endpoint: str) -> str:
     base_url = get_cometapi_api_base(api_base).rstrip("/")
     normalized_endpoint = endpoint.strip("/")
+    parsed_endpoint = urlsplit(normalized_endpoint)
+    if not normalized_endpoint or parsed_endpoint.query or parsed_endpoint.fragment:
+        raise ValueError("CometAPI endpoint must be a non-empty path")
     parsed_base_url = urlsplit(base_url)
     path_segments = [segment for segment in parsed_base_url.path.split("/") if segment]
     endpoint_segments = normalized_endpoint.split("/")

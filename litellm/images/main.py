@@ -442,8 +442,8 @@ def image_generation(  # noqa: PLR0915
             if custom_llm_provider == litellm.LlmProviders.COMETAPI:
                 _api_base = api_base
                 api_key = api_key or dynamic_api_key or litellm.cometapi_key
+                litellm_params_dict.pop("api_key", None)
             litellm_params_dict["api_base"] = _api_base
-            litellm_params_dict["api_key"] = api_key
 
             return llm_http_handler.image_generation_handler(
                 api_key=api_key,
