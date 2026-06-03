@@ -128,7 +128,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         tools_to_check: List[ChatCompletionToolParam] = (
             chat_completion_compatible_request.get("tools", [])
         )
-        task_mappings: List[Tuple[int, Optional[int]]] = []
+        task_mappings: List[Tuple[int, Optional[int], Optional[int]]] = []
 
         # Step 1: Extract all text content and images
         for msg_idx, message in enumerate(messages):
@@ -202,7 +202,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: List[str],
         images_to_check: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        task_mappings: List[Tuple[int, Optional[int], Optional[int]]],
         skip_system_message: bool = False,
         skip_tool_message: bool = False,
     ) -> None:
@@ -226,7 +226,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if content is not None and isinstance(content, str):
             # Simple string content
             texts_to_check.append(content)
-            task_mappings.append((msg_idx, None))
+            task_mappings.append((msg_idx, None, None))
 
         elif content is not None and isinstance(content, list):
             # List content (e.g., multimodal with text and images)
@@ -235,23 +235,27 @@ class AnthropicMessagesHandler(BaseTranslation):
                 text_str = content_item.get("text", None)
                 if text_str is not None:
                     texts_to_check.append(text_str)
-                    task_mappings.append((msg_idx, int(content_idx)))
+                    task_mappings.append((msg_idx, int(content_idx), None))
 
                 # Anthropic tool_result blocks carry their text under "content"
                 # (string or list of blocks), not "text". Without this, tool
                 # outputs (file reads, API responses) bypass guardrail scanning.
+                # The block index is tracked so sanitized text is written back to
+                # the correct location (see _apply_guardrail_responses_to_input).
                 if content_item.get("type") == "tool_result":
                     tool_result_content = content_item.get("content")
                     if isinstance(tool_result_content, str):
                         texts_to_check.append(tool_result_content)
-                        task_mappings.append((msg_idx, int(content_idx)))
+                        task_mappings.append((msg_idx, int(content_idx), None))
                     elif isinstance(tool_result_content, list):
-                        for block in tool_result_content:
+                        for block_idx, block in enumerate(tool_result_content):
                             if isinstance(block, dict):
                                 block_text = block.get("text")
                                 if block_text is not None:
                                     texts_to_check.append(block_text)
-                                    task_mappings.append((msg_idx, int(content_idx)))
+                                    task_mappings.append(
+                                        (msg_idx, int(content_idx), int(block_idx))
+                                    )
 
                 # Extract images
                 if content_item.get("type") == "image":
@@ -282,7 +286,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         self,
         messages: List[Dict[str, Any]],
         responses: List[str],
-        task_mappings: List[Tuple[int, Optional[int]]],
+        task_mappings: List[Tuple[int, Optional[int], Optional[int]]],
     ) -> None:
         """
         Apply guardrail responses back to input messages.
@@ -293,6 +297,7 @@ class AnthropicMessagesHandler(BaseTranslation):
             mapping = task_mappings[task_idx]
             msg_idx = cast(int, mapping[0])
             content_idx_optional = cast(Optional[int], mapping[1])
+            block_idx_optional = cast(Optional[int], mapping[2])
 
             content = messages[msg_idx].get("content", None)
             if content is None:
@@ -303,10 +308,24 @@ class AnthropicMessagesHandler(BaseTranslation):
                 messages[msg_idx]["content"] = guardrail_response
 
             elif isinstance(content, list) and content_idx_optional is not None:
-                # Replace specific text item in list content
-                messages[msg_idx]["content"][content_idx_optional][
-                    "text"
-                ] = guardrail_response
+                content_item = content[content_idx_optional]
+                if content_item.get("type") == "tool_result":
+                    # tool_result text lives under "content" (string or list of
+                    # blocks), not "text" — write the sanitized text back there so
+                    # redactions are actually applied to the outgoing tool output.
+                    tool_result_content = content_item.get("content")
+                    if isinstance(tool_result_content, str):
+                        content_item["content"] = guardrail_response
+                    elif (
+                        isinstance(tool_result_content, list)
+                        and block_idx_optional is not None
+                    ):
+                        tool_result_content[block_idx_optional][
+                            "text"
+                        ] = guardrail_response
+                else:
+                    # Replace specific text item in list content
+                    content_item["text"] = guardrail_response
 
     async def process_output_response(
         self,
