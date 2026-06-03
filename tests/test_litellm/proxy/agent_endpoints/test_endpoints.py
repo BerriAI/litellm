@@ -318,8 +318,55 @@ async def test_attach_keys_to_agents_groups_by_agent_and_omits_secret():
 
     # Only summary fields are exposed; the row's user_id must not be carried.
     summary = agent_with_keys.keys[0]
-    assert not hasattr(summary, "user_id")
     assert set(summary.model_dump().keys()) == {"token", "key_alias", "key_name"}
+
+
+class TestAgentByIdKeyRedaction:
+    """GET /v1/agents/{id} surfaces attached keys to admins but never to
+    non-admins, even when the agent has keys attached."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, monkeypatch):
+        self.mock_registry = MagicMock()
+        self.mock_registry.get_agent_by_id = MagicMock(
+            return_value=_sample_agent_response()
+        )
+        monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", self.mock_registry)
+
+    def _get_as(self, role: LitellmUserRoles):
+        key_row = MagicMock()
+        key_row.token = "hash-aaa"
+        key_row.agent_id = "agent-123"
+        key_row.key_alias = "primary"
+        key_row.key_name = "sk-...aaa"
+
+        test_client = _make_app_with_role(role)
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value=None
+            )
+            mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
+                return_value=[key_row]
+            )
+            return test_client.get(
+                "/v1/agents/agent-123", headers={"Authorization": "Bearer k"}
+            )
+
+    def test_admin_sees_attached_keys(self):
+        resp = self._get_as(LitellmUserRoles.PROXY_ADMIN)
+        assert resp.status_code == 200
+        keys = resp.json()["keys"]
+        assert keys is not None
+        assert keys[0] == {
+            "token": "hash-aaa",
+            "key_alias": "primary",
+            "key_name": "sk-...aaa",
+        }
+
+    def test_non_admin_never_sees_keys(self):
+        resp = self._get_as(LitellmUserRoles.INTERNAL_USER)
+        assert resp.status_code == 200
+        assert resp.json()["keys"] is None
 
 
 # ---------- RBAC enforcement tests ----------

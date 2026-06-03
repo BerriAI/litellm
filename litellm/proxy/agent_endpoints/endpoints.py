@@ -105,6 +105,7 @@ def _redact_sensitive_agent_fields(
         copy = agent.model_copy(deep=True)
         copy.static_headers = None
         copy.extra_headers = None
+        copy.keys = None
         if copy.litellm_params:
             copy.litellm_params = _get_masked_values(
                 copy.litellm_params,
