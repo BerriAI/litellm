@@ -15,16 +15,18 @@ interface GuardrailConfigProps {
 }
 
 const versions = [
-  { id: "v3", label: "v3 (current)", date: "2026-02-18", author: "admin@company.com", changes: "Adjusted sensitivity for medical terms" },
+  {
+    id: "v3",
+    label: "v3 (current)",
+    date: "2026-02-18",
+    author: "admin@company.com",
+    changes: "Adjusted sensitivity for medical terms",
+  },
   { id: "v2", label: "v2", date: "2026-02-10", author: "admin@company.com", changes: "Added custom categories list" },
   { id: "v1", label: "v1", date: "2026-01-28", author: "admin@company.com", changes: "Initial configuration" },
 ];
 
-export function GuardrailConfig({
-  guardrailName,
-  guardrailType,
-  provider,
-}: GuardrailConfigProps) {
+export function GuardrailConfig({ guardrailName, guardrailType, provider }: GuardrailConfigProps) {
   const [action, setAction] = useState("block");
   const [enabled, setEnabled] = useState(true);
   const [customCode, setCustomCode] = useState("");
@@ -76,7 +78,9 @@ export function GuardrailConfig({
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <span className={`font-mono text-xs font-medium ${v.id === version ? "text-blue-600" : "text-gray-500"}`}>
+                  <span
+                    className={`font-mono text-xs font-medium ${v.id === version ? "text-blue-600" : "text-gray-500"}`}
+                  >
                     {v.id}
                   </span>
                   <span className="text-gray-700">{v.changes}</span>
@@ -161,9 +165,7 @@ export function GuardrailConfig({
               <CodeOutlined className="text-gray-500" />
               Custom Code Override
             </h3>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Replace the built-in guardrail with custom evaluation code
-            </p>
+            <p className="text-xs text-gray-500 mt-0.5">Replace the built-in guardrail with custom evaluation code</p>
           </div>
           <Switch checked={useCustomCode} onChange={setUseCustomCode} />
         </div>
@@ -207,9 +209,7 @@ export function GuardrailConfig({
             </span>
           )}
 
-          {rerunStatus === "error" && (
-            <span className="text-sm text-red-600">Error running tests</span>
-          )}
+          {rerunStatus === "error" && <span className="text-sm text-red-600">Error running tests</span>}
         </div>
       </div>
     </div>

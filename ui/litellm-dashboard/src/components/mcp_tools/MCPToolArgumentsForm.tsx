@@ -9,9 +9,7 @@ const isPlainObject = (value: unknown): value is Record<string, any> =>
 function buildArrayItems(items?: InputSchemaProperty | InputSchemaProperty[]): any[] {
   if (!items) return [];
   if (Array.isArray(items)) {
-    return items
-      .map((item) => buildDefaultValue(item))
-      .filter((value) => value !== undefined);
+    return items.map((item) => buildDefaultValue(item)).filter((value) => value !== undefined);
   }
   const itemDefault = buildDefaultValue(items);
   return itemDefault !== undefined ? [itemDefault] : [];
@@ -103,10 +101,7 @@ function convertFormValues(
           try {
             const parsed = typeof value === "string" ? JSON.parse(value) : value;
             const isValidObject =
-              prop.type === "object" &&
-              parsed !== null &&
-              typeof parsed === "object" &&
-              !Array.isArray(parsed);
+              prop.type === "object" && parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
             const isValidArray = prop.type === "array" && Array.isArray(parsed);
             if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
               convertedValues[key] = parsed;
@@ -129,8 +124,7 @@ function convertFormValues(
     }
   });
 
-  const isNestedParams =
-    schema.properties?.params?.type === "object" && schema.properties.params.properties;
+  const isNestedParams = schema.properties?.params?.type === "object" && schema.properties.params.properties;
 
   return isNestedParams ? { params: convertedValues } : convertedValues;
 }
@@ -165,10 +159,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
     }, [tool.inputSchema]);
 
     const actualSchema: InputSchema = useMemo(() => {
-      if (
-        schema.properties?.params?.type === "object" &&
-        schema.properties.params.properties
-      ) {
+      if (schema.properties?.params?.type === "object" && schema.properties.params.properties) {
         return {
           type: "object",
           properties: schema.properties.params.properties,
@@ -217,9 +208,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
     if (!actualSchema.properties) {
       return (
         <Form form={form} layout="vertical" className={className}>
-          <div className="py-4 text-center text-sm text-gray-500">
-            No parameters required for this tool.
-          </div>
+          <div className="py-4 text-center text-sm text-gray-500">No parameters required for this tool.</div>
         </Form>
       );
     }
@@ -267,10 +256,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                               typeof parsed === "object" &&
                               !Array.isArray(parsed);
                             const isValidArray = prop.type === "array" && Array.isArray(parsed);
-                            if (
-                              (prop.type === "object" && isValidObject) ||
-                              (prop.type === "array" && isValidArray)
-                            ) {
+                            if ((prop.type === "object" && isValidObject) || (prop.type === "array" && isValidArray)) {
                               return Promise.resolve();
                             }
                             return Promise.reject(
@@ -294,10 +280,7 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                   options={prop.enum.map((v) => ({ value: v, label: v }))}
                 />
               ) : prop.type === "string" && !prop.enum ? (
-                <Input
-                  placeholder={prop.description || `Enter ${key}`}
-                  allowClear
-                />
+                <Input placeholder={prop.description || `Enter ${key}`} allowClear />
               ) : prop.type === "number" || prop.type === "integer" ? (
                 <InputNumber
                   step={prop.type === "integer" ? 1 : undefined}
@@ -314,23 +297,18 @@ const MCPToolArgumentsForm = forwardRef<MCPToolArgumentsFormRef, MCPToolArgument
                     { value: false, label: "False" },
                   ]}
                 />
-              ) : (prop.type === "object" || prop.type === "array") ? (
+              ) : prop.type === "object" || prop.type === "array" ? (
                 <Input.TextArea
                   rows={prop.type === "object" ? 4 : 3}
                   placeholder={
                     prop.description ||
-                    (prop.type === "object"
-                      ? `Enter JSON object for ${key}`
-                      : `Enter JSON array for ${key}`)
+                    (prop.type === "object" ? `Enter JSON object for ${key}` : `Enter JSON array for ${key}`)
                   }
                   spellCheck={false}
                   className="font-mono"
                 />
               ) : (
-                <Input
-                  placeholder={prop.description || `Enter ${key}`}
-                  allowClear
-                />
+                <Input placeholder={prop.description || `Enter ${key}`} allowClear />
               )}
             </Form.Item>
           );

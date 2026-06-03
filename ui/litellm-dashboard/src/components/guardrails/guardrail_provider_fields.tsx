@@ -110,7 +110,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
   }
 
   console.log("Value:", value);
-  
+
   // Fields to skip for content filter provider (handled in dedicated steps)
   const contentFilterFieldsToSkip = new Set([
     "patterns",
@@ -121,9 +121,9 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
     "pattern_redaction_format",
     "keyword_redaction_tag",
   ]);
-  
+
   const isContentFilterProvider = shouldRenderContentFilterConfigSettings(selectedProvider);
-  
+
   // Convert object to array of entries and render fields
   const renderFields = (fields: { [key: string]: ProviderParam }, parentKey = "", parentValue?: any) => {
     return Object.entries(fields).map(([fieldKey, field]) => {
@@ -158,9 +158,7 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
       }
 
       const resolvedInitialValue =
-        fieldValue !== undefined
-          ? fieldValue
-          : (field.default_value ?? (field.type === "percentage" ? 0.5 : undefined));
+        fieldValue !== undefined ? fieldValue : field.default_value ?? (field.type === "percentage" ? 0.5 : undefined);
 
       return (
         <Form.Item

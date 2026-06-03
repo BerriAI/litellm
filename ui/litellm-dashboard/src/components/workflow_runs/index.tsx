@@ -50,17 +50,17 @@ interface WorkflowRunMessage {
 // ── design tokens ─────────────────────────────────────────────────────────────
 
 const STATUS_DOT: Record<RunStatus, string> = {
-  pending:   "#a1a1aa",
-  running:   "#3b82f6",
-  paused:    "#f59e0b",
+  pending: "#a1a1aa",
+  running: "#3b82f6",
+  paused: "#f59e0b",
   completed: "#22c55e",
-  failed:    "#ef4444",
+  failed: "#ef4444",
 };
 
 const EVENT_COLOR: Record<string, { bar: string; border: string; text: string }> = {
-  "step.started":  { bar: "#f0fdf4", border: "#86efac", text: "#16a34a" },
-  "step.failed":   { bar: "#fef2f2", border: "#fca5a5", text: "#dc2626" },
-  "hook.waiting":  { bar: "#fffbeb", border: "#fcd34d", text: "#d97706" },
+  "step.started": { bar: "#f0fdf4", border: "#86efac", text: "#16a34a" },
+  "step.failed": { bar: "#fef2f2", border: "#fca5a5", text: "#dc2626" },
+  "hook.waiting": { bar: "#fffbeb", border: "#fcd34d", text: "#d97706" },
   "hook.received": { bar: "#eff6ff", border: "#93c5fd", text: "#2563eb" },
 };
 
@@ -149,15 +149,15 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
   const meta = run.metadata ?? {};
 
   const primaryFields: { key: string; label: string }[] = [
-    { key: "state",            label: "state" },
-    { key: "worktree_path",    label: "worktree" },
+    { key: "state", label: "state" },
+    { key: "worktree_path", label: "worktree" },
     { key: "grill_session_id", label: "grill session" },
-    { key: "session_id",       label: "session" },
+    { key: "session_id", label: "session" },
   ];
 
   const primaryKeys = new Set(["title", ...primaryFields.map((f) => f.key)]);
   const extraEntries = Object.entries(meta).filter(
-    ([k, v]) => !primaryKeys.has(k) && v !== null && v !== undefined && v !== ""
+    ([k, v]) => !primaryKeys.has(k) && v !== null && v !== undefined && v !== "",
   );
 
   return (
@@ -180,9 +180,7 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
         }}
       >
         <StatusDot status={run.status} size={10} />
-        <span style={{ fontSize: 14, fontWeight: 600, color: "#18181b", flex: 1 }}>
-          {runTitle(run)}
-        </span>
+        <span style={{ fontSize: 14, fontWeight: 600, color: "#18181b", flex: 1 }}>{runTitle(run)}</span>
         <span
           style={{
             fontFamily: "monospace",
@@ -263,14 +261,9 @@ const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
   );
 };
 
-const FieldPair: React.FC<{ label: string; children: React.ReactNode }> = ({
-  label,
-  children,
-}) => (
+const FieldPair: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
   <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
-    <span style={{ fontSize: 10, color: "#a1a1aa", textTransform: "uppercase", letterSpacing: "0.06em" }}>
-      {label}
-    </span>
+    <span style={{ fontSize: 10, color: "#a1a1aa", textTransform: "uppercase", letterSpacing: "0.06em" }}>{label}</span>
     <span style={{ fontSize: 12 }}>{children}</span>
   </div>
 );
@@ -320,7 +313,15 @@ const GanttTimeline: React.FC<{
 
       {/* outer run bar */}
       <div style={{ display: "grid", gridTemplateColumns: "160px 1fr", gap: "0 12px", marginBottom: 4 }}>
-        <div style={{ color: "#3f3f46", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingTop: 2 }}>
+        <div
+          style={{
+            color: "#3f3f46",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            paddingTop: 2,
+          }}
+        >
           {runTitle(run)}
         </div>
         <div
@@ -346,9 +347,7 @@ const GanttTimeline: React.FC<{
 
           const nextIdx = events.findIndex((e) => e.sequence_number > ev.sequence_number);
           const nextTime =
-            nextIdx >= 0
-              ? new Date(events[nextIdx].created_at).getTime()
-              : lastTime + Math.max(totalSpan * 0.12, 500);
+            nextIdx >= 0 ? new Date(events[nextIdx].created_at).getTime() : lastTime + Math.max(totalSpan * 0.12, 500);
           const widthPct = Math.max(8, ((nextTime - evTime) / totalSpan) * 100);
           const style = eventStyle(ev.event_type);
           const dur = fmtDuration(nextTime - evTime);
@@ -371,12 +370,27 @@ const GanttTimeline: React.FC<{
                 <Tooltip
                   title={
                     <div style={{ fontFamily: "monospace", fontSize: 11, lineHeight: 1.6 }}>
-                      <div><span style={{ color: "#a1a1aa" }}>type: </span><span style={{ color: style.text }}>{ev.event_type}</span></div>
-                      <div><span style={{ color: "#a1a1aa" }}>step: </span>{ev.step_name}</div>
-                      <div><span style={{ color: "#a1a1aa" }}>seq:  </span>{ev.sequence_number}</div>
-                      <div><span style={{ color: "#a1a1aa" }}>time: </span>{timeAgo(ev.created_at)}</div>
+                      <div>
+                        <span style={{ color: "#a1a1aa" }}>type: </span>
+                        <span style={{ color: style.text }}>{ev.event_type}</span>
+                      </div>
+                      <div>
+                        <span style={{ color: "#a1a1aa" }}>step: </span>
+                        {ev.step_name}
+                      </div>
+                      <div>
+                        <span style={{ color: "#a1a1aa" }}>seq: </span>
+                        {ev.sequence_number}
+                      </div>
+                      <div>
+                        <span style={{ color: "#a1a1aa" }}>time: </span>
+                        {timeAgo(ev.created_at)}
+                      </div>
                       {ev.data && Object.keys(ev.data).length > 0 && (
-                        <div><span style={{ color: "#a1a1aa" }}>data: </span>{JSON.stringify(ev.data)}</div>
+                        <div>
+                          <span style={{ color: "#a1a1aa" }}>data: </span>
+                          {JSON.stringify(ev.data)}
+                        </div>
                       )}
                     </div>
                   }
@@ -415,9 +429,9 @@ const GanttTimeline: React.FC<{
 
 const MessageRow: React.FC<{ msg: WorkflowRunMessage }> = ({ msg }) => {
   const roleColor: Record<string, string> = {
-    user:        "#2563eb",
-    assistant:   "#16a34a",
-    system:      "#7c3aed",
+    user: "#2563eb",
+    assistant: "#16a34a",
+    system: "#7c3aed",
     tool_result: "#d97706",
   };
   const color = roleColor[msg.role] ?? "#52525b";
@@ -506,13 +520,13 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         const msgData = msgRes.ok ? await msgRes.json() : { messages: [] };
         setEvents(
           [...(evData.events ?? [])].sort(
-            (a: WorkflowRunEvent, b: WorkflowRunEvent) => a.sequence_number - b.sequence_number
-          )
+            (a: WorkflowRunEvent, b: WorkflowRunEvent) => a.sequence_number - b.sequence_number,
+          ),
         );
         setMessages(
           [...(msgData.messages ?? [])].sort(
-            (a: WorkflowRunMessage, b: WorkflowRunMessage) => a.sequence_number - b.sequence_number
-          )
+            (a: WorkflowRunMessage, b: WorkflowRunMessage) => a.sequence_number - b.sequence_number,
+          ),
         );
       } catch (err) {
         console.error("workflow run detail fetch failed:", err);
@@ -520,7 +534,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         setLoadingDetail(false);
       }
     },
-    [accessToken]
+    [accessToken],
   );
 
   useEffect(() => {
@@ -536,12 +550,8 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <StatusDot status={run.status} size={7} />
           <div>
-            <div style={{ fontSize: 13, color: "#18181b", fontWeight: 500, lineHeight: 1.4 }}>
-              {runTitle(run)}
-            </div>
-            <div style={{ fontFamily: "monospace", fontSize: 11, color: "#a1a1aa" }}>
-              {shortId(run.run_id)}
-            </div>
+            <div style={{ fontSize: 13, color: "#18181b", fontWeight: 500, lineHeight: 1.4 }}>{runTitle(run)}</div>
+            <div style={{ fontFamily: "monospace", fontSize: 11, color: "#a1a1aa" }}>{shortId(run.run_id)}</div>
           </div>
         </div>
       ),
@@ -550,9 +560,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       title: "Type",
       dataIndex: "workflow_type",
       key: "workflow_type",
-      render: (v: string) => (
-        <span style={{ fontFamily: "monospace", fontSize: 12, color: "#71717a" }}>{v}</span>
-      ),
+      render: (v: string) => <span style={{ fontFamily: "monospace", fontSize: 12, color: "#71717a" }}>{v}</span>,
     },
     {
       title: "Status",
@@ -563,9 +571,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
         return (
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             <StatusDot status={status} size={7} />
-            <span style={{ fontSize: 12, color: "#52525b", textTransform: "capitalize" }}>
-              {state ?? status}
-            </span>
+            <span style={{ fontSize: 12, color: "#52525b", textTransform: "capitalize" }}>{state ?? status}</span>
           </div>
         );
       },
@@ -574,9 +580,7 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
       title: "Created",
       dataIndex: "created_at",
       key: "created_at",
-      render: (v: string) => (
-        <span style={{ fontSize: 12, color: "#a1a1aa" }}>{timeAgo(v)}</span>
-      ),
+      render: (v: string) => <span style={{ fontSize: 12, color: "#a1a1aa" }}>{timeAgo(v)}</span>,
     },
   ];
 
@@ -655,7 +659,12 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
             <Spin />
           </div>
         ) : (
-          <div style={{ padding: "24px 28px", fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}>
+          <div
+            style={{
+              padding: "24px 28px",
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+            }}
+          >
             {/* drawer close + refresh */}
             <div
               style={{
@@ -727,17 +736,18 @@ const WorkflowRuns: React.FC<WorkflowRunsProps> = ({ accessToken }) => {
                       </span>
                     </span>
                   ),
-                  children: messages.length === 0 ? (
-                    <div style={{ padding: "12px 4px", color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>
-                      No messages
-                    </div>
-                  ) : (
-                    <div style={{ paddingBottom: 4 }}>
-                      {messages.map((msg) => (
-                        <MessageRow key={msg.message_id} msg={msg} />
-                      ))}
-                    </div>
-                  ),
+                  children:
+                    messages.length === 0 ? (
+                      <div style={{ padding: "12px 4px", color: "#a1a1aa", fontSize: 12, fontFamily: "monospace" }}>
+                        No messages
+                      </div>
+                    ) : (
+                      <div style={{ paddingBottom: 4 }}>
+                        {messages.map((msg) => (
+                          <MessageRow key={msg.message_id} msg={msg} />
+                        ))}
+                      </div>
+                    ),
                 },
               ]}
             />
