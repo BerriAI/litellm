@@ -12,6 +12,7 @@ spec:
       {{- include "litellm.backend.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      {{- if or .Values.backend.config.create .Values.backend.podAnnotations }}
       annotations:
         {{- if .Values.backend.config.create }}
         checksum/config: {{ include (print $.Template.BasePath "/backend/configmap.yaml") . | sha256sum }}
@@ -19,6 +20,7 @@ spec:
         {{- with .Values.backend.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+      {{- end }}
       labels:
         {{- include "litellm.backend.selectorLabels" . | nindent 8 }}
     spec:
