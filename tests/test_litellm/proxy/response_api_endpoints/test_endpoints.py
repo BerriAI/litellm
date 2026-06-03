@@ -433,6 +433,41 @@ class TestResponsesWSFirstFrameValidation:
         ws.send_text.assert_awaited_once()
         ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
 
+    @pytest.mark.asyncio
+    async def test_client_disconnect_first_frame_does_not_close(self):
+        from fastapi import WebSocketDisconnect
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=WebSocketDisconnect(code=1006))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.close.assert_not_awaited()
+        ws.send_text.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_server_error_first_frame_closes_with_internal_error(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=RuntimeError("boom"))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.close.assert_awaited_once_with(code=1011, reason="Internal server error")
+
 
 class TestResponsesWSFirstFrameModelAuth:
     @pytest.mark.asyncio

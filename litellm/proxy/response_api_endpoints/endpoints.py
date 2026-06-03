@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -947,10 +947,13 @@ async def _read_ws_model_from_first_frame(
     except asyncio.TimeoutError:
         await websocket.close(code=1008, reason="Timed out waiting for first message")
         return None
+    except WebSocketDisconnect:
+        return None
     except Exception:
-        await websocket.close(
-            code=1008, reason="Client disconnected before sending first message"
+        verbose_proxy_logger.exception(
+            "Responses WebSocket error reading first message"
         )
+        await websocket.close(code=1011, reason="Internal server error")
         return None
 
     try:

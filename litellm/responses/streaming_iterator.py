@@ -1459,6 +1459,7 @@ class ManagedResponsesWebSocketHandler:
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
+        self._connection_provider = self._resolve_provider(model)
         self.first_message = first_message
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: Dict[str, Any] = {
@@ -1657,18 +1658,27 @@ class ManagedResponsesWebSocketHandler:
             # cross-connection multi-turn when spend logs are committed)
             call_kwargs["previous_response_id"] = previous_response_id
 
-    def _same_provider(self, model: Optional[str]) -> bool:
-        """Return True if model uses the same LLM provider as self.model."""
-        if model is None or model == self.model:
-            return True
+    @staticmethod
+    def _resolve_provider(model: Optional[str]) -> Optional[str]:
+        """Resolve the LLM provider for a model string, or None if unresolvable."""
+        if not model:
+            return None
         try:
             from litellm import get_llm_provider
 
-            _, event_provider, _, _ = get_llm_provider(model=model)
-            _, conn_provider, _, _ = get_llm_provider(model=self.model)
-            return event_provider == conn_provider
+            _, provider, _, _ = get_llm_provider(model=model)
+            return provider
         except Exception:
-            return model == self.model
+            return None
+
+    def _same_provider(self, model: Optional[str]) -> bool:
+        """Return True if model uses the same LLM provider as the connection model."""
+        if model is None or model == self.model:
+            return True
+        event_provider = self._resolve_provider(model)
+        if event_provider is None:
+            return False
+        return event_provider == self._connection_provider
 
     def _inject_credentials(
         self, call_kwargs: Dict[str, Any], model: Optional[str] = None
