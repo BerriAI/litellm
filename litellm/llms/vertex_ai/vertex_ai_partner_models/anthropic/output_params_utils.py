@@ -55,6 +55,13 @@ def sanitize_vertex_anthropic_output_params(data: dict, model: str) -> None:
 
     drop_keys = set(VERTEX_UNSUPPORTED_OUTPUT_CONFIG_KEYS)
     if "effort" in output_config and not _model_accepts_output_config_effort(model):
+        from litellm._logging import verbose_logger
+
+        verbose_logger.debug(
+            "Dropping unsupported output_config.effort for vertex_ai model=%s "
+            "(no supports_output_config in the model map)",
+            model,
+        )
         drop_keys.add("effort")
 
     sanitized = {k: v for k, v in output_config.items() if k not in drop_keys}
