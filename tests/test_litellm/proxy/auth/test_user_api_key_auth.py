@@ -1513,6 +1513,7 @@ class TestJWTOAuth2Coexistence:
 
         mock_request = MagicMock()
         mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
         mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
         mock_request.query_params = {}
 
@@ -1546,6 +1547,7 @@ class TestJWTOAuth2Coexistence:
             mock_oauth2.assert_not_called()
             # JWT auth SHOULD be called
             mock_jwt_auth.assert_called_once()
+            assert mock_jwt_auth.call_args.kwargs["request_method"] == "POST"
             assert result.user_id == "jwt-human-user"
 
     @pytest.mark.asyncio

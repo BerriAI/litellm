@@ -38,6 +38,9 @@ from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.llms.base_llm.managed_resources.utils import (
+    resolve_passthrough_managed_id_provider,
+)
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.passthrough import BasePassthroughUtils
 from litellm.proxy._types import (
@@ -75,7 +78,7 @@ pass_through_endpoint_logging = PassThroughEndpointLogging()
 
 # Global registry to track registered pass-through routes and prevent memory leaks
 _registered_pass_through_routes: Dict[
-    str, Dict[str, Union[str, List[str], Dict[str, Any]]]
+    str, Dict[str, Union[str, bool, List[str], Dict[str, Any]]]
 ] = {}
 
 
@@ -344,7 +347,13 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         if litellm_call_id:
             return_headers["x-litellm-call-id"] = litellm_call_id
         if custom_headers:
-            return_headers.update(custom_headers)
+            # Ensure custom headers don't override actual upstream response headers or let framework defaults (like content-length: 0) interfere.
+            sanitized_custom_headers = {
+                key: value
+                for key, value in custom_headers.items()
+                if key.lower() not in excluded_headers
+            }
+            return_headers.update(sanitized_custom_headers)
 
         return return_headers
 
@@ -537,8 +546,6 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             )
         )
 
-        _metadata["user_api_key"] = user_api_key_dict.api_key
-
         litellm_metadata = litellm_params_in_body.pop("litellm_metadata", None)
         metadata = litellm_params_in_body.pop("metadata", None)
         if litellm_metadata:
@@ -550,6 +557,12 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             request=request,
             metadata=_metadata,
         )
+
+        # Set internal keys after merging client-supplied metadata so a request
+        # body that mirrors them cannot clobber the authenticated key or the
+        # real parent span.
+        _metadata["user_api_key"] = user_api_key_dict.api_key
+        _metadata["litellm_parent_otel_span"] = user_api_key_dict.parent_otel_span
 
         kwargs = {
             "litellm_params": {
@@ -654,6 +667,34 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         return stream
 
 
+def _carry_guardrail_logging_info(
+    request_data: dict, guardrail_data: Optional[dict]
+) -> None:
+    """Copy guardrail logging entries from ``guardrail_data`` onto ``request_data``.
+
+    Post-call guardrails run against a throwaway ``hook_data`` dict (its
+    ``metadata`` is what ``_init_kwargs_for_pass_through_endpoint`` already
+    stripped off ``_parsed_body``), so a block records the
+    ``standard_logging_guardrail_information`` there and not on the dict the
+    failure handler forwards to ``post_call_failure_hook``. Without this the
+    otel guardrail span is emitted on allow but missing on block. Carry the
+    entries over so the failure path matches the unified path.
+    """
+    if guardrail_data is None:
+        return
+    source_metadata = guardrail_data.get("metadata")
+    if not isinstance(source_metadata, dict):
+        return
+    entries = source_metadata.get("standard_logging_guardrail_information")
+    if not entries:
+        return
+
+    metadata = request_data.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = request_data["metadata"] = {}
+    metadata.setdefault("standard_logging_guardrail_information", list(entries))
+
+
 async def pass_through_request(  # noqa: PLR0915
     request: Request,
     target: str,
@@ -705,6 +746,9 @@ async def pass_through_request(  # noqa: PLR0915
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: Optional[dict] = None
     logging_obj: Optional[Logging] = None
+    # the dict post-call guardrails wrote their logging info into; the failure
+    # handler reuses it so a guardrail block still surfaces its span/logs
+    post_call_guardrail_data: Optional[dict] = None
 
     #########################################################
     try:
@@ -791,9 +835,14 @@ async def pass_through_request(  # noqa: PLR0915
             )
 
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
+        # Surface the requested model (when the body carries one) so logging/spans
+        # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
+        passthrough_model = (
+            _parsed_body.get("model") if isinstance(_parsed_body, dict) else None
+        ) or "unknown"
         start_time = datetime.now()
         logging_obj = Logging(
-            model="unknown",
+            model=passthrough_model,
             messages=[{"role": "user", "content": safe_dumps(_parsed_body)}],
             stream=False,
             call_type="pass_through_endpoint",
@@ -845,7 +894,7 @@ async def pass_through_request(  # noqa: PLR0915
 
         # done for supporting 'parallel_request_limiter.py' with pass-through endpoints
         logging_obj.update_environment_variables(
-            model="unknown",
+            model=passthrough_model,
             user="unknown",
             optional_params={},
             litellm_params=kwargs["litellm_params"],
@@ -857,6 +906,130 @@ async def pass_through_request(  # noqa: PLR0915
         requested_query_params: Optional[dict] = query_params or dict(
             request.query_params
         )
+
+        ## PASSTHROUGH MANAGED ID RESOLUTION (INPUT) ##
+        # Resolve managed IDs in path, query params, and body back to raw
+        # provider IDs before forwarding upstream.  Gated by feature flag and
+        # enterprise managed-files hook.  Runs after pre_call_hook so
+        # guardrails have already seen the managed IDs.
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
+
+        _managed_id_provider = resolve_passthrough_managed_id_provider(
+            custom_llm_provider
+        )
+
+        if (
+            proxy_general_settings.get("passthrough_managed_object_ids", False)
+            and _managed_id_provider is not None
+        ):
+            verbose_proxy_logger.debug(
+                "pass_through_endpoint: managed-id input rewrite enabled for route=%s method=%s",
+                request.url.path,
+                request.method,
+            )
+            _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook(
+                "managed_files"
+            )
+            if _passthrough_managed_hook is not None:
+                from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                    rewrite_body_ids,
+                    rewrite_path_ids,
+                    rewrite_query_ids,
+                )
+                from litellm.proxy.proxy_server import (
+                    prisma_client as _passthrough_prisma,
+                )
+
+                _original_path = url.path
+                _original_query_params = requested_query_params
+                _original_body = _parsed_body
+                _new_path = await rewrite_path_ids(
+                    url.path,
+                    _managed_id_provider,
+                    user_api_key_dict,
+                    _passthrough_prisma,
+                    _passthrough_managed_hook,
+                )
+                if _new_path != url.path:
+                    url = url.copy_with(path=_new_path)
+                requested_query_params = await rewrite_query_ids(
+                    requested_query_params,
+                    _managed_id_provider,
+                    user_api_key_dict,
+                    _passthrough_prisma,
+                    _passthrough_managed_hook,
+                )
+                _parsed_body = await rewrite_body_ids(
+                    _parsed_body,
+                    _managed_id_provider,
+                    user_api_key_dict,
+                    _passthrough_prisma,
+                    _passthrough_managed_hook,
+                )
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: managed-id input rewrite results path_changed=%s query_changed=%s body_changed=%s route=%s method=%s",
+                    _new_path != _original_path,
+                    requested_query_params is not _original_query_params,
+                    _parsed_body is not _original_body,
+                    request.url.path,
+                    request.method,
+                )
+            else:
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: managed-id input rewrite skipped (managed_files hook not available) route=%s method=%s",
+                    request.url.path,
+                    request.method,
+                )
+
+        ## PASSTHROUGH MANAGED LIST (DB-only response) ##
+        # For GET /v1/files and GET /v1/batches passthrough routes, serve the
+        # listing entirely from our DB so each caller only sees their own IDs.
+        # Admins / master-key callers see all rows.  Gated on the same
+        # conditions as INPUT/OUTPUT rewrite: feature flag, provider, AND
+        # the managed_files hook must be present.  Without the hook no managed
+        # IDs are ever minted or stored, so the DB is empty and intercepting
+        # the list would silently hide the caller's real upstream files/batches.
+        if (
+            proxy_general_settings.get("passthrough_managed_object_ids", False)
+            and _managed_id_provider is not None
+            and request.method == "GET"
+            and proxy_logging_obj.get_proxy_hook("managed_files") is not None
+        ):
+            from litellm.proxy.auth.auth_utils import get_request_route
+            from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                is_passthrough_list_route,
+                list_passthrough_ids_from_db,
+            )
+            from litellm.proxy.proxy_server import (
+                prisma_client as _list_prisma,
+            )
+
+            if (
+                is_passthrough_list_route(
+                    _managed_id_provider, request.method, get_request_route(request)
+                )
+                and _list_prisma is not None
+            ):
+                _list_result = await list_passthrough_ids_from_db(
+                    provider=_managed_id_provider,
+                    route=get_request_route(request),
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=_list_prisma,
+                    query_params=dict(request.query_params),
+                )
+                if _list_result is not None:
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: list served from DB route=%s count=%d",
+                        request.url.path,
+                        len(_list_result.get("data", [])),
+                    )
+                    return Response(
+                        content=json.dumps(_list_result),
+                        status_code=200,
+                        media_type="application/json",
+                    )
 
         requested_query_params_str = None
         if requested_query_params:
@@ -882,7 +1055,7 @@ async def pass_through_request(  # noqa: PLR0915
         )
         stream = (
             HttpPassThroughEndpointHelpers._update_stream_param_based_on_request_body(
-                parsed_body=_parsed_body,
+                parsed_body=_parsed_body or {},
                 stream=stream,
             )
         )
@@ -908,7 +1081,7 @@ async def pass_through_request(  # noqa: PLR0915
                     else {"json": _parsed_body}
                 )
                 req = async_client.build_request(
-                    "POST",
+                    request.method,
                     url,
                     params=requested_query_params,
                     headers=headers,
@@ -1018,6 +1191,7 @@ async def pass_through_request(  # noqa: PLR0915
                 **existing_metadata,
                 "guardrails": guardrails_to_run,
             }
+            post_call_guardrail_data = hook_data
             response_body = await proxy_logging_obj.post_call_success_hook(
                 data=hook_data,
                 user_api_key_dict=user_api_key_dict,
@@ -1036,6 +1210,66 @@ async def pass_through_request(  # noqa: PLR0915
                 "pass_through_endpoint: response body not JSON-parseable, skipping post-call guardrails"
             )
 
+        ## PASSTHROUGH MANAGED ID MINTING (OUTPUT) ##
+        # Mint managed IDs for raw provider IDs in the response body and swap
+        # them before the response reaches the client.  Runs after guardrails
+        # so guardrails see the raw IDs (cleaner) and the client receives the
+        # managed IDs.  Gated by feature flag and enterprise managed-files hook.
+        if (
+            proxy_general_settings.get("passthrough_managed_object_ids", False)
+            and _managed_id_provider is not None
+            and isinstance(response_body, dict)
+            and response.status_code < 300
+        ):
+            verbose_proxy_logger.debug(
+                "pass_through_endpoint: managed-id output rewrite enabled for route=%s method=%s status=%s",
+                request.url.path,
+                request.method,
+                response.status_code,
+            )
+            _passthrough_managed_hook = proxy_logging_obj.get_proxy_hook(
+                "managed_files"
+            )
+            if _passthrough_managed_hook is not None:
+                from litellm.proxy.auth.auth_utils import get_request_route
+                from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
+                    rewrite_response_ids,
+                )
+                from litellm.proxy.proxy_server import (
+                    prisma_client as _passthrough_prisma,
+                )
+
+                _new_body = await rewrite_response_ids(
+                    provider=_managed_id_provider,
+                    method=request.method,
+                    route=get_request_route(request),
+                    body=response_body,
+                    user_api_key_dict=user_api_key_dict,
+                    prisma_client=_passthrough_prisma,
+                    managed_files_hook=_passthrough_managed_hook,
+                )
+                if _new_body is not response_body:
+                    response_body = _new_body
+                    content = json.dumps(response_body).encode("utf-8")
+                    _content_modified = True
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: managed-id output rewrite applied route=%s method=%s",
+                        request.url.path,
+                        request.method,
+                    )
+                else:
+                    verbose_proxy_logger.debug(
+                        "pass_through_endpoint: managed-id output rewrite no-op route=%s method=%s",
+                        request.url.path,
+                        request.method,
+                    )
+            else:
+                verbose_proxy_logger.debug(
+                    "pass_through_endpoint: managed-id output rewrite skipped (managed_files hook not available) route=%s method=%s",
+                    request.url.path,
+                    request.method,
+                )
+
         ## LOG SUCCESS
         passthrough_logging_payload["response_body"] = response_body
         end_time = datetime.now()
@@ -1049,7 +1283,7 @@ async def pass_through_request(  # noqa: PLR0915
                 end_time=end_time,
                 logging_obj=logging_obj,
                 cache_hit=False,
-                request_body=_parsed_body,
+                request_body=_parsed_body or {},
                 custom_llm_provider=custom_llm_provider,
                 **kwargs,
             )
@@ -1140,6 +1374,8 @@ async def pass_through_request(  # noqa: PLR0915
             request_payload["model"] = _parsed_body.get("model", "")
         if "custom_llm_provider" not in request_payload and custom_llm_provider:
             request_payload["custom_llm_provider"] = custom_llm_provider
+
+        _carry_guardrail_logging_info(request_payload, post_call_guardrail_data)
 
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict,
@@ -1307,11 +1543,14 @@ def create_pass_through_route(
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
                 InitPassThroughEndpointHelpers,
             )
 
-            path = request.url.path
+            path = get_request_route(request)
 
             # Parse request data based on content type
             (
@@ -1334,6 +1573,17 @@ def create_pass_through_route(
                     route=path, method=request.method
                 )
             )
+            if (
+                passthrough_params is None
+                and InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+                    route=path
+                )
+                is not None
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_405_METHOD_NOT_ALLOWED,
+                    detail=f"Method {request.method} is not allowed for pass-through endpoint {path}.",
+                )
             target_params = {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2061,6 +2311,7 @@ class InitPassThroughEndpointHelpers:
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
         config_file_path: Optional[str] = None,
+        auth: bool = False,
     ):
         """Add exact path route for pass-through endpoint"""
         # Default to all methods if none specified (backward compatibility)
@@ -2112,6 +2363,7 @@ class InitPassThroughEndpointHelpers:
             "path": path,
             "type": "exact",
             "methods": methods,
+            "auth": auth,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2139,6 +2391,7 @@ class InitPassThroughEndpointHelpers:
         methods: Optional[List[str]] = None,
         default_query_params: Optional[dict] = None,
         config_file_path: Optional[str] = None,
+        auth: bool = False,
     ):
         """Add wildcard route for sub-paths"""
         # Default to all methods if none specified (backward compatibility)
@@ -2191,6 +2444,7 @@ class InitPassThroughEndpointHelpers:
             "path": path,
             "type": "subpath",
             "methods": methods,
+            "auth": auth,
             "passthrough_params": {
                 "target": target,
                 "custom_headers": custom_headers,
@@ -2309,8 +2563,15 @@ class InitPassThroughEndpointHelpers:
                     InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
                 )
 
-                # Get the methods for this route
-                route_methods = _registered_pass_through_routes[key].get("methods", [])
+                # Get the methods for this route. Prefer the registered metadata,
+                # but keep supporting test fixtures / older registry entries that
+                # only encoded methods in the route key.
+                methods_entry = _registered_pass_through_routes[key].get("methods", [])
+                route_methods: List[str] = (
+                    methods_entry if isinstance(methods_entry, list) else []
+                )
+                if not route_methods and len(parts) == 4:
+                    route_methods = parts[3].split(",")
 
                 # Check if path matches
                 path_matches = False
@@ -2368,8 +2629,9 @@ async def _register_pass_through_endpoint(
     default_query_params = endpoint_data.get("default_query_params")
     auth = endpoint_data.get("auth")
     dependencies = None
+    auth_enforced = auth is not None and str(auth).lower() == "true"
 
-    if auth is not None and str(auth).lower() == "true":
+    if auth_enforced:
         # Authentication on a pass-through endpoint used to be enterprise-only.
         # That left OSS with no safe configuration: auth=True raised at startup
         # unless the operator had a license. The safe option must always be free,
@@ -2402,6 +2664,7 @@ async def _register_pass_through_endpoint(
         methods=methods,
         default_query_params=default_query_params,
         config_file_path=config_file_path,
+        auth=auth_enforced,
     )
 
     methods_for_key = methods if methods else ["GET", "POST", "PUT", "DELETE", "PATCH"]
@@ -2427,6 +2690,7 @@ async def _register_pass_through_endpoint(
             methods=methods,
             default_query_params=default_query_params,
             config_file_path=config_file_path,
+            auth=auth_enforced,
         )
         visited_endpoints.add(f"{endpoint_id}:subpath:{path}:{methods_str}")
 
@@ -2750,14 +3014,18 @@ async def update_pass_through_endpoints(
             },
         )
 
-    # Get the update data as dict, excluding None values for partial updates
+    # Only merge fields the caller explicitly sent so omitted fields keep their
+    # stored value. Without exclude_unset, defaults like auth=True would overwrite
+    # an existing auth=false entry on any unrelated edit.
     # Exclude is_from_config as it's a response-only field (computed at read time)
-    update_data = data.model_dump(exclude_none=True, exclude={"is_from_config"})
+    update_data = data.model_dump(
+        exclude_unset=True, exclude_none=True, exclude={"is_from_config"}
+    )
 
     # Start with existing endpoint data
     endpoint_dict = found_endpoint.model_dump()
 
-    # Update with new data (only non-None values)
+    # Update with new data (only explicitly provided values)
     endpoint_dict.update(update_data)
 
     # Preserve existing ID if not provided in update and endpoint has ID
@@ -2805,6 +3073,7 @@ async def update_pass_through_endpoints(
             guardrails=getattr(updated_endpoint, "guardrails", None),
             methods=updated_endpoint.methods,
             default_query_params=updated_endpoint.default_query_params,
+            auth=updated_endpoint.auth,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2820,6 +3089,7 @@ async def update_pass_through_endpoints(
             guardrails=getattr(updated_endpoint, "guardrails", None),
             methods=updated_endpoint.methods,
             default_query_params=updated_endpoint.default_query_params,
+            auth=updated_endpoint.auth,
         )
 
     return PassThroughEndpointResponse(
@@ -2898,6 +3168,7 @@ async def create_pass_through_endpoints(
             guardrails=getattr(created_endpoint, "guardrails", None),
             methods=created_endpoint.methods,
             default_query_params=created_endpoint.default_query_params,
+            auth=created_endpoint.auth,
         )
     else:
         InitPassThroughEndpointHelpers.add_exact_path_route(
@@ -2913,6 +3184,7 @@ async def create_pass_through_endpoints(
             guardrails=getattr(created_endpoint, "guardrails", None),
             methods=created_endpoint.methods,
             default_query_params=created_endpoint.default_query_params,
+            auth=created_endpoint.auth,
         )
 
     return PassThroughEndpointResponse(endpoints=[created_endpoint])

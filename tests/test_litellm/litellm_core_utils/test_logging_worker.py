@@ -4,6 +4,8 @@ Tests for the LoggingWorker class to ensure graceful shutdown handling.
 
 import asyncio
 import contextvars
+import io
+import logging
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -64,6 +66,57 @@ class TestLoggingWorker:
 
         # Verify the queue is empty after clearing
         assert logging_worker._queue.empty()
+
+    def test_flush_on_exit_suppresses_closed_handler_errors(self, capsys):
+        """Atexit flushing should not print logging errors after streams close."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        stream = io.StringIO()
+        handler = logging.StreamHandler(stream)
+        logger = logging.getLogger("test_logging_worker_closed_handler")
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+
+        async def log_with_closed_handler():
+            logger.debug("flush me during shutdown")
+
+        previous_raise_exceptions = logging.raiseExceptions
+        logging.raiseExceptions = True
+
+        try:
+            worker.enqueue(log_with_closed_handler())
+            stream.close()
+
+            worker._flush_on_exit()
+
+            captured = capsys.readouterr()
+            assert "I/O operation on closed file" not in captured.err
+        finally:
+            logging.raiseExceptions = previous_raise_exceptions
+            logger.removeHandler(handler)
+
+    def test_flush_on_exit_swallows_errors_and_drains_remaining(self):
+        """A failing queued coroutine must not abort the atexit drain of later events."""
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker._queue = asyncio.Queue(maxsize=10)
+
+        processed = []
+
+        async def raises_during_flush():
+            raise RuntimeError("boom during shutdown flush")
+
+        async def records_during_flush():
+            processed.append("ran")
+
+        worker.enqueue(raises_during_flush())
+        worker.enqueue(records_during_flush())
+
+        worker._flush_on_exit()
+
+        assert processed == ["ran"]
+        assert worker._queue.empty()
 
     @pytest.mark.asyncio
     async def test_worker_handles_cancellation_gracefully(self, logging_worker):
