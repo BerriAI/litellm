@@ -1657,7 +1657,9 @@ class ManagedResponsesWebSocketHandler:
             # cross-connection multi-turn when spend logs are committed)
             call_kwargs["previous_response_id"] = previous_response_id
 
-    def _inject_credentials(self, call_kwargs: Dict[str, Any]) -> None:
+    def _inject_credentials(
+        self, call_kwargs: Dict[str, Any], model: Optional[str] = None
+    ) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
         if self.api_key is not None:
             call_kwargs["api_key"] = self.api_key
@@ -1665,7 +1667,10 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["api_base"] = self.api_base
         if self.timeout is not None:
             call_kwargs["timeout"] = self.timeout
-        if self.custom_llm_provider is not None:
+        # Only force connection-level custom_llm_provider when the per-event model
+        # hasn't switched providers. If the event overrides to a different model,
+        # let litellm re-resolve the provider from the model string.
+        if self.custom_llm_provider is not None and model == self.model:
             call_kwargs["custom_llm_provider"] = self.custom_llm_provider
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
@@ -1797,7 +1802,7 @@ class ManagedResponsesWebSocketHandler:
         self._apply_history(
             call_kwargs, previous_response_id, current_messages, prior_history
         )
-        self._inject_credentials(call_kwargs)
+        self._inject_credentials(call_kwargs, model=model)
         self._update_proxy_request(call_kwargs, model)
         call_kwargs.update(self.extra_kwargs)
 
