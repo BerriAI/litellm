@@ -1336,6 +1336,7 @@ def _make_counter_invalidation_job(monkeypatch):
     spend_counter_cache.in_memory_cache.set_cache = MagicMock()
     spend_counter_cache.redis_cache = MagicMock()
     spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
 
     user_api_key_cache = MagicMock()
     user_api_key_cache.async_delete_cache = AsyncMock()
@@ -1803,3 +1804,38 @@ def test_reset_budget_for_tags_linked_to_budgets_management_cache_delete_failure
     asyncio.run(job.reset_budget_for_tags_linked_to_budgets([expired_budget]))
 
     prisma_client.db.litellm_tagtable.update_many.assert_awaited_once()
+
+
+def test_invalidate_spend_counter_deletes_on_redis_set_failure(monkeypatch):
+    """When Redis SET fails, _invalidate_spend_counter must fall back to DELETE."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.redis_cache.async_set_cache = AsyncMock(
+        side_effect=RuntimeError("SET failed")
+    )
+
+    asyncio.run(
+        ResetBudgetJob._invalidate_spend_counter("spend:key:test-fallback")
+    )
+
+    counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(
+        key="spend:key:test-fallback"
+    )
+
+
+def test_invalidate_spend_counter_swallows_delete_failure(monkeypatch):
+    """When both Redis SET and DELETE fallback fail, the method must not raise."""
+    counter_cache = _make_counter_invalidation_job(monkeypatch)
+    counter_cache.redis_cache.async_set_cache = AsyncMock(
+        side_effect=RuntimeError("SET failed")
+    )
+    counter_cache.redis_cache.async_delete_cache = AsyncMock(
+        side_effect=RuntimeError("DELETE also failed")
+    )
+
+    asyncio.run(
+        ResetBudgetJob._invalidate_spend_counter("spend:key:test-double-fail")
+    )
+
+    counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(
+        key="spend:key:test-double-fail"
+    )
