@@ -5,6 +5,7 @@ Tests that invoke_agent_a2a properly integrates with add_litellm_data_to_request
 """
 
 import json
+import socket
 import sys
 from contextlib import ExitStack
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -454,6 +455,12 @@ async def test_task_methods_forward_jsonrpc(method: str, params: dict):
                 return_value=mock_handler,
             )
         )
+        stack.enter_context(
+            patch(
+                "litellm.proxy.agent_endpoints.a2a_endpoints.validate_url",
+                return_value=("https://webhook.example.com", "webhook.example.com"),
+            )
+        )
 
         from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
 
@@ -597,13 +604,78 @@ async def test_subscribe_to_task_calls_pre_call_hook():
         async for _ in response.body_iterator:
             pass
 
-    assert mock_proxy_logging.pre_call_hook.called
-    calls = mock_proxy_logging.pre_call_hook.call_args_list
-    assert any(
-        c.kwargs.get("call_type") == "asend_message"
-        and c.kwargs.get("user_api_key_dict") == user_api_key_dict
-        for c in calls
-    ), "pre_call_hook must be called with call_type='asend_message' for tasks/resubscribe"
+    mock_proxy_logging.pre_call_hook.assert_awaited_once()
+    call_kwargs = mock_proxy_logging.pre_call_hook.await_args.kwargs
+    assert call_kwargs.get("call_type") == "asend_message"
+    assert call_kwargs.get("user_api_key_dict") == user_api_key_dict
+
+
+@pytest.mark.asyncio
+async def test_task_method_failure_hook_uses_enriched_request_data():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("tasks/get", {"id": "task-1"})
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    async def add_proxy_data_copy(data, **kwargs):
+        enriched = dict(data)
+        enriched["proxy_server_request"] = {
+            "url": "http://localhost:4000",
+            "method": "POST",
+            "headers": {},
+            "body": {},
+        }
+        enriched.setdefault("metadata", {})
+        return enriched
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(side_effect=RuntimeError("upstream failed"))
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type: data
+    )
+    mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+                new=AsyncMock(side_effect=add_proxy_data_copy),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.proxy.proxy_server.proxy_logging_obj",
+                mock_proxy_logging,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    body = json.loads(response.body.decode())
+    assert body["error"]["code"] == -32603
+    failure_data = mock_proxy_logging.post_call_failure_hook.await_args.kwargs[
+        "request_data"
+    ]
+    assert failure_data.get("litellm_call_id")
+    assert failure_data.get("agent_id") == "test-agent"
 
 
 @pytest.mark.asyncio
@@ -980,4 +1052,61 @@ async def test_push_notification_config_set_rejects_private_ip():
             )
 
     assert exc_info.value.status_code == 400
-    assert "private" in exc_info.value.detail.lower()
+    assert "blocked address" in exc_info.value.detail.lower()
+
+
+def test_push_notification_config_set_rejects_private_dns_resolution():
+    from fastapi import HTTPException
+
+    from litellm.proxy.agent_endpoints.a2a_endpoints import (
+        _validate_push_notification_url,
+    )
+
+    with patch(
+        "litellm.litellm_core_utils.url_utils.socket.getaddrinfo",
+        return_value=[
+            (
+                socket.AF_INET,
+                socket.SOCK_STREAM,
+                socket.IPPROTO_TCP,
+                "",
+                ("10.0.0.5", 443),
+            )
+        ],
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            _validate_push_notification_url("https://webhook.example.com/hook")
+
+    assert exc_info.value.status_code == 400
+    assert "blocked address" in exc_info.value.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_push_notification_config_set_rejects_null_push_config():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock(
+        "tasks/pushNotificationConfig/set",
+        {"taskId": "task-1", "pushNotificationConfig": None},
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        with pytest.raises(HTTPException) as exc_info:
+            await invoke_agent_a2a(
+                agent_id="test-agent",
+                request=mock_request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=user_api_key_dict,
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "pushNotificationConfig must be an object" in exc_info.value.detail

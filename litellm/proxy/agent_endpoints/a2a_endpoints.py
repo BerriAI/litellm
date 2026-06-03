@@ -5,7 +5,6 @@ Allows clients to invoke agents through LiteLLM using the A2A protocol.
 The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM.
 """
 
-import ipaddress
 import json
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -14,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -41,25 +41,10 @@ def _validate_push_notification_url(url: str) -> None:
             status_code=400,
             detail="Push notification URL must use HTTPS",
         )
-    hostname = parsed.hostname or ""
     try:
-        addr = ipaddress.ip_address(hostname)
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_reserved
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail="Push notification URL must not point to a private or reserved address",
-            )
-    except ValueError:
-        if hostname in ("localhost",) or hostname.endswith(".local"):
-            raise HTTPException(
-                status_code=400,
-                detail="Push notification URL must not point to localhost",
-            )
+        validate_url(url)
+    except (SSRFError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str]:
@@ -459,9 +444,11 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         version,
     )
 
-    body = {}
+    body: Dict[str, Any] = {}
+    request_data: Dict[str, Any] = body
     try:
         body = await request.json()
+        request_data = body
 
         verbose_proxy_logger.debug(f"A2A request for agent '{agent_id}': {body}")
 
@@ -572,6 +559,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             route_type="asend_message",
             version=version,
         )
+        request_data = data
 
         # Build merged headers for the backend agent
         static_headers: Dict[str, str] = dict(agent.static_headers or {})
@@ -699,9 +687,25 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                     request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
                 )
             if method == "tasks/pushNotificationConfig/set":
-                callback_url = (params or {}).get("url") or (params or {}).get(
-                    "pushNotificationConfig", {}
-                ).get("url")
+                if not isinstance(params, dict):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="params must be an object",
+                    )
+                push_config = params.get("pushNotificationConfig", {})
+                if "pushNotificationConfig" in params and not isinstance(
+                    push_config, dict
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="pushNotificationConfig must be an object",
+                    )
+                callback_url = params.get("url") or push_config.get("url")
+                if callback_url is not None and not isinstance(callback_url, str):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Push notification URL must be a string",
+                    )
                 if callback_url:
                     _validate_push_notification_url(callback_url)
             forward_body = {
@@ -745,11 +749,6 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 return _jsonrpc_error(
                     request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
                 )
-            await proxy_logging_obj.pre_call_hook(
-                user_api_key_dict=user_api_key_dict,
-                data=data,
-                call_type="asend_message",
-            )
             forward_body = {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -781,7 +780,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,
-                request_data=body,
+                request_data=request_data,
             )
         except Exception:
             pass
