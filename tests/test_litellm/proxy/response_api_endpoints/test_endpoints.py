@@ -382,3 +382,158 @@ class TestWSModelExtraction:
         )
         event = {"type": "response.create", "input": "hello"}
         assert _extract_model_from_first_ws_event(event) is None
+
+    def test_non_object_returns_none(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _extract_model_from_first_ws_event,
+        )
+
+        assert _extract_model_from_first_ws_event([]) is None
+
+
+class TestResponsesWSFirstFrameValidation:
+    @pytest.mark.asyncio
+    async def test_rejects_non_response_create_first_frame(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps({"type": "session.update", "model": "gpt-4o"})
+        )
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.send_text.assert_awaited_once()
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
+        error_payload = json.loads(ws.send_text.await_args.args[0])
+        assert (
+            error_payload["error"]["message"]
+            == "First message must be a response.create JSON object."
+        )
+
+    @pytest.mark.asyncio
+    async def test_rejects_non_object_json_first_frame(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _read_ws_model_from_first_frame,
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(return_value=json.dumps(["gpt-4o"]))
+        ws.send_text = AsyncMock()
+        ws.close = AsyncMock()
+
+        result = await _read_ws_model_from_first_frame(ws)
+
+        assert result is None
+        ws.send_text.assert_awaited_once()
+        ws.close.assert_awaited_once_with(code=1008, reason="Invalid first message")
+
+
+class TestResponsesWSFirstFrameModelAuth:
+    @pytest.mark.asyncio
+    async def test_endpoint_enforces_auth_after_model_from_first_frame(self):
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            responses_websocket_endpoint,
+        )
+
+        ws = MagicMock()
+        ws.headers = {}
+        ws.query_params = {}
+        ws.scope = {"headers": []}
+        ws.url = "ws://testserver/v1/responses"
+        ws.accept = AsyncMock()
+        ws.receive_text = AsyncMock(
+            return_value=json.dumps(
+                {"type": "response.create", "model": "gpt-4o-mini", "input": []}
+            )
+        )
+        ws.close = AsyncMock()
+
+        processor = MagicMock()
+        processor.common_processing_pre_call_logic = AsyncMock(
+            return_value=({"model": "gpt-4o-mini"}, MagicMock())
+        )
+
+        async def fake_llm_call():
+            return None
+
+        with (
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints._enforce_responses_ws_first_frame_model_auth",
+                new_callable=AsyncMock,
+            ) as mock_model_auth,
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+                return_value=processor,
+            ),
+            patch(
+                "litellm.proxy.route_llm_request.route_request",
+                new_callable=AsyncMock,
+                return_value=fake_llm_call(),
+            ),
+        ):
+            await responses_websocket_endpoint(
+                websocket=ws,
+                model=None,
+                user_api_key_dict=MagicMock(),
+            )
+
+        mock_model_auth.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_reruns_model_auth_for_first_frame_model(self):
+        from starlette.requests import Request
+
+        from litellm.proxy.response_api_endpoints.endpoints import (
+            _enforce_responses_ws_first_frame_model_auth,
+        )
+
+        request = Request(
+            {"type": "http", "method": "POST", "path": "/v1/responses", "headers": []}
+        )
+        user_api_key_dict = MagicMock()
+        llm_router = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._enforce_key_and_fallback_model_access",
+                new_callable=AsyncMock,
+            ) as mock_key_check,
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                new_callable=AsyncMock,
+            ) as mock_common_checks,
+            patch(
+                "litellm.proxy.proxy_server.llm_model_list",
+                [],
+            ),
+            patch("litellm.proxy.proxy_server.master_key", "sk-test"),
+            patch("litellm.proxy.proxy_server.user_custom_auth", None),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            await _enforce_responses_ws_first_frame_model_auth(
+                request=request,
+                model="gpt-4o-mini",
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
+
+        mock_key_check.assert_awaited_once_with(
+            valid_token=user_api_key_dict,
+            request_data={"model": "gpt-4o-mini"},
+            route="/v1/responses",
+            request=request,
+            llm_model_list=[],
+            llm_router=llm_router,
+        )
+        mock_common_checks.assert_awaited_once_with(
+            user_api_key_auth_obj=user_api_key_dict,
+            request=request,
+            request_data={"model": "gpt-4o-mini"},
+            route="/v1/responses",
+        )

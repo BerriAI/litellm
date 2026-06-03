@@ -970,6 +970,24 @@ async def _read_ws_model_from_first_frame(
         await websocket.close(code=1008, reason="Invalid JSON in first message")
         return None
 
+    if (
+        not isinstance(first_event, dict)
+        or first_event.get("type") != "response.create"
+    ):
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "First message must be a response.create JSON object.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="Invalid first message")
+        return None
+
     model = _extract_model_from_first_ws_event(first_event)
     if not model:
         await websocket.send_text(
@@ -989,16 +1007,63 @@ async def _read_ws_model_from_first_frame(
     return model, first_message
 
 
-def _extract_model_from_first_ws_event(first_event: dict) -> Optional[str]:
+def _extract_model_from_first_ws_event(first_event: Any) -> Optional[str]:
     """Extract model from a response.create WS event, handling flat and nested formats.
 
     Flat:   {"type": "response.create", "model": "gpt-4o", ...}
     Nested: {"type": "response.create", "response": {"model": "gpt-4o", ...}}
     """
+    if not isinstance(first_event, dict):
+        return None
     nested = first_event.get("response")
     return (
         nested.get("model") if isinstance(nested, dict) else None
     ) or first_event.get("model")
+
+
+async def _enforce_responses_ws_first_frame_model_auth(
+    request: Request,
+    model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Optional[Any],
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import (
+        _enforce_key_and_fallback_model_access,
+        _run_centralized_common_checks,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_model_list,
+        master_key,
+        user_custom_auth,
+    )
+
+    request_data = {"model": model}
+    route = request.scope.get("path") or "/v1/responses"
+    if master_key is None and not (
+        general_settings.get("enable_jwt_auth", False)
+        or general_settings.get("enable_oauth2_auth", False)
+        or general_settings.get("enable_oauth2_proxy_auth", False)
+    ):
+        return
+    if user_custom_auth is not None and not general_settings.get(
+        "custom_auth_run_common_checks", False
+    ):
+        return
+    await _enforce_key_and_fallback_model_access(
+        valid_token=user_api_key_dict,
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_model_list=llm_model_list,
+        llm_router=llm_router,
+    )
+    await _run_centralized_common_checks(
+        user_api_key_auth_obj=user_api_key_dict,
+        request=request,
+        request_data=request_data,
+        route=route,
+    )
 
 
 @router.websocket("/v1/responses")
@@ -1083,6 +1148,13 @@ async def responses_websocket_endpoint(
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
+        if first_message is not None:
+            await _enforce_responses_ws_first_frame_model_auth(
+                request=request,
+                model=model,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
         (
             data,
             litellm_logging_obj,
