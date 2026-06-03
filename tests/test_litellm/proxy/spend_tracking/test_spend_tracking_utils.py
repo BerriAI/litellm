@@ -1655,6 +1655,40 @@ def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     assert parsed["messages"] == [{"role": "user", "content": "hello"}]
 
 
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_get_proxy_server_request_payload_strips_null_bytes(mock_should_store):
+    """Regression for #29515 (PostgreSQL 22P05): NUL bytes in the
+    proxy_server_request body must be stripped before the jsonb write.
+
+    The builder serializes via safe_dumps, which removes \\x00. Reverting it
+    to json.dumps would re-emit the \\u0000 escape Postgres rejects, crashing
+    the update_spend batch. NUL bytes hide in both keys and values.
+    """
+    mock_should_store.return_value = True
+
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "model": "gpt-4",
+                "messages": [{"role": "user", "content": "hel\x00lo"}],
+                "meta\x00key": "va\x00lue",
+            }
+        }
+    }
+
+    result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata={}, litellm_params=litellm_params, kwargs={}
+    )
+
+    assert "\\u0000" not in result
+    parsed = json.loads(result)
+    assert parsed["messages"][0]["content"] == "hello"
+    assert parsed["metakey"] == "value"
+    assert "meta\x00key" not in parsed
+
+
 # ---------------------------------------------------------------------------
 # LIT-2992: error_information sanitization for spend logs
 # ---------------------------------------------------------------------------
