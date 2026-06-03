@@ -569,6 +569,34 @@ class TestProxyBaseLLMRequestProcessing:
         assert "x-litellm-response-cost-original" not in headers
         assert "x-litellm-response-cost-discount-amount" not in headers
 
+    def test_get_custom_headers_includes_routed_model(self):
+        """
+        Regression test for https://github.com/BerriAI/litellm/issues/29406
+
+        When a provider resolves the request to a different model (e.g. openrouter/auto),
+        the adapter stores it in hidden_params["routed_model"] and the proxy must expose
+        it as the x-litellm-routed-model header. When absent, the header is omitted.
+        """
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0
+
+        headers = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={"routed_model": "anthropic/claude-sonnet-4"},
+        )
+        assert headers["x-litellm-routed-model"] == "anthropic/claude-sonnet-4"
+
+        headers_without = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id",
+            hidden_params={},
+        )
+        assert "x-litellm-routed-model" not in headers_without
+
     def test_get_custom_headers_with_margin_info(self):
         """
         Test that margin headers are included when margin is applied.
