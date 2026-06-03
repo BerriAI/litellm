@@ -1114,6 +1114,7 @@ class TestCiscoAIDefenseMCPMode:
 
         real_result = CallToolResult(
             content=[TextContent(type="text", text="leak 9045629876")],
+            structuredContent={"patient": {"ssn": "123-45-6789"}},
             isError=False,
         )
         wrapped = MCPPostCallResponseObject(
@@ -1166,6 +1167,10 @@ class TestCiscoAIDefenseMCPMode:
             f"``content`` field."
         )
         assert content_items[0].get("type") == "text"
+        assert sent_payload["result"]["structuredContent"] == {
+            "patient": {"ssn": "123-45-6789"}
+        }
+        assert sent_payload["result"]["isError"] is False
         assert sent_payload["id"] == "real-wire-call"
         assert sent_payload["method"] == "tools/call"
         assert sent_payload["params"] == {"name": "leak_tool", "arguments": {}}
@@ -2492,7 +2497,7 @@ class TestCiscoAIDefenseRedactListShape:
         tuples_list = [
             ("meta", None),
             ("content", inner_content),
-            ("structuredContent", None),
+            ("structuredContent", {"patient": {"ssn": "123-45-6789"}}),
             ("isError", False),
         ]
         return tuples_list, lambda: inner_content[0].text
@@ -2536,6 +2541,10 @@ class TestCiscoAIDefenseRedactListShape:
             f"Redact silently failed for {factory_name}; original text "
             f"not rewritten."
         )
+        if factory_name == "_pydantic_tuple_list_factory":
+            structured_content = dict(content)["structuredContent"]
+            assert structured_content == {"result": "[REDACTED tool output]"}
+            assert "123-45-6789" not in json.dumps(structured_content)
 
 
 class TestCiscoAIDefenseResponsesAPIBypass:

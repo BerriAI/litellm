@@ -492,22 +492,36 @@ class _CiscoAIDefenseMcpMixin:
                     "id": response.get("id") or "litellm-mcp",
                     "result": response["result"],
                 }
+            content = response.get("content")
+            if isinstance(content, list):
+                return {
+                    "jsonrpc": "2.0",
+                    "id": response.get("id") or "litellm-mcp",
+                    "result": _CiscoAIDefenseMcpMixin._build_mcp_result(
+                        content=content, source=response
+                    ),
+                }
         if isinstance(response, list):
             if response and all(
                 isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
                 for item in response
             ):
-                inner_content = dict(response).get("content")
+                response_fields = dict(response)
+                inner_content = response_fields.get("content")
                 if isinstance(inner_content, list):
-                    response = inner_content
+                    return {
+                        "jsonrpc": "2.0",
+                        "id": "litellm-mcp",
+                        "result": _CiscoAIDefenseMcpMixin._build_mcp_result(
+                            content=inner_content, source=response_fields
+                        ),
+                    }
                 else:
                     return None
             return {
                 "jsonrpc": "2.0",
                 "id": "litellm-mcp",
-                "result": {
-                    "content": [_serialize_mcp_content_item(item) for item in response]
-                },
+                "result": _CiscoAIDefenseMcpMixin._build_mcp_result(content=response),
             }
         model_dump = getattr(response, "model_dump", None)
         if callable(model_dump):
@@ -522,11 +536,29 @@ class _CiscoAIDefenseMcpMixin:
             return {
                 "jsonrpc": "2.0",
                 "id": "litellm-mcp",
-                "result": {
-                    "content": [_serialize_mcp_content_item(item) for item in content]
-                },
+                "result": _CiscoAIDefenseMcpMixin._build_mcp_result(
+                    content=content, source=response
+                ),
             }
         return None
+
+    @staticmethod
+    def _build_mcp_result(
+        content: List[Any],
+        source: Any = None,
+    ) -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "content": [_serialize_mcp_content_item(item) for item in content]
+        }
+        for key in ("structuredContent", "isError"):
+            value = (
+                source.get(key)
+                if isinstance(source, dict)
+                else getattr(source, key, None)
+            )
+            if value is not None and (key != "isError" or isinstance(value, bool)):
+                result[key] = value
+        return result
 
     # ------------------------------------------------------------------
     # MCP redact (in-place rewrite of tool output)
@@ -535,21 +567,56 @@ class _CiscoAIDefenseMcpMixin:
     @staticmethod
     def _set_mcp_tool_response_text(response_obj: Any, text: str) -> bool:
         """Replace text content in any supported MCP response shape."""
-        content_list = _CiscoAIDefenseMcpMixin._coerce_to_content_list(response_obj)
-        if not isinstance(content_list, list) or not content_list:
+        if response_obj is None:
             return False
 
+        inner = getattr(response_obj, "mcp_tool_call_response", None)
+        if inner is not None:
+            return _CiscoAIDefenseMcpMixin._set_mcp_tool_response_text(inner, text)
+
+        content_list = _CiscoAIDefenseMcpMixin._coerce_to_content_list(response_obj)
+
         replaced = False
-        for item in content_list:
-            if isinstance(item, dict) and item.get("type") == "text":
-                item["text"] = text
-                replaced = True
-            elif hasattr(item, "type") and getattr(item, "type", None) == "text":
-                try:
-                    setattr(item, "text", text)
+        if isinstance(content_list, list):
+            for item in content_list:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    item["text"] = text
                     replaced = True
-                except (AttributeError, TypeError, ValueError):
-                    continue
+                elif hasattr(item, "type") and getattr(item, "type", None) == "text":
+                    try:
+                        setattr(item, "text", text)
+                        replaced = True
+                    except (AttributeError, TypeError, ValueError):
+                        continue
+
+        replacement = {"result": text}
+        if (
+            isinstance(response_obj, list)
+            and response_obj
+            and all(
+                isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str)
+                for item in response_obj
+            )
+        ):
+            for index, item in enumerate(response_obj):
+                if item[0] == "structuredContent":
+                    response_obj[index] = (item[0], replacement)
+                    replaced = True
+        elif hasattr(response_obj, "structuredContent"):
+            try:
+                setattr(response_obj, "structuredContent", replacement)
+                replaced = True
+            except (AttributeError, TypeError, ValueError):
+                pass
+        elif isinstance(response_obj, dict):
+            result = response_obj.get("result")
+            target: Dict[Any, Any] = (
+                result if isinstance(result, dict) else response_obj
+            )
+            if "structuredContent" in target:
+                target["structuredContent"] = replacement
+                replaced = True
+
         return replaced
 
     @staticmethod
