@@ -110,7 +110,9 @@ def reset_litellm_state():
 
 @pytest.mark.asyncio
 async def test_litellm_overhead_non_streaming(monkeypatch):
-    _mock_openai_completion_transport(monkeypatch, response_id="chatcmpl-non-stream")
+    calls = _mock_openai_completion_transport(
+        monkeypatch, response_id="chatcmpl-non-stream"
+    )
 
     start_time = time.perf_counter()
     response = await litellm.acompletion(
@@ -121,12 +123,13 @@ async def test_litellm_overhead_non_streaming(monkeypatch):
     )
     total_time_ms = (time.perf_counter() - start_time) * 1000
 
+    assert calls["count"] == 1
     _assert_overhead_is_smaller_than_total(response, total_time_ms)
 
 
 @pytest.mark.asyncio
 async def test_litellm_overhead_stream(monkeypatch):
-    _mock_openai_completion_transport(
+    calls = _mock_openai_completion_transport(
         monkeypatch, stream=True, response_id="chatcmpl-stream"
     )
 
@@ -143,6 +146,8 @@ async def test_litellm_overhead_stream(monkeypatch):
         pass
 
     total_time_ms = (time.perf_counter() - start_time) * 1000
+
+    assert calls["count"] == 1
     _assert_overhead_is_smaller_than_total(response, total_time_ms)
 
 
