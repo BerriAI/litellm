@@ -21,7 +21,7 @@ class TestLiteLLMResponsesBridge(BaseInteractionsTest):
         The bridge provider uses litellm.responses() internally, so we can
         use any model that litellm.responses() supports (e.g., gpt-5.5).
         """
-        return "gpt-5.5"
+        return os.environ.get("CI_CD_DEFAULT_OPENAI_MODEL", "gpt-4o-mini")
 
     def get_api_key(self) -> str:
         """Return the OpenAI API key from environment."""

@@ -93,7 +93,7 @@ async def test_pagerduty_hanging_request_alerting():
     )
 
     await litellm.acompletion(
-        model="gpt-5.5",
+        model=os.environ.get("CI_CD_DEFAULT_OPENAI_MODEL", "gpt-4o-mini"),
         messages=[{"role": "user", "content": "hi"}],
     )
 

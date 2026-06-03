@@ -522,7 +522,7 @@ async def test_deployment_budget_limits_e2e_test():
             {
                 "model_name": "gpt-4o",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "openai/gpt-4o",
+                    "model": f"openai/{os.environ.get('CI_CD_DEFAULT_OPENAI_MODEL', 'gpt-4o-mini')}",
                     "api_key": os.getenv("OPENAI_API_KEY"),
                     "max_budget": 0.000000000001,
                     "budget_duration": "1d",

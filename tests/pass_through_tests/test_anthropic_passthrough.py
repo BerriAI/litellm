@@ -2,6 +2,8 @@
 This test ensures that the proxy can passthrough anthropic requests
 """
 
+import os
+
 import pytest
 import anthropic
 import aiohttp
@@ -407,7 +409,7 @@ async def test_anthropic_messages_openai_model_streaming_cost_injection():
     }
 
     payload = {
-        "model": "openai/gpt-4o",
+        "model": f"openai/{os.environ.get('CI_CD_DEFAULT_OPENAI_MODEL', 'gpt-4o-mini')}",
         "max_tokens": 20,
         "stream": True,
         "messages": [{"role": "user", "content": "Say 'Hi'"}],

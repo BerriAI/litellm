@@ -1,3 +1,5 @@
+import os
+
 import pytest
 import openai
 import aiohttp
@@ -5,7 +7,6 @@ import asyncio
 import tempfile
 from typing_extensions import override
 from openai import AssistantEventHandler
-
 
 client = openai.OpenAI(base_url="http://0.0.0.0:4000/openai", api_key="sk-1234")
 
@@ -35,7 +36,7 @@ def test_openai_assistants_e2e_operations():
         name="Math Tutor",
         instructions="You are a personal math tutor. Write and run code to answer math questions.",
         tools=[{"type": "code_interpreter"}],
-        model="gpt-4o",
+        model=os.environ.get("CI_CD_DEFAULT_OPENAI_MODEL", "gpt-4o-mini"),
     )
     print("assistant created", assistant)
 
@@ -75,7 +76,7 @@ def test_openai_assistants_e2e_operations_stream():
         name="Math Tutor",
         instructions="You are a personal math tutor. Write and run code to answer math questions.",
         tools=[{"type": "code_interpreter"}],
-        model="gpt-4o",
+        model=os.environ.get("CI_CD_DEFAULT_OPENAI_MODEL", "gpt-4o-mini"),
     )
     print("assistant created", assistant)
 

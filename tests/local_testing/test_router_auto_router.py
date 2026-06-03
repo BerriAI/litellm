@@ -47,7 +47,9 @@ async def test_router_auto_router():
             {
                 "model_name": "litellm-gpt-4.1",
                 "litellm_params": {
-                    "model": "gpt-4.1",
+                    "model": os.environ.get(
+                        "CI_CD_DEFAULT_OPENAI_MODEL", "gpt-4o-mini"
+                    ),
                 },
                 "model_info": {"id": "openai-id"},
             },
