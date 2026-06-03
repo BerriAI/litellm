@@ -522,14 +522,20 @@ def get_request_route(request: Request) -> str:
         if not isinstance(scope, dict):
             return str(request.url.path)
         raw_path: str = str(scope.get("path", request.url.path))
-        root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
+        root_path: str = str(
+            scope.get("app_root_path", scope.get("root_path", ""))
+        ).rstrip("/")
         if not isinstance(raw_path, str):
             return str(request.url.path)
-        # Only strip root_path when it is a meaningful prefix (not bare "/").
-        # Stripping bare "/" would remove the leading slash from every path
-        # e.g. "/team/new" → "team/new", breaking route matching.
-        if root_path and root_path != "/" and raw_path.startswith(root_path):
-            return raw_path[len(root_path) :]
+        # Strip root_path only when it matches whole path segments — guarding
+        # against sibling paths like "/apifoo" being truncated under
+        # root_path="/api". Trailing slashes on root_path are stripped above,
+        # so bare "/" or "/prefix/" still leave the leading "/" intact.
+        if root_path and (
+            raw_path == root_path or raw_path.startswith(root_path + "/")
+        ):
+            stripped = raw_path[len(root_path) :]
+            return stripped or "/"
         return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
@@ -931,6 +937,40 @@ def get_team_model_tpm_limit(
 ) -> Optional[Dict[str, int]]:
     if user_api_key_dict.team_metadata:
         return user_api_key_dict.team_metadata.get("model_tpm_limit")
+    return None
+
+
+def get_key_mcp_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    """
+    Get the per-MCP-server rpm limit for a given api key.
+
+    Priority order (returns first found):
+    1. Key metadata (mcp_rpm_limit)
+    2. Team metadata (mcp_rpm_limit)
+
+    The returned dict is keyed by MCP server name (alias if set, else the
+    configured server name).
+    """
+    if user_api_key_dict.metadata:
+        result = user_api_key_dict.metadata.get("mcp_rpm_limit")
+        if result is not None:
+            return result
+
+    if user_api_key_dict.team_metadata:
+        team_limit = user_api_key_dict.team_metadata.get("mcp_rpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    return None
+
+
+def get_team_mcp_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("mcp_rpm_limit")
     return None
 
 

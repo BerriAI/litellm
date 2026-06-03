@@ -3429,6 +3429,29 @@ async def can_team_call_search_tool(
     )
 
 
+async def can_user_view_search_tool(
+    search_tool_name: str,
+    valid_token: UserAPIKeyAuth,
+    team_object: Optional[LiteLLM_TeamTable],
+) -> bool:
+    """
+    Boolean variant of the key + team authorization enforced on /search, used to
+    scope /search_tools/list so a non-admin caller only sees tools it may invoke.
+    """
+    try:
+        await can_key_call_search_tool(
+            search_tool_name=search_tool_name,
+            valid_token=valid_token,
+        )
+        await can_team_call_search_tool(
+            search_tool_name=search_tool_name,
+            team_object=team_object,
+        )
+    except ProxyException:
+        return False
+    return True
+
+
 async def is_valid_fallback_model(
     model: str,
     llm_router: Optional[Router],
