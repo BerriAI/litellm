@@ -3057,7 +3057,9 @@ class TestMCPServerTimestamps:
         ``_deserialize_json_list`` must hand back plain dicts so ``MCPServer``
         (typed ``List[Dict[str, Any]]``) validates."""
         env_vars = [
-            MCPEnvVar(name="GITHUB_TOKEN", scope=MCPEnvVarScope.user, description="PAT"),
+            MCPEnvVar(
+                name="GITHUB_TOKEN", scope=MCPEnvVarScope.user, description="PAT"
+            ),
             MCPEnvVar(name="REGION", value="us-east-1", scope=MCPEnvVarScope.global_),
         ]
         result = _deserialize_json_list(env_vars)
