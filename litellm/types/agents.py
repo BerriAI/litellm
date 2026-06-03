@@ -300,7 +300,7 @@ class MakeAgentsPublicRequest(BaseModel):
 
 def _normalize_a2a_jsonrpc_response(
     response_dict: Dict[str, Any],
-    request_id: Optional[str] = None,
+    request_id: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """
     Ensure JSON-RPC responses include ``id`` when the caller supplied one.
@@ -341,7 +341,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     def from_a2a_response(
         cls,
         response: "SendMessageResponse",
-        request_id: Optional[str] = None,
+        request_id: Optional[Any] = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
@@ -363,7 +363,7 @@ class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
     def from_dict(
         cls,
         response_dict: Dict[str, Any],
-        request_id: Optional[str] = None,
+        request_id: Optional[Any] = None,
     ) -> "LiteLLMSendMessageResponse":
         """
         Create a LiteLLMSendMessageResponse from a dict.
