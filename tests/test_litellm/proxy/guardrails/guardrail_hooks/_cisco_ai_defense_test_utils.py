@@ -20,12 +20,6 @@ from litellm.types.utils import (
 
 
 def _make_model_response_with_content(content: str) -> ModelResponse:
-    """Build a real ModelResponse so ``isinstance(choice, Choices)`` works.
-
-    MagicMock(spec=Choices) doesn't expose Pydantic v2 field attributes, so
-    a real Choices/Message pair is the simplest way to mirror what the
-    proxy hands the post-call hook in production.
-    """
     return ModelResponse(
         choices=[
             Choices(
@@ -183,7 +177,6 @@ def _redact_response(
     severity="HIGH",
     url=CHAT_URL,
 ):
-    """Build a Cisco verdict that asks for redact with the supplied sanitized payload."""
     body = {
         "is_safe": False,
         "classifications": list(classifications),
@@ -203,7 +196,6 @@ def _redact_response(
 
 
 def _responses_api_response(text, role="assistant"):
-    """Build a ResponsesAPIResponse with a single message output."""
     from litellm.types.llms.openai import ResponsesAPIResponse
     from litellm.types.responses.main import GenericResponseOutputItem, OutputText
 
@@ -236,7 +228,6 @@ def _make_guardrail(
     default_on=True,
     **kwargs,
 ):
-    """Construct a Cisco AI Defense guardrail with sensible test defaults."""
     return CiscoAIDefenseGuardrail(
         guardrail_name=name,
         api_key=api_key,
@@ -248,7 +239,6 @@ def _make_guardrail(
 
 
 def _find_callback(name):
-    """Pull the freshly-registered Cisco callback off litellm.callbacks."""
     from litellm.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
         CiscoAIDefenseGuardrail,
     )
@@ -260,7 +250,6 @@ def _find_callback(name):
 
 
 def _make_streaming_chunks(parts):
-    """Build a list of OpenAI-shape streaming chunks from text segments."""
     chunks = []
     for i, part in enumerate(parts):
         chunks.append(
@@ -294,12 +283,6 @@ async def _streaming_setup(
     request_data=None,
     post_mock=None,
 ):
-    """Run the streaming hook with the standard patch/iterate boilerplate.
-
-    Returns ``(received_chunks, post_mock)``. Caller picks the post mock
-    flavor (``AsyncMock(return_value=cisco_response)`` by default, or any
-    custom mock supplied via ``post_mock``).
-    """
     if post_mock is None:
         post_mock = (
             AsyncMock(return_value=cisco_response) if cisco_response else AsyncMock()

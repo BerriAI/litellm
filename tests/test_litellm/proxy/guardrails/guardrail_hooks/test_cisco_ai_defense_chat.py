@@ -42,7 +42,6 @@ from tests.test_litellm.proxy.guardrails.guardrail_hooks._cisco_ai_defense_test_
 
 
 def test_cisco_ai_defense_config_via_init_v2_chat(monkeypatch):
-    """init_guardrails_v2 accepts a chat-mode cisco_ai_defense guardrail."""
     monkeypatch.setenv("CISCO_AI_DEFENSE_API_KEY", "test-key")
     litellm.set_verbose = True
     litellm.guardrail_name_config_map = {}
@@ -63,17 +62,6 @@ def test_cisco_ai_defense_config_via_init_v2_chat(monkeypatch):
 
 
 def test_init_registers_on_both_callbacks_and_success_callback(monkeypatch):
-    """Regression: the post-MCP dispatcher in litellm_logging only iterates
-    ``litellm.success_callback`` (via
-    ``get_combined_callback_list(global_callbacks=litellm.success_callback)``)
-    — NOT ``litellm.callbacks``. Cisco guardrails that only register on
-    ``litellm.callbacks`` (the default for every other guardrail) would
-    silently skip MCP response scanning even though they implement
-    ``async_post_mcp_tool_call_hook``. The initializer must register on
-    BOTH lists so the chain {pre_call, during_call, post_call} (which the
-    proxy dispatches off ``litellm.callbacks``) AND the MCP post-tool
-    hook (off ``success_callback``) both reach us.
-    """
     monkeypatch.setenv("CISCO_AI_DEFENSE_API_KEY", "test-key")
     litellm.guardrail_name_config_map = {}
     litellm.callbacks = []
@@ -118,18 +106,6 @@ def test_init_registers_on_both_callbacks_and_success_callback(monkeypatch):
 
 
 class TestCiscoAIDefenseFlattenedConfig:
-    """The Admin UI / management API flattens guardrail params onto
-    ``LitellmParams`` directly (e.g. ``on_flagged_action: monitor`` at the
-    same level as ``mode`` / ``api_key``) instead of nesting under
-    ``optional_params``. The initializer must honor those flattened values.
-
-    However, several shared field names are claimed by sibling guardrail
-    configs with their own defaults (GraySwan defaults ``on_flagged_action``
-    to ``"passthrough"``); reading them via a bare ``getattr`` would
-    silently inherit those defaults even when the user never set the field.
-    The helper relies on Pydantic v2's ``model_fields_set`` to fall back
-    *only* when the user explicitly set the value at the root.
-    """
 
     def setup_method(self):
         for key in (
@@ -149,7 +125,6 @@ class TestCiscoAIDefenseFlattenedConfig:
         self.setup_method()
 
     def test_flattened_on_flagged_action_is_honored(self, monkeypatch):
-        """User explicitly set on_flagged_action=monitor at the top level."""
         monkeypatch.setenv("CISCO_AI_DEFENSE_API_KEY", "test-key")
         init_guardrails_v2(
             all_guardrails=[
@@ -173,7 +148,6 @@ class TestCiscoAIDefenseFlattenedConfig:
         assert cb.timeout == 20.0
 
     def test_flattened_and_nested_mix_keeps_user_intent(self, monkeypatch):
-        """nested takes precedence when both are set."""
         monkeypatch.setenv("CISCO_AI_DEFENSE_API_KEY", "test-key")
         init_guardrails_v2(
             all_guardrails=[
@@ -197,11 +171,6 @@ class TestCiscoAIDefenseFlattenedConfig:
         assert cb.fallback_on_error == "allow"
 
     def test_unset_fields_do_not_inherit_sibling_defaults(self, monkeypatch):
-        """Regression: when the user does NOT set on_flagged_action anywhere,
-        we must not silently pick up another guardrail config's default
-        (e.g. GraySwan's ``passthrough``). We should fall through to Cisco's
-        own constructor default (``block``).
-        """
         monkeypatch.setenv("CISCO_AI_DEFENSE_API_KEY", "test-key")
         init_guardrails_v2(
             all_guardrails=[
@@ -299,18 +268,10 @@ class TestCiscoAIDefenseGuardrailInit:
         assert g.inspect_path == "/api/v1/inspect/mcp"
 
     def test_event_hooks_include_both_surfaces(self):
-        """Both modes advertise every event hook the proxy can dispatch.
-
-        Construction-time validation is intentionally permissive: runtime
-        ``_surface_matches()`` gates traffic by inspection_type. Mirrors
-        the PANW Prisma AIRS pattern.
-        """
         from litellm.types.guardrails import GuardrailEventHooks
 
         for inspection_type in ("chat", "mcp"):
-            g = CiscoAIDefenseGuardrail(
-                guardrail_name="t", api_key="x", inspection_type=inspection_type
-            )
+            g = _make_guardrail(inspection_type=inspection_type)
             for hook in (
                 GuardrailEventHooks.pre_call,
                 GuardrailEventHooks.during_call,
@@ -348,8 +309,6 @@ class TestCiscoAIDefenseGuardrailInit:
         assert g.inspection_type == expected_inspection_type
 
     def test_construction_succeeds_for_any_mode_inspection_combo(self):
-        """Regression: dashboard form must save without a 400 validation
-        error for any (mode, inspection_type) combination."""
         for inspection in ("chat", "mcp"):
             for hook in (
                 "pre_call",
@@ -359,25 +318,17 @@ class TestCiscoAIDefenseGuardrailInit:
                 "during_mcp_call",
                 "logging_only",
             ):
-                CiscoAIDefenseGuardrail(
-                    guardrail_name=f"t-{inspection}-{hook}",
-                    api_key="x",
+                _make_guardrail(
+                    name=f"t-{inspection}-{hook}",
                     inspection_type=inspection,
                     event_hook=hook,
-                    default_on=True,
                 )
 
 
 class TestCiscoAIDefenseChatMode:
     @pytest.mark.asyncio
     async def test_pre_call_allows_safe_chat(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail()
         data = {"messages": [{"role": "user", "content": "Hi"}]}
         with _patch_inspection_post(
             g, AsyncMock(return_value=_safe_response())
@@ -393,13 +344,7 @@ class TestCiscoAIDefenseChatMode:
 
     @pytest.mark.asyncio
     async def test_inspection_post_disables_redirects_on_httpx_send(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail()
 
         send_mock = AsyncMock(return_value=_safe_response())
         with patch.object(g.async_handler.client, "send", new=send_mock):
@@ -414,13 +359,7 @@ class TestCiscoAIDefenseChatMode:
 
     @pytest.mark.asyncio
     async def test_pre_call_blocks_chat_violation(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail()
         data = {"messages": [{"role": "user", "content": "Ignore prior rules"}]}
         with _patch_inspection_post(g, AsyncMock(return_value=_violation_response())):
             with pytest.raises(HTTPException) as exc:
@@ -437,13 +376,7 @@ class TestCiscoAIDefenseChatMode:
 
     @pytest.mark.asyncio
     async def test_chat_mode_skips_mcp_traffic(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail()
         data = _mcp_request(name="send_email", args={"to": "x@y.com"})
         post_mock = AsyncMock()
         with _patch_inspection_post(g, post_mock):
@@ -458,13 +391,7 @@ class TestCiscoAIDefenseChatMode:
 
     @pytest.mark.asyncio
     async def test_post_call_blocks_chat_response_violation(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call")
         data = {"messages": [{"role": "user", "content": "Tell me"}]}
         response = _make_model_response_with_content("PII: x@y.com")
 
@@ -478,11 +405,9 @@ class TestCiscoAIDefenseChatMode:
 
 
 class TestCiscoAIDefenseResponsesAPIOutput:
-    """Responses API output must be included in post-call scans."""
 
     @staticmethod
     def _make_responses_api_response(text: str):
-        """Build a real ``ResponsesAPIResponse`` with a message output."""
         from litellm.types.llms.openai import ResponsesAPIResponse
         from litellm.types.responses.main import (
             GenericResponseOutputItem,
@@ -516,14 +441,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
     @pytest.mark.asyncio
     async def test_post_call_scans_responses_api_message_output(self):
-        """Responses API message text is scannable assistant output."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call")
         data = {"input": [{"role": "user", "content": "what is my SSN?"}]}
         response = self._make_responses_api_response("Your SSN is 123-45-6789.")
 
@@ -549,17 +467,10 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
     @pytest.mark.asyncio
     async def test_post_call_scans_responses_api_function_call_arguments(self):
-        """Responses API function-call arguments are also client-visible."""
         from litellm.types.llms.openai import ResponsesAPIResponse
         from litellm.types.responses.main import OutputFunctionToolCall
 
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call")
         data = {"input": [{"role": "user", "content": "anything"}]}
         response = ResponsesAPIResponse(
             id="resp_1",
@@ -596,14 +507,7 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
     @pytest.mark.asyncio
     async def test_post_call_responses_api_violation_is_blocked(self):
-        """Responses API output blocks use the normal chat HTTPException path."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call")
         data = {"input": [{"role": "user", "content": "ask"}]}
         response = self._make_responses_api_response("sensitive PII payload")
 
@@ -618,7 +522,6 @@ class TestCiscoAIDefenseResponsesAPIOutput:
 
 
 class TestCiscoAIDefenseResponsesAPIOutputRedaction:
-    """Redaction should rewrite Responses API output in place."""
 
     @pytest.mark.parametrize(
         "input_text,sanitized_text,sanitized_messages,expected_substring",
@@ -641,15 +544,7 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
     async def test_redact_rewrites_responses_api_output_in_place(
         self, input_text, sanitized_text, sanitized_messages, expected_substring
     ):
-        """Responses API output supports sanitized_text and sanitized_messages."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            on_flagged_action="monitor",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
         data = {"input": [{"role": "user", "content": "ask"}]}
         response = _responses_api_response(input_text)
 
@@ -679,7 +574,6 @@ class TestCiscoAIDefenseResponsesAPIOutputRedaction:
 
 
 class TestCiscoAIDefenseResponsesAPIInputRedaction:
-    """Responses API input redaction must update ``input``, not ``messages``."""
 
     @pytest.mark.parametrize(
         "initial_data,cisco_kwargs,assertion",
@@ -740,18 +634,7 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
     async def test_redact_rewrites_correct_request_field(
         self, initial_data, cisco_kwargs, assertion
     ):
-        """The redact path must rewrite the right field based on whether
-        the request uses ``input`` (Responses API) or ``messages``
-        (Chat Completions).
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            on_flagged_action="block",
-            default_on=True,
-        )
+        g = _make_guardrail(on_flagged_action="block")
         cisco_resp = _redact_response(
             rules=({"rule_name": "PII"},),
             **cisco_kwargs,
@@ -833,7 +716,6 @@ class TestCiscoAIDefenseResponsesAPIInputRedaction:
 
 
 class TestCiscoAIDefenseRedactionEdgeCases:
-    """Redaction edge cases across output shapes."""
 
     @pytest.mark.parametrize(
         "response_shape,unsafe_fragment,data,rule_name",
@@ -856,14 +738,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
     async def test_redact_clears_output_arguments(
         self, response_shape, unsafe_fragment, data, rule_name
     ):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            on_flagged_action="monitor",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
         if response_shape == "chat":
             from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
@@ -945,17 +820,9 @@ class TestCiscoAIDefenseRedactionEdgeCases:
 
     @pytest.mark.asyncio
     async def test_redact_applies_to_all_choices_for_n_gt_1(self):
-        """All choices must be rewritten when n > 1."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            on_flagged_action="monitor",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
         response = ModelResponse(
             choices=[
                 Choices(
@@ -1027,20 +894,9 @@ class TestCiscoAIDefenseRedactionEdgeCases:
 
     @pytest.mark.asyncio
     async def test_redact_sanitized_messages_clears_extra_choices(self):
-        """When Cisco returns fewer sanitized_messages than there are
-        choices, the remaining choices must NOT keep their original
-        unsafe content / tool-call args. Otherwise n > len(replacements)
-        leaks content past the scan."""
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            on_flagged_action="monitor",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
         response = ModelResponse(
             choices=[
                 Choices(
@@ -1120,15 +976,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
     async def test_redact_handles_structured_sanitized_messages(
         self, response_shape, unsafe_fragment, data, rule_name
     ):
-        """Structured sanitized_messages must rewrite both chat and Responses API output."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            on_flagged_action="monitor",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call", on_flagged_action="monitor")
         if response_shape == "chat":
             response = ModelResponse(
                 choices=[
@@ -1209,7 +1057,6 @@ class TestCiscoAIDefenseRedactionEdgeCases:
         assert "[REDACTED]" in out
 
     def _canonical_payload_assertions(self, payload, surface, direction):
-        """Shared invariants every Cisco block payload must satisfy."""
         assert payload["error"] == "Blocked by Cisco AI Defense Guardrail"
         assert payload["message"] == "Blocked by Cisco AI Defense Guardrail"
         assert payload["provider"] == "cisco_ai_defense"
@@ -1233,7 +1080,6 @@ class TestCiscoAIDefenseRedactionEdgeCases:
     )
     @pytest.mark.asyncio
     async def test_block_payload_canonical(self, surface, direction, transport):
-        """Every block surface emits the same canonical payload shape."""
         import json as _json
         from litellm.types.mcp import MCPPostCallResponseObject
 
@@ -1244,13 +1090,7 @@ class TestCiscoAIDefenseRedactionEdgeCases:
             event_hook = ["pre_call", "post_call"]
         else:
             event_hook = "pre_call" if direction == "input" else "post_call"
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type=surface,
-            event_hook=event_hook,
-            default_on=True,
-        )
+        g = _make_guardrail(inspection_type=surface, event_hook=event_hook)
 
         violation = _violation_response(url=url)
         if transport == "http_input":
@@ -1326,7 +1166,6 @@ class TestCiscoAIDefenseRedactionEdgeCases:
         )
 
     def test_sanitize_logging_strips_nested_keys(self):
-        """Logging sanitization strips sensitive nested keys."""
         verdict = {
             "is_safe": False,
             "result": {
@@ -1356,21 +1195,10 @@ class TestCiscoAIDefenseRedactionEdgeCases:
 
 
 class TestCiscoAIDefenseEdgeCases:
-    """Additional streaming, MCP, logging, and config edge cases."""
 
     @pytest.mark.asyncio
     async def test_streaming_anthropic_sse_bytes_fails_closed(self):
-        """Anthropic SSE bytes chunks (``/v1/messages`` streaming) must
-        NOT be delivered unscanned. We don't parse Anthropic SSE today,
-        so the safest posture is to refuse to deliver.
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook=["pre_call", "post_call"],
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
         anthropic_chunks = [
             b'event: content_block_delta\ndata: {"type":"text_delta","text":"leak SSN 123-45-6789"}\n\n',
             b"event: message_stop\ndata: {}\n\n",
@@ -1404,14 +1232,7 @@ class TestCiscoAIDefenseEdgeCases:
 
     @pytest.mark.asyncio
     async def test_streaming_responses_pydantic_events_fail_closed(self):
-        """Same fail-closed posture for ``/v1/responses`` pydantic events."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook=["pre_call", "post_call"],
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
         responses_events = [
             SimpleNamespace(
                 type="response.output_text.delta", delta="leak 4111-1111-1111-1111"
@@ -1439,18 +1260,10 @@ class TestCiscoAIDefenseEdgeCases:
 
     @pytest.mark.asyncio
     async def test_mcp_redact_jsonrpc_params_arguments_path(self):
-        """When the request is a JSON-RPC envelope, ``mcp_arguments`` is
-        a stale field — the proxy reads ``data["params"]["arguments"]``
-        and forwards that upstream. Redact must rewrite the right field
-        or the original (unsafe) arguments reach the MCP server.
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
+        g = _make_guardrail(
             inspection_type="mcp",
             event_hook="pre_mcp_call",
             on_flagged_action="monitor",
-            default_on=True,
         )
         data = _mcp_request(
             name="send_data",
@@ -1489,21 +1302,9 @@ class TestCiscoAIDefenseEdgeCases:
 
     @pytest.mark.asyncio
     async def test_handle_api_error_uses_output_event_type_for_response_scan(self):
-        """When ``_inspect_chat(direction="output")`` fails, the failure
-        log must use ``post_call`` as the event type — not ``pre_call``.
-        Otherwise output-side scan failures get bucketed as input-side
-        failures and skew dashboards.
-        """
         from litellm.types.guardrails import GuardrailEventHooks
 
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            fallback_on_error="allow",  # let the failure path run to completion
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call", fallback_on_error="allow")
         data = {"messages": [{"role": "user", "content": "hi"}]}
         response = _make_model_response_with_content("safe")
 
@@ -1538,9 +1339,6 @@ class TestCiscoAIDefenseEdgeCases:
         )
 
     def test_config_model_no_mcp_api_key_reference(self):
-        """The config model docstring referenced ``optional_params.mcp_api_key``
-        — a field that doesn't exist. Remove the stale sentence so
-        operators don't go looking for a setting that isn't there."""
         from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
             CiscoAIDefenseGuardrailConfigModel,
             CiscoAIDefenseGuardrailConfigModelOptionalParams,
@@ -1560,19 +1358,7 @@ class TestCiscoAIDefenseEdgeCases:
 
     @pytest.mark.asyncio
     async def test_mcp_response_scan_runs_with_pre_mcp_call_only(self):
-        """UX clarification per product decision: a user configuring
-        ``mode: pre_mcp_call`` expects MCP response scanning too — that
-        IS guarding the MCP call. Previously response scan required
-        ``during_mcp_call`` to be explicitly configured; now either
-        MCP mode enables it.
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="mcp",
-            event_hook="pre_mcp_call",
-            default_on=True,
-        )
+        g = _make_guardrail(inspection_type="mcp", event_hook="pre_mcp_call")
         response_obj = _mcp_response(
             [{"type": "text", "text": "leaked SSN 123-45-6789"}]
         )
@@ -1595,11 +1381,9 @@ class TestCiscoAIDefenseEdgeCases:
 
 
 class TestCiscoAIDefenseEnabledRulesPydanticShape:
-    """enabled_rules may arrive as Pydantic rule objects."""
 
     @pytest.mark.asyncio
     async def test_enabled_rules_from_pydantic_model_does_not_500(self):
-        """Typed config enabled_rules are normalized into Cisco wire shape."""
         from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
             CiscoAIDefenseGuardrailConfigModelOptionalParams,
             CiscoAIDefenseRule,
@@ -1619,14 +1403,7 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
             "CiscoAIDefenseRule instances for the regression to apply."
         )
 
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-            enabled_rules=optional_params.enabled_rules,
-        )
+        g = _make_guardrail(enabled_rules=optional_params.enabled_rules)
         data = {"messages": [{"role": "user", "content": "hi"}]}
 
         post_mock = AsyncMock(return_value=_safe_response())
@@ -1658,7 +1435,6 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
         )
 
     def test_normalize_rule_handles_pydantic_basemodel_directly(self):
-        """BaseModel-like inputs are accepted by the normalization helper."""
         from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
             CiscoAIDefenseRule,
         )
@@ -1670,7 +1446,6 @@ class TestCiscoAIDefenseEnabledRulesPydanticShape:
 
 
 class TestCiscoAIDefenseResponsesAPIBypass:
-    """Responses API ``input`` shapes must be flattened for scanning."""
 
     @pytest.mark.parametrize(
         "input_value,expected_substring",
@@ -1714,13 +1489,7 @@ class TestCiscoAIDefenseResponsesAPIBypass:
     async def test_responses_api_input_is_scanned(
         self, input_value, expected_substring
     ):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail()
         data = {"input": input_value}
         post_mock = AsyncMock(return_value=_safe_response())
         with _patch_inspection_post(g, post_mock):
@@ -1765,7 +1534,6 @@ class TestCiscoAIDefenseResponsesAPIBypass:
 
 
 class TestCiscoAIDefenseToolCallBypass:
-    """Tool-call and function-call arguments are scannable."""
 
     @pytest.mark.parametrize(
         "data,expected_text_in_scan",
@@ -1871,18 +1639,9 @@ class TestCiscoAIDefenseToolCallBypass:
     async def test_post_call_scans_tool_call_payloads(
         self, message_kwargs, expected_text_in_scan
     ):
-        """Tool-call payloads (modern + legacy) are delivered to the
-        client; they must be sent to Cisco for inspection too.
-        """
         from litellm.types.utils import ChatCompletionMessageToolCall, Function
 
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook="post_call")
 
         message_init = {
             "role": "assistant",
@@ -1933,7 +1692,6 @@ class TestCiscoAIDefenseToolCallBypass:
 
 
 class TestCiscoAIDefenseReasoningOutputBypass:
-    """Reasoning-specific response fields are scannable and redactable."""
 
     @pytest.mark.asyncio
     async def test_post_call_scans_and_redacts_reasoning_fields(self):
@@ -1981,18 +1739,10 @@ class TestCiscoAIDefenseReasoningOutputBypass:
 
 
 class TestCiscoAIDefenseStreamingBypass:
-    """Streaming output is buffered until Cisco returns a verdict."""
 
     @pytest.mark.asyncio
     async def test_streaming_violation_does_not_deliver_original_chunks(self):
-        """Block verdicts yield an SSE error instead of original chunks."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook=["pre_call", "post_call"],
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
         sensitive_chunks = _make_streaming_chunks(
             ["Here is your SSN: ", "123-45-", "6789."]
         )
@@ -2024,14 +1774,7 @@ class TestCiscoAIDefenseStreamingBypass:
 
     @pytest.mark.asyncio
     async def test_streaming_inspect_is_called_before_any_chunk_is_yielded(self):
-        """The hook buffers the full stream before any client-visible yield."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook=["pre_call", "post_call"],
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
         chunks = _make_streaming_chunks(["a", "b", "c"])
 
         order_log = []
@@ -2081,16 +1824,7 @@ class TestCiscoAIDefenseStreamingBypass:
 
     @pytest.mark.asyncio
     async def test_streaming_safe_response_yields_original_chunks(self):
-        """Allow path: Cisco says safe → original chunks flow through
-        unchanged (no MockResponseIterator swap).
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook=["pre_call", "post_call"],
-            default_on=True,
-        )
+        g = _make_guardrail(event_hook=["pre_call", "post_call"])
         chunks = _make_streaming_chunks(["Hello", " safe", " world."])
 
         received, _ = await _streaming_setup(g, chunks, cisco_response=_safe_response())
@@ -2216,16 +1950,8 @@ class TestCiscoAIDefenseStreamingBypass:
 
     @pytest.mark.asyncio
     async def test_streaming_skipped_for_mcp_mode_guardrail(self):
-        """An mcp-mode guardrail must not scan chat streaming — MCP
-        traffic doesn't flow through this hook in any case, and chat
-        traffic is owned by the chat-mode guardrail.
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="mcp",
-            event_hook=["pre_mcp_call", "during_mcp_call"],
-            default_on=True,
+        g = _make_guardrail(
+            inspection_type="mcp", event_hook=["pre_mcp_call", "during_mcp_call"]
         )
         chunks = _make_streaming_chunks(["anything"])
 
@@ -2235,17 +1961,7 @@ class TestCiscoAIDefenseStreamingBypass:
 
     @pytest.mark.asyncio
     async def test_streaming_skipped_when_guardrail_not_requested(self):
-        """If ``should_run_guardrail`` returns False (e.g. user did not
-        opt in and ``default_on=False``), the hook must pass chunks
-        through without scanning.
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            default_on=False,
-        )
+        g = _make_guardrail(event_hook="post_call", default_on=False)
         chunks = _make_streaming_chunks(["anything"])
 
         received, post_mock = await _streaming_setup(g, chunks)
@@ -2254,7 +1970,6 @@ class TestCiscoAIDefenseStreamingBypass:
 
 
 class TestCiscoAIDefenseSurfaceBypass:
-    """Surface routing trusts proxy call_type over request body shape."""
 
     @pytest.mark.parametrize(
         "hook,inspection_type,event_hook,call_type,data,response,"
@@ -2355,16 +2070,7 @@ class TestCiscoAIDefenseSurfaceBypass:
         expected_called,
         expected_url,
     ):
-        """The proxy's ``call_type`` is the authoritative surface signal;
-        payload-shape sniffing must NOT override it (in either direction).
-        """
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type=inspection_type,
-            event_hook=event_hook,
-            default_on=True,
-        )
+        g = _make_guardrail(inspection_type=inspection_type, event_hook=event_hook)
 
         post_mock = AsyncMock(return_value=_safe_response())
         with _patch_inspection_post(g, post_mock):
@@ -2402,20 +2108,9 @@ class TestCiscoAIDefenseSurfaceBypass:
 
 
 class TestCiscoAIDefenseEventTypeDirection:
-    """Input and output scans log under distinct event types."""
 
     @staticmethod
     def _spy_event_types(g: "CiscoAIDefenseGuardrail") -> "tuple[list, Any]":
-        """Spy on add_standard_logging_guardrail_information_to_request_data.
-
-        ``@log_guardrail_information`` also auto-records an entry when the
-        wrapped function doesn't append to ``metadata.standard_logging_
-        guardrail_information`` itself — and patching the method out
-        prevents the append, so the decorator's auto-record fires and
-        adds a second call with the function-name-inferred event type.
-        We therefore track ALL recorded event_types and assert the one
-        emitted from our own code is in the list.
-        """
         recorded: list = []
 
         def _spy(*args, **kwargs):
@@ -2448,13 +2143,7 @@ class TestCiscoAIDefenseEventTypeDirection:
                 if direction == "output"
                 else "pre_mcp_call"
             )
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type=inspection_type,
-            event_hook=event_hook,
-            default_on=True,
-        )
+        g = _make_guardrail(inspection_type=inspection_type, event_hook=event_hook)
         url = MCP_URL if inspection_type == "mcp" else CHAT_URL
 
         recorded, _spy = self._spy_event_types(g)
@@ -2506,14 +2195,7 @@ class TestCiscoAIDefenseEventTypeDirection:
 class TestCiscoAIDefenseErrorHandling:
     @pytest.mark.asyncio
     async def test_api_error_fallback_block(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            fallback_on_error="block",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(fallback_on_error="block")
         data = {"messages": [{"role": "user", "content": "x"}]}
         with _patch_inspection_post(g, AsyncMock(side_effect=Exception("boom"))):
             with pytest.raises(HTTPException) as exc:
@@ -2527,14 +2209,7 @@ class TestCiscoAIDefenseErrorHandling:
 
     @pytest.mark.asyncio
     async def test_api_error_fallback_allow(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="t",
-            api_key="x",
-            inspection_type="chat",
-            fallback_on_error="allow",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(fallback_on_error="allow")
         data = {"messages": [{"role": "user", "content": "x"}]}
         with _patch_inspection_post(g, AsyncMock(side_effect=Exception("boom"))):
             result = await g.async_pre_call_hook(
@@ -2547,7 +2222,6 @@ class TestCiscoAIDefenseErrorHandling:
 
 
 class TestCiscoAIDefenseRedactAction:
-    """When Cisco returns sanitized content, we rewrite instead of blocking."""
 
     @staticmethod
     def _redact_response(
@@ -2576,13 +2250,7 @@ class TestCiscoAIDefenseRedactAction:
 
     @pytest.mark.asyncio
     async def test_chat_request_redact_rewrites_last_user_message(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(name="cisco-chat")
         data = {
             "messages": [
                 {"role": "system", "content": "be helpful"},
@@ -2610,13 +2278,7 @@ class TestCiscoAIDefenseRedactAction:
 
     @pytest.mark.asyncio
     async def test_chat_request_redact_uses_sanitized_messages(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(name="cisco-chat")
         data = {"messages": [{"role": "user", "content": "leak abc@x.com"}]}
         with _patch_inspection_post(
             g,
@@ -2636,13 +2298,7 @@ class TestCiscoAIDefenseRedactAction:
 
     @pytest.mark.asyncio
     async def test_chat_response_redact_rewrites_assistant_content(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="post_call",
-            default_on=True,
-        )
+        g = _make_guardrail(name="cisco-chat", event_hook="post_call")
         data = {"messages": [{"role": "user", "content": "tell me"}]}
         response = _make_model_response_with_content("leak: alice@example.com")
 
@@ -2662,12 +2318,8 @@ class TestCiscoAIDefenseRedactAction:
 
     @pytest.mark.asyncio
     async def test_mcp_request_redact_rewrites_arguments(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-mcp",
-            api_key="x",
-            inspection_type="mcp",
-            event_hook="pre_mcp_call",
-            default_on=True,
+        g = _make_guardrail(
+            name="cisco-mcp", inspection_type="mcp", event_hook="pre_mcp_call"
         )
         data = _mcp_request(
             name="send_email", args={"to": "alice@example.com", "body": "hi"}
@@ -2696,15 +2348,7 @@ class TestCiscoAIDefenseRedactAction:
     async def test_redact_falls_through_to_block_when_no_rewrite_possible(
         self,
     ):
-        """Redact action with no sanitized content + no rewrite surface → block."""
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-            on_flagged_action="block",
-        )
+        g = _make_guardrail(name="cisco-chat", on_flagged_action="block")
         data = {"prompt": "secret abc"}
         cisco_response = _mock_inspect_response(
             {
@@ -2728,7 +2372,6 @@ class TestCiscoAIDefenseRedactAction:
 
 
 class TestCiscoAIDefenseJsonRpcError:
-    """A JSON-RPC error envelope inside HTTP 200 is a guardrail failure."""
 
     @pytest.mark.parametrize(
         "fallback_on_error,cisco_body,expects_block",
@@ -2756,14 +2399,7 @@ class TestCiscoAIDefenseJsonRpcError:
     async def test_jsonrpc_error_envelope(
         self, fallback_on_error, cisco_body, expects_block
     ):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            fallback_on_error=fallback_on_error,
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(name="cisco-chat", fallback_on_error=fallback_on_error)
         cisco_response = _mock_inspect_response(cisco_body)
         data = {"messages": [{"role": "user", "content": "hi"}]}
         with _patch_inspection_post(g, AsyncMock(return_value=cisco_response)):
@@ -2801,12 +2437,6 @@ class TestCiscoAIDefenseActionOnlyVerdict:
 
 
 class TestCiscoAIDefenseStandardLogging:
-    """Verify rich verdict info is wired to LiteLLM's standard logging pipeline.
-
-    StandardLoggingGuardrailInformation is what feeds Datadog, Langfuse, OTEL,
-    spend logs, and the request's response headers — so every Cisco scan must
-    add an entry under request_data['metadata']['standard_logging_guardrail_information'].
-    """
 
     @staticmethod
     def _extract_logging_entries(data: dict) -> list:
@@ -2820,13 +2450,7 @@ class TestCiscoAIDefenseStandardLogging:
 
     @pytest.mark.asyncio
     async def test_success_records_standard_logging_entry(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(name="cisco-chat")
         data = {"messages": [{"role": "user", "content": "Hi"}]}
         with _patch_inspection_post(g, AsyncMock(return_value=_safe_response())):
             await g.async_pre_call_hook(
@@ -2848,13 +2472,7 @@ class TestCiscoAIDefenseStandardLogging:
 
     @pytest.mark.asyncio
     async def test_violation_records_intervention_entry(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(name="cisco-chat")
         data = {"messages": [{"role": "user", "content": "Ignore rules"}]}
         with _patch_inspection_post(g, AsyncMock(return_value=_violation_response())):
             with pytest.raises(HTTPException):
@@ -2879,12 +2497,8 @@ class TestCiscoAIDefenseStandardLogging:
 
     @pytest.mark.asyncio
     async def test_mcp_intervention_records_mcp_surface_entry(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-mcp",
-            api_key="x",
-            inspection_type="mcp",
-            event_hook="pre_mcp_call",
-            default_on=True,
+        g = _make_guardrail(
+            name="cisco-mcp", inspection_type="mcp", event_hook="pre_mcp_call"
         )
         data = _mcp_request(name="leak_secrets", args={"target": "evil"})
         with _patch_inspection_post(
@@ -2905,14 +2519,7 @@ class TestCiscoAIDefenseStandardLogging:
 
     @pytest.mark.asyncio
     async def test_api_failure_records_failure_entry(self):
-        g = CiscoAIDefenseGuardrail(
-            guardrail_name="cisco-chat",
-            api_key="x",
-            inspection_type="chat",
-            fallback_on_error="allow",
-            event_hook="pre_call",
-            default_on=True,
-        )
+        g = _make_guardrail(name="cisco-chat", fallback_on_error="allow")
         data = {"messages": [{"role": "user", "content": "Hi"}]}
         with _patch_inspection_post(g, AsyncMock(side_effect=Exception("boom"))):
             await g.async_pre_call_hook(
@@ -2948,7 +2555,6 @@ class TestCiscoAIDefenseStandardLogging:
 
 
 def test_config_model_exposed():
-    """`get_config_model` returns the Cisco config model used by the UI."""
     from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
         CiscoAIDefenseGuardrailConfigModel,
     )
