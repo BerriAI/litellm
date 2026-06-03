@@ -966,3 +966,34 @@ class TestPreCallHookDeferredRouting:
             )
 
         assert blocker.ran is True
+
+    @pytest.mark.asyncio
+    async def test_routing_recorded_as_intervention_not_prometheus_error(
+        self, proxy_logging
+    ):
+        import litellm
+        from litellm.integrations.prometheus import PrometheusLogger
+
+        router = _RoutingGuardrail(
+            guardrail_name="router",
+            default_on=True,
+            event_hook="pre_call",
+            on_sensitive_data="route",
+            sensitive_data_route_to_model="on-prem-model",
+            sticky_session_routing=False,
+        )
+        prom = MagicMock(spec=PrometheusLogger)
+        litellm.callbacks = [router, prom]
+
+        data = {"model": "gpt-4", "metadata": {"session_id": "sess-prom"}}
+        result = await proxy_logging.pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key="tenant-a"),
+            data=data,
+            call_type="completion",
+        )
+
+        assert result["model"] == "on-prem-model"
+        prom._record_guardrail_metrics.assert_called_once()
+        metrics_kwargs = prom._record_guardrail_metrics.call_args.kwargs
+        assert metrics_kwargs["status"] == "intervened"
+        assert metrics_kwargs["error_type"] is None

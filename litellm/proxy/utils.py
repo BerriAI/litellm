@@ -1153,6 +1153,9 @@ class ProxyLogging:
                     response=response, data=data, call_type=call_type
                 )
 
+        except SensitiveDataRouteException:
+            status = "intervened"
+            raise
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
