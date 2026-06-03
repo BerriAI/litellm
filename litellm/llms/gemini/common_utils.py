@@ -118,7 +118,8 @@ def map_openai_size_to_gemini_image_config(
 def supports_gemini_image_size(model: str) -> bool:
     try:
         model_info = litellm.get_model_info(model=model)
-        return model_info.get("supports_image_size", True)
+        value = model_info.get("supports_image_size")
+        return value is not False
     except Exception:
         return True
 

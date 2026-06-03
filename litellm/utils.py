@@ -6097,6 +6097,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "provider_specific_entry", None
                 ),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
+                supports_image_size=_model_info.get("supports_image_size", None),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
