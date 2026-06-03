@@ -14,6 +14,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.proxy_track_cost_callback import (
     _ProxyDBLogger,
     _get_budget_reservation_from_metadata,
+    _should_track_cost_callback,
     _update_database_and_spend_counters,
 )
 
@@ -1067,3 +1068,66 @@ async def test_failure_hook_drops_error_information_traceback_when_env_set(
     assert "traceback" not in error_information
     assert error_information["error_class"] == "RuntimeError"
     assert error_information["error_message"] == "boom-with-traceback"
+
+
+# ---------------------------------------------------------------------------
+# _should_track_cost_callback gate
+# ---------------------------------------------------------------------------
+
+
+def test_should_track_cost_callback_returns_true_with_only_api_key():
+    """A request authenticated via a virtual key must be tracked even when
+    user_id, team_id, and end_user_id are all absent.
+
+    Mutating the OR condition to AND would make this return False, silently
+    dropping all spend for key-only requests.
+    """
+    assert _should_track_cost_callback(
+        user_api_key="hashed-key",
+        user_id=None,
+        team_id=None,
+        end_user_id=None,
+    )
+
+
+def test_should_track_cost_callback_returns_true_with_only_user_id():
+    """A request with user attribution but no key must still be tracked."""
+    assert _should_track_cost_callback(
+        user_api_key=None,
+        user_id="alice",
+        team_id=None,
+        end_user_id=None,
+    )
+
+
+def test_should_track_cost_callback_returns_false_when_all_ids_none():
+    """When no attribution is present the callback must be skipped.
+
+    Removing the final `return False` (or returning True unconditionally)
+    would cause unauthenticated system requests to attempt DB writes with no
+    entity to attribute the spend to.
+    """
+    assert not _should_track_cost_callback(
+        user_api_key=None,
+        user_id=None,
+        team_id=None,
+        end_user_id=None,
+    )
+
+
+def test_should_track_cost_callback_respects_disable_spend_updates(monkeypatch):
+    """disable_spend_updates=True must suppress tracking even with a valid key.
+
+    This pins the operator kill-switch: if the guard is removed, operators
+    who set disable_spend_updates lose the ability to stop spend writes.
+    """
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {"disable_spend_updates": True},
+    )
+    assert not _should_track_cost_callback(
+        user_api_key="hashed-key",
+        user_id="alice",
+        team_id="team-1",
+        end_user_id="end-user",
+    )
