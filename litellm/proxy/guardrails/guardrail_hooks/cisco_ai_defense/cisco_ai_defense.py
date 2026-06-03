@@ -2068,9 +2068,7 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                 if not isinstance(item, dict):
                     continue
                 role = item.get("role") or "user"
-                text = CiscoAIDefenseGuardrail._normalize_message_content(
-                    item.get("content")
-                )
+                text = CiscoAIDefenseGuardrail._normalize_message_content([item])
                 if text:
                     result.append({"role": role, "content": text})
             return result
@@ -2115,6 +2113,12 @@ class CiscoAIDefenseGuardrail(_CiscoAIDefenseMcpMixin, CustomGuardrail):
                     )
                     if nested_text:
                         parts.append(nested_text)
+                for key in ("arguments", "output"):
+                    value = part.get(key)
+                    if value:
+                        parts.append(
+                            CiscoAIDefenseGuardrail._normalize_message_content(value)
+                        )
             return " ".join(parts)
         return str(content)
 

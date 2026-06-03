@@ -1483,6 +1483,28 @@ class TestCiscoAIDefenseResponsesAPIBypass:
                 ],
                 "previously leaked PII",
             ),
+            (
+                [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "lookup",
+                        "arguments": '{"query":"SSN 123-45-6789"}',
+                    }
+                ],
+                "123-45-6789",
+            ),
+            (
+                [
+                    {"role": "user", "content": "safe text"},
+                    {
+                        "type": "function_call_output",
+                        "call_id": "call_1",
+                        "output": "card 4111-1111-1111-1111",
+                    },
+                ],
+                "4111-1111-1111-1111",
+            ),
         ],
     )
     @pytest.mark.asyncio
