@@ -8686,6 +8686,9 @@ class Router:
                         self._update_deployment_indices_after_removal(
                             model_id=deployment_id, removal_idx=removal_idx
                         )
+                        self._remove_deployment_from_wildcard_state(
+                            model_id=deployment_id
+                        )
 
             # if the model_id is not in router
             self.add_deployment(deployment=deployment)
@@ -8721,6 +8724,7 @@ class Router:
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
+                self._remove_deployment_from_wildcard_state(model_id=id)
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
@@ -8729,6 +8733,28 @@ class Router:
                 return None
         except Exception:
             return None
+
+    def _remove_deployment_from_wildcard_state(self, model_id: str) -> None:
+        """
+        Drop every reference to model_id from the wildcard-routing data
+        structures. Without this, upsert/delete leaves stale credentials in
+        pattern_router which silently defeats key rotation for wildcard
+        deployments.
+        """
+        if not model_id:
+            return
+        self.pattern_router.remove_deployment(model_id)
+        empty_team_ids: List[str] = []
+        for team_id, team_router in self.team_pattern_routers.items():
+            team_router.remove_deployment(model_id)
+            if not team_router.patterns:
+                empty_team_ids.append(team_id)
+        for team_id in empty_team_ids:
+            del self.team_pattern_routers[team_id]
+        if model_id in self.provider_default_deployment_ids:
+            self.provider_default_deployment_ids = [
+                i for i in self.provider_default_deployment_ids if i != model_id
+            ]
 
     def _get_router_deployment_budget_limiter(
         self,

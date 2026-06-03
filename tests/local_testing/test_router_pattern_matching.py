@@ -395,3 +395,90 @@ def test_wildcard_priority_over_deployment_names():
     assert (
         deployments[0]["litellm_params"]["api_base"] == "http://localhost:8081/openai"
     ), f"Expected '*' wildcard deployment (8081), got {deployments[0]['litellm_params']['api_base']}"
+
+
+def _make_wildcard_entry(model_id: str, api_key: str) -> dict:
+    """Build a dict shaped like Deployment(...).to_json(exclude_none=True)."""
+    return Deployment(
+        model_name="openai/*",
+        litellm_params=LiteLLM_Params(model="openai/*", api_key=api_key),
+        model_info=ModelInfo(id=model_id),
+    ).to_json(exclude_none=True)
+
+
+def test_remove_deployment_drops_matching_id_only():
+    router = PatternMatchRouter()
+    router.add_pattern("openai/*", _make_wildcard_entry("id-A", "key-A"))
+    router.add_pattern("openai/*", _make_wildcard_entry("id-B", "key-B"))
+
+    removed = router.remove_deployment("id-A")
+
+    assert removed == 1
+    survivors = router.patterns["openai/(.*)"]
+    assert len(survivors) == 1
+    assert survivors[0]["model_info"]["id"] == "id-B"
+    assert survivors[0]["litellm_params"]["api_key"] == "key-B"
+
+
+def test_remove_deployment_drops_regex_key_when_list_empties():
+    router = PatternMatchRouter()
+    router.add_pattern("openai/*", _make_wildcard_entry("id-A", "key-A"))
+
+    router.remove_deployment("id-A")
+
+    assert router.patterns == {}
+
+
+def test_remove_deployment_spans_multiple_regexes():
+    router = PatternMatchRouter()
+    router.add_pattern("openai/*", _make_wildcard_entry("id-A", "key-A"))
+    router.add_pattern("anthropic/*", _make_wildcard_entry("id-A", "key-A"))
+    router.add_pattern("openai/*", _make_wildcard_entry("id-B", "key-B"))
+
+    removed = router.remove_deployment("id-A")
+
+    assert removed == 2
+    assert "anthropic/(.*)" not in router.patterns
+    assert [d["model_info"]["id"] for d in router.patterns["openai/(.*)"]] == ["id-B"]
+
+
+def test_remove_deployment_noop_for_unknown_id():
+    router = PatternMatchRouter()
+    router.add_pattern("openai/*", _make_wildcard_entry("id-A", "key-A"))
+    before = {k: list(v) for k, v in router.patterns.items()}
+
+    removed = router.remove_deployment("id-DOES-NOT-EXIST")
+
+    assert removed == 0
+    assert router.patterns == before
+
+
+def test_remove_deployment_with_falsy_id_is_noop_even_when_entries_have_no_id():
+    """
+    An entry without model_info.id has '' / None as its id. remove_deployment('')
+    must NOT match those entries; otherwise a stray empty-string call would
+    wipe every id-less wildcard deployment in the router.
+    """
+    router = PatternMatchRouter()
+    router.patterns["openai/(.*)"] = [
+        {"model_name": "openai/*", "litellm_params": {"api_key": "key-X"}}
+    ]
+
+    for falsy in ("", None):
+        removed = router.remove_deployment(falsy)
+        assert removed == 0
+        assert len(router.patterns["openai/(.*)"]) == 1
+
+
+def test_remove_deployment_tolerates_missing_model_info():
+    router = PatternMatchRouter()
+    router.patterns["openai/(.*)"] = [
+        {"model_name": "openai/*", "litellm_params": {"api_key": "X"}},
+        _make_wildcard_entry("id-A", "key-A"),
+    ]
+
+    router.remove_deployment("id-A")
+
+    survivors = router.patterns["openai/(.*)"]
+    assert len(survivors) == 1
+    assert "model_info" not in survivors[0]

@@ -4231,3 +4231,172 @@ def test_is_deployment_blocked_static_helper_reflects_blocked_flag():
         )
         is True
     )
+
+
+def _build_wildcard_router(api_key: str, model_id: str = "wildcard-deployment-1"):
+    from litellm.router import Deployment
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/*",
+                "litellm_params": {"model": "openai/*", "api_key": api_key},
+                "model_info": {"id": model_id},
+            },
+        ],
+    )
+    return router, Deployment
+
+
+def test_upsert_wildcard_deployment_removes_stale_api_key():
+    """
+    Regression: rotating the api_key on a wildcard deployment must NOT leave
+    the previous credential in pattern_router. Before the fix, the old entry
+    survived in pattern_router.patterns[regex] and was still selected on
+    roughly half of wildcard traffic.
+    """
+    router, Deployment = _build_wildcard_router(api_key="OLD-KEY")
+    model_id = "wildcard-deployment-1"
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="openai/*",
+            litellm_params={"model": "openai/*", "api_key": "NEW-KEY"},
+            model_info={"id": model_id},
+        )
+    )
+
+    entries = router.pattern_router.patterns["openai/(.*)"]
+    assert (
+        len(entries) == 1
+    ), f"pattern_router accumulated stale entries: {len(entries)} present"
+    assert entries[0]["litellm_params"]["api_key"] == "NEW-KEY"
+    assert all(
+        e["litellm_params"]["api_key"] != "OLD-KEY" for e in entries
+    ), "Rotated-out api_key is still resident in pattern_router"
+
+
+def test_upsert_wildcard_deployment_is_idempotent_in_pattern_router():
+    """
+    Repeated upserts of the same wildcard deployment must not grow the
+    pattern_router unboundedly.
+    """
+    router, Deployment = _build_wildcard_router(api_key="key-0")
+    model_id = "wildcard-deployment-1"
+
+    for i in range(1, 6):
+        router.upsert_deployment(
+            Deployment(
+                model_name="openai/*",
+                litellm_params={"model": "openai/*", "api_key": f"key-{i}"},
+                model_info={"id": model_id},
+            )
+        )
+
+    entries = router.pattern_router.patterns["openai/(.*)"]
+    assert len(entries) == 1
+    assert entries[0]["litellm_params"]["api_key"] == "key-5"
+    assert router.provider_default_deployment_ids.count(model_id) == 1
+
+
+def test_delete_wildcard_deployment_clears_pattern_router():
+    router, _ = _build_wildcard_router(api_key="OLD-KEY")
+    model_id = "wildcard-deployment-1"
+
+    assert router.pattern_router.patterns  # sanity
+
+    router.delete_deployment(id=model_id)
+
+    assert router.pattern_router.patterns == {}
+    assert model_id not in router.provider_default_deployment_ids
+
+
+def test_upsert_wildcard_to_concrete_model_removes_old_wildcard_entry():
+    """
+    Changing model_name from a wildcard to a concrete name must drop the
+    old wildcard entry. Otherwise traffic to openai/<anything> still routes
+    to a model the operator believes they renamed.
+    """
+    router, Deployment = _build_wildcard_router(api_key="key-A")
+    model_id = "wildcard-deployment-1"
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="openai/gpt-4o",
+            litellm_params={"model": "openai/gpt-4o", "api_key": "key-A"},
+            model_info={"id": model_id},
+        )
+    )
+
+    assert router.pattern_router.patterns == {}
+    assert model_id not in router.provider_default_deployment_ids
+
+
+def test_upsert_team_wildcard_deployment_does_not_leak_old_key():
+    from litellm.router import Deployment
+
+    team_id = "team-acme"
+    model_id = "team-wildcard-1"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/team-foo-*",
+                "litellm_params": {"model": "openai/*", "api_key": "OLD-KEY"},
+                "model_info": {
+                    "id": model_id,
+                    "team_id": team_id,
+                    "team_public_model_name": "team-foo-*",
+                },
+            },
+        ],
+    )
+
+    assert team_id in router.team_pattern_routers
+    assert router.team_pattern_routers[team_id].patterns
+
+    router.upsert_deployment(
+        Deployment(
+            model_name="openai/team-foo-*",
+            litellm_params={"model": "openai/*", "api_key": "NEW-KEY"},
+            model_info={
+                "id": model_id,
+                "team_id": team_id,
+                "team_public_model_name": "team-foo-*",
+            },
+        )
+    )
+
+    team_router = router.team_pattern_routers[team_id]
+    assert len(team_router.patterns) == 1
+    team_entries = next(iter(team_router.patterns.values()))
+    assert len(team_entries) == 1
+    assert team_entries[0]["litellm_params"]["api_key"] == "NEW-KEY"
+
+
+def test_delete_team_wildcard_removes_empty_team_router():
+    """
+    When the last wildcard deployment for a team is deleted, its dedicated
+    team_pattern_router entry should be discarded too, not left as an empty
+    PatternMatchRouter holding the team_id forever.
+    """
+    team_id = "team-acme"
+    model_id = "team-wildcard-1"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai/team-foo-*",
+                "litellm_params": {"model": "openai/*", "api_key": "key-A"},
+                "model_info": {
+                    "id": model_id,
+                    "team_id": team_id,
+                    "team_public_model_name": "team-foo-*",
+                },
+            },
+        ],
+    )
+
+    router.delete_deployment(id=model_id)
+
+    assert team_id not in router.team_pattern_routers
