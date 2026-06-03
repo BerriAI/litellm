@@ -363,13 +363,15 @@ def _make_agent_mock(url: str = "http://backend-agent:10001") -> MagicMock:
     return agent
 
 
-def _make_request_mock(method: str, params: dict) -> MagicMock:
+def _make_request_mock(
+    method: str, params: dict, request_id: object = "req-1"
+) -> MagicMock:
     req = MagicMock()
     req.headers = {}
     req.json = AsyncMock(
         return_value={
             "jsonrpc": "2.0",
-            "id": "req-1",
+            "id": request_id,
             "method": method,
             "params": params,
         }
@@ -406,6 +408,87 @@ async def _add_proxy_data(data, **kwargs):
     }
     data.setdefault("metadata", {})
     return data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_preserve_numeric_zero_request_id(method: str):
+    from fastapi.responses import JSONResponse
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    class MessageSendParams:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class SendMessageRequest:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    agent = _make_agent_mock()
+    params = {
+        "message": {
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Hello"}],
+            "messageId": "msg-123",
+        }
+    }
+    mock_request = _make_request_mock(method, params, request_id=0)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+    captured = {}
+
+    async def capture_asend_message(request, **kwargs):
+        captured["request_id"] = request.id
+        response = MagicMock()
+        response.model_dump.return_value = {
+            "jsonrpc": "2.0",
+            "id": request.id,
+            "result": {"status": "success"},
+        }
+        return response
+
+    async def capture_stream_message(**kwargs):
+        captured["request_id"] = kwargs["request_id"]
+        return JSONResponse({"jsonrpc": "2.0", "id": kwargs["request_id"]})
+
+    mock_a2a_types = MagicMock()
+    mock_a2a_types.MessageSendParams = MessageSendParams
+    mock_a2a_types.SendMessageRequest = SendMessageRequest
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(patch("litellm.a2a_protocol.main.A2A_SDK_AVAILABLE", True))
+        if method == "message/send":
+            stack.enter_context(
+                patch.dict(
+                    sys.modules,
+                    {"a2a": MagicMock(), "a2a.types": mock_a2a_types},
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "litellm.a2a_protocol.asend_message",
+                    new=AsyncMock(side_effect=capture_asend_message),
+                )
+            )
+        else:
+            stack.enter_context(
+                patch(
+                    "litellm.proxy.agent_endpoints.a2a_endpoints._handle_stream_message",
+                    new=AsyncMock(side_effect=capture_stream_message),
+                )
+            )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert captured["request_id"] == 0
 
 
 @pytest.mark.asyncio
@@ -479,6 +562,87 @@ async def test_task_methods_forward_jsonrpc(method: str, params: dict):
     assert posted is not None
     forwarded_body = posted.kwargs.get("json") or posted.args[1]
     assert forwarded_body["method"] == method
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["tasks/get", "tasks/resubscribe"])
+async def test_task_methods_extract_litellm_params_before_forwarding(method: str):
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    agent = _make_agent_mock()
+    params = {
+        "id": "task-1",
+        "guardrails": ["guardrail-1"],
+        "tags": ["tag-1"],
+    }
+    mock_request = _make_request_mock(method, params)
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+    captured_data = {}
+
+    async def capture_proxy_data(data, **kwargs):
+        captured_data.update(data)
+        return await _add_proxy_data(data, **kwargs)
+
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+
+    async def fake_aiter_lines():
+        yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1"}}'
+
+    mock_resp = AsyncMock()
+    mock_resp.is_success = True
+    mock_resp.aiter_lines = fake_aiter_lines
+    mock_resp.aclose = AsyncMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = mock_async_client
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+                new=AsyncMock(side_effect=capture_proxy_data),
+            )
+        )
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        response = await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+        if method == "tasks/resubscribe":
+            async for _ in response.body_iterator:
+                pass
+
+    if method == "tasks/resubscribe":
+        forwarded_body = mock_async_client.build_request.call_args.kwargs["json"]
+    else:
+        forwarded_body = mock_handler.post.call_args.kwargs["json"]
+    assert forwarded_body["params"] == {"id": "task-1"}
+    assert captured_data["guardrails"] == ["guardrail-1"]
+    assert captured_data["tags"] == ["tag-1"]
 
 
 @pytest.mark.asyncio

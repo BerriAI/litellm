@@ -57,7 +57,7 @@ def _caller_identity_headers(user_api_key_dict: UserAPIKeyAuth) -> Dict[str, str
 
 
 def _jsonrpc_error(
-    request_id: Optional[str],
+    request_id: Optional[Any],
     code: int,
     message: str,
     status_code: int = 400,
@@ -130,7 +130,7 @@ async def _forward_jsonrpc(
 async def _forward_jsonrpc_sse(
     agent_url: str,
     body: dict,
-    request_id: Optional[str] = None,
+    request_id: Optional[Any] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     proxy_logging_obj: Optional[Any] = None,
     user_api_key_dict: Optional[Any] = None,
@@ -193,7 +193,7 @@ async def _forward_jsonrpc_sse(
 
 async def _handle_stream_message(
     api_base: Optional[str],
-    request_id: str,
+    request_id: Any,
     params: dict,
     litellm_params: Optional[dict] = None,
     agent_id: Optional[str] = None,
@@ -458,14 +458,14 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'"
             )
 
-        request_id: Optional[str] = body.get("id")
+        request_id: Optional[Any] = body.get("id")
         method: Optional[str] = body.get("method")
         params = body.get("params", {})
 
         if method:
             method = _PASCAL_TO_WIRE.get(method, method)
 
-        if params and method in {"message/send", "message/stream"}:
+        if isinstance(params, dict):
             # extract any litellm params from the params - eg. 'guardrails'
             # ``metadata`` is intentionally excluded: it's a first-class A2A
             # ``MessageSendParams`` field that the completion bridge forwards
@@ -474,7 +474,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             # silently drop the caller's A2A request-level metadata.
             params_to_remove = []
             for key, value in params.items():
-                if key in all_litellm_params and key != "metadata":
+                if key in all_litellm_params and key not in {"id", "metadata"}:
                     params_to_remove.append(key)
                     body[key] = value
             for key in params_to_remove:
@@ -623,7 +623,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             from a2a.types import MessageSendParams, SendMessageRequest
 
             a2a_request = SendMessageRequest(
-                id=request_id or "",
+                id=request_id if request_id is not None else "",
                 params=MessageSendParams(**params),
             )
             # Defer spend-log until after post_call_success_hook so guardrail
@@ -663,7 +663,7 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         elif method == "message/stream":
             return await _handle_stream_message(
                 api_base=agent_url,
-                request_id=request_id or "",
+                request_id=request_id if request_id is not None else "",
                 params=params,
                 litellm_params=litellm_params,
                 agent_id=agent.agent_id,
