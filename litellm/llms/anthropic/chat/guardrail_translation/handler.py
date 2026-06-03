@@ -251,9 +251,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                                 block_text = block.get("text")
                                 if block_text is not None:
                                     texts_to_check.append(block_text)
-                                    task_mappings.append(
-                                        (msg_idx, int(content_idx))
-                                    )
+                                    task_mappings.append((msg_idx, int(content_idx)))
 
                 # Extract images
                 if content_item.get("type") == "image":
