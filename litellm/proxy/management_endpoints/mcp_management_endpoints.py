@@ -2132,6 +2132,33 @@ if MCP_AVAILABLE:
 
     # ── Per-user MCP env var endpoints ────────────────────────────────────────
 
+    async def _authorize_mcp_server_access(
+        prisma_client,
+        user_api_key_dict: UserAPIKeyAuth,
+        server_id: str,
+    ) -> None:
+        """Raise 403 if a non-admin caller cannot access this MCP server.
+
+        Mirrors the access gate in ``fetch_mcp_server`` so the per-user env-var
+        endpoints can't be used to read or mutate state for servers outside the
+        caller's allowed set.
+        """
+        if _user_has_admin_view(user_api_key_dict):
+            return
+        accessible = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        if not does_mcp_server_exist(accessible, server_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": (
+                        f"User does not have permission to access mcp server with id {server_id}. "
+                        "You can only manage env vars for mcp servers that you have access to."
+                    )
+                },
+            )
+
     def _compute_user_env_var_status(
         *,
         server: LiteLLM_MCPServerTable,
@@ -2208,6 +2235,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
+        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         stored = await get_user_env_vars(prisma_client, user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values=stored)
 
@@ -2238,6 +2266,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
+        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         # Filter to only known per-user var names declared by the admin —
         # never persist arbitrary keys the user invents.
         _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
@@ -2274,6 +2303,7 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
+        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
         try:
             await delete_user_env_vars(prisma_client, user_id, server_id)
         except Exception:
