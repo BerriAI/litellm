@@ -1955,6 +1955,10 @@ class CustomStreamWrapper:
                 )
 
                 response = self.model_response_creator()
+                # Per the OpenAI streaming spec, the final usage chunk
+                # must have choices: [] (not a default placeholder choice).
+                # https://platform.openai.com/docs/api-reference/chat/streaming
+                response.choices = []
                 if complete_streaming_response is not None:
                     setattr(
                         response,
@@ -2184,6 +2188,10 @@ class CustomStreamWrapper:
                 )
 
                 response = self.model_response_creator()
+                # Per the OpenAI streaming spec, the final usage chunk
+                # must have choices: [] (not a default placeholder choice).
+                # https://platform.openai.com/docs/api-reference/chat/streaming
+                response.choices = []
                 if complete_streaming_response is not None:
                     setattr(
                         response,

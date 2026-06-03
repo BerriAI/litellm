@@ -2118,3 +2118,81 @@ def test_gemini_legacy_vertex_tool_calls_finish_reason_with_stop_enum():
         f"Expected 'tool_calls' but got {final.choices[0].finish_reason!r}. "
         "STOP enum was not normalised through map_finish_reason()."
     )
+
+
+class TestUsageChunkEmptyChoices:
+    """The OpenAI streaming spec requires the final usage chunk to have choices: [].
+
+    See: https://platform.openai.com/docs/api-reference/chat/streaming
+    Regression test for https://github.com/BerriAI/litellm/issues/28735
+    """
+
+    def _build_wrapper(self, logging_obj):
+        """Build a CustomStreamWrapper that has already sent the last content chunk."""
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-test",
+                choices=[
+                    StreamingChoices(
+                        finish_reason=None,
+                        index=0,
+                        delta=Delta(content="hello", role="assistant"),
+                    )
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-test",
+                choices=[
+                    StreamingChoices(
+                        finish_reason="stop",
+                        index=0,
+                        delta=Delta(content=None),
+                    )
+                ],
+            ),
+        ]
+        completion_stream = ModelResponseListIterator(model_responses=chunks)
+        wrapper = CustomStreamWrapper(
+            completion_stream=completion_stream,
+            model="gpt-4",
+            logging_obj=logging_obj,
+            custom_llm_provider="openai",
+            stream_options={"include_usage": True},
+        )
+        return wrapper
+
+    def test_sync_usage_chunk_has_empty_choices(self, logging_obj):
+        """Sync __next__: the final usage-only chunk must have choices=[]."""
+        wrapper = self._build_wrapper(logging_obj)
+
+        collected = []
+        for chunk in wrapper:
+            collected.append(chunk)
+
+        # The last chunk should be the usage chunk
+        usage_chunk = collected[-1]
+        assert (
+            getattr(usage_chunk, "usage", None) is not None
+        ), "Final chunk should carry non-None usage"
+        assert usage_chunk.choices == [], (
+            f"Usage chunk must have choices=[] per OpenAI spec, "
+            f"got {usage_chunk.choices!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_async_usage_chunk_has_empty_choices(self, logging_obj):
+        """Async __anext__: the final usage-only chunk must have choices=[]."""
+        wrapper = self._build_wrapper(logging_obj)
+
+        collected = []
+        async for chunk in wrapper:
+            collected.append(chunk)
+
+        usage_chunk = collected[-1]
+        assert (
+            getattr(usage_chunk, "usage", None) is not None
+        ), "Final chunk should carry non-None usage"
+        assert usage_chunk.choices == [], (
+            f"Usage chunk must have choices=[] per OpenAI spec, "
+            f"got {usage_chunk.choices!r}"
+        )
