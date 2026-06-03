@@ -722,8 +722,17 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # with an explicit budget cannot grant a key a higher budget than their own.
     # Callers with max_budget=None (unlimited) can delegate any budget.
+    # A UI/CLI session token's max_budget is a per-session chat spend cap
+    # (max_ui_session_budget), not a delegation authority, so it is exempt only
+    # when creating a team key - that key's spend is bounded by the team budget
+    # at request time. Personal keys keep the ceiling; nothing else bounds them.
+    is_ui_session_team_key = (
+        user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+        and data.team_id is not None
+    )
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not is_ui_session_team_key
         and _requested_max_budget is not None
         and user_api_key_dict.max_budget is not None
         and _requested_max_budget > user_api_key_dict.max_budget
