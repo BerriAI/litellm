@@ -345,6 +345,10 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
     """
     await add_shared_session_to_data(data)
 
+    # Propagate route_type so downstream filters (protocol_routing) can inspect
+    # the incoming protocol without changing existing function signatures.
+    data["_route_type"] = route_type
+
     # Strip router-internal mock_testing_* flags. Combined with an
     # unauthorized fallback in ``router_settings_override`` they let a
     # caller deterministically execute requests against restricted

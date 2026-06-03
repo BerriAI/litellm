@@ -10870,6 +10870,17 @@ class Router:
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
+        # Protocol strict-mode filter (opt-in). In bridged mode this is a no-op.
+        from litellm.protocol_routing import filter_deployments_by_protocol
+
+        _route_type = (request_kwargs or {}).get("_route_type")
+        if _route_type is not None:
+            healthy_deployments = filter_deployments_by_protocol(
+                healthy_deployments=cast(List[Dict], healthy_deployments),
+                route_type=_route_type,
+                model=model,
+            )
+
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
             healthy_deployments=healthy_deployments,
