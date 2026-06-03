@@ -1696,10 +1696,10 @@ class TestTemporaryMCPSessionEndpoints:
         assert call_kwargs["api_key"] == ""
 
     @pytest.mark.asyncio
-    async def test_mcp_oauth_user_api_key_auth_requires_public_server_for_delegate_bypass(
+    async def test_mcp_oauth_user_api_key_auth_internal_delegate_bypasses(
         self,
     ):
-        """Internal-only delegate servers must still require LiteLLM auth."""
+        """Internal-only delegate servers still get anonymous PKCE /authorize bypass."""
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             _mcp_oauth_user_api_key_auth,
         )
@@ -1711,6 +1711,8 @@ class TestTemporaryMCPSessionEndpoints:
         mock_request.headers = {}
         mock_request.cookies = {}
         mock_request.path_params = {"server_id": "server-1"}
+        # Real path so ``endswith("/token")`` is not fooled by MagicMock truthiness.
+        mock_request.url = types.SimpleNamespace(path="/server-1/authorize")
         internal_server = MagicMock()
         internal_server.auth_type = MCPAuth.oauth2
         internal_server.delegate_auth_to_upstream = True
@@ -1742,10 +1744,39 @@ class TestTemporaryMCPSessionEndpoints:
         ):
             result = await _mcp_oauth_user_api_key_auth(mock_request)
 
-        assert result is expected_auth
-        auth_builder_mock.assert_awaited_once()
-        _, call_kwargs = auth_builder_mock.call_args
-        assert call_kwargs["api_key"] == ""
+        assert isinstance(result, UserAPIKeyAuth)
+        auth_builder_mock.assert_not_called()
+
+    def test_mcp_oauth_authorize_token_routes_use_browser_auth_dependency(self):
+        from fastapi.routing import APIRoute
+
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            _mcp_oauth_user_api_key_auth,
+            router,
+        )
+
+        oauth_routes = {
+            route.path: route
+            for route in router.routes
+            if isinstance(route, APIRoute)
+            and route.path
+            in {
+                "/v1/mcp/server/oauth/{server_id}/authorize",
+                "/v1/mcp/server/oauth/{server_id}/token",
+            }
+        }
+
+        assert set(oauth_routes) == {
+            "/v1/mcp/server/oauth/{server_id}/authorize",
+            "/v1/mcp/server/oauth/{server_id}/token",
+        }
+        for route in oauth_routes.values():
+            dependency_names = {
+                dependant.name
+                for dependant in route.dependant.dependencies
+                if dependant.call is _mcp_oauth_user_api_key_auth
+            }
+            assert dependency_names == {None, "user_api_key_dict"}
 
     @pytest.mark.asyncio
     async def test_mcp_authorize_proxies_to_discoverable_endpoint(self):

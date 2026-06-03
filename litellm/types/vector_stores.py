@@ -112,6 +112,66 @@ class VectorStoreSearchRequest(VectorStoreSearchOptionalRequestParams, total=Fal
     query: Union[str, List[str]]
 
 
+class VertexSearchDataStoreExtraBody(TypedDict, total=False):
+    """
+    Native Discovery Engine ``SearchRequest`` fields callers may forward via
+    ``extra_body`` when searching a Vertex AI Search **data store** serving
+    config (``.../dataStores/{id}/servingConfigs/default_config``).
+
+    The data store is scoped by the request URL path, so target-selecting
+    fields (``servingConfig``, ``branch``, ``entity``) are intentionally
+    omitted and rejected by the transformation layer. Engine/app-only fields
+    such as ``dataStoreSpecs`` and ``numResultsPerDataStore`` live on
+    ``VertexSearchEngineExtraBody`` instead.
+    """
+
+    query: str
+    pageSize: int
+    pageToken: str
+    offset: int
+    oneBoxPageSize: int
+    pageCategories: List[str]
+    imageQuery: Dict[str, Any]
+    filter: str
+    canonicalFilter: str
+    orderBy: str
+    userInfo: Dict[str, Any]
+    languageCode: str
+    facetSpecs: List[Dict[str, Any]]
+    boostSpec: Dict[str, Any]
+    params: Dict[str, Any]
+    queryExpansionSpec: Dict[str, Any]
+    spellCorrectionSpec: Dict[str, Any]
+    userPseudoId: str
+    contentSearchSpec: Dict[str, Any]
+    rankingExpression: str
+    rankingExpressionBackend: str
+    safeSearch: bool
+    userLabels: Dict[str, str]
+    naturalLanguageQueryUnderstandingSpec: Dict[str, Any]
+    searchAsYouTypeSpec: Dict[str, Any]
+    displaySpec: Dict[str, Any]
+    crowdingSpecs: List[Dict[str, Any]]
+    relevanceThreshold: str
+    relevanceScoreSpec: Dict[str, Any]
+    customRankingParams: Dict[str, Any]
+
+
+class VertexSearchEngineExtraBody(VertexSearchDataStoreExtraBody, total=False):
+    """
+    Native Discovery Engine ``SearchRequest`` fields callers may forward via
+    ``extra_body`` when searching a Vertex AI Search **engine/app** serving
+    config (``.../engines/{id}/servingConfigs/default_serving_config``).
+
+    Inherits every data-store field and adds fields that only make sense when
+    an app fans out across multiple member data stores, e.g. ``dataStoreSpecs``
+    (per-store scoping/filtering) and ``numResultsPerDataStore``.
+    """
+
+    dataStoreSpecs: List[Dict[str, Any]]
+    numResultsPerDataStore: int
+
+
 # Vector Store Creation Types
 class VectorStoreExpirationPolicy(TypedDict, total=False):
     """The expiration policy for a vector store"""

@@ -162,6 +162,7 @@ class UserAPIKeyLabelNames(Enum):
     END_USER = "end_user"
     USER = "user"
     USER_EMAIL = "user_email"
+    USER_ALIAS = "user_alias"
     API_KEY_HASH = "hashed_api_key"
     API_KEY_ALIAS = "api_key_alias"
     TEAM = "team"
@@ -204,6 +205,11 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_total_tokens_metric",
     "litellm_input_tokens_metric",
     "litellm_output_tokens_metric",
+    "litellm_input_cached_tokens_metric",
+    "litellm_input_cache_creation_tokens_metric",
+    "litellm_input_audio_tokens_metric",
+    "litellm_output_reasoning_tokens_metric",
+    "litellm_output_audio_tokens_metric",
     "litellm_deployment_successful_fallbacks",
     "litellm_deployment_failed_fallbacks",
     "litellm_remaining_team_budget_metric",
@@ -236,6 +242,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
     "litellm_cached_tokens_metric",
+    # Provider prompt-caching metrics (e.g. OpenAI/Anthropic/Bedrock/Gemini)
+    "litellm_provider_cache_read_input_tokens_metric",
+    "litellm_provider_cache_creation_input_tokens_metric",
     "litellm_deployment_tpm_limit",
     "litellm_deployment_rpm_limit",
     "litellm_remaining_api_key_requests_for_model",
@@ -458,6 +467,17 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
+    # Token-type detail metrics — reuse the same label set as
+    # litellm_input_tokens_metric / litellm_output_tokens_metric so dashboards
+    # can join across them. Only emitted when the underlying usage detail is
+    # populated by the provider (e.g. Anthropic cache_read_input_tokens,
+    # OpenAI prompt_tokens_details.cached_tokens, reasoning_tokens, audio_tokens).
+    litellm_input_cached_tokens_metric = litellm_input_tokens_metric
+    litellm_input_cache_creation_tokens_metric = litellm_input_tokens_metric
+    litellm_input_audio_tokens_metric = litellm_input_tokens_metric
+    litellm_output_reasoning_tokens_metric = litellm_output_tokens_metric
+    litellm_output_audio_tokens_metric = litellm_output_tokens_metric
+
     litellm_deployment_state = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -541,17 +561,9 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
     ]
 
-    litellm_user_max_budget_metric = [
-        UserAPIKeyLabelNames.USER.value,
-    ]
+    litellm_user_max_budget_metric = litellm_remaining_user_budget_metric
 
-    litellm_user_budget_remaining_hours_metric = [
-        UserAPIKeyLabelNames.USER.value,
-    ]
-
-    litellm_user_budget_remaining_hours_metric = [
-        UserAPIKeyLabelNames.USER.value,
-    ]
+    litellm_user_budget_remaining_hours_metric = litellm_remaining_user_budget_metric
 
     litellm_remaining_api_key_requests_for_model = [
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -654,6 +666,10 @@ class PrometheusMetricLabels:
     litellm_cache_misses_metric = _cache_metric_labels
     litellm_cached_tokens_metric = _cache_metric_labels
 
+    # Provider prompt-caching metrics - track tokens read/written to provider caches
+    litellm_provider_cache_read_input_tokens_metric = _cache_metric_labels
+    litellm_provider_cache_creation_input_tokens_metric = _cache_metric_labels
+
     # Metrics whose emission paths supply org context (used by get_labels)
     _org_label_metrics: ClassVar[frozenset] = frozenset(
         {
@@ -671,7 +687,6 @@ class PrometheusMetricLabels:
             "litellm_output_tokens_metric",
         }
     )
-
     # Managed batch metrics
     _batch_user_labels = [
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
@@ -757,6 +772,22 @@ class PrometheusMetricLabels:
                 ):
                     custom_labels.append(_rate_limit_label)
 
+        _user_budget_metrics = {
+            "litellm_remaining_user_budget_metric",
+            "litellm_user_max_budget_metric",
+            "litellm_user_budget_remaining_hours_metric",
+        }
+        if (
+            label_name in _user_budget_metrics
+            and litellm.prometheus_user_budget_label_include_email_alias is True
+        ):
+            for label in [
+                UserAPIKeyLabelNames.USER_EMAIL.value,
+                UserAPIKeyLabelNames.USER_ALIAS.value,
+            ]:
+                if label not in default_labels and label not in custom_labels:
+                    custom_labels.append(label)
+
         if label_name in PrometheusMetricLabels._org_label_metrics:
             for label in [
                 UserAPIKeyLabelNames.ORG_ID.value,
@@ -786,6 +817,7 @@ class UserAPIKeyLabelValues:
     end_user: Optional[str] = None
     user: Optional[str] = None
     user_email: Optional[str] = None
+    user_alias: Optional[str] = None
     hashed_api_key: Optional[str] = None
     api_key_alias: Optional[str] = None
     team: Optional[str] = None

@@ -322,6 +322,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            user_api_key_auth=None,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -376,6 +377,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            user_api_key_auth=None,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -414,6 +416,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            user_api_key_auth=None,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -476,6 +479,167 @@ class TestMCPServerManager:
 
         assert captured_extra_headers == {"Authorization": "Bearer token"}
         assert isinstance(result, CallToolResult)
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
+        self,
+    ):
+        """OAuth pass-through must not forward the caller's Authorization to upstream
+        when LiteLLM admission consumed the bearer as its API key — otherwise the
+        LiteLLM key the caller used for admission would leak upstream."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization", "x-request-id"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "authorization": "Bearer sk-litellm-key",
+                "x-request-id": "req-123",
+            },
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        assert captured_extra_headers == {"x-request-id": "req-123"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(
+        self,
+    ):
+        """OAuth pass-through forwards Authorization upstream when x-litellm-api-key
+        provides admission — in that case Authorization carries the upstream OAuth
+        bearer, not the LiteLLM key."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call-admission",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-litellm-key",
+                "authorization": "Bearer upstream-oauth-bearer",
+            },
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        assert captured_extra_headers == {
+            "Authorization": "Bearer upstream-oauth-bearer"
+        }
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_forwards_authorization_for_anonymous_admission(
+        self,
+    ):
+        """OAuth pass-through cold-start return (RFC 9728): the caller's only
+        credential is the upstream bearer in Authorization, and LiteLLM admission
+        is anonymous (no api_key on user_api_key_auth). Authorization must be
+        forwarded so the delegated flow can complete."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call-anon",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"authorization": "Bearer upstream-oauth-bearer"},
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key=None),
+        )
+
+        assert captured_extra_headers == {
+            "Authorization": "Bearer upstream-oauth-bearer"
+        }
 
     @pytest.mark.asyncio
     async def test_get_prompts_from_server_success(self):
@@ -1004,6 +1168,7 @@ class TestMCPServerManager:
             mcp_auth_header=None,
             mcp_protocol_version=None,
             raw_headers=None,
+            user_api_key_auth=None,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -1800,6 +1965,258 @@ class TestMCPServerManager:
         )
         assert len(tools_unprefixed) == 1
         assert tools_unprefixed[0].name == "send_email"
+
+    @pytest.mark.asyncio
+    async def test_get_tools_from_server_jwt_skipped_when_mcp_auth_header_set(self):
+        """When a per-user mcp_auth_header is resolved, JWT injection must be skipped.
+
+        MCPClient._get_auth_headers() applies extra_headers AFTER writing
+        Authorization from auth_value, so an injected JWT would clobber the
+        user's per-server OAuth token. Regression test for that interaction.
+        """
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="zapier",
+            name="zapier",
+            transport=MCPTransport.http,
+        )
+
+        manager._create_mcp_client = AsyncMock(return_value=object())
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
+
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with (
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.inject_mcp_jwt_headers_for_upstream",
+                new=AsyncMock(return_value={"Authorization": "Bearer signed-jwt"}),
+            ) as mock_inject,
+        ):
+            # Case A: mcp_auth_header present -> JWT must NOT be injected
+            await manager._get_tools_from_server(
+                server,
+                mcp_auth_header="oauth-user-token",
+                user_api_key_auth=user_auth,
+            )
+            mock_inject.assert_not_called()
+
+            # Case B: no mcp_auth_header -> JWT injection runs as before
+            await manager._get_tools_from_server(
+                server,
+                user_api_key_auth=user_auth,
+            )
+            mock_inject.assert_awaited_once()
+
+    def test_resolve_mcp_server_for_tool_call_via_prefixed_name(self):
+        """Resolution succeeds when the prefixed tool name is in the mapping."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="jira",
+            name="jira",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"jira": server}
+        manager.tool_name_to_mcp_server_name_mapping["jira-search_issues"] = "jira"
+        manager.tool_name_to_mcp_server_name_mapping["search_issues"] = "jira"
+
+        resolved = manager._resolve_mcp_server_for_tool_call("jira", "search_issues")
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_via_alias(self):
+        """Resolution falls back to alias/server_name match in the registry."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-123": server}
+        manager.tool_name_to_mcp_server_name_mapping["create_zap"] = "zapier"
+
+        resolved = manager._resolve_mcp_server_for_tool_call(
+            "zapier-alias", "create_zap"
+        )
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_empty_mapping(self):
+        """Server-name match alone must not let unknown tools through when the
+        mapping has no entries for that server (e.g. listing has not completed
+        or the server is OAuth2 and the user has not yet listed tools).
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="srv-uuid-123",
+            name="zapier",
+            alias="zapier-alias",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"srv-uuid-123": server}
+
+        with pytest.raises(ValueError, match="Tool create_zap not found"):
+            manager._resolve_mcp_server_for_tool_call("zapier-alias", "create_zap")
+
+    def test_resolve_mcp_server_for_tool_call_fallback_to_unprefixed_lookup(self):
+        """Fallback to unprefixed _get_mcp_server_from_tool_name when other paths fail."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="linear",
+            name="linear",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"linear": server}
+        manager.tool_name_to_mcp_server_name_mapping["create_issue"] = "linear"
+
+        # server_name is empty so the fallback unprefixed lookup runs and matches.
+        resolved = manager._resolve_mcp_server_for_tool_call("", "create_issue")
+        assert resolved is server
+
+    def test_resolve_mcp_server_for_tool_call_raises_when_not_found(self):
+        """ValueError is raised when no resolution path finds the tool."""
+        manager = MCPServerManager()
+        with pytest.raises(ValueError, match="Tool .* not found"):
+            manager._resolve_mcp_server_for_tool_call("nonexistent", "ghost_tool")
+
+    def test_resolve_mcp_server_for_tool_call_unknown_tool_with_known_server(self):
+        """Server-name match alone must not let unknown tools slip through.
+
+        If the registry has tools for this server but neither the prefixed nor
+        unprefixed tool name is in the mapping, raise rather than returning the
+        server (would otherwise allow tool enumeration via name spoofing).
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="github",
+            name="github",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {"github": server}
+        # Mapping has *some* tools for github but not "missing_tool".
+        manager.tool_name_to_mcp_server_name_mapping["github-list_repos"] = "github"
+        manager.tool_name_to_mcp_server_name_mapping["list_repos"] = "github"
+
+        with pytest.raises(ValueError, match="Tool missing_tool not found"):
+            manager._resolve_mcp_server_for_tool_call("github", "missing_tool")
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_skipped_when_not_user_oauth(self):
+        """Returns input headers unchanged when server does not need user OAuth."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="plain",
+            name="plain",
+            transport=MCPTransport.http,
+        )
+        # needs_user_oauth_token defaults to False.
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="bob")
+
+        result = await manager._resolve_oauth2_headers_for_tool_call(
+            server, oauth2_headers=None, user_api_key_auth=user_auth
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_returns_client_supplied_token(self):
+        """Returns the client's oauth2_headers as-is when already set."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        assert server.needs_user_oauth_token is True
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+        supplied = {"Authorization": "Bearer client-supplied"}
+
+        result = await manager._resolve_oauth2_headers_for_tool_call(
+            server, oauth2_headers=supplied, user_api_key_auth=user_auth
+        )
+        assert result is supplied
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_looks_up_stored_token(self):
+        """Falls back to stored per-user OAuth headers when no token is supplied."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+        stored = {"Authorization": "Bearer stored-user-token"}
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value=stored),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+
+        assert result == stored
+        mock_lookup.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_swallows_lookup_exception(self):
+        """Returns supplied headers (None) when the stored-token lookup raises."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        user_auth = UserAPIKeyAuth(api_key="sk-test", user_id="alice")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(side_effect=RuntimeError("redis down")),
+        ):
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_resolve_oauth2_headers_no_user_id(self):
+        """Skip lookup entirely when user_api_key_auth has no user_id."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="oauth-srv",
+            name="oauth-srv",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+        )
+        # user_id is None -> lookup must not happen
+        user_auth = UserAPIKeyAuth(api_key="sk-test")
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.server._get_user_oauth_extra_headers_from_db",
+            new=AsyncMock(return_value={"Authorization": "Bearer x"}),
+        ) as mock_lookup:
+            result = await manager._resolve_oauth2_headers_for_tool_call(
+                server, oauth2_headers=None, user_api_key_auth=user_auth
+            )
+        assert result is None
+        mock_lookup.assert_not_called()
 
     def test_create_prefixed_tools_updates_mapping_for_both_forms(self):
         """_create_prefixed_tools should populate mapping for prefixed and original names even when not adding prefix in output."""
@@ -2631,6 +3048,92 @@ class TestMCPServerTimestamps:
 
         assert rebuilt_table.created_at == created
         assert rebuilt_table.updated_at == updated
+
+    @pytest.mark.asyncio
+    async def test_round_trip_source_url_preserved(self):
+        """source_url survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable.
+
+        Regression test: the list endpoint (GET /v1/mcp/server) builds its
+        response from the registry via this round-trip, so a dropped field
+        here surfaces as a null source_url in the list response even though
+        the value is stored in the DB.
+        """
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="src-url-server",
+            server_name="src_url_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            source_url="https://github.com/org/mcp-server",
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        assert mcp_server.source_url == "https://github.com/org/mcp-server"
+
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+        assert rebuilt_table.source_url == "https://github.com/org/mcp-server"
+
+
+class TestInternalDelegatePkceWarningLog:
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_logs_on_internal_delegate_interactive(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-1",
+            server_name="warn_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" in combined
+        assert "delegate_auth_to_upstream=true" in combined
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_no_internal_delegate_log_when_public(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="warn-del-2",
+            server_name="warn_server_pub",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            authorization_url="https://idp.example.com/authorize",
+            token_url="https://idp.example.com/token",
+            available_on_public_internet=True,
+            delegate_auth_to_upstream=True,
+        )
+        await manager.build_mcp_server_from_table(table_record)
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
+
+    def test_warn_skipped_for_client_credentials(self, caplog):
+        caplog.set_level(logging.WARNING, logger="LiteLLM")
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            _warn_internal_delegate_pkce_if_applicable,
+        )
+
+        server = MCPServer(
+            server_id="m2m-1",
+            name="x",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            oauth2_flow="client_credentials",
+            available_on_public_internet=False,
+            delegate_auth_to_upstream=True,
+        )
+        _warn_internal_delegate_pkce_if_applicable(server, source="test")
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "internal-only" not in combined
 
 
 class TestHasClientCredentialsOAuth2Flow:

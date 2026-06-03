@@ -1446,3 +1446,474 @@ class TestGetTeamDeployments:
         result = await _get_team_deployments(team_id, prisma_client)
         assert len(result) == 1
         assert result[0] is dep1
+
+
+def _build_db_model_for_blocked_test():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="gpt-4o",
+        litellm_params=LiteLLM_Params(model="openai/gpt-4o"),
+        model_info=ModelInfo(id="dep-0"),
+    )
+
+
+class TestUpdateDBModelBlocked:
+    """`update_db_model` must thread `blocked` through to the Prisma payload only
+    when the caller explicitly set it — PATCH semantics: an absent field means
+    "leave the stored value untouched"."""
+
+    def test_update_db_model_passes_blocked_true_to_db(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+
+        result = update_db_model(
+            db_model=_build_db_model_for_blocked_test(),
+            updated_patch=updateDeployment(blocked=True),
+        )
+        assert result["blocked"] is True
+
+    def test_update_db_model_passes_blocked_false_to_db(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+
+        result = update_db_model(
+            db_model=_build_db_model_for_blocked_test(),
+            updated_patch=updateDeployment(blocked=False),
+        )
+        assert result["blocked"] is False
+
+    def test_update_db_model_omits_blocked_when_patch_is_none(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+
+        result = update_db_model(
+            db_model=_build_db_model_for_blocked_test(),
+            updated_patch=updateDeployment(),
+        )
+        assert "blocked" not in result
+
+
+def _build_db_model_with_pricing():
+    """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
+    mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="openai/*",
+        litellm_params=LiteLLM_Params(
+            model="openai/*",
+            input_cost_per_token=0.000001,
+            output_cost_per_token=0.000002,
+        ),
+        model_info=ModelInfo(id="dep-pricing-0"),
+    )
+
+
+class TestUpdateDBModelClearPricing:
+    """Sending an explicit `null` for a pricing field must remove it from both
+    `litellm_params` and `model_info` (SPECIAL_MODEL_INFO_PARAMS are mirrored
+    between the two by Deployment.__init__).
+
+    Restricted to SPECIAL_MODEL_INFO_PARAMS so non-pricing fields (e.g. team_id)
+    cannot be cleared via this path.
+    """
+
+    def test_clear_input_cost_removes_from_both_blobs(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+        # Other pricing untouched
+        assert params.get("output_cost_per_token") == 0.000002
+        assert info.get("output_cost_per_token") == 0.000002
+
+    def test_clear_output_cost_removes_from_both_blobs(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "output_cost_per_token" not in params
+        assert "output_cost_per_token" not in info
+
+    def test_non_null_pricing_update_still_works(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=0.000005)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["input_cost_per_token"] == 0.000005
+
+    def test_omitted_pricing_field_is_preserved(self):
+        """PATCH semantics: fields not in the patch keep their existing value."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=0.000007)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["input_cost_per_token"] == 0.000001
+        assert params["output_cost_per_token"] == 0.000007
+
+    def test_null_on_non_pricing_field_does_not_clear(self):
+        """Security guard: only SPECIAL_MODEL_INFO_PARAMS can be cleared via null.
+        Privileged or unrelated model_info fields (e.g. team_id) must be unaffected
+        by the null-clearing path so a team admin can't ungate a team-scoped model.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+            ),
+            model_info=ModelInfo(id="dep-pricing-1", team_id="team-keep-me"),
+        )
+
+        # Patch sends a null for api_base (non-SPECIAL field). Must NOT clear team_id
+        # or any other non-pricing field from the merged dict.
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(api_base=None)
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        # Pricing still present (not part of this patch)
+        assert "input_cost_per_token" in info
+        # team_id must survive
+        assert info.get("team_id") == "team-keep-me"
+
+    def test_clear_survives_model_info_passthrough_with_old_pricing(self):
+        """Realistic UI submit shape: the patch carries BOTH blobs. The
+        model_info portion still has the old pricing because the form
+        re-serializes the source blob. The litellm_params null must beat the
+        model_info merge — i.e. the clear runs after both merges, not between.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None),
+                # The UI passes the OLD model_info blob through unchanged.
+                model_info=ModelInfo(
+                    id="dep-pricing-0",
+                    input_cost_per_token=0.000001,  # stale value from the page state
+                ),
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert (
+            "input_cost_per_token" not in info
+        ), "model_info passthrough must not resurrect the cleared override"
+
+    def test_clear_via_model_info_clears_both_blobs(self):
+        """The mirror works in the reverse direction too: nulling a pricing field
+        via the model_info patch should clear it from litellm_params as well."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-pricing-0", input_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+
+    def test_clear_cache_read_cost_removes_from_both_blobs(self):
+        """cache_read_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-read overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_read_input_token_cost=0.0000005,
+            ),
+            model_info=ModelInfo(id="dep-cache-read-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+
+    def test_clear_cache_write_cost_removes_from_both_blobs(self):
+        """cache_creation_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-write overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-write-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_creation_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_creation_input_token_cost" not in params
+        assert "cache_creation_input_token_cost" not in info
+
+    def test_clear_cache_read_preserves_other_pricing(self):
+        """Clearing cache_read must not touch input/output cost overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+                output_cost_per_token=0.000002,
+                cache_read_input_token_cost=0.0000005,
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-mixed-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+        # Other pricing untouched in both blobs
+        assert params["input_cost_per_token"] == 0.000001
+        assert params["output_cost_per_token"] == 0.000002
+        assert params["cache_creation_input_token_cost"] == 0.000003
+        assert info["input_cost_per_token"] == 0.000001
+        assert info["output_cost_per_token"] == 0.000002
+        assert info["cache_creation_input_token_cost"] == 0.000003
+
+
+class TestGetModelInfoWithIdBlocked:
+    """`ProxyConfig.get_model_info_with_id` must propagate the DB-level `blocked`
+    column into the in-memory `model_info` dict so the router filter can read it."""
+
+    def test_get_model_info_with_id_propagates_blocked_true(self):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        model = MagicMock()
+        model.model_id = "dep-1"
+        model.model_info = {}
+        model.blocked = True
+        info = ProxyConfig().get_model_info_with_id(model=model, db_model=True)
+        assert info.id == "dep-1"
+        assert getattr(info, "blocked") is True
+
+    def test_get_model_info_with_id_defaults_blocked_to_false_when_missing(self):
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        model = MagicMock(spec=["model_id", "model_info"])
+        model.model_id = "dep-2"
+        model.model_info = {}
+        info = ProxyConfig().get_model_info_with_id(model=model, db_model=True)
+        assert getattr(info, "blocked") is False
+
+
+class TestPatchModelBlockedAuthGate:
+    """Only proxy admins may flip `blocked` — team admins authorized for
+    team-scoped models via `can_user_make_model_call` must still be rejected
+    when they attempt to toggle the pause flag."""
+
+    @pytest.mark.asyncio
+    async def test_team_admin_cannot_toggle_blocked(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+
+        non_admin = UserAPIKeyAuth(
+            user_id="team_admin",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "openai/gpt-4o-mini"}
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(blocked=True),
+                    user_api_key_dict=non_admin,
+                )
+            err = exc_info.value
+            assert getattr(err, "param", "") == "blocked"
+            assert "proxy admin" in getattr(err, "message", "").lower()
+
+    @pytest.mark.asyncio
+    async def test_proxy_admin_can_toggle_blocked(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "openai/gpt-4o-mini"}
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1"},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+        updated_row = MagicMock()
+        updated_row.model_dump_json.return_value = "{}"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=existing_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock(
+            return_value=updated_row
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            result = await patch_model(
+                model_id="m1",
+                patch_data=updateDeployment(blocked=True),
+                user_api_key_dict=admin,
+            )
+            assert result is updated_row
+            mock_prisma.db.litellm_proxymodeltable.update.assert_awaited_once()
