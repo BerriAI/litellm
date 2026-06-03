@@ -121,6 +121,18 @@ class TestResolveAnthropicApiKeyFromRouter:
     anthropic_proxy_route discovers the api_key from any deployed Anthropic
     model in llm_router (so the UI add-model flow works)."""
 
+    @pytest.fixture(autouse=True)
+    def _restore_llm_router(self):
+        """Save/restore proxy_server.llm_router so tests in this class do not
+        pollute the global state used by other modules (e.g. TestProxyServer’s
+        FakeRouter assertions rely on it being a real Router)."""
+        import litellm.proxy.proxy_server as proxy_server
+        _saved = getattr(proxy_server, "llm_router", None)
+        try:
+            yield
+        finally:
+            proxy_server.llm_router = _saved
+
     def _set_router(self, model_list):
         import litellm
         import litellm.proxy.proxy_server as proxy_server
@@ -243,6 +255,15 @@ class TestAnthropicProxyRouteRaisesWhenNoCredential:
     """LIT-3550: when no Anthropic credential is configured anywhere, the
     route must raise a clean ProxyException(401) instead of silently
     forwarding the client virtual key as the upstream credential."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_llm_router(self):
+        import litellm.proxy.proxy_server as proxy_server
+        _saved = getattr(proxy_server, "llm_router", None)
+        try:
+            yield
+        finally:
+            proxy_server.llm_router = _saved
 
     def test_raises_401_when_no_credential_configured(self, monkeypatch):
         from fastapi import Response
