@@ -391,30 +391,33 @@ async def test_aarun_thread_litellm(
     assistant_id = assistants.data[0].id
     new_thread = await _create_thread_litellm(sync_mode, provider, assistant_client)
     message: MessageData = {"role": "user", "content": "Hey, how's it going?"}  # type: ignore
-    data = _request_data(provider, assistant_client, thread_id=new_thread.id, **message)
+    thread_data = _request_data(provider, assistant_client, thread_id=new_thread.id)
+    message_data = _request_data(
+        provider, assistant_client, thread_id=new_thread.id, **message
+    )
 
     if sync_mode:
-        added_message = litellm.add_message(**data)
+        added_message = litellm.add_message(**message_data)
         assert isinstance(added_message, Message)
 
         if is_streaming:
-            run = litellm.run_thread_stream(assistant_id=assistant_id, **data)
+            run = litellm.run_thread_stream(assistant_id=assistant_id, **thread_data)
             with run as run:
                 assert isinstance(run, AssistantEventHandler)
                 run.until_done()
         else:
             run = litellm.run_thread(
-                assistant_id=assistant_id, stream=is_streaming, **data
+                assistant_id=assistant_id, stream=is_streaming, **thread_data
             )
             assert run.status == "completed"
-            messages = litellm.get_messages(**data)
+            messages = litellm.get_messages(**thread_data)
             assert isinstance(messages.data[0], Message)
     else:
-        added_message = await litellm.a_add_message(**data)
+        added_message = await litellm.a_add_message(**message_data)
         assert isinstance(added_message, Message)
 
         if is_streaming:
-            run = litellm.arun_thread_stream(assistant_id=assistant_id, **data)
+            run = litellm.arun_thread_stream(assistant_id=assistant_id, **thread_data)
             async with run as run:
                 assert isinstance(run, AsyncAssistantEventHandler)
                 await run.until_done()
@@ -426,5 +429,5 @@ async def test_aarun_thread_litellm(
                 client=assistant_client,
             )
             assert run.status == "completed"
-            messages = await litellm.aget_messages(**data)
+            messages = await litellm.aget_messages(**thread_data)
             assert isinstance(messages.data[0], Message)

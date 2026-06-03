@@ -30,12 +30,9 @@ from litellm.types.utils import Usage, ModelResponse
 from abc import ABC, abstractmethod
 from openai import OpenAI
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
-def _skip_live_prompt_caching_test():
-    if os.environ.get("LITELLM_RUN_LIVE_PROMPT_CACHING_TESTS") != "1":
-        pytest.skip("Live prompt-caching E2E tests are opt-in")
-    if os.environ.get("CASSETTE_REDIS_URL"):
-        pytest.skip("Live prompt-caching E2E tests cannot run under VCR replay")
+from tests._live_test_helpers import _skip_live_prompt_caching_test  # noqa: E402
 
 
 def _usage_format_tests(usage: litellm.Usage):

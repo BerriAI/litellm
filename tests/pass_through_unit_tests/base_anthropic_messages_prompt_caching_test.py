@@ -18,17 +18,12 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
 sys.path.insert(0, os.path.abspath("../../.."))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 import pytest
 import litellm
 
-
-def _skip_live_prompt_caching_test():
-    if os.environ.get("LITELLM_RUN_LIVE_PROMPT_CACHING_TESTS") != "1":
-        pytest.skip("Live prompt-caching E2E tests are opt-in")
-    if os.environ.get("CASSETTE_REDIS_URL"):
-        pytest.skip("Live prompt-caching E2E tests cannot run under VCR replay")
-
+from tests._live_test_helpers import _skip_live_prompt_caching_test
 
 # Large document for caching tests (needs 1024+ tokens for Claude models)
 LARGE_DOCUMENT_FOR_CACHING = """

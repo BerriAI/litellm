@@ -10,31 +10,7 @@ const originalFetch = global.fetch || require('node-fetch');
 
 let lastCallId;
 
-function isVertexQuotaError(error) {
-    const message = [
-        error && error.message,
-        error && error.stack,
-        error && error.cause && JSON.stringify(error.cause),
-    ].filter(Boolean).join('\n');
-
-    return (
-        message.includes('429') ||
-        message.includes('Too Many Requests') ||
-        message.includes('RESOURCE_EXHAUSTED')
-    );
-}
-
-async function runVertexRequestOrSkip(requestFn) {
-    try {
-        return await requestFn();
-    } catch (error) {
-        if (isVertexQuotaError(error)) {
-            console.warn('Vertex AI quota exhausted; skipping live provider assertions for this run');
-            return null;
-        }
-        throw error;
-    }
-}
+const { runVertexRequestOrSkip } = require('./vertex_test_helpers');
 
 // Monkey-patch the fetch used internally
 global.fetch = async function patchedFetch(url, options) {
