@@ -1459,7 +1459,7 @@ class ManagedResponsesWebSocketHandler:
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
-        self._connection_provider = self._resolve_provider(model)
+        self._connection_provider = self._resolve_provider(model) or custom_llm_provider
         self.first_message = first_message
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: Dict[str, Any] = {

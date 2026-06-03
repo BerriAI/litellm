@@ -694,3 +694,20 @@ class TestManagedResponsesSameProvider:
         call_kwargs: dict = {}
         handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
         assert "custom_llm_provider" not in call_kwargs
+
+    def test_unresolvable_connection_model_falls_back_to_custom_provider(self):
+        handler = self._handler(
+            "my-custom-deployment", custom_llm_provider="openai"
+        )
+        assert handler._same_provider("gpt-4o-mini") is True
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="gpt-4o-mini")
+        assert call_kwargs["custom_llm_provider"] == "openai"
+
+    def test_unresolvable_connection_model_still_drops_cross_provider(self):
+        handler = self._handler(
+            "my-custom-deployment", custom_llm_provider="openai"
+        )
+        call_kwargs: dict = {}
+        handler._inject_credentials(call_kwargs, model="vertex_ai/gemini-2.0-flash")
+        assert "custom_llm_provider" not in call_kwargs
