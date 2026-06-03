@@ -6299,6 +6299,79 @@ export const createAgentCall = async (accessToken: string, agentData: any) => {
   }
 };
 
+export interface DiscoveredAgentCard {
+  protocolVersion?: string;
+  name?: string;
+  description?: string;
+  version?: string;
+  url?: string;
+  iconUrl?: string;
+  documentationUrl?: string;
+  defaultInputModes?: string[];
+  defaultOutputModes?: string[];
+  capabilities?: Record<string, any>;
+  skills?: Array<{
+    id?: string;
+    name?: string;
+    description?: string;
+    tags?: string[];
+    examples?: string[];
+    [key: string]: any;
+  }>;
+  provider?: { organization?: string; url?: string };
+  [key: string]: any;
+}
+
+export interface DiscoverAgentCardResponse {
+  url: string;
+  agent_card: DiscoveredAgentCard;
+}
+
+/**
+ * How the backend should locate the upstream agent card.
+ *
+ * - ``well_known_fallback`` (default): pure A2A — try the three standard
+ *   well-known paths under the base URL.
+ * - ``langgraph_platform``: LangGraph Platform — hits the canonical
+ *   well-known path with an ``assistant_id`` query parameter, because
+ *   LangGraph mounts one shared card endpoint per deployment.
+ */
+export type DiscoveryMode = "well_known_fallback" | "langgraph_platform";
+
+export interface DiscoverAgentCardOptions {
+  discovery_mode?: DiscoveryMode;
+  /** Mode-specific params. ``langgraph_platform`` requires ``assistant_id``. */
+  params?: Record<string, any>;
+}
+
+export const discoverAgentCardCall = async (
+  accessToken: string,
+  url: string,
+  options?: DiscoverAgentCardOptions,
+): Promise<DiscoverAgentCardResponse> => {
+  const endpoint = proxyBaseUrl ? `${proxyBaseUrl}/v1/a2a/discover` : `/v1/a2a/discover`;
+  const body: Record<string, any> = { url };
+  if (options?.discovery_mode) body.discovery_mode = options.discovery_mode;
+  if (options?.params) body.params = options.params;
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorData = await response.text();
+    handleError(errorData);
+    throw new Error(errorData);
+  }
+
+  return (await response.json()) as DiscoverAgentCardResponse;
+};
+
 export const createGuardrailCall = async (accessToken: string, guardrailData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails` : `/guardrails`;
@@ -7068,46 +7141,33 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
 };
 
 export const listMCPTools = async (
-  accessToken: string, 
+  accessToken: string,
   serverId: string,
-  customHeaders?: Record<string, string>
+  customHeaders?: Record<string, string>,
 ) => {
+  // Construct base URL
+  let url = proxyBaseUrl
+    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
+    : `/mcp-rest/tools/list?server_id=${serverId}`;
+
+  console.log("Fetching MCP tools from:", url);
+
+  const headers: Record<string, string> = {
+    [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    ...customHeaders, // Merge custom headers for passthrough auth
+  };
+
+  let response: Response;
   try {
-    // Construct base URL
-    let url = proxyBaseUrl
-      ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-      : `/mcp-rest/tools/list?server_id=${serverId}`;
-
-    console.log("Fetching MCP tools from:", url);
-
-    const headers: Record<string, string> = {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      ...customHeaders, // Merge custom headers for passthrough auth
-    };
-
-    const response = await fetch(url, {
+    response = await fetch(url, {
       method: "GET",
       headers,
     });
-
-    const data = await response.json();
-    console.log("Fetched MCP tools response:", data);
-
-    if (!response.ok) {
-      // If the server returned an error response, use it
-      if (data.error && data.message) {
-        throw new Error(data.message);
-      }
-      // Otherwise use a generic error
-      throw new Error("Failed to fetch MCP tools");
-    }
-
-    // Return the full response object which includes tools, error, message, and stack_trace
-    return data;
   } catch (error) {
-    console.error("Failed to fetch MCP tools:", error);
-    // Return an error response in the same format as the API
+    // Network-level failure (no HTTP response). Preserve legacy shape so the
+    // caller can render a generic error message without crashing.
+    console.error("Failed to fetch MCP tools (network error):", error);
     return {
       tools: [],
       error: "network_error",
@@ -7115,6 +7175,44 @@ export const listMCPTools = async (
       stack_trace: null,
     };
   }
+
+  let data: any = null;
+  try {
+    data = await response.json();
+  } catch (parseError) {
+    console.error("Failed to parse MCP tools response:", parseError);
+    return {
+      tools: [],
+      error: "parse_error",
+      message: "Failed to parse MCP tools response",
+      status: response.status,
+      statusText: response.statusText,
+      stack_trace: null,
+    };
+  }
+  console.log("Fetched MCP tools response:", data);
+
+  if (!response.ok) {
+    // Preserve the legacy "never throws" contract so existing callers
+    // (e.g. MCPToolPermissions, MCPAppsPanel, MCPConnectPicker) can continue
+    // to inspect `result.error` / `result.message`. Attach `status` so
+    // callers that need to react to auth failures (e.g. the useQuery in
+    // mcp_tools.tsx) can still detect 401s from the returned object.
+    const errorMessage =
+      (data && (data.message || data.error)) || "Failed to fetch MCP tools";
+    return {
+      tools: [],
+      error: (data && data.error) || `http_${response.status}`,
+      message: errorMessage,
+      status: response.status,
+      statusText: response.statusText,
+      details: data,
+      stack_trace: null,
+    };
+  }
+
+  // Return the full response object which includes tools, error, message, and stack_trace
+  return data;
 };
 
 interface CallMCPToolOptions {
@@ -7288,9 +7386,28 @@ export const tagInfoCall = async (accessToken: string, tagNames: string[]): Prom
   }
 };
 
-export const tagListCall = async (accessToken: string): Promise<TagListResponse> => {
+const formatYmd = (value: Date): string => {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+};
+
+export const tagListCall = async (
+  accessToken: string,
+  startTime?: Date | null,
+  endTime?: Date | null,
+): Promise<TagListResponse> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/list` : `/tag/list`;
+
+    if (startTime && endTime) {
+      const params = new URLSearchParams({
+        start_date: formatYmd(startTime),
+        end_date: formatYmd(endTime),
+      });
+      url = `${url}?${params.toString()}`;
+    }
 
     const response = await fetch(url, {
       method: "GET",
@@ -8781,6 +8898,7 @@ interface ExchangeMcpOAuthTokenParams {
   clientSecret?: string;
   codeVerifier: string;
   redirectUri: string;
+  accessToken?: string | null;
 }
 
 export const exchangeMcpOAuthToken = async ({
@@ -8790,6 +8908,7 @@ export const exchangeMcpOAuthToken = async ({
   clientSecret,
   codeVerifier,
   redirectUri,
+  accessToken,
 }: ExchangeMcpOAuthTokenParams) => {
   const base = getProxyBaseUrl();
   const normalizedServerId = encodeURIComponent(serverId.trim());
@@ -8807,11 +8926,16 @@ export const exchangeMcpOAuthToken = async ({
   body.set("code_verifier", codeVerifier);
   body.set("redirect_uri", redirectUri);
 
+  const headers: Record<string, string> = {
+    "Content-Type": "application/x-www-form-urlencoded",
+  };
+  if (accessToken) {
+    headers["Authorization"] = `Bearer ${accessToken}`;
+  }
+
   const response = await fetch(url, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
+    headers,
     body: body.toString(),
   });
 

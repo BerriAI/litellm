@@ -36,7 +36,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import CallTypes, ModelResponse, Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -207,6 +207,11 @@ REDIS_NODE_HASHTAG_NAME = "all_keys"
 # *some* output budget; these define that fallback estimate.
 DEFAULT_MAX_TOKENS_ESTIMATE = 4096
 DEFAULT_CHARS_PER_TOKEN = 4
+# Fraction of the available output budget reserved as the upfront floor when
+# the request omits max_tokens. Applied to both DEFAULT_MAX_TOKENS_ESTIMATE
+# (baseline floor) and to the smallest configured TPM limit (capped floor for
+# small per-tenant TPM caps).
+_TPM_FLOOR_FRACTION = 4
 # Stash for the reserved-token count on the request data dict so success/
 # failure callbacks can reconcile against the upfront reservation.
 TPM_RESERVED_TOKENS_KEY = "_litellm_tpm_reserved_tokens"
@@ -224,6 +229,17 @@ TPM_RESERVED_SCOPES_KEY = "_litellm_tpm_reserved_scopes"
 # (e.g. async_log_failure_event firing after async_post_call_failure_hook)
 # does not double-refund.
 TPM_RESERVATION_RELEASED_KEY = "_litellm_tpm_reservation_released"
+RATE_LIMIT_DESCRIPTORS_KEY = "_litellm_rate_limit_descriptors"
+# Stash keys live ONLY in metadata channels — never at the top level of the
+# request body. Top-level keys are forwarded as body params to upstream
+# providers, which reject unknown fields with 400/429 errors.
+_LITELLM_STASH_KEYS: Tuple[str, ...] = (
+    TPM_RESERVED_TOKENS_KEY,
+    TPM_RESERVED_MODEL_KEY,
+    TPM_RESERVED_SCOPES_KEY,
+    TPM_RESERVATION_RELEASED_KEY,
+    RATE_LIMIT_DESCRIPTORS_KEY,
+)
 
 
 class RateLimitDescriptorRateLimitObject(TypedDict, total=False):
@@ -329,10 +345,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """Return the current time for rate limiting calculations."""
         return self._time_provider()
 
+    @staticmethod
+    def _no_max_tokens_output_floor(
+        min_configured_tpm_limit: Optional[int],
+    ) -> int:
+        """Output-budget floor used when the request omits max_tokens.
+
+        Capped at a fraction of the smallest configured TPM limit so a small
+        per-tenant cap can't be tripped by the floor alone. Returns the
+        baseline floor when no limit is provided.
+        """
+        baseline = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        if min_configured_tpm_limit is None:
+            return baseline
+        return min(baseline, max(1, min_configured_tpm_limit // _TPM_FLOOR_FRACTION))
+
     def _estimate_tokens_for_request(
         self,
         data: dict,
         model: Optional[str] = None,
+        min_configured_tpm_limit: Optional[int] = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
@@ -340,6 +372,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         estimated = input_tokens + max_tokens.
 
         Supports chat (messages), completions (prompt), and embeddings (input).
+
+        ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
+        the TPM-bearing descriptors this request will be charged against. When
+        provided, the no-``max_tokens`` output-budget floor is capped at a
+        fraction of that limit so small TPM caps remain usable. Omit to
+        preserve the unconstrained floor.
         """
         messages = data.get("messages")
         prompt = data.get("prompt")
@@ -383,11 +421,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             case _:
                 # No max_tokens specified — reserve at least the input size with a
                 # conservative floor so a stream of small concurrent requests can't
-                # collectively bypass the limit.
-                max_tokens_estimate = max(
-                    estimated_input_tokens,
-                    DEFAULT_MAX_TOKENS_ESTIMATE // 4,
+                # collectively bypass the limit. Cap the floor by a fraction of
+                # the smallest TPM limit this request will be charged against,
+                # so a small per-tenant TPM cap can't be tripped by the floor
+                # alone.
+                output_floor = self._no_max_tokens_output_floor(
+                    min_configured_tpm_limit
                 )
+                max_tokens_estimate = max(estimated_input_tokens, output_floor)
 
         total_estimated = estimated_input_tokens + max_tokens_estimate
 
@@ -1334,6 +1375,79 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
 
+    def _add_mcp_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the API key, if a limit is
+        configured for the server being called.
+
+        MCP tool calls have no token usage, so only requests_per_unit is set;
+        tokens_per_unit stays None so the TPM reservation path is never engaged.
+        """
+        from litellm.proxy.auth.auth_utils import get_key_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.api_key:
+            return
+
+        mcp_rpm_limit = get_key_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_key",
+                value=f"{user_api_key_dict.api_key}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
+    def _add_mcp_per_team_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the team, if a limit is
+        configured for the server being called.
+        """
+        from litellm.proxy.auth.auth_utils import get_team_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.team_id:
+            return
+
+        mcp_rpm_limit = get_team_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_team",
+                value=f"{user_api_key_dict.team_id}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
     def _should_enforce_rate_limit(
         self,
         limit_type: Optional[str],
@@ -1492,6 +1606,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rpm_limit_type: Optional[str],
         tpm_limit_type: Optional[str],
         model_has_failures: bool,
+        call_type: Optional[str] = None,
     ) -> List[RateLimitDescriptor]:
         """
         Create all rate limit descriptors for the request.
@@ -1611,6 +1726,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model,
             descriptors=descriptors,
         )
+
+        # REST MCP calls pass the raw body through this hook before server
+        # resolution; only the later synthetic hook payload may carry this key.
+        if call_type == CallTypes.call_mcp_tool.value and "server_id" not in data:
+            mcp_server_name = data.get("mcp_server_name", None)
+            self._add_mcp_per_key_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+            self._add_mcp_per_team_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
 
         if (
             get_team_model_rpm_limit(user_api_key_dict) is not None
@@ -1892,6 +2022,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         verbose_proxy_logger.debug("Inside Rate Limit Pre-Call Hook")
 
+        # Reject caller-supplied stash values before any read/write. Otherwise
+        # a client can inject ``_litellm_rate_limit_descriptors`` /
+        # ``_litellm_tpm_reserved_tokens`` in body ``metadata`` and have
+        # ``async_post_call_failure_hook`` refund TPM counters against scopes
+        # they name (e.g. another tenant's api_key).
+        self._strip_stash_keys_from_all_channels(data)
+
         #########################################################
         # Check if the call type has a specific rate limiter
         # eg. for Batch APIs we need to use the batch rate limiter to read the input file and count the tokens and requests
@@ -1935,6 +2072,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rpm_limit_type=rpm_limit_type,
             tpm_limit_type=tpm_limit_type,
             model_has_failures=model_has_failures,
+            call_type=call_type,
         )
 
         # Add team model rate limits from team_metadata
@@ -1991,12 +2129,39 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # in-memory check otherwise — single-worker protection still holds
             # even without Redis.
             # ----------------------------------------------------------------
-            has_tpm_limits = any(
-                (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            configured_tpm_limits = [
+                int(v)
                 for d in descriptors
-            )
+                for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
+                if v is not None
+            ]
+            has_tpm_limits = bool(configured_tpm_limits)
 
             if has_tpm_limits:
+                min_configured_tpm_limit = min(configured_tpm_limits)
+
+                # When the configured TPM cap is small enough to constrain the
+                # no-max_tokens floor, also hard-cap the model output via
+                # data["max_tokens"] so concurrent unbounded generations can't
+                # spend past the limit before post-call reconciliation runs.
+                # Skip when the request already sets max_tokens or has no
+                # generation budget at all (embeddings).
+                capped_floor = self._no_max_tokens_output_floor(
+                    min_configured_tpm_limit
+                )
+                baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+                has_explicit_max_tokens = (
+                    data.get("max_tokens") is not None
+                    or data.get("max_completion_tokens") is not None
+                )
+                is_embedding = data.get("input") is not None
+                if (
+                    capped_floor < baseline_floor
+                    and not has_explicit_max_tokens
+                    and not is_embedding
+                ):
+                    data["max_tokens"] = capped_floor
+
                 # Floor at 1 token so contentless requests (/responses,
                 # tool-call continuations, empty messages) still flow
                 # through the atomic counter and get backpressure when at
@@ -2008,6 +2173,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._estimate_tokens_for_request(
                         data=data,
                         model=requested_model,
+                        min_configured_tpm_limit=min_configured_tpm_limit,
                     ),
                     1,
                 )
@@ -2024,7 +2190,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         descriptors=descriptors,
                     )
                 else:
-                    data["_litellm_rate_limit_descriptors"] = descriptors
+                    self._stash_value_in_metadata_channels(
+                        data=data,
+                        key=RATE_LIMIT_DESCRIPTORS_KEY,
+                        value=descriptors,
+                    )
                     # Capture the exact (key, value) scopes the reservation
                     # incremented so post-call reconciliation only applies
                     # the (actual - reserved) delta to those — unreserved
@@ -2058,6 +2228,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     verbose_proxy_logger.debug(
                         f"TPM tokens reserved: {estimated_tokens} for model {requested_model}"
                     )
+
+        # Defense-in-depth: scrub any stash key that escaped onto data
+        # top-level (stale cache hit, router pass, test fixture) before the
+        # body is forwarded to the provider.
+        self._strip_stash_keys_from_top_level(data)
+
+    @staticmethod
+    def _strip_stash_keys_from_top_level(data: Any) -> None:
+        if not isinstance(data, dict):
+            return
+        for stash_key in _LITELLM_STASH_KEYS:
+            data.pop(stash_key, None)
+
+    @classmethod
+    def _strip_stash_keys_from_all_channels(cls, data: Any) -> None:
+        if not isinstance(data, dict):
+            return
+        cls._strip_stash_keys_from_top_level(data)
+        for channel in ("metadata", "litellm_metadata"):
+            channel_dict = data.get(channel)
+            if isinstance(channel_dict, dict):
+                for stash_key in _LITELLM_STASH_KEYS:
+                    channel_dict.pop(stash_key, None)
 
     def _create_pipeline_operations(
         self,
@@ -2233,18 +2426,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         return specified_rate_limit_type
 
     @staticmethod
+    def _stash_value_in_metadata_channels(
+        data: Dict[str, Any],
+        key: str,
+        value: Any,
+    ) -> None:
+        for channel in ("metadata", "litellm_metadata"):
+            existing = data.get(channel)
+            if isinstance(existing, dict):
+                existing[key] = value
+            elif channel == "metadata":
+                # ``litellm_metadata`` is owned by the router; don't conjure
+                # it here.
+                data[channel] = {key: value}
+
+    @classmethod
     def _stash_reservation_in_data(
+        cls,
         data: Dict[str, Any],
         estimated_tokens: int,
         reserved_model: Optional[str],
         reserved_scopes: Optional[List[Tuple[str, str]]] = None,
     ) -> None:
         """
-        Persist the reservation amount, model, and reserved scopes into every
-        channel a callback might read from: top-level kwargs (via ``**data``),
-        request metadata, and litellm_metadata. Keeps reservation and
-        reconciliation in sync.
-
         ``reserved_scopes`` is serialized as a list of [key, value] pairs so
         it round-trips through JSON-based metadata transports.
         """
@@ -2252,30 +2456,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             [[k, v] for k, v in reserved_scopes] if reserved_scopes else None
         )
 
-        data[TPM_RESERVED_TOKENS_KEY] = estimated_tokens
+        cls._stash_value_in_metadata_channels(
+            data=data, key=TPM_RESERVED_TOKENS_KEY, value=estimated_tokens
+        )
         if reserved_model:
-            data[TPM_RESERVED_MODEL_KEY] = reserved_model
+            cls._stash_value_in_metadata_channels(
+                data=data, key=TPM_RESERVED_MODEL_KEY, value=reserved_model
+            )
         if scopes_payload is not None:
-            data[TPM_RESERVED_SCOPES_KEY] = scopes_payload
-
-        for channel in ("metadata", "litellm_metadata"):
-            existing = data.get(channel)
-            if isinstance(existing, dict):
-                existing[TPM_RESERVED_TOKENS_KEY] = estimated_tokens
-                if reserved_model:
-                    existing[TPM_RESERVED_MODEL_KEY] = reserved_model
-                if scopes_payload is not None:
-                    existing[TPM_RESERVED_SCOPES_KEY] = scopes_payload
-            elif channel == "metadata":
-                # Only auto-create ``metadata`` (preserves prior behavior);
-                # ``litellm_metadata`` is set by the router and shouldn't be
-                # conjured here.
-                stash: Dict[str, Any] = {TPM_RESERVED_TOKENS_KEY: estimated_tokens}
-                if reserved_model:
-                    stash[TPM_RESERVED_MODEL_KEY] = reserved_model
-                if scopes_payload is not None:
-                    stash[TPM_RESERVED_SCOPES_KEY] = scopes_payload
-                data[channel] = stash
+            cls._stash_value_in_metadata_channels(
+                data=data, key=TPM_RESERVED_SCOPES_KEY, value=scopes_payload
+            )
 
     @staticmethod
     def _lookup_stashed_value(
@@ -2284,19 +2475,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         key: str,
     ) -> Any:
         """
-        Resolve a stashed value from any of the channels the request data can
-        flow through to a callback.
-
-        Checks (in priority order):
-          1. kwargs (top-level data fields propagate via **data)
-          2. kwargs["litellm_params"]["metadata"] (request metadata channel)
-          3. standard_logging_metadata (covers tests that mock the SLO directly)
+        Resolve a stashed value from any metadata channel the request data
+        can flow through to a callback. Top-level ``kwargs`` is not checked
+        because stash keys must never live there.
         """
-        candidate = kwargs.get(key) if isinstance(kwargs, dict) else None
-        if candidate is None:
-            litellm_params = (
-                kwargs.get("litellm_params") if isinstance(kwargs, dict) else None
-            )
+        candidate: Any = None
+        if isinstance(kwargs, dict):
+            for channel in ("metadata", "litellm_metadata"):
+                channel_dict = kwargs.get(channel)
+                if isinstance(channel_dict, dict) and key in channel_dict:
+                    candidate = channel_dict.get(key)
+                    if candidate is not None:
+                        return candidate
+            litellm_params = kwargs.get("litellm_params")
             if isinstance(litellm_params, dict):
                 lp_metadata = litellm_params.get("metadata")
                 if isinstance(lp_metadata, dict):
@@ -2390,7 +2581,6 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         if not isinstance(data, dict):
             return
-        data[TPM_RESERVATION_RELEASED_KEY] = True
         for channel in ("metadata", "litellm_metadata"):
             existing = data.get(channel)
             if isinstance(existing, dict):
@@ -2811,9 +3001,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return
 
             # Refund directly against the descriptors we reserved against —
-            # the pre-call hook stashes them on the request data before
-            # success/failure callbacks run.
-            stashed = request_data.get("_litellm_rate_limit_descriptors")
+            # the pre-call hook stashes them in the request-data metadata
+            # channels before success/failure callbacks run.
+            stashed = self._lookup_stashed_value(
+                kwargs=request_data,
+                standard_logging_metadata=None,
+                key=RATE_LIMIT_DESCRIPTORS_KEY,
+            )
             descriptors: List[RateLimitDescriptor] = (
                 stashed if isinstance(stashed, list) else []
             )

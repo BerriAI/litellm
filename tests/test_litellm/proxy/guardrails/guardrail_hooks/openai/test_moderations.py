@@ -820,3 +820,63 @@ def test_openai_moderation_process_error_metadata_none_edge_case():
 
         # Internal key cleaned up
         assert "_openai_moderation_response" not in request_data["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_streaming_defaults():
+    """Defaults match the unified dispatcher: sampled in-stream, every 5th chunk."""
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(guardrail_name="test")
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 5
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_guardrail_streaming_overrides():
+    """Constructor-level overrides for the two streaming flags are stored on self."""
+    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+        guardrail = OpenAIModerationGuardrail(
+            guardrail_name="test",
+            streaming_end_of_stream_only=False,
+            streaming_sampling_rate=3,
+        )
+        assert guardrail.streaming_end_of_stream_only is False
+        assert guardrail.streaming_sampling_rate == 3
+
+
+@pytest.mark.asyncio
+async def test_openai_moderation_initialize_guardrail_forwards_streaming_flags():
+    """initialize_guardrail forwards streaming knobs from litellm_params (extra='allow')."""
+    import litellm
+    from litellm.proxy.guardrails.guardrail_hooks.openai import (
+        initialize_guardrail as openai_initialize_guardrail,
+    )
+    from litellm.types.guardrails import (
+        Guardrail,
+        LitellmParams,
+        SupportedGuardrailIntegrations,
+    )
+
+    litellm.logging_callback_manager._reset_all_callbacks()
+    try:
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            litellm_params = LitellmParams(
+                guardrail=SupportedGuardrailIntegrations.OPENAI_MODERATION,
+                api_key="test-key",
+                model="omni-moderation-latest",
+                mode="post_call",
+                streaming_end_of_stream_only=False,
+                streaming_sampling_rate=2,
+            )
+            guardrail = openai_initialize_guardrail(
+                litellm_params=litellm_params,
+                guardrail=Guardrail(
+                    guardrail_name="test-openai-moderation",
+                    litellm_params=litellm_params,
+                ),
+            )
+
+            assert guardrail.streaming_end_of_stream_only is False
+            assert guardrail.streaming_sampling_rate == 2
+    finally:
+        litellm.logging_callback_manager._reset_all_callbacks()

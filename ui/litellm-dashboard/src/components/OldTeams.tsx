@@ -45,6 +45,7 @@ import OrganizationDropdown from "./common_components/OrganizationDropdown";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { teamListCall as v2TeamListCall, type TeamsResponse } from "@/app/(dashboard)/hooks/teams/useTeams";
 import AccessGroupSelector from "./common_components/AccessGroupSelector";
+import PassThroughRoutesSelector from "./common_components/PassThroughRoutesSelector";
 import AgentSelector from "./agent_management/AgentSelector";
 import ModelAliasManager from "./common_components/ModelAliasManager";
 import PremiumLoggingSettings from "./common_components/PremiumLoggingSettings";
@@ -80,8 +81,7 @@ interface TeamProps {
 }
 
 interface FilterState {
-  team_id: string;
-  team_alias: string;
+  search: string;
   organization_id: string;
   sort_by: string;
   sort_order: "asc" | "desc";
@@ -105,6 +105,7 @@ interface TeamInfo {
 
 interface PerTeamInfo {
   keys: KeyResponse[];
+  keys_count: number;
   team_info: TeamInfo;
 }
 
@@ -200,8 +201,7 @@ const Teams: React.FC<TeamProps> = ({
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
   const [filters, setFilters] = useState<FilterState>({
-    team_id: "",
-    team_alias: "",
+    search: "",
     organization_id: "",
     sort_by: "created_at",
     sort_order: "desc",
@@ -215,7 +215,7 @@ const Teams: React.FC<TeamProps> = ({
     sortBy?: string;
     sortOrder?: string;
     organizationID?: string;
-    teamAlias?: string;
+    search?: string;
   } = {}) => {
     if (!accessToken) return;
     const page = opts.page ?? currentPage;
@@ -223,7 +223,7 @@ const Teams: React.FC<TeamProps> = ({
     const sortBy = opts.sortBy ?? filters.sort_by;
     const sortOrder = opts.sortOrder ?? filters.sort_order;
     const organizationID = opts.organizationID ?? filters.organization_id;
-    const teamAlias = opts.teamAlias ?? filters.team_alias;
+    const search = opts.search ?? filters.search;
 
     setIsLoading(true);
     setFetchError(null);
@@ -234,7 +234,7 @@ const Teams: React.FC<TeamProps> = ({
         size,
         {
           organizationID: organizationID || null,
-          team_alias: teamAlias || null,
+          search: search || null,
           userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
           sortBy: sortBy || null,
           sortOrder: sortOrder || null,
@@ -365,6 +365,7 @@ const Teams: React.FC<TeamProps> = ({
         (acc, team) => {
           acc[team.team_id] = {
             keys: team.keys || [],
+            keys_count: team.keys_count ?? team.keys?.length ?? 0,
             team_info: {
               members_with_roles: team.members_with_roles || [],
             },
@@ -632,9 +633,9 @@ const Teams: React.FC<TeamProps> = ({
     setIsSearching(true);
     searchDebounceRef.current = setTimeout(async () => {
       try {
-        setFilters((prev) => ({ ...prev, team_alias: value }));
+        setFilters((prev) => ({ ...prev, search: value }));
         setCurrentPage(1);
-        await fetchTeamsV2({ page: 1, teamAlias: value });
+        await fetchTeamsV2({ page: 1, search: value });
       } finally {
         setIsSearching(false);
       }
@@ -653,7 +654,7 @@ const Teams: React.FC<TeamProps> = ({
         pageSize,
         {
           organizationID: newFilters.organization_id || null,
-          team_alias: newFilters.team_alias || null,
+          search: newFilters.search || null,
           userID: userRole !== "Admin" && userRole !== "Admin Viewer" ? userID : null,
           sortBy: newFilters.sort_by || null,
           sortOrder: newFilters.sort_order || null,
@@ -670,15 +671,14 @@ const Teams: React.FC<TeamProps> = ({
     if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
     setIsSearching(false);
     const resetFilters: FilterState = {
-      team_id: "",
-      team_alias: "",
+      search: "",
       organization_id: "",
       sort_by: "created_at",
       sort_order: "desc",
     };
     setFilters(resetFilters);
     setCurrentPage(1);
-    fetchTeamsV2({ page: 1, organizationID: "", teamAlias: "", sortBy: "created_at", sortOrder: "desc" });
+    fetchTeamsV2({ page: 1, organizationID: "", search: "", sortBy: "created_at", sortOrder: "desc" });
   };
 
   const { token } = theme.useToken();
@@ -747,7 +747,7 @@ const Teams: React.FC<TeamProps> = ({
       render: (_: unknown, record: Team) => {
         const memberCount = perTeamInfo?.[record.team_id]?.team_info?.members_with_roles?.length ?? 0;
         const modelCount = record.models?.length ?? 0;
-        const keyCount = perTeamInfo?.[record.team_id]?.keys?.length ?? 0;
+        const keyCount = perTeamInfo?.[record.team_id]?.keys_count ?? 0;
         return (
           <Flex gap={12} align="center">
             <Tooltip title={`${memberCount} Members`}>
@@ -945,7 +945,7 @@ const Teams: React.FC<TeamProps> = ({
                 <Input
                   prefix={<SearchIcon size={16} />}
                   suffix={isSearching ? <AntDLoadingSpinner size="small" /> : null}
-                  placeholder="Search teams by name..."
+                  placeholder="Search teams by name or ID..."
                   onChange={(e) => handleSearchChange(e.target.value)}
                   allowClear
                   style={{ maxWidth: 400 }}
@@ -979,17 +979,23 @@ const Teams: React.FC<TeamProps> = ({
           <DeleteResourceModal
             isOpen={isDeleteModalOpen}
             title="Delete Team?"
-            alertMessage={
-              teamToDelete?.keys?.length === 0
+            alertMessage={(() => {
+              const deleteKeyCount =
+                teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0;
+              return deleteKeyCount === 0
                 ? undefined
-                : `Warning: This team has ${teamToDelete?.keys?.length} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`
-            }
+                : `Warning: This team has ${deleteKeyCount} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`;
+            })()}
             message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
             resourceInformationTitle="Team Information"
             resourceInformation={[
               { label: "Team ID", value: teamToDelete?.team_id, code: true },
               { label: "Team Name", value: teamToDelete?.team_alias },
-              { label: "Keys", value: teamToDelete?.keys?.length },
+              {
+                label: "Keys",
+                value:
+                  teamToDelete?.keys_count ?? teamToDelete?.keys?.length ?? 0,
+              },
               { label: "Members", value: teamToDelete?.members_with_roles?.length },
             ]}
             requiredConfirmation={teamToDelete?.team_alias}
@@ -1448,6 +1454,30 @@ const Teams: React.FC<TeamProps> = ({
                           accessToken={accessToken || ""}
                           placeholder="Select vector stores (optional)"
                         />
+                      </Form.Item>
+                      <Form.Item
+                        label="Allowed Pass Through Routes"
+                        name="allowed_passthrough_routes"
+                        className="mt-8"
+                      >
+                        <Tooltip
+                          title={
+                            !premiumUser
+                              ? "Premium feature - Upgrade to set allowed pass through routes"
+                              : !isProxyAdminRole(userRole || "")
+                                ? "Only proxy admins can set allowed pass through routes"
+                                : ""
+                          }
+                          placement="top"
+                        >
+                          <PassThroughRoutesSelector
+                            onChange={(values: string[]) => form.setFieldValue("allowed_passthrough_routes", values)}
+                            value={form.getFieldValue("allowed_passthrough_routes")}
+                            accessToken={accessToken || ""}
+                            placeholder="Select pass through routes (optional)"
+                            disabled={!premiumUser || !isProxyAdminRole(userRole || "")}
+                          />
+                        </Tooltip>
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>

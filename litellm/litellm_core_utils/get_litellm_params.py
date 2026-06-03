@@ -1,5 +1,7 @@
 from typing import Optional
 
+from litellm.llms.openai.data_residency import infer_openai_data_residency
+
 # Pre-define optional kwargs keys as frozenset for O(1) lookups
 # These are extracted from kwargs only if present, avoiding unnecessary .get() calls
 _OPTIONAL_KWARGS_KEYS = frozenset(
@@ -103,6 +105,10 @@ def get_litellm_params(
     if litellm_trace_id is None:
         litellm_trace_id = _meta.get("trace_id") or _meta.get("session_id")
 
+    data_residency: Optional[str] = infer_openai_data_residency(
+        custom_llm_provider, api_base
+    )
+
     # Build base dict with explicit parameters (always included)
     litellm_params = {
         "acompletion": acompletion,
@@ -112,6 +118,7 @@ def get_litellm_params(
         "verbose": verbose,
         "custom_llm_provider": custom_llm_provider,
         "api_base": api_base,
+        "data_residency": data_residency,
         "litellm_call_id": litellm_call_id,
         "model_alias_map": model_alias_map,
         "completion_call_id": completion_call_id,

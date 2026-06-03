@@ -50,6 +50,7 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
         KeyManagementRoutes.KEY_BULK_UPDATE.value,
+        KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
     ]
 )
 
@@ -58,10 +59,18 @@ _PROXY_ADMIN_VIEW_ONLY_BLOCKED_ROUTES = frozenset(
 # paths directly because the request route carries the resolved key id.
 _PROXY_ADMIN_VIEW_ONLY_BLOCKED_KEY_SUFFIXES = ("/regenerate", "/reset_spend")
 
+_AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS = frozenset(
+    ("openai_routes", "llm_api_routes")
+)
+
 
 class RouteChecks:
     @staticmethod
-    def should_call_route(route: str, valid_token: UserAPIKeyAuth):
+    def should_call_route(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Optional[Request] = None,
+    ):
         """
         Check if management route is disabled and raise exception
         """
@@ -76,13 +85,15 @@ class RouteChecks:
 
         # Check if Virtual Key is allowed to call the route - Applies to all Roles
         RouteChecks.is_virtual_key_allowed_to_call_route(
-            route=route, valid_token=valid_token
+            route=route, valid_token=valid_token, request=request
         )
         return True
 
     @staticmethod
     def is_virtual_key_allowed_to_call_route(
-        route: str, valid_token: UserAPIKeyAuth
+        route: str,
+        valid_token: UserAPIKeyAuth,
+        request: Optional[Request] = None,
     ) -> bool:
         """
         Raises Exception if Virtual Key is not allowed to call the route
@@ -95,6 +106,8 @@ class RouteChecks:
             return True
         if len(valid_token.allowed_routes) == 0:
             return True
+
+        denied_auth_enforced_pass_through_route = False
 
         # explicit check for allowed routes (exact match or prefix match)
         for allowed_route in valid_token.allowed_routes:
@@ -114,7 +127,20 @@ class RouteChecks:
                         route=route,
                         allowed_routes=LiteLLMRoutes._member_map_[allowed_route].value,
                     ):
-                        return True
+                        if (
+                            allowed_route in _AUTH_ENFORCED_PASS_THROUGH_ROUTE_GROUPS
+                            and RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route,
+                                method=RouteChecks._get_request_method(request=request),
+                            )
+                        ):
+                            if RouteChecks.check_passthrough_route_access(
+                                route=route, user_api_key_dict=valid_token
+                            ):
+                                return True
+                            denied_auth_enforced_pass_through_route = True
+                        else:
+                            return True
 
                     ################################################
                     #  For llm_api_routes, also check registered pass-through endpoints
@@ -127,6 +153,31 @@ class RouteChecks:
                         if InitPassThroughEndpointHelpers.is_registered_pass_through_route(
                             route=route
                         ):
+                            if RouteChecks.is_auth_enforced_pass_through_route(
+                                route=route,
+                                method=RouteChecks._get_request_method(request=request),
+                            ):
+                                if RouteChecks.check_passthrough_route_access(
+                                    route=route, user_api_key_dict=valid_token
+                                ):
+                                    return True
+                                denied_auth_enforced_pass_through_route = True
+                            else:
+                                return True
+
+                        # Method-aware carve-out: allow GET on the two
+                        # read-only MCP-server discovery endpoints
+                        # (`/v1/mcp/server` and `/v1/mcp/server/{server_id}`)
+                        # so virtual keys with allowed_routes=["llm_api_routes"]
+                        # can list/inspect MCP servers. The GET handlers in
+                        # mcp_management_endpoints.py sanitize the response
+                        # for restricted virtual keys (stripping url,
+                        # headers, env, credentials). POST/PUT/DELETE on
+                        # these paths are admin-only management writes and
+                        # are intentionally not covered.
+                        if RouteChecks._is_get_mcp_server_discovery_route(
+                            route=route, request=request
+                        ):
                             return True
 
         # check if wildcard pattern is allowed
@@ -135,6 +186,9 @@ class RouteChecks:
                 route=route, pattern=allowed_route
             ):
                 return True
+
+        if denied_auth_enforced_pass_through_route:
+            raise RouteChecks._auth_pass_through_denied_exception(route=route)
 
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -206,7 +260,14 @@ class RouteChecks:
             route=route,
         )
 
-        if RouteChecks.is_llm_api_route(route=route):
+        if RouteChecks.is_auth_enforced_pass_through_route(
+            route=route,
+            method=RouteChecks._get_request_method(request=request),
+        ):
+            RouteChecks._require_auth_pass_through_access(
+                route=route, valid_token=valid_token
+            )
+        elif RouteChecks.is_llm_api_route(route=route):
             pass
         elif RouteChecks.is_info_route(route=route):
             # check if user allowed to call an info route
@@ -394,9 +455,36 @@ class RouteChecks:
             return True
 
         for _llm_passthrough_route in LiteLLMRoutes.mapped_pass_through_routes.value:
-            if _llm_passthrough_route in route:
+            if route == _llm_passthrough_route or route.startswith(
+                _llm_passthrough_route + "/"
+            ):
                 return True
         return False
+
+    @staticmethod
+    def _is_get_mcp_server_discovery_route(
+        route: str, request: Optional[Request]
+    ) -> bool:
+        """
+        Returns True if `request` is a GET against one of the two read-only
+        MCP-server discovery paths:
+
+        - GET `/v1/mcp/server`               (list)
+        - GET `/v1/mcp/server/{server_id}`   (single server, single segment)
+
+        Multi-segment paths (`/v1/mcp/server/{id}/approve`, etc.) and any
+        non-GET method return False, so admin-only management writes on the
+        same path prefix are not reachable through this carve-out.
+        """
+        if request is None or request.method.upper() != "GET":
+            return False
+        if route == "/v1/mcp/server":
+            return True
+        prefix = "/v1/mcp/server/"
+        if not route.startswith(prefix):
+            return False
+        remainder = route[len(prefix) :]
+        return bool(remainder) and "/" not in remainder
 
     @staticmethod
     def is_management_route(route: str) -> bool:
@@ -576,6 +664,66 @@ class RouteChecks:
         return False
 
     @staticmethod
+    def _get_request_method(request: Optional[Request]) -> Optional[str]:
+        if request is None:
+            return None
+
+        try:
+            method = request.method
+        except (AttributeError, KeyError):
+            return None
+        if not isinstance(method, str):
+            return None
+
+        return method.upper()
+
+    @staticmethod
+    def is_auth_enforced_pass_through_route(
+        route: str, method: Optional[str] = None
+    ) -> bool:
+        """
+        True for config/DB pass-through endpoints registered with auth=true.
+
+        These routes are injected into ``openai_routes`` for spend/budget hooks but
+        must not inherit blanket ``openai_routes`` RBAC; access is gated by
+        ``allowed_passthrough_routes`` on the key or team.
+        """
+        from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+            InitPassThroughEndpointHelpers,
+        )
+
+        route_info = InitPassThroughEndpointHelpers.get_registered_pass_through_route(
+            route=route, method=method
+        )
+        if route_info is None:
+            return False
+        return route_info.get("auth") is True
+
+    @staticmethod
+    def _auth_pass_through_denied_exception(route: str) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"Key/team not allowed to access passthrough route {route}. "
+                "Configure `allowed_passthrough_routes` on the team or key."
+            ),
+        )
+
+    @staticmethod
+    def _require_auth_pass_through_access(
+        route: str,
+        valid_token: UserAPIKeyAuth,
+    ) -> None:
+        """
+        Require an explicit ``allowed_passthrough_routes`` match for auth=true pass-through.
+        """
+        if RouteChecks.check_passthrough_route_access(
+            route=route, user_api_key_dict=valid_token
+        ):
+            return
+        raise RouteChecks._auth_pass_through_denied_exception(route=route)
+
+    @staticmethod
     def check_passthrough_route_access(
         route: str, user_api_key_dict: UserAPIKeyAuth
     ) -> bool:
@@ -624,7 +772,11 @@ class RouteChecks:
         Returns:
             bool: True if `thread` or `assistant` is in the request path, False otherwise
         """
-        if "thread" in request.url.path or "assistant" in request.url.path:
+        # Inline import — auth_utils participates in a proxy import cycle.
+        from .auth_utils import get_request_route  # noqa: PLC0415
+
+        route = get_request_route(request)
+        if "thread" in route or "assistant" in route:
             return True
         return False
 
@@ -671,6 +823,7 @@ class RouteChecks:
             "/key/service-account/generate",
             "/key/block",
             "/key/unblock",
+            "/team/key/bulk_update",
         ]
     )
 
