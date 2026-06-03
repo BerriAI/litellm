@@ -433,3 +433,20 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
           value: HTTPS
+  - it: should upper-case a lowercase probe scheme
+    template: deployment.yaml
+    set:
+      image.tag: test
+      livenessProbe.scheme: https
+      readinessProbe.scheme: https
+      startupProbe.scheme: https
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
+          value: HTTPS
