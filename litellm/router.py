@@ -10217,7 +10217,8 @@ class Router:
                     value = kwargs[var]
                     if isinstance(value, dict):
                         value = RetryPolicy(**value)
-                    setattr(self, var, value)
+                    if value is None or isinstance(value, RetryPolicy):
+                        setattr(self, var, value)
                 else:
                     value = kwargs[var]
                     # only run routing strategy init if it has changed

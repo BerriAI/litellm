@@ -114,6 +114,24 @@ def test_update_settings_accepts_retry_policy_object_unchanged():
     assert router.retry_policy is policy
 
 
+def test_update_settings_ignores_malformed_retry_policy():
+    """A non-dict, non-``RetryPolicy`` value (e.g. a YAML typo like
+    ``retry_policy: 5`` reaching ``update_settings``) must not land on
+    ``self.retry_policy``. ``Router.__init__`` already drops such inputs;
+    the update path must match so a malformed config can't store garbage
+    that ``get_num_retries_from_retry_policy`` would only choke on at
+    request time."""
+    router = _build_router()
+
+    existing = RetryPolicy(BadRequestErrorRetries=4)
+    router.update_settings(retry_policy=existing)
+    assert router.retry_policy is existing
+
+    for bad_value in (5, "RateLimitErrorRetries=7", ["BadRequestErrorRetries"]):
+        router.update_settings(retry_policy=bad_value)
+        assert router.retry_policy is existing
+
+
 def test_update_settings_get_settings_round_trip_for_retry_policy():
     """``GET /get/config/callbacks`` serializes ``llm_router.get_settings()``
     back to the UI. After updating, the round-trip must reflect the new
