@@ -12,6 +12,8 @@ import contextlib
 import sys
 import types
 
+import pytest
+
 import litellm.integrations.otel.runtime as rt
 
 
@@ -21,9 +23,14 @@ def _reset_runtime_cache():
     rt._seed_request_identity_impl = None
 
 
-def test_resolves_logger_import_at_most_once(monkeypatch):
+@pytest.fixture(autouse=True)
+def _isolate_runtime_cache():
+    _reset_runtime_cache()
+    yield
     _reset_runtime_cache()
 
+
+def test_resolves_logger_import_at_most_once(monkeypatch):
     real_import = builtins.__import__
     attempts = {"n": 0}
 
@@ -75,8 +82,6 @@ def test_phase_span_and_seed_use_resolved_impl_when_available():
     assert calls["phase"] == ["auth /chat"]
     assert calls["seed"] == [("key-obj", "gpt-4o")]
 
-    _reset_runtime_cache()
-
 
 def test_resolve_wires_up_logger_when_importable(monkeypatch):
     """When the OTel logger is importable, ``_resolve`` caches its callables.
@@ -115,5 +120,3 @@ def test_resolve_wires_up_logger_when_importable(monkeypatch):
         "seed": ("key-obj", "claude-3-5"),
         "phase": "auth /v1/chat/completions",
     }
-
-    _reset_runtime_cache()

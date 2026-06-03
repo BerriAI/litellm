@@ -12,6 +12,7 @@ import sys
 import types
 
 import httpx
+import pytest
 
 import litellm.proxy.db.log_db_metrics as m
 
@@ -20,21 +21,25 @@ def _reset_cache():
     m._db_exception_types = None
 
 
-def test_httpx_connection_errors_classified_as_db():
+@pytest.fixture(autouse=True)
+def _isolate_exception_type_cache():
     _reset_cache()
+    yield
+    _reset_cache()
+
+
+def test_httpx_connection_errors_classified_as_db():
     assert m._is_exception_related_to_db(httpx.ConnectError("boom")) is True
     assert m._is_exception_related_to_db(httpx.TimeoutException("slow")) is True
 
 
 def test_non_db_exception_returns_false_without_raising():
-    _reset_cache()
     # Must not raise even when prisma is not installed.
     assert m._is_exception_related_to_db(ValueError("nope")) is False
     assert m._is_exception_related_to_db(KeyError("nope")) is False
 
 
 def test_exception_types_resolved_once_and_cached():
-    _reset_cache()
     first = m._db_exception_types_cached()
     second = m._db_exception_types_cached()
     assert first is second
@@ -59,9 +64,6 @@ def test_prisma_error_classified_as_db_when_available(monkeypatch):
     monkeypatch.setitem(sys.modules, "prisma", fake_prisma)
     monkeypatch.setitem(sys.modules, "prisma.errors", fake_errors)
 
-    _reset_cache()
     assert FakePrismaError in m._db_exception_types_cached()
     assert m._is_exception_related_to_db(FakePrismaError()) is True
     assert m._is_exception_related_to_db(httpx.ConnectError("x")) is True
-
-    _reset_cache()

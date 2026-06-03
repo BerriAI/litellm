@@ -121,14 +121,14 @@ def _db_exception_types_cached() -> Tuple[type, ...]:
     if _db_exception_types is None:
         import httpx
 
-        types: Tuple[type, ...] = (httpx.ConnectError, httpx.TimeoutException)
+        exc_types: Tuple[type, ...] = (httpx.ConnectError, httpx.TimeoutException)
         try:
             from prisma.errors import PrismaError
 
-            types = (PrismaError, *types)
+            exc_types = (PrismaError, *exc_types)
         except Exception:
             pass
-        _db_exception_types = types
+        _db_exception_types = exc_types
     return _db_exception_types
 
 
