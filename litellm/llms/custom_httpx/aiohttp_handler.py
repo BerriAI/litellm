@@ -186,12 +186,23 @@ class _SSRFGuardTransport(httpx.HTTPTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:  # type: ignore[override]
         if not litellm.allow_requests_to_internal_ips:
             host = request.url.host
-            # IP-literal hosts are validated by _assert_not_private_ip_literal before
-            # the request reaches the transport; skip re-validation here.
             try:
-                ipaddress.ip_address(host)
+                addr: Optional[ipaddress.IPv4Address | ipaddress.IPv6Address] = (
+                    ipaddress.ip_address(host)
+                )
             except ValueError:
-                # Hostname — resolve, validate all answers, then pin.
+                addr = None
+
+            if addr is not None:
+                # IP-literal host: validate inline — no DNS needed, no TOCTOU window.
+                if _is_blocked_address(addr):
+                    raise ValueError(
+                        f"Host '{host}' is a private/reserved IP address "
+                        f"which is not allowed (SSRF protection)"
+                    )
+            else:
+                # Hostname path: resolve, validate all answers, then pin to prevent
+                # a second DNS lookup (closes the DNS-rebinding TOCTOU window).
                 port = request.url.port or (
                     443 if request.url.scheme == "https" else 80
                 )
@@ -204,10 +215,10 @@ class _SSRFGuardTransport(httpx.HTTPTransport):
                 for info in infos:
                     raw_ip = info[4][0]
                     try:
-                        addr = ipaddress.ip_address(raw_ip)
+                        resolved = ipaddress.ip_address(raw_ip)
                     except ValueError:
                         continue
-                    if _is_blocked_address(addr):
+                    if _is_blocked_address(resolved):
                         raise ValueError(
                             f"Host '{host}' resolves to a private/reserved IP "
                             f"address ({raw_ip}) which is not allowed (SSRF protection)"
@@ -223,9 +234,7 @@ class _SSRFGuardTransport(httpx.HTTPTransport):
                     # Preserve the original hostname in the Host header (virtual
                     # hosting) and sni_hostname extension (TLS cert validation).
                     headers = [
-                        (k, v)
-                        for k, v in request.headers.raw
-                        if k.lower() != b"host"
+                        (k, v) for k, v in request.headers.raw if k.lower() != b"host"
                     ]
                     headers.append((b"host", host.encode("utf-8")))
                     extensions = {**request.extensions, "sni_hostname": host}
