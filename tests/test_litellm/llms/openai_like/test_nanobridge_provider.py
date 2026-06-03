@@ -1,22 +1,18 @@
 """
-Unit tests for Nanobridge JSON-configured OpenAI-compatible provider.
+Mock-only unit tests for Nanobridge JSON-configured OpenAI-compatible provider.
+Live / network tests: tests/llm_translation/test_nanobridge.py
 """
 
 import os
 import sys
 
-try:
-    import pytest
-except ImportError:
-    pytest = None
-
-workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
-sys.path.insert(0, workspace_path)
-
 import litellm
 from litellm import LlmProviders
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+workspace_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
+sys.path.insert(0, workspace_path)
 
 
 class TestNanobridgeProvider:
@@ -60,17 +56,3 @@ class TestNanobridgeProvider:
             mock_response="PONG",
         )
         assert response.choices[0].message.content == "PONG"
-
-
-@pytest.mark.skipif(
-    not os.environ.get("NANOBRIDGE_API_KEY"),
-    reason="NANOBRIDGE_API_KEY not set",
-)
-class TestNanobridgeLive:
-    def test_nanobridge_live_chat_completions(self):
-        response = litellm.completion(
-            model="nanobridge/deepseek-v4-flash",
-            messages=[{"role": "user", "content": "Reply with exactly: ok"}],
-            max_tokens=16,
-        )
-        assert response.choices[0].message.content
