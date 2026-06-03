@@ -72,7 +72,7 @@ async def reserve_budget_for_request(
         return None
     if route in {"/models", "/v1/models", "/utils/token_counter"}:
         return None
-    if get_model_from_request(request_body, route) is None:
+    if get_model_from_request(request_body, route, llm_router=llm_router) is None:
         return None
 
     counters = await _get_budget_counters(
@@ -797,7 +797,7 @@ def estimate_request_max_cost(
     route: str,
     llm_router: Optional[Router],
 ) -> Optional[float]:
-    model = get_model_from_request(request_body, route)
+    model = get_model_from_request(request_body, route, llm_router=llm_router)
     if model is None:
         return None
 
