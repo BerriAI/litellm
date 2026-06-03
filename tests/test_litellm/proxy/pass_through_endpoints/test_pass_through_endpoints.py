@@ -1115,6 +1115,67 @@ async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
 
 
 @pytest.mark.asyncio
+async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
+    """
+    Regression: a request that is not flagged as streaming up front but whose
+    upstream response comes back as an SSE stream (content-type text/event-stream)
+    must still flag its logging object as streaming before dispatch. Otherwise the
+    cost/success callbacks treat the assembled stream as a non-stream and the dedup
+    guard never fires, double-logging the request.
+    """
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
+            ) as mock_chunk_processor:
+                mock_proxy_logging.pre_call_hook = AsyncMock(
+                    return_value={"model": "claude-3"}
+                )
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+                upstream_response = MagicMock()
+                upstream_response.status_code = 200
+                upstream_response.headers = {"content-type": "text/event-stream"}
+                upstream_response.raise_for_status = MagicMock()
+
+                async_client = MagicMock()
+                async_client.request = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                async def _empty_chunks(*args, **kwargs):
+                    return
+                    yield  # pragma: no cover
+
+                mock_chunk_processor.return_value = _empty_chunks()
+
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "POST"
+                mock_request.url = "http://test-proxy.com/v1/messages"
+                mock_request.body = AsyncMock(return_value=b'{"model": "claude-3"}')
+                mock_request.headers = Headers({})
+                mock_request.query_params = QueryParams({})
+
+                await pass_through_request(
+                    request=mock_request,
+                    target="http://target-api.com/v1/messages",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=False,
+                )
+
+                async_client.request.assert_awaited_once()
+
+                mock_chunk_processor.assert_called_once()
+                logging_obj = mock_chunk_processor.call_args.kwargs[
+                    "litellm_logging_obj"
+                ]
+                assert logging_obj.stream is True
+                assert logging_obj.model_call_details["stream"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_pass_through_endpoint():
     """
     Test creating a new pass-through endpoint
