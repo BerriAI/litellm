@@ -167,6 +167,9 @@ backend:
   extraEnv: []
   envConfigMaps: []
   envSecrets: []
+  config:
+    create: false
+    proxy_config: {}
   image:
     repository: ghcr.io/berriai/litellm-backend
     tag: ""
