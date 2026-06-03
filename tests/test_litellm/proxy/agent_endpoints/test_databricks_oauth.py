@@ -9,6 +9,7 @@ helper.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm.proxy.agent_endpoints.databricks_oauth import (
@@ -264,6 +265,100 @@ async def test_missing_access_token_raises():
     ):
         with pytest.raises(ValueError, match="access_token"):
             await cache.async_get_token(config)
+
+
+def _config():
+    return DatabricksAppOAuthConfig(
+        client_id="cid",
+        client_secret="secret",
+        token_url="https://dbc.cloud.databricks.com/oidc/v1/token",
+        scope="all-apis",
+    )
+
+
+@pytest.mark.asyncio
+async def test_http_status_error_raises_value_error():
+    cache = DatabricksAppOAuthTokenCache()
+    request = httpx.Request("POST", _config().token_url)
+    error_response = httpx.Response(status_code=401, request=request)
+    response = MagicMock()
+    response.raise_for_status = MagicMock(
+        side_effect=httpx.HTTPStatusError(
+            "unauthorized", request=request, response=error_response
+        )
+    )
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        with pytest.raises(ValueError, match="status 401"):
+            await cache.async_get_token(_config())
+
+
+@pytest.mark.asyncio
+async def test_transport_error_raises_value_error():
+    cache = DatabricksAppOAuthTokenCache()
+    client = MagicMock()
+    client.post = AsyncMock(side_effect=httpx.ConnectError("boom"))
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        with pytest.raises(ValueError, match="token request failed"):
+            await cache.async_get_token(_config())
+
+
+@pytest.mark.asyncio
+async def test_non_object_json_body_raises():
+    cache = DatabricksAppOAuthTokenCache()
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(return_value=["not", "an", "object"])
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=client,
+    ):
+        with pytest.raises(ValueError, match="non-object JSON"):
+            await cache.async_get_token(_config())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expires_in", [None, "not-a-number"])
+async def test_invalid_expires_in_falls_back_to_default_ttl(expires_in):
+    cache = DatabricksAppOAuthTokenCache()
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(
+        return_value={"access_token": "tok", "expires_in": expires_in}
+    )
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+
+    captured = {}
+    real_set = cache.set_cache
+
+    def _spy_set(key, value, **kwargs):
+        captured["ttl"] = kwargs.get("ttl")
+        return real_set(key, value, **kwargs)
+
+    with (
+        patch(
+            "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+            return_value=client,
+        ),
+        patch.object(cache, "set_cache", side_effect=_spy_set),
+    ):
+        await cache.async_get_token(_config())
+
+    # default TTL (3600) minus the 60s expiry buffer
+    assert captured["ttl"] == 3600 - 60
 
 
 # ---------------------------------------------------------------------------
