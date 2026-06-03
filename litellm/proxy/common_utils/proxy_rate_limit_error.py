@@ -133,6 +133,13 @@ class ProxyRateLimitError(HTTPException, RateLimitError):  # type: ignore[misc]
         compatibility with logging / standard payload extraction.
     """
 
+    # Prometheus' ``exception_class`` label is pinned to "HTTPException" for
+    # this type: before the unified class existed, proxy-side 429s surfaced as
+    # ``fastapi.HTTPException`` and existing dashboards/alerts key off that exact
+    # value. Distinguishing vendor vs. litellm 429s is now the job of the
+    # ``rate_limit_category`` / ``rate_limit_type`` labels.
+    prometheus_exception_class_name = "HTTPException"
+
     def __init__(
         self,
         detail: Any,

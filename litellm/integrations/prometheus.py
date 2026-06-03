@@ -2875,32 +2875,15 @@ class PrometheusLogger(CustomLogger):
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:
-        # Back-compat: ProxyRateLimitError multi-inherits from
-        # fastapi.HTTPException + litellm.RateLimitError. Before the unified
-        # rate-limit error class landed, every proxy-side 429 surfaced on this
-        # label as the literal string "HTTPException", and existing dashboards
-        # / alerts (e.g. trho's HubSpot dashboard) key off that exact value.
-        # Renaming the class would silently break those queries, so we keep
-        # emitting "HTTPException" here. Callers that need to distinguish
-        # vendor vs. litellm rate limits should use the new
-        # ``rate_limit_category`` / ``rate_limit_type`` labels instead.
-        #
-        # The import is intentionally lazy + ImportError-tolerant: this method
-        # is also called from router-side fallback events
-        # (``log_success_fallback_event`` / ``log_failure_fallback_event``)
-        # which can run in non-proxy installs where ``fastapi`` (a transitive
-        # dep of ``proxy_rate_limit_error``) is not installed.
-        try:
-            from litellm.proxy.common_utils.proxy_rate_limit_error import (
-                ProxyRateLimitError,
-            )
-        except ImportError:
-            ProxyRateLimitError = None  # type: ignore[assignment,misc]
-
-        if ProxyRateLimitError is not None and isinstance(
-            exception, ProxyRateLimitError
-        ):
-            return "HTTPException"
+        # Some exception types pin the ``exception_class`` label to a legacy
+        # value for back-compat with existing dashboards (e.g. proxy-side 429s
+        # keep reporting as "HTTPException"). Honor that opt-in marker before
+        # deriving the label from the runtime class name. Reading it via
+        # ``getattr`` keeps this core integrations module free of a transitive
+        # ``fastapi`` dependency.
+        legacy_class_name = getattr(exception, "prometheus_exception_class_name", None)
+        if isinstance(legacy_class_name, str) and legacy_class_name:
+            return legacy_class_name
 
         # Same back-compat reasoning for ``BudgetExceededError``: the unified
         # rate-limit error work attached ``.llm_provider`` to budget errors
