@@ -232,7 +232,8 @@ class TestSSRFGuardOnRequestMethods:
     @pytest.mark.asyncio
     async def test_make_common_async_call_hostname_defers_to_resolver(self):
         """Async path does NOT do a blocking DNS preflight for hostname-based URLs.
-        SSRF protection for those is handled by _SSRFGuardResolver at TCP-connect time."""
+        SSRF protection for those is handled by _SSRFGuardResolver at TCP-connect time.
+        """
         from unittest.mock import AsyncMock, Mock
 
         from litellm.llms.custom_httpx.aiohttp_handler import BaseLLMAIOHTTPHandler
@@ -322,8 +323,6 @@ class TestSSRFGuardOnRequestMethods:
 
         ssrf_safe_client = _get_ssrf_safe_sync_client()
         forwarded_hosts: list = []
-
-        original_handle = httpx.HTTPTransport.handle_request
 
         def spy_handle(self_transport, request):
             forwarded_hosts.append(request.url.host)
@@ -461,7 +460,7 @@ class TestSSRFGuardTransport:
         """Raises when ANY answer resolves to a private IP (A-record rotation)."""
         transport = _SSRFGuardTransport()
         mock_infos = [
-            (2, 1, 6, "", ("104.18.7.8", 443)),    # public — passes
+            (2, 1, 6, "", ("104.18.7.8", 443)),  # public — passes
             (2, 1, 6, "", ("169.254.169.254", 443)),  # private — must still block
         ]
         request = httpx.Request("POST", "https://rebinding.example.com/v1")
@@ -513,8 +512,8 @@ class TestSSRFGuardTransport:
 
         assert result is mock_response
 
-    def test_transport_skips_ip_literal_hosts(self):
-        """IP-literal URLs bypass hostname resolution (already validated upstream)."""
+    def test_transport_public_ip_literal_allowed(self):
+        """Public IP-literal URLs are allowed and bypass DNS (no resolution needed)."""
         transport = _SSRFGuardTransport()
         request = httpx.Request("POST", "https://104.18.7.8/v1/chat")
         mock_response = Mock(spec=httpx.Response)
@@ -528,6 +527,55 @@ class TestSSRFGuardTransport:
 
         mock_dns.assert_not_called()
         assert result is mock_response
+
+    def test_transport_blocks_private_ip_literal(self):
+        """Private IP-literal in URL is blocked directly — no DNS lookup required."""
+        transport = _SSRFGuardTransport()
+        request = httpx.Request("POST", "http://10.0.0.1/api")
+
+        with patch("socket.getaddrinfo") as mock_dns:
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(request)
+
+        mock_dns.assert_not_called()
+
+    def test_transport_blocks_aws_metadata_ip_literal(self):
+        """169.254.169.254 as an IP literal is blocked without DNS lookup."""
+        transport = _SSRFGuardTransport()
+        request = httpx.Request("GET", "http://169.254.169.254/latest/meta-data/")
+
+        with patch("socket.getaddrinfo") as mock_dns:
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(request)
+
+        mock_dns.assert_not_called()
+
+    def test_transport_blocks_ipv6_loopback_literal(self):
+        """IPv6 loopback ::1 as an IP literal is blocked without DNS lookup."""
+        transport = _SSRFGuardTransport()
+        request = httpx.Request("GET", "http://[::1]/admin")
+
+        with patch("socket.getaddrinfo") as mock_dns:
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(request)
+
+        mock_dns.assert_not_called()
+
+    def test_transport_ip_literal_bypassed_when_flag_set(self):
+        """allow_requests_to_internal_ips=True skips IP-literal validation too."""
+        transport = _SSRFGuardTransport()
+        request = httpx.Request("POST", "http://10.0.0.1/internal")
+        mock_response = Mock(spec=httpx.Response)
+
+        litellm.allow_requests_to_internal_ips = True
+        try:
+            with patch.object(
+                httpx.HTTPTransport, "handle_request", return_value=mock_response
+            ):
+                result = transport.handle_request(request)
+            assert result is mock_response
+        finally:
+            litellm.allow_requests_to_internal_ips = False
 
     def test_transport_bypassed_when_flag_set(self):
         """allow_requests_to_internal_ips=True disables all transport-level checks."""
@@ -566,3 +614,60 @@ class TestSSRFGuardTransport:
         with patch("socket.getaddrinfo", return_value=mock_infos):
             with pytest.raises(ValueError, match="private/reserved"):
                 handler.post("https://evil.internal/v1/chat", json={"test": True})
+
+    def test_ssrf_safe_client_blocks_private_ip_literal(self):
+        """End-to-end: _get_ssrf_safe_sync_client raises on a private IP-literal URL
+        even without DNS, proving the sync path catches direct IP addresses."""
+        handler = _get_ssrf_safe_sync_client()
+
+        # No DNS mock needed — the transport must block before any resolution
+        with patch("socket.getaddrinfo") as mock_dns:
+            with pytest.raises(ValueError, match="private/reserved"):
+                handler.post("http://10.0.0.1/api", json={"test": True})
+
+        mock_dns.assert_not_called()
+
+    def test_transport_skips_unparseable_ip_in_dns_answers(self):
+        """Unparseable entries in getaddrinfo answers are skipped; valid entries
+        still checked — mirrors _SSRFGuardResolver behaviour on the sync path."""
+        transport = _SSRFGuardTransport()
+        # One entry is unparseable; the other is a safe public IP.
+        mock_infos = [
+            (2, 1, 6, "", ("not-an-ip", 443)),
+            (2, 1, 6, "", ("104.18.7.8", 443)),
+        ]
+        request = httpx.Request("POST", "https://api.example.com/v1/chat")
+        mock_response = Mock(spec=httpx.Response)
+
+        with patch("socket.getaddrinfo", return_value=mock_infos):
+            with patch.object(
+                httpx.HTTPTransport, "handle_request", return_value=mock_response
+            ):
+                result = transport.handle_request(request)
+
+        assert result is mock_response
+
+    def test_transport_blocks_redirect_to_private_ip_literal(self):
+        """Redirect targets with private IP literals are blocked by the transport.
+        httpx calls handle_request for each redirect hop, so the guard applies."""
+        transport = _SSRFGuardTransport()
+        # Simulate httpx presenting the redirect target URL to the transport.
+        redirect_request = httpx.Request(
+            "GET", "http://169.254.169.254/latest/meta-data/"
+        )
+
+        with patch("socket.getaddrinfo") as mock_dns:
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(redirect_request)
+
+        mock_dns.assert_not_called()
+
+    def test_transport_blocks_redirect_to_private_hostname(self):
+        """Redirect targets resolving to private IPs are blocked by the transport."""
+        transport = _SSRFGuardTransport()
+        mock_infos = [(2, 1, 6, "", ("10.0.0.1", 80))]
+        redirect_request = httpx.Request("GET", "http://internal.corp/sensitive")
+
+        with patch("socket.getaddrinfo", return_value=mock_infos):
+            with pytest.raises(ValueError, match="private/reserved"):
+                transport.handle_request(redirect_request)
