@@ -467,9 +467,7 @@ class OpenTelemetryV2(CustomLogger):
         )
         return data
 
-    def emit_guardrail_span(
-        self, entry: "StandardLoggingGuardrailInformation"
-    ) -> None:
+    def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
         # Emitted by the guardrail-recording code the moment a guardrail finishes,
         # not from a post-call hook — that hook does not fire on every path (a
         # pass-through request that passes its guardrails never reaches it), which
