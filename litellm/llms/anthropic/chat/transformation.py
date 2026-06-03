@@ -29,6 +29,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -679,6 +680,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _input_schema["type"] = "object"
                 if "properties" not in _input_schema:
                     _input_schema["properties"] = {}
+
+            # Inline legacy / OpenAPI $refs before the allow-list filter strips
+            # their backing def blocks (https://github.com/BerriAI/litellm/issues/26692).
+            _input_schema = unpack_legacy_defs(_input_schema, copy=True)
 
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {

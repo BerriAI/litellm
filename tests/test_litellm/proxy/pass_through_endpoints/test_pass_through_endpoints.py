@@ -520,6 +520,64 @@ def test_add_subpath_route():
 
 
 @pytest.mark.asyncio
+async def test_pass_through_handler_rejects_unregistered_method():
+    """
+    Stale FastAPI routes can remain after an endpoint is updated from all methods
+    to a restricted method list. The handler must enforce the current registry.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_route,
+    )
+
+    endpoint_func = create_pass_through_route(
+        endpoint="/test/path",
+        target="http://example.com",
+    )
+    request = MagicMock(spec=Request)
+    request.method = "GET"
+
+    with (
+        patch.dict(os.environ, {"SERVER_ROOT_PATH": ""}),
+        patch(
+            "litellm.proxy.auth.auth_utils.get_request_route",
+            return_value="/test/path",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._parse_request_data_by_content_type",
+            new_callable=AsyncMock,
+            return_value=({}, {}, None, False),
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            {
+                "test-endpoint-id:exact:/test/path:POST": {
+                    "endpoint_id": "test-endpoint-id",
+                    "path": "/test/path",
+                    "type": "exact",
+                    "methods": ["POST"],
+                    "passthrough_params": {
+                        "target": "http://example.com",
+                        "custom_headers": {},
+                        "forward_headers": False,
+                        "merge_query_params": False,
+                    },
+                }
+            },
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            await endpoint_func(
+                request=request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(),
+            )
+
+    assert exc_info.value.status_code == 405
+
+
+@pytest.mark.asyncio
 async def test_initialize_pass_through_endpoints_with_include_subpath():
     """
     Test that initialize_pass_through_endpoints adds wildcard routes when include_subpath is True
@@ -993,6 +1051,131 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
 
 
 @pytest.mark.asyncio
+async def test_pass_through_request_streaming_marks_logging_obj_as_stream():
+    """
+    Regression: a streaming pass-through request must flag its logging object as
+    streaming (logging_obj.stream and model_call_details["stream"]) before the
+    response is dispatched, so cost/success callbacks treat it as a stream and the
+    streaming dedup guard fires instead of double-logging.
+    """
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
+            ) as mock_chunk_processor:
+                mock_proxy_logging.pre_call_hook = AsyncMock(
+                    return_value={"model": "claude-3", "stream": True}
+                )
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+                upstream_response = MagicMock()
+                upstream_response.status_code = 200
+                upstream_response.headers = {}
+                upstream_response.raise_for_status = MagicMock()
+
+                async_client = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                async def _empty_chunks(*args, **kwargs):
+                    return
+                    yield  # pragma: no cover
+
+                mock_chunk_processor.return_value = _empty_chunks()
+
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "POST"
+                mock_request.url = "http://test-proxy.com/v1/messages"
+                mock_request.body = AsyncMock(
+                    return_value=b'{"model": "claude-3", "stream": true}'
+                )
+                mock_request.headers = Headers({})
+                mock_request.query_params = QueryParams({})
+
+                await pass_through_request(
+                    request=mock_request,
+                    target="http://target-api.com/v1/messages",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=True,
+                )
+
+                async_client.send.assert_awaited_once()
+                assert async_client.send.call_args.kwargs["stream"] is True
+
+                mock_chunk_processor.assert_called_once()
+                logging_obj = mock_chunk_processor.call_args.kwargs[
+                    "litellm_logging_obj"
+                ]
+                assert logging_obj.stream is True
+                assert logging_obj.model_call_details["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_sse_response_marks_logging_obj_as_stream():
+    """
+    Regression: a request that is not flagged as streaming up front but whose
+    upstream response comes back as an SSE stream (content-type text/event-stream)
+    must still flag its logging object as streaming before dispatch. Otherwise the
+    cost/success callbacks treat the assembled stream as a non-stream and the dedup
+    guard never fires, double-logging the request.
+    """
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.PassThroughStreamingHandler.chunk_processor"
+            ) as mock_chunk_processor:
+                mock_proxy_logging.pre_call_hook = AsyncMock(
+                    return_value={"model": "claude-3"}
+                )
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+
+                upstream_response = MagicMock()
+                upstream_response.status_code = 200
+                upstream_response.headers = {"content-type": "text/event-stream"}
+                upstream_response.raise_for_status = MagicMock()
+
+                async_client = MagicMock()
+                async_client.request = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                async def _empty_chunks(*args, **kwargs):
+                    return
+                    yield  # pragma: no cover
+
+                mock_chunk_processor.return_value = _empty_chunks()
+
+                mock_request = MagicMock(spec=Request)
+                mock_request.method = "POST"
+                mock_request.url = "http://test-proxy.com/v1/messages"
+                mock_request.body = AsyncMock(return_value=b'{"model": "claude-3"}')
+                mock_request.headers = Headers({})
+                mock_request.query_params = QueryParams({})
+
+                await pass_through_request(
+                    request=mock_request,
+                    target="http://target-api.com/v1/messages",
+                    custom_headers={},
+                    user_api_key_dict=MagicMock(),
+                    stream=False,
+                )
+
+                async_client.request.assert_awaited_once()
+
+                mock_chunk_processor.assert_called_once()
+                logging_obj = mock_chunk_processor.call_args.kwargs[
+                    "litellm_logging_obj"
+                ]
+                assert logging_obj.stream is True
+                assert logging_obj.model_call_details["stream"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_pass_through_endpoint():
     """
     Test creating a new pass-through endpoint
@@ -1169,6 +1352,256 @@ async def test_update_pass_through_endpoint():
             assert updated_data["id"] == existing_endpoint_id
             assert updated_data["target"] == "http://newapi.com/v2"
             assert updated_data["cost_per_request"] == 0.75
+
+
+@pytest.mark.asyncio
+async def test_create_pass_through_endpoint_auth_true_enforces_allowlist():
+    """
+    Regression: a pass-through endpoint created through the management API with
+    auth=true (the model default) must be treated as allowlist-enforced. The
+    create path registers FastAPI routes with dependencies=None, so deriving
+    enforcement from dependency metadata let a key with broad llm_api_routes
+    access call the route without an allowed_passthrough_routes match.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_endpoints,
+    )
+
+    registry: dict = {}
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings"),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            registry,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=[]
+        )
+
+        # auth is not passed -> defaults to True on PassThroughGenericEndpoint
+        endpoint = PassThroughGenericEndpoint(
+            path="/secure-passthrough",
+            target="http://example.com/api",
+            methods=["POST"],
+        )
+        await create_pass_through_endpoints(
+            data=endpoint,
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert any(value.get("auth") is True for value in registry.values())
+        assert (
+            RouteChecks.is_auth_enforced_pass_through_route(
+                route="/secure-passthrough", method="POST"
+            )
+            is True
+        )
+
+        post_request = MagicMock(spec=Request)
+        post_request.method = "POST"
+
+        without_allowlist = UserAPIKeyAuth(
+            user_id="u", allowed_routes=["llm_api_routes"]
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/secure-passthrough",
+                valid_token=without_allowlist,
+                request=post_request,
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in exc_info.value.detail
+
+        with_allowlist = UserAPIKeyAuth(
+            user_id="u",
+            allowed_routes=["llm_api_routes"],
+            metadata={"allowed_passthrough_routes": ["/secure-passthrough"]},
+        )
+        assert (
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/secure-passthrough",
+                valid_token=with_allowlist,
+                request=post_request,
+            )
+            is True
+        )
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_auth_true_enforces_allowlist():
+    """
+    Regression: editing a pass-through endpoint through the management API must
+    keep an auth=true route allowlist-enforced. remove_endpoint_routes drops the
+    old registry entry, so the re-registration has to record the auth flag.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    registry: dict = {}
+    existing_endpoint_id = "edit-me-123"
+    existing_endpoints = [
+        {
+            "id": existing_endpoint_id,
+            "path": "/edited-passthrough",
+            "target": "http://example.com/api",
+            "auth": True,
+            "methods": ["POST"],
+        }
+    ]
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings"),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            registry,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=existing_endpoints
+        )
+
+        update_data = PassThroughGenericEndpoint(
+            path="/edited-passthrough",
+            target="http://newapi.com/v2",
+            methods=["POST"],
+        )
+        await update_pass_through_endpoints(
+            endpoint_id=existing_endpoint_id,
+            data=update_data,
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert (
+            RouteChecks.is_auth_enforced_pass_through_route(
+                route="/edited-passthrough", method="POST"
+            )
+            is True
+        )
+
+        post_request = MagicMock(spec=Request)
+        post_request.method = "POST"
+
+        without_allowlist = UserAPIKeyAuth(
+            user_id="u", allowed_routes=["llm_api_routes"]
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            RouteChecks.is_virtual_key_allowed_to_call_route(
+                route="/edited-passthrough",
+                valid_token=without_allowlist,
+                request=post_request,
+            )
+        assert exc_info.value.status_code == 403
+        assert "allowed_passthrough_routes" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_preserves_auth_false():
+    """
+    Regression: editing an unrelated field on an auth=false pass-through must not
+    silently flip it to auth=true. auth defaults to True on the request model, so a
+    naive exclude_none merge would overwrite the stored auth=false and start
+    rejecting every team/key that lacks allowed_passthrough_routes.
+    """
+    from litellm.proxy._types import (
+        ConfigFieldInfo,
+        PassThroughGenericEndpoint,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    registry: dict = {}
+    existing_endpoint_id = "public-forwarder-123"
+    existing_endpoints = [
+        {
+            "id": existing_endpoint_id,
+            "path": "/public-passthrough",
+            "target": "http://example.com/api",
+            "auth": False,
+            "methods": ["POST"],
+        }
+    ]
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.get_config_general_settings"
+        ) as mock_get_config,
+        patch(
+            "litellm.proxy.proxy_server.update_config_general_settings"
+        ) as mock_update_config,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
+            registry,
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            return_value="/",
+        ),
+    ):
+        mock_get_config.return_value = ConfigFieldInfo(
+            field_name="pass_through_endpoints", field_value=existing_endpoints
+        )
+
+        update_data = PassThroughGenericEndpoint(
+            path="/public-passthrough",
+            target="http://newapi.com/v2",
+            methods=["POST"],
+        )
+        result = await update_pass_through_endpoints(
+            endpoint_id=existing_endpoint_id,
+            data=update_data,
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert result.endpoints[0].auth is False
+
+        persisted = mock_update_config.call_args[1]["data"].field_value[0]
+        assert persisted["auth"] is False
+
+        assert (
+            RouteChecks.is_auth_enforced_pass_through_route(
+                route="/public-passthrough", method="POST"
+            )
+            is False
+        )
 
 
 @pytest.mark.asyncio
