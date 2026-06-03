@@ -28,10 +28,13 @@ from mcp.types import Tool as MCPTool
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
+    _deserialize_json_list,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPApprovalStatus,
+    MCPEnvVar,
+    MCPEnvVarScope,
     MCPTransport,
 )
 from litellm.types.mcp import MCPAuth
@@ -3048,6 +3051,55 @@ class TestMCPServerTimestamps:
 
         assert rebuilt_table.created_at == created
         assert rebuilt_table.updated_at == updated
+
+    def test_deserialize_json_list_normalizes_pydantic_models(self):
+        """Prisma hydrates the ``env_vars`` JSON column into ``MCPEnvVar`` models;
+        ``_deserialize_json_list`` must hand back plain dicts so ``MCPServer``
+        (typed ``List[Dict[str, Any]]``) validates."""
+        env_vars = [
+            MCPEnvVar(name="GITHUB_TOKEN", scope=MCPEnvVarScope.user, description="PAT"),
+            MCPEnvVar(name="REGION", value="us-east-1", scope=MCPEnvVarScope.global_),
+        ]
+        result = _deserialize_json_list(env_vars)
+        assert result is not None
+        assert all(isinstance(item, dict) for item in result)
+        assert result[0]["name"] == "GITHUB_TOKEN"
+        assert result[0]["scope"] == "user"
+        assert result[1]["value"] == "us-east-1"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_with_model_env_vars(self):
+        """Regression: a DB row whose ``env_vars`` is a list of ``MCPEnvVar``
+        models (as Prisma returns) must build into an ``MCPServer`` instead of
+        raising a Pydantic ``dict_type`` validation error that silently drops
+        the server from the registry."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="env-var-server-1",
+            server_name="github_peruser",
+            url="https://api.githubcopilot.com/mcp/",
+            transport=MCPTransport.http,
+            static_headers={"Authorization": "Bearer ${GITHUB_TOKEN}"},
+            env_vars=[
+                MCPEnvVar(
+                    name="GITHUB_TOKEN",
+                    scope=MCPEnvVarScope.user,
+                    description="Your personal GitHub PAT",
+                )
+            ],
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.env_vars == [
+            {
+                "name": "GITHUB_TOKEN",
+                "value": "",
+                "scope": "user",
+                "description": "Your personal GitHub PAT",
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_round_trip_source_url_preserved(self):
