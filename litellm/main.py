@@ -3827,9 +3827,8 @@ def completion(  # type: ignore # noqa: PLR0915
             if passed_api_base is None or api_key:
                 api_key = (
                     api_key
-                    or litellm.api_key
                     or litellm.inception_key
-                    or get_secret("INCEPTION_API_KEY")
+                    or get_secret_str("INCEPTION_API_KEY")
                 )
 
             _response = openai_text_completions.completion(

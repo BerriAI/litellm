@@ -217,6 +217,39 @@ def test_inception_fim_targets_fim_endpoint():
     assert response.choices[0].text == "a + b"
 
 
+def test_inception_fim_does_not_leak_global_api_key():
+    """
+    Regression: the global litellm.api_key (commonly an OpenAI key) must not be
+    forwarded to Inception. Only an Inception-specific key (param,
+    litellm.inception_key, or INCEPTION_API_KEY) may be sent to the Inception base.
+    """
+
+    captured = {}
+
+    def fake_send(self, request, **kwargs):
+        captured["auth"] = request.headers.get("authorization")
+        return httpx.Response(
+            status_code=200,
+            request=request,
+            headers={"content-type": "application/json"},
+            content=_fim_response_bytes(),
+        )
+
+    with mock.patch.dict(
+        os.environ, {"INCEPTION_API_KEY": "sk-inception-correct"}, clear=True
+    ):
+        with mock.patch.object(litellm, "inception_key", None):
+            with mock.patch.object(litellm, "api_key", "sk-global-should-not-leak"):
+                with mock.patch("httpx.Client.send", new=fake_send):
+                    litellm.text_completion(
+                        model="text-completion-inception/mercury-edit-2",
+                        prompt="def add(a, b): return ",
+                        max_tokens=10,
+                    )
+
+    assert captured["auth"] == "Bearer sk-inception-correct"
+
+
 def test_inception_fim_extra_body_forwards_vllm_params():
     """top_k / repetition_penalty are reachable via extra_body (not OpenAI params)"""
 
