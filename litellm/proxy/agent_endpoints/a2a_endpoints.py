@@ -8,6 +8,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 import json
 from typing import Any, Dict, List, Optional
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -65,6 +66,39 @@ def _enforce_inbound_trace_id(agent: Any, request: Request) -> None:
                 "on all inbound requests."
             ),
         )
+
+
+async def _forward_jsonrpc(
+    agent_url: str,
+    body: dict,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> dict:
+    headers = {"Content-Type": "application/json", **(extra_headers or {})}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        resp = await client.post(agent_url, json=body, headers=headers)
+        resp.raise_for_status()
+        return resp.json()
+
+
+async def _forward_jsonrpc_sse(
+    agent_url: str,
+    body: dict,
+    extra_headers: Optional[Dict[str, str]] = None,
+) -> StreamingResponse:
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        **(extra_headers or {}),
+    }
+
+    async def stream_events():
+        async with httpx.AsyncClient(timeout=None) as client:
+            async with client.stream("POST", agent_url, json=body, headers=headers) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    yield line + "\n"
+
+    return StreamingResponse(stream_events(), media_type="text/event-stream")
 
 
 async def _handle_stream_message(
@@ -310,8 +344,6 @@ async def invoke_agent_a2a(  # noqa: PLR0915
     - message/send: Send a message and get a response
     - message/stream: Send a message and stream the response
     """
-    from litellm.a2a_protocol import asend_message
-    from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
     )
@@ -338,7 +370,21 @@ async def invoke_agent_a2a(  # noqa: PLR0915
         method = body.get("method")
         params = body.get("params", {})
 
-        if params:
+        # Normalize PascalCase aliases to the canonical slash-style wire format
+        _PASCAL_TO_WIRE = {
+            "GetTask": "tasks/get",
+            "ListTasks": "tasks/list",
+            "CancelTask": "tasks/cancel",
+            "SubscribeToTask": "tasks/resubscribe",
+            "CreateTaskPushNotificationConfig": "tasks/pushNotificationConfig/set",
+            "GetTaskPushNotificationConfig": "tasks/pushNotificationConfig/get",
+            "ListTaskPushNotificationConfigs": "tasks/pushNotificationConfig/list",
+            "DeleteTaskPushNotificationConfig": "tasks/pushNotificationConfig/delete",
+            "GetExtendedAgentCard": "agent/getAuthenticatedExtendedCard",
+        }
+        method = _PASCAL_TO_WIRE.get(method, method)
+
+        if params and method in {"message/send", "message/stream"}:
             # extract any litellm params from the params - eg. 'guardrails'
             # ``metadata`` is intentionally excluded: it's a first-class A2A
             # ``MessageSendParams`` field that the completion bridge forwards
@@ -352,14 +398,6 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                     body[key] = value
             for key in params_to_remove:
                 params.pop(key)
-
-        if not A2A_SDK_AVAILABLE:
-            return _jsonrpc_error(
-                request_id,
-                -32603,
-                "Server error: 'a2a' package not installed. Please install 'a2a-sdk'.",
-                500,
-            )
 
         # Find the agent
         agent = _get_agent(agent_id)
@@ -489,6 +527,16 @@ async def invoke_agent_a2a(  # noqa: PLR0915
 
         # Route through SDK functions
         if method == "message/send":
+            from litellm.a2a_protocol import asend_message
+            from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
+
+            if not A2A_SDK_AVAILABLE:
+                return _jsonrpc_error(
+                    request_id,
+                    -32603,
+                    "Server error: 'a2a' package not installed. Please install 'a2a-sdk'.",
+                    500,
+                )
             from a2a.types import MessageSendParams, SendMessageRequest
 
             a2a_request = SendMessageRequest(
@@ -543,6 +591,50 @@ async def invoke_agent_a2a(  # noqa: PLR0915
                 request_data=data,
                 proxy_logging_obj=proxy_logging_obj,
             )
+        elif method in {
+            "tasks/get",
+            "tasks/list",
+            "tasks/cancel",
+            "tasks/pushNotificationConfig/set",
+            "tasks/pushNotificationConfig/get",
+            "tasks/pushNotificationConfig/list",
+            "tasks/pushNotificationConfig/delete",
+        }:
+            if not agent_url:
+                return _jsonrpc_error(
+                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
+                )
+            forward_body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            result = await _forward_jsonrpc(
+                agent_url, forward_body, extra_headers=agent_extra_headers
+            )
+            return JSONResponse(content=result)
+
+        elif method == "tasks/resubscribe":
+            if not agent_url:
+                return _jsonrpc_error(
+                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
+                )
+            forward_body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            return await _forward_jsonrpc_sse(
+                agent_url, forward_body, extra_headers=agent_extra_headers
+            )
+
+        elif method == "agent/getAuthenticatedExtendedCard":
+            if not agent_url:
+                return _jsonrpc_error(
+                    request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
+                )
+            forward_body = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            result = await _forward_jsonrpc(
+                agent_url, forward_body, extra_headers=agent_extra_headers
+            )
+            if isinstance(result.get("result"), dict) and "url" in result["result"]:
+                result["result"]["url"] = (
+                    f"{str(request.base_url).rstrip('/')}/a2a/{agent_id}"
+                )
+            return JSONResponse(content=result)
+
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")
 
