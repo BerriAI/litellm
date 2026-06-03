@@ -4400,3 +4400,51 @@ def test_delete_team_wildcard_removes_empty_team_router():
     router.delete_deployment(id=model_id)
 
     assert team_id not in router.team_pattern_routers
+
+
+def test_remove_deployment_from_wildcard_state_cleans_all_three_structures():
+    """
+    Pin the contract of Router._remove_deployment_from_wildcard_state: a single
+    call must strip model_id from the global pattern router, from every per-team
+    pattern router (dropping the team entry when its router empties out), and
+    from provider_default_deployment_ids. Exercised directly so the helper's
+    behavior is locked in independently of the upsert/delete code paths.
+    """
+    from litellm.router_utils.pattern_match_deployments import PatternMatchRouter
+
+    router, _ = _build_wildcard_router(api_key="key-A")
+    model_id = "wildcard-deployment-1"
+
+    router.team_pattern_routers["team-x"] = PatternMatchRouter()
+    router.team_pattern_routers["team-x"].add_pattern(
+        "openai/team-x-*",
+        {
+            "model_name": "openai/team-x-*",
+            "litellm_params": {"model": "openai/*", "api_key": "key-A"},
+            "model_info": {"id": model_id},
+        },
+    )
+    assert router.pattern_router.patterns
+    assert "team-x" in router.team_pattern_routers
+    assert model_id in router.provider_default_deployment_ids
+
+    router._remove_deployment_from_wildcard_state(model_id=model_id)
+
+    assert router.pattern_router.patterns == {}
+    assert "team-x" not in router.team_pattern_routers
+    assert model_id not in router.provider_default_deployment_ids
+
+
+def test_remove_deployment_from_wildcard_state_is_noop_for_empty_id():
+    """
+    A falsy model_id must not touch any wildcard-routing state; otherwise an
+    accidental empty-string call could wipe deployments that lack model_info.id.
+    """
+    router, _ = _build_wildcard_router(api_key="key-A")
+    snapshot_patterns = {k: list(v) for k, v in router.pattern_router.patterns.items()}
+    snapshot_ids = list(router.provider_default_deployment_ids)
+
+    router._remove_deployment_from_wildcard_state(model_id="")
+
+    assert router.pattern_router.patterns == snapshot_patterns
+    assert router.provider_default_deployment_ids == snapshot_ids
