@@ -2163,8 +2163,14 @@ if MCP_AVAILABLE:
         *,
         server: LiteLLM_MCPServerTable,
         stored_values: Dict[str, str],
+        include_values: bool = True,
     ) -> MCPUserEnvVarsStatus:
-        """Build a status object for one server given the user's stored values."""
+        """Build a status object for one server given the user's stored values.
+
+        ``include_values=False`` omits the stored credential values from the
+        response (the bulk status feed only needs ``is_set`` for the dashboard
+        badge, so there's no reason to echo secrets back across every server).
+        """
         _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
 
         # Limit "required" to vars that are actually referenced by static_headers.
@@ -2193,7 +2199,7 @@ if MCP_AVAILABLE:
                 MCPUserEnvVarSpec(
                     name=name,
                     description=spec.get("description"),
-                    value=value,
+                    value=value if include_values else None,
                     is_set=is_set,
                 )
             )
@@ -2333,7 +2339,7 @@ if MCP_AVAILABLE:
         for server in accessible:
             stored = stored_bulk.get(server.server_id, {})
             status_obj = _compute_user_env_var_status(
-                server=server, stored_values=stored
+                server=server, stored_values=stored, include_values=False
             )
             if status_obj.required:
                 statuses.append(status_obj)

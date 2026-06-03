@@ -59,7 +59,7 @@ const EnvVarsSection: React.FC = () => {
             {fields.length > 0 && (
               <div className="flex gap-3 px-1 text-xs font-medium text-gray-500 uppercase tracking-wide">
                 <div style={{ flex: 1 }}>Variable Name</div>
-                <div style={{ flex: 1 }}>Value</div>
+                <div style={{ flex: 1 }}>Value / Description</div>
                 <div style={{ width: 160 }}>Scope</div>
                 <div style={{ width: 24 }} />
               </div>
@@ -84,15 +84,9 @@ const EnvVarsSection: React.FC = () => {
                     className="rounded-md font-mono"
                   />
                 </Form.Item>
-                <Form.Item
-                  {...restField}
-                  name={[name, "value"]}
-                  className="mb-0"
-                  style={{ flex: 1 }}
-                  shouldUpdate
-                >
-                  <ValueField fieldName={name} />
-                </Form.Item>
+                <div style={{ flex: 1 }}>
+                  <ScopedValueOrDescription name={name} restField={restField} />
+                </div>
                 <Form.Item
                   {...restField}
                   name={[name, "scope"]}
@@ -128,23 +122,28 @@ const EnvVarsSection: React.FC = () => {
   );
 };
 
-// Disables the value field when scope=user (those values come from each
-// user later), keeping the column visible so the row layout stays consistent.
-const ValueField: React.FC<{
-  fieldName: number;
-  value?: string;
-  onChange?: (v: string) => void;
-}> = ({ fieldName, value, onChange }) => {
-  const scope = Form.useWatch(["env_vars", fieldName, "scope"]);
-  const isPerUser = scope === "user";
+// For instance-scoped vars this column holds the admin value. For per-user
+// vars the value comes from each user later, so the column instead captures an
+// optional description that the per-user fill-in modal shows as a hint.
+const ScopedValueOrDescription: React.FC<{
+  name: number;
+  restField: object;
+}> = ({ name, restField }) => {
+  const isPerUser = Form.useWatch(["env_vars", name, "scope"]) === "user";
+  if (isPerUser) {
+    return (
+      <Form.Item {...restField} name={[name, "description"]} className="mb-0">
+        <Input
+          placeholder="Description shown to users, e.g. Your DB username"
+          className="rounded-md"
+        />
+      </Form.Item>
+    );
+  }
   return (
-    <Input
-      value={value ?? ""}
-      onChange={(e) => onChange?.(e.target.value)}
-      placeholder={isPerUser ? "Defined per user" : "e.g. postgresql"}
-      disabled={isPerUser}
-      className="rounded-md font-mono"
-    />
+    <Form.Item {...restField} name={[name, "value"]} className="mb-0">
+      <Input placeholder="e.g. postgresql" className="rounded-md font-mono" />
+    </Form.Item>
   );
 };
 

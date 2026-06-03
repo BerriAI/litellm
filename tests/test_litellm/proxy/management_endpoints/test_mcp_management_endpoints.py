@@ -3491,6 +3491,10 @@ class TestGetMCPUserEnvVars:
         assert result.server_id == "srv-1"
         assert result.missing_count == 1
         assert {s.name for s in result.required} == {"CORP_USERNAME", "CORP_PASSWORD"}
+        # The single-server endpoint backs the fill-in modal, so it must echo the
+        # already-stored value back for pre-population.
+        by_name = {s.name: s for s in result.required}
+        assert by_name["CORP_USERNAME"].value == "alice"
 
     @pytest.mark.asyncio
     async def test_missing_user_id_raises_400(self):
@@ -3729,6 +3733,39 @@ class TestListMCPUserEnvVarStatus:
             )
         assert [s.server_id for s in result] == ["srv-with"]
         assert result[0].missing_count == 1
+
+    @pytest.mark.asyncio
+    async def test_bulk_status_omits_stored_credential_values(self):
+        """The bulk feed only drives the "fields missing" badge, so it must not
+        echo stored credential values back; is_set still reflects presence."""
+        server = _make_env_var_server(
+            server_id="srv-with",
+            env_vars=_ENV_VARS_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_all_mcp_servers_for_user",
+                AsyncMock(return_value=[server]),
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_env_vars_bulk",
+                AsyncMock(return_value={"srv-with": {"CORP_USERNAME": "alice"}}),
+            ),
+        ):
+            result = await mgmt_endpoints.list_mcp_user_env_var_status(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice")
+            )
+        by_name = {s.name: s for s in result[0].required}
+        assert by_name["CORP_USERNAME"].is_set is True
+        assert by_name["CORP_USERNAME"].value is None
+        assert by_name["CORP_PASSWORD"].is_set is False
+        assert by_name["CORP_PASSWORD"].value is None
 
 
 class TestMCPUserEnvVarsAccessControl:
