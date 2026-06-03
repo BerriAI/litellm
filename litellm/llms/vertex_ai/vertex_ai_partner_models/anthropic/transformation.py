@@ -106,7 +106,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
-        sanitize_vertex_anthropic_output_params(data)
+        sanitize_vertex_anthropic_output_params(data, model)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
