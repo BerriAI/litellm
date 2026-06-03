@@ -283,13 +283,14 @@ class GeminiVideoConfig(BaseVideoConfig):
 
         params_copy = video_create_optional_request_params.copy()
 
-        if "image" in params_copy and params_copy["image"] is not None:
+        if "image" in params_copy:
             image = params_copy.pop("image")
-            if isinstance(image, dict):
-                image_data = image
-            else:
-                image_data = _convert_image_to_gemini_format(image)
-            instance["image"] = image_data
+            if image is not None:
+                if isinstance(image, dict):
+                    image_data = image
+                else:
+                    image_data = _convert_image_to_gemini_format(image)
+                instance["image"] = image_data
 
         parameters = GeminiVideoGenerationParameters(**params_copy)
 
