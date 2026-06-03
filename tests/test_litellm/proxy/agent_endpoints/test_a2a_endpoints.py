@@ -1349,3 +1349,60 @@ async def test_push_notification_config_set_rejects_null_push_config():
 
     assert exc_info.value.status_code == 400
     assert "pushNotificationConfig must be an object" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_caller_identity_headers_cannot_be_spoofed_via_forwarded_headers():
+    """A client must not be able to override X-LiteLLM-User-Id / X-LiteLLM-Team-Id
+    by including x-a2a-<agent>-x-litellm-user-id in their request headers.
+    The authenticated identity must always win."""
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    upstream_response = {
+        "jsonrpc": "2.0",
+        "id": "req-1",
+        "result": {"id": "task-1", "status": {"state": "completed"}},
+    }
+    agent = _make_agent_mock()
+    mock_request = _make_request_mock("tasks/get", {"id": "task-1"})
+    mock_request.headers = {
+        "x-a2a-test-agent-x-litellm-user-id": "attacker-user",
+        "x-a2a-test-agent-x-litellm-team-id": "attacker-team",
+    }
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="sk-test", user_id="real-user", team_id="real-team"
+    )
+
+    mock_http_response = MagicMock()
+    mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+
+    with ExitStack() as stack:
+        for p in _base_patches(agent):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch(
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
+            )
+        )
+
+        from litellm.proxy.agent_endpoints.a2a_endpoints import invoke_agent_a2a
+
+        await invoke_agent_a2a(
+            agent_id="test-agent",
+            request=mock_request,
+            fastapi_response=MagicMock(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    posted_headers = mock_handler.post.call_args.kwargs.get("headers") or {}
+    assert (
+        posted_headers.get("X-LiteLLM-User-Id") == "real-user"
+    ), "authenticated user id must not be overridden by forwarded client headers"
+    assert (
+        posted_headers.get("X-LiteLLM-Team-Id") == "real-team"
+    ), "authenticated team id must not be overridden by forwarded client headers"

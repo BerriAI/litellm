@@ -61,14 +61,22 @@ def _forwarding_headers(
     request_data: dict,
     agent_extra_headers: Optional[Dict[str, str]],
 ) -> Optional[Dict[str, str]]:
-    dynamic_headers = _caller_identity_headers(user_api_key_dict)
+    sanitized = (
+        {
+            k: v
+            for k, v in agent_extra_headers.items()
+            if not k.lower().startswith("x-litellm-")
+        }
+        if agent_extra_headers
+        else None
+    )
+    merged = merge_agent_headers(dynamic_headers=sanitized, static_headers=None) or {}
+    identity = _caller_identity_headers(user_api_key_dict)
     trace_id = request_data.get("litellm_trace_id")
     if trace_id:
-        dynamic_headers["X-LiteLLM-Trace-Id"] = str(trace_id)
-    return merge_agent_headers(
-        dynamic_headers=dynamic_headers or None,
-        static_headers=agent_extra_headers or None,
-    )
+        identity["X-LiteLLM-Trace-Id"] = str(trace_id)
+    merged.update(identity)
+    return merged or None
 
 
 def _jsonrpc_error(
