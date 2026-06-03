@@ -11539,3 +11539,218 @@ async def test_ghsa_q775_admin_bypasses_budget_ceiling():
             litellm_changed_by=None,
         )
         assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_key_info_aggregates_model_spend_from_spend_logs(monkeypatch):
+    """/key/info overwrites the empty model_spend column with the per-model sum
+    from LiteLLM_SpendLogs over the last 30 days.
+
+    Regression test for the case where the verification-token row's model_spend
+    JSON column is no longer written by the runtime spend pipeline (orphaned
+    after the spend-queue refactor), so the endpoint computes it from spend logs
+    at read time.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+    from litellm.proxy.utils import _hash_token_if_needed
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    input_key = "sk-test-aggregate"
+    expected_hashed_token = _hash_token_if_needed(token=input_key)
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = expected_hashed_token
+    mock_key_info.model_dump.return_value = {
+        "token": expected_hashed_token,
+        "user_id": "user-aggregate",
+        "team_id": None,
+        "spend": 12.34,
+        "model_spend": {},
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+
+    group_by_mock = AsyncMock(
+        return_value=[
+            {"model": "claude-3-5-sonnet", "_sum": {"spend": 7.25}},
+            {"model": "gpt-4o", "_sum": {"spend": 5.09}},
+            {"model": "", "_sum": {"spend": 0.10}},
+        ]
+    )
+    mock_prisma_client.db.litellm_spendlogs.group_by = group_by_mock
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=input_key,
+    )
+
+    result = await info_key_fn(
+        key=input_key,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["info"]["model_spend"] == {
+        "claude-3-5-sonnet": 7.25,
+        "gpt-4o": 5.09,
+    }
+    assert group_by_mock.call_args.kwargs["where"]["api_key"] == expected_hashed_token
+
+
+@pytest.mark.asyncio
+async def test_key_info_model_spend_empty_when_no_logs(monkeypatch):
+    """/key/info returns model_spend: {} when the key has no spend-log entries
+    in the 30-day window — the row's stored value is also {}, so the response
+    surface is unchanged for new keys."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+    from litellm.proxy.utils import _hash_token_if_needed
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    input_key = "sk-test-empty"
+    expected_hashed_token = _hash_token_if_needed(token=input_key)
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = expected_hashed_token
+    mock_key_info.model_dump.return_value = {
+        "token": expected_hashed_token,
+        "user_id": "user-empty",
+        "team_id": None,
+        "spend": 0.0,
+        "model_spend": {},
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    group_by_mock = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_spendlogs.group_by = group_by_mock
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=input_key,
+    )
+
+    result = await info_key_fn(
+        key=input_key,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["info"]["model_spend"] == {}
+    assert group_by_mock.call_args.kwargs["where"]["api_key"] == expected_hashed_token
+
+
+@pytest.mark.asyncio
+async def test_key_info_falls_back_when_spend_logs_query_fails(monkeypatch):
+    """/key/info must not 500 when the spend-logs aggregation fails. The DB
+    row's stored model_spend value is preserved as a graceful fallback, and the
+    rest of the key info still surfaces (auth/budget callers must keep working)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+    from litellm.proxy.utils import _hash_token_if_needed
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    input_key = "sk-test-fail"
+    expected_hashed_token = _hash_token_if_needed(token=input_key)
+    stored_model_spend = {"stale-model": 99.99}
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = expected_hashed_token
+    mock_key_info.model_dump.return_value = {
+        "token": expected_hashed_token,
+        "user_id": "user-fail",
+        "team_id": None,
+        "spend": 1.0,
+        "model_spend": stored_model_spend,
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    group_by_mock = AsyncMock(
+        side_effect=Exception("simulated DB outage on LiteLLM_SpendLogs")
+    )
+    mock_prisma_client.db.litellm_spendlogs.group_by = group_by_mock
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=input_key,
+    )
+
+    result = await info_key_fn(
+        key=input_key,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["info"]["spend"] == 1.0
+    assert result["info"]["model_spend"] == stored_model_spend
+    assert group_by_mock.call_args.kwargs["where"]["api_key"] == expected_hashed_token
+
+
+@pytest.mark.asyncio
+async def test_key_info_aggregation_uses_30_day_window(monkeypatch):
+    """The spend-logs aggregation must scope to the last 30 days, matching the
+    Last30dKeysBySpend view that backs the per-key UI chart."""
+    from datetime import datetime, timedelta, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LiteLLM_VerificationToken
+    from litellm.proxy.management_endpoints.key_management_endpoints import info_key_fn
+    from litellm.proxy.utils import _hash_token_if_needed
+
+    mock_prisma_client = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    input_key = "sk-test-window"
+    expected_hashed_token = _hash_token_if_needed(token=input_key)
+    mock_key_info = MagicMock(spec=LiteLLM_VerificationToken)
+    mock_key_info.token = expected_hashed_token
+    mock_key_info.model_dump.return_value = {
+        "token": expected_hashed_token,
+        "user_id": "user-window",
+        "team_id": None,
+        "spend": 0.0,
+        "model_spend": {},
+        "object_permission_id": None,
+        "litellm_budget_table": None,
+    }
+    mock_key_info.dict.return_value = mock_key_info.model_dump.return_value
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=mock_key_info
+    )
+    group_by_mock = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_spendlogs.group_by = group_by_mock
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key=input_key,
+    )
+
+    before = datetime.now(timezone.utc)
+    await info_key_fn(key=input_key, user_api_key_dict=user_api_key_dict)
+    after = datetime.now(timezone.utc)
+
+    group_by_mock.assert_called_once()
+    where_arg = group_by_mock.call_args.kwargs["where"]
+    assert where_arg["api_key"] == expected_hashed_token
+    window_start = where_arg["startTime"]["gte"]
+    assert before - timedelta(days=30) <= window_start <= after - timedelta(days=30)
+    assert group_by_mock.call_args.kwargs["by"] == ["model"]
+    assert group_by_mock.call_args.kwargs["sum"] == {"spend": True}
