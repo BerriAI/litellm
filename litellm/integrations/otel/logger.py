@@ -25,7 +25,6 @@ from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
-    guardrail_entries_from_request_data,
     model_from_request_data,
 )
 from litellm.integrations.otel.model.payloads import (
@@ -468,46 +467,27 @@ class OpenTelemetryV2(CustomLogger):
         )
         return data
 
-    async def async_post_call_success_hook(
-        self,
-        data: Mapping[str, Any],
-        user_api_key_dict: Any,
-        response: Any,
-    ) -> Any:
-        self._emit_guardrail_spans(data)
-        return response
-
-    async def async_post_call_failure_hook(
-        self,
-        request_data: Mapping[str, Any],
-        original_exception: BaseException | None,
-        user_api_key_dict: Any,
-        traceback_str: str | None = None,
-    ) -> None:
-        self._emit_guardrail_spans(request_data)
-
-    def _emit_guardrail_spans(self, request_data: Mapping[str, Any]) -> None:
+    def emit_guardrail_span(self, entry: "StandardLoggingGuardrailInformation") -> None:
+        # Emitted by the guardrail-recording code the moment a guardrail finishes,
+        # not from a post-call hook — that hook does not fire on every path (a
+        # pass-through request that passes its guardrails never reaches it), which
+        # left passing guardrails without a span.
+        #
         # A guardrail is a sibling of the LLM call under the request's root span,
-        # so parent it to the explicit anchor — not the active span, which on the
-        # failure path can be the live ``auth`` phase span (post-call failure hooks
-        # run from inside it on an auth rejection). Emit with the guardrail's actual
-        # execution window so a pre_call guardrail is placed before the LLM call
-        # rather than at post-call emission time.
-        guardrails = guardrail_entries_from_request_data(request_data)
-        if not guardrails:
-            return
-        parent_ctx = resolve_request_span_context()
-        for entry in guardrails:
-            data = GuardrailSpanData.from_logging_entry(
-                cast("StandardLoggingGuardrailInformation", entry)
-            )
-            self._emitter.emit(
-                SpanRole.GUARDRAIL,
-                data,
-                parent_context=parent_ctx,
-                start_time_ns=to_ns(data.start_time),
-                end_time_ns=to_ns(data.end_time),
-            )
+        # so parent it to the explicit anchor — never the active span, which during
+        # a pre_call guardrail can be the live ``auth`` phase span. Emit with the
+        # guardrail's actual execution window so a pre_call guardrail is placed
+        # before the LLM call rather than at emission time. One entry in, one span
+        # out — the module-level entry point routes each entry to this single
+        # registered logger so a guardrail is never emitted more than once.
+        data = GuardrailSpanData.from_logging_entry(entry)
+        self._emitter.emit(
+            SpanRole.GUARDRAIL,
+            data,
+            parent_context=resolve_request_span_context(),
+            start_time_ns=to_ns(data.start_time),
+            end_time_ns=to_ns(data.end_time),
+        )
 
     def create_litellm_proxy_request_started_span(
         self, start_time: datetime, headers: Mapping[str, str] | None
@@ -526,6 +506,26 @@ def _registered_v2_logger() -> "OpenTelemetryV2 | None":
         return None
     logger = getattr(proxy_server, "open_telemetry_logger", None)
     return logger if isinstance(logger, OpenTelemetryV2) else None
+
+
+def emit_guardrail_span(entry: "StandardLoggingGuardrailInformation") -> None:
+    """Emit a guardrail span on the registered v2 OTel logger.
+
+    Called by the guardrail-recording code the moment a guardrail finishes, so a
+    span is produced regardless of whether a post-call hook later runs (it does
+    not on the pass-through allow path). Routes through the single canonical
+    logger — the same one every other v2 entry point uses — so a guardrail
+    recorded once yields exactly one span; fanning out across every reachable
+    ``OpenTelemetryV2`` instance double-emits the same entry. Best-effort: span
+    emission must never break guardrail evaluation.
+    """
+    logger = _registered_v2_logger()
+    if logger is None:
+        return
+    try:
+        logger.emit_guardrail_span(entry)
+    except Exception:
+        pass
 
 
 def seed_request_identity(user_api_key_dict: Any, model: Any = None) -> None:
