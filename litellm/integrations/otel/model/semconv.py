@@ -204,15 +204,6 @@ class LiteLLM:
     SERVICE_NAME: Final = "litellm.service.name"
     SERVICE_CALL_TYPE: Final = "litellm.service.call_type"
     PREPROCESSING_MS: Final = "litellm.preprocessing.duration_ms"
-    # Rate-limit error decomposition stamped on a failed span when the underlying
-    # error is a ``litellm.RateLimitError`` (vendor or proxy-internal). They sit
-    # in the vendor namespace because there is no GenAI semconv equivalent for
-    # "who rate-limited" / "which dimension was exceeded". Same source of truth
-    # as the StandardLoggingPayload.error_information.error_rate_limit_*
-    # custom-callback fields and the prometheus rate_limit_category /
-    # rate_limit_type labels — one decomposition, three observability surfaces.
-    ERROR_RATE_LIMIT_CATEGORY: Final = "litellm.error.rate_limit_category"
-    ERROR_RATE_LIMIT_TYPE: Final = "litellm.error.rate_limit_type"
     # The logical name of the MCP server a tool call was routed to. There is no
     # semconv key for an MCP server's *name* (the convention uses ``server.address``
     # for its network location), so it lives under the vendor namespace.

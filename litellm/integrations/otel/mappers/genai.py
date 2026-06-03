@@ -55,12 +55,6 @@ class GenAIMapper:
         GenAI.USAGE_INPUT_TOKENS: lambda d: d.usage.input_tokens,
         GenAI.USAGE_OUTPUT_TOKENS: lambda d: d.usage.output_tokens,
         Error.TYPE: lambda d: d.error.error_type if d.error else None,
-        LiteLLM.ERROR_RATE_LIMIT_CATEGORY: lambda d: (
-            d.error.rate_limit_category if d.error else None
-        ),
-        LiteLLM.ERROR_RATE_LIMIT_TYPE: lambda d: (
-            d.error.rate_limit_type if d.error else None
-        ),
         Server.ADDRESS: lambda d: d.server.address if d.server else None,
         Server.PORT: lambda d: d.server.port if d.server else None,
         LiteLLM.CALL_ID: lambda d: d.identity.call_id or None,
