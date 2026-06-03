@@ -122,3 +122,190 @@ class TestRouterSettingsEndpoints:
 
         rg_field = next(f for f in response.fields if f.field_name == "routing_groups")
         assert rg_field.field_value == groups
+
+    @pytest.mark.asyncio
+    async def test_get_router_settings_empty_config_routing_groups_not_overwritten(
+        self, monkeypatch
+    ):
+        """When config returns empty routing_groups, live router value is preserved."""
+        live_groups = [
+            {
+                "group_name": "live-group",
+                "models": ["gpt-4"],
+                "routing_strategy": "cost-based-routing",
+            }
+        ]
+        llm_router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                }
+            ],
+            routing_groups=live_groups,
+        )
+
+        monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+
+        async def fake_get_config(self, config_file_path=None):
+            return {"router_settings": {"routing_groups": []}}
+
+        monkeypatch.setattr(
+            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+        )
+
+        admin_user = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
+        )
+        response = await get_router_settings(user_api_key_dict=admin_user)
+
+        assert response.current_values.get("routing_groups") == live_groups
+
+    @pytest.mark.asyncio
+    async def test_get_router_settings_merge_routing_groups_config_wins(
+        self, monkeypatch
+    ):
+        """When both live router and config have routing_groups, config values win for same group_name."""
+        live_groups = [
+            {
+                "group_name": "shared-group",
+                "models": ["gpt-4"],
+                "routing_strategy": "cost-based-routing",
+            },
+            {
+                "group_name": "live-only-group",
+                "models": ["gpt-3.5"],
+                "routing_strategy": "simple-shuffle",
+            },
+        ]
+        config_groups = [
+            {
+                "group_name": "shared-group",
+                "models": ["gpt-4o"],
+                "routing_strategy": "latency-based-routing",
+            },
+            {
+                "group_name": "config-only-group",
+                "models": ["claude-3"],
+                "routing_strategy": "least-busy",
+            },
+        ]
+        llm_router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                },
+                {
+                    "model_name": "gpt-3.5",
+                    "litellm_params": {"model": "openai/gpt-3.5-turbo", "api_key": "sk-x"},
+                },
+                {
+                    "model_name": "gpt-4o",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                },
+                {
+                    "model_name": "claude-3",
+                    "litellm_params": {"model": "anthropic/claude-3", "api_key": "sk-x"},
+                },
+            ],
+            routing_groups=live_groups,
+        )
+
+        monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+
+        async def fake_get_config(self, config_file_path=None):
+            return {"router_settings": {"routing_groups": config_groups}}
+
+        monkeypatch.setattr(
+            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+        )
+
+        admin_user = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
+        )
+        response = await get_router_settings(user_api_key_dict=admin_user)
+
+        result_groups = response.current_values.get("routing_groups", [])
+        result_by_name = {g["group_name"]: g for g in result_groups}
+
+        # shared-group should have config values
+        assert result_by_name["shared-group"]["routing_strategy"] == "latency-based-routing"
+        assert result_by_name["shared-group"]["models"] == ["gpt-4o"]
+
+        # live-only-group should be preserved
+        assert "live-only-group" in result_by_name
+        assert result_by_name["live-only-group"]["routing_strategy"] == "simple-shuffle"
+
+        # config-only-group should be added
+        assert "config-only-group" in result_by_name
+        assert result_by_name["config-only-group"]["routing_strategy"] == "least-busy"
+
+    @pytest.mark.asyncio
+    async def test_get_router_settings_fallback_to_config_routing_groups(
+        self, monkeypatch
+    ):
+        """When live router has no routing_groups, config value is used."""
+        llm_router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                }
+            ],
+        )
+
+        monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+
+        config_groups = [
+            {
+                "group_name": "config-group",
+                "models": ["gpt-4"],
+                "routing_strategy": "cost-based-routing",
+            }
+        ]
+
+        async def fake_get_config(self, config_file_path=None):
+            return {"router_settings": {"routing_groups": config_groups}}
+
+        monkeypatch.setattr(
+            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+        )
+
+        admin_user = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
+        )
+        response = await get_router_settings(user_api_key_dict=admin_user)
+
+        assert response.current_values.get("routing_groups") == config_groups
+
+    @pytest.mark.asyncio
+    async def test_get_router_settings_other_fields_overwritten_by_config(
+        self, monkeypatch
+    ):
+        """Non-routing_groups fields should still be overwritten by config values."""
+        llm_router = Router(
+            model_list=[
+                {
+                    "model_name": "gpt-4",
+                    "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-x"},
+                }
+            ],
+            num_retries=5,
+        )
+
+        monkeypatch.setattr(proxy_server, "llm_router", llm_router)
+
+        async def fake_get_config(self, config_file_path=None):
+            return {"router_settings": {"num_retries": 10}}
+
+        monkeypatch.setattr(
+            proxy_server.ProxyConfig, "get_config", fake_get_config, raising=True
+        )
+
+        admin_user = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-x"
+        )
+        response = await get_router_settings(user_api_key_dict=admin_user)
+
+        assert response.current_values.get("num_retries") == 10
