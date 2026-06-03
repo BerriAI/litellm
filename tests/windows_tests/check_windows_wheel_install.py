@@ -15,7 +15,8 @@ WORST_CASE_PREFIX = 100
 
 
 def overlong_install_paths(wheel, prefix_len=WORST_CASE_PREFIX, max_path=MAX_PATH):
-    names = zipfile.ZipFile(wheel).namelist()
+    with zipfile.ZipFile(wheel) as zf:
+        names = zf.namelist()
     return sorted(
         (n for n in names if prefix_len + len(n) > max_path), key=len, reverse=True
     )
@@ -24,6 +25,7 @@ def overlong_install_paths(wheel, prefix_len=WORST_CASE_PREFIX, max_path=MAX_PAT
 def _deep_venv_dir(target_prefix=WORST_CASE_PREFIX):
     drive = os.path.splitdrive(os.getcwd())[0] or "C:"
     root = drive + os.sep + "lmwin" + os.sep
+    # +2: the sep joining the venv root to "Lib", plus the trailing sep before the entry
     suffix = len(os.path.join("Lib", "site-packages")) + 2
     return root + "x" * (target_prefix - suffix - len(root))
 
@@ -38,7 +40,7 @@ def main():
     if not wheels:
         print("::error::no wheel in dist/; run `uv build --wheel --out-dir dist` first")
         return 1
-    wheel = wheels[0]
+    wheel = max(wheels, key=os.path.getmtime)
 
     offenders = overlong_install_paths(wheel)
     if offenders:
