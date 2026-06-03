@@ -8,7 +8,6 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 import json
 from typing import Any, Dict, List, Optional
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -85,17 +84,23 @@ async def _forward_jsonrpc(
     body: dict,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> dict:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
     headers = {"Content-Type": "application/json", **(extra_headers or {})}
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        resp = await client.post(agent_url, json=body, headers=headers)
-        try:
-            result = resp.json()
-        except Exception:
-            resp.raise_for_status()
-            raise
-        if not resp.is_success and "error" not in result:
-            resp.raise_for_status()
-        return result
+    handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.A2A,
+        params={"timeout": 60.0},
+    )
+    resp = await handler.post(agent_url, json=body, headers=headers)
+    try:
+        result = resp.json()
+    except Exception:
+        resp.raise_for_status()
+        raise
+    if not resp.is_success and "error" not in result:
+        resp.raise_for_status()
+    return result
 
 
 async def _forward_jsonrpc_sse(
@@ -107,6 +112,9 @@ async def _forward_jsonrpc_sse(
     user_api_key_dict: Optional[Any] = None,
     request_data: Optional[dict] = None,
 ) -> StreamingResponse:
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
     headers = {
         "Content-Type": "application/json",
         "Accept": "text/event-stream",
@@ -115,23 +123,31 @@ async def _forward_jsonrpc_sse(
 
     async def stream_events():
         try:
-            async with httpx.AsyncClient(timeout=None) as client:
-                async with client.stream(
-                    "POST", agent_url, json=body, headers=headers
-                ) as resp:
-                    if not resp.is_success:
-                        error_body = await resp.aread()
-                        try:
-                            error_json = json.loads(error_body)
-                            if "error" in error_json:
-                                yield f"data: {json.dumps(error_json)}\n\n"
-                                return
-                        except Exception:
-                            pass
-                        yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': resp.status_code, 'message': resp.reason_phrase}})}\n\n"
-                        return
-                    async for line in resp.aiter_lines():
-                        yield line + "\n"
+            handler = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.A2A,
+                params={"timeout": None},
+            )
+            async_client = handler.client
+            req = async_client.build_request(
+                "POST", agent_url, json=body, headers=headers
+            )
+            resp = await async_client.send(req, stream=True)
+            try:
+                if not resp.is_success:
+                    error_body = await resp.aread()
+                    try:
+                        error_json = json.loads(error_body)
+                        if "error" in error_json:
+                            yield f"data: {json.dumps(error_json)}\n\n"
+                            return
+                    except Exception:
+                        pass
+                    yield f"data: {json.dumps({'jsonrpc': '2.0', 'id': request_id, 'error': {'code': resp.status_code, 'message': resp.reason_phrase}})}\n\n"
+                    return
+                async for line in resp.aiter_lines():
+                    yield line + "\n"
+            finally:
+                await resp.aclose()
         except Exception as e:
             if (
                 proxy_logging_obj is not None

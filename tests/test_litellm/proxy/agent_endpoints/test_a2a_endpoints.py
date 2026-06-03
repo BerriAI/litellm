@@ -436,12 +436,12 @@ async def test_task_methods_forward_jsonrpc(method: str, params: dict):
 
     mock_http_response = MagicMock()
     mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
     mock_http_response.raise_for_status = MagicMock()
 
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.post = AsyncMock(return_value=mock_http_response)
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
 
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
@@ -450,8 +450,8 @@ async def test_task_methods_forward_jsonrpc(method: str, params: dict):
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
-                return_value=mock_http_client,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
             )
         )
 
@@ -468,7 +468,7 @@ async def test_task_methods_forward_jsonrpc(method: str, params: dict):
     assert body["jsonrpc"] == "2.0"
     assert body["result"]["id"] == "task-1"
 
-    posted = mock_http_client.post.call_args
+    posted = mock_handler.post.call_args
     assert posted is not None
     forwarded_body = posted.kwargs.get("json") or posted.args[1]
     assert forwarded_body["method"] == method
@@ -491,16 +491,18 @@ async def test_subscribe_to_task_returns_sse_stream():
         for line in sse_lines:
             yield line
 
-    mock_stream_response = MagicMock()
-    mock_stream_response.raise_for_status = MagicMock()
-    mock_stream_response.aiter_lines = fake_aiter_lines
-    mock_stream_response.__aenter__ = AsyncMock(return_value=mock_stream_response)
-    mock_stream_response.__aexit__ = AsyncMock(return_value=False)
+    mock_resp = AsyncMock()
+    mock_resp.is_success = True
+    mock_resp.aiter_lines = fake_aiter_lines
+    mock_resp.aclose = AsyncMock()
 
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.stream = MagicMock(return_value=mock_stream_response)
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.client = mock_async_client
+    mock_handler.post = AsyncMock()
 
     chunks = []
     with ExitStack() as stack:
@@ -508,8 +510,8 @@ async def test_subscribe_to_task_returns_sse_stream():
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
-                return_value=mock_http_client,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
             )
         )
 
@@ -544,16 +546,18 @@ async def test_subscribe_to_task_calls_pre_call_hook():
     async def fake_aiter_lines():
         yield 'data: {"jsonrpc":"2.0","id":"req-1","result":{"taskId":"task-1","status":{"state":"completed"}}}'
 
-    mock_stream_response = MagicMock()
-    mock_stream_response.is_success = True
-    mock_stream_response.aiter_lines = fake_aiter_lines
-    mock_stream_response.__aenter__ = AsyncMock(return_value=mock_stream_response)
-    mock_stream_response.__aexit__ = AsyncMock(return_value=False)
+    mock_resp = AsyncMock()
+    mock_resp.is_success = True
+    mock_resp.aiter_lines = fake_aiter_lines
+    mock_resp.aclose = AsyncMock()
 
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.stream = MagicMock(return_value=mock_stream_response)
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.client = mock_async_client
+    mock_handler.post = AsyncMock()
 
     mock_proxy_logging = MagicMock()
     mock_proxy_logging.pre_call_hook = AsyncMock(
@@ -569,8 +573,8 @@ async def test_subscribe_to_task_calls_pre_call_hook():
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
-                return_value=mock_http_client,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
             )
         )
         stack.enter_context(
@@ -620,20 +624,20 @@ async def test_get_extended_agent_card_rewrites_url():
 
     mock_http_response = MagicMock()
     mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
     mock_http_response.raise_for_status = MagicMock()
 
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.post = AsyncMock(return_value=mock_http_response)
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
 
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
-                return_value=mock_http_client,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
             )
         )
 
@@ -704,31 +708,33 @@ async def test_pascal_method_names_normalize_to_wire_format(
     upstream_response = {"jsonrpc": "2.0", "id": "req-1", "result": {"id": "task-1"}}
     mock_http_response = MagicMock()
     mock_http_response.json.return_value = upstream_response
+    mock_http_response.is_success = True
     mock_http_response.raise_for_status = MagicMock()
-
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.post = AsyncMock(return_value=mock_http_response)
 
     async def _empty_aiter_lines():
         return
         yield  # make it an async generator
 
-    sse_response = MagicMock()
-    sse_response.raise_for_status = MagicMock()
-    sse_response.aiter_lines = _empty_aiter_lines
-    sse_response.__aenter__ = AsyncMock(return_value=sse_response)
-    sse_response.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.stream = MagicMock(return_value=sse_response)
+    mock_sse_resp = AsyncMock()
+    mock_sse_resp.is_success = True
+    mock_sse_resp.aiter_lines = _empty_aiter_lines
+    mock_sse_resp.aclose = AsyncMock()
+
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_sse_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = mock_async_client
 
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
-                return_value=mock_http_client,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
             )
         )
 
@@ -750,7 +756,7 @@ async def test_pascal_method_names_normalize_to_wire_format(
             assert "error" not in body, f"Got error: {body}"
 
     if expected_wire_method != "tasks/resubscribe":
-        posted = mock_http_client.post.call_args
+        posted = mock_handler.post.call_args
         forwarded_body = posted.kwargs.get("json") or posted.args[1]
         assert forwarded_body["method"] == expected_wire_method, (
             f"Expected '{expected_wire_method}' forwarded for PascalCase '{pascal_method}', "
@@ -781,18 +787,17 @@ async def test_task_method_upstream_jsonrpc_error_on_http_4xx_is_relayed():
         side_effect=Exception("404 Not Found")
     )
 
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.post = AsyncMock(return_value=mock_http_response)
+    mock_handler = MagicMock()
+    mock_handler.post = AsyncMock(return_value=mock_http_response)
+    mock_handler.client = MagicMock()
 
     with ExitStack() as stack:
         for p in _base_patches(agent):
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
-                return_value=mock_http_client,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
             )
         )
 
@@ -820,20 +825,22 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
     mock_request = _make_request_mock("tasks/resubscribe", {"id": "task-1"})
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
-    mock_stream_response = MagicMock()
-    mock_stream_response.is_success = False
-    mock_stream_response.status_code = 404
-    mock_stream_response.reason_phrase = "Not Found"
-    mock_stream_response.aread = AsyncMock(
+    mock_resp = AsyncMock()
+    mock_resp.is_success = False
+    mock_resp.status_code = 404
+    mock_resp.reason_phrase = "Not Found"
+    mock_resp.aread = AsyncMock(
         return_value=b'{"jsonrpc":"2.0","error":{"code":-32001,"message":"Task not found"}}'
     )
-    mock_stream_response.__aenter__ = AsyncMock(return_value=mock_stream_response)
-    mock_stream_response.__aexit__ = AsyncMock(return_value=False)
+    mock_resp.aclose = AsyncMock()
 
-    mock_http_client = AsyncMock()
-    mock_http_client.__aenter__ = AsyncMock(return_value=mock_http_client)
-    mock_http_client.__aexit__ = AsyncMock(return_value=False)
-    mock_http_client.stream = MagicMock(return_value=mock_stream_response)
+    mock_async_client = MagicMock()
+    mock_async_client.build_request = MagicMock(return_value=MagicMock())
+    mock_async_client.send = AsyncMock(return_value=mock_resp)
+
+    mock_handler = MagicMock()
+    mock_handler.client = mock_async_client
+    mock_handler.post = AsyncMock()
 
     chunks = []
     with ExitStack() as stack:
@@ -841,8 +848,8 @@ async def test_subscribe_to_task_upstream_error_yields_jsonrpc_error_event():
             stack.enter_context(p)
         stack.enter_context(
             patch(
-                "litellm.proxy.agent_endpoints.a2a_endpoints.httpx.AsyncClient",
-                return_value=mock_http_client,
+                "litellm.llms.custom_httpx.http_handler.get_async_httpx_client",
+                return_value=mock_handler,
             )
         )
 
