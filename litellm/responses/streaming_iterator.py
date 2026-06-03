@@ -1657,9 +1657,7 @@ class ManagedResponsesWebSocketHandler:
             # cross-connection multi-turn when spend logs are committed)
             call_kwargs["previous_response_id"] = previous_response_id
 
-    def _inject_credentials(
-        self, call_kwargs: Dict[str, Any], event_model: Optional[str]
-    ) -> None:
+    def _inject_credentials(self, call_kwargs: Dict[str, Any]) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
         if self.api_key is not None:
             call_kwargs["api_key"] = self.api_key
@@ -1667,10 +1665,7 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["api_base"] = self.api_base
         if self.timeout is not None:
             call_kwargs["timeout"] = self.timeout
-        # Only propagate custom_llm_provider when no per-request model override exists.
-        # If the payload specifies a different model, let litellm re-resolve the
-        # provider so we don't accidentally force the wrong backend.
-        if self.custom_llm_provider is not None and not event_model:
+        if self.custom_llm_provider is not None:
             call_kwargs["custom_llm_provider"] = self.custom_llm_provider
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
@@ -1785,8 +1780,8 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        event_model: Optional[str] = call_kwargs.pop("model", None)
-        model = event_model or self.model
+        call_kwargs.pop("model", None)
+        model = self.model
 
         previous_response_id: Optional[str] = call_kwargs.pop(
             "previous_response_id", None
@@ -1803,7 +1798,7 @@ class ManagedResponsesWebSocketHandler:
         self._apply_history(
             call_kwargs, previous_response_id, current_messages, prior_history
         )
-        self._inject_credentials(call_kwargs, event_model)
+        self._inject_credentials(call_kwargs)
         self._update_proxy_request(call_kwargs, model)
         call_kwargs.update(self.extra_kwargs)
 

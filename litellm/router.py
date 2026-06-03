@@ -4636,11 +4636,11 @@ class Router:
             except Exception:
                 custom_llm_provider = None
 
-            # Build response kwargs
             response_kwargs = {
                 **data,
                 "caching": self.cache_responses,
                 **kwargs,
+                "model": model_name,
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
