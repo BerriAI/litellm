@@ -1187,6 +1187,32 @@ async def handle_sampling_create_message(
                 proxy_config=proxy_config,
             )
 
+        # 7. Run pre-call guardrail hooks (content filtering, PII redaction,
+        #    prompt-injection detection, etc.).  Without this, a malicious
+        #    upstream MCP server with allow_sampling=True could send prompts
+        #    that bypass every guardrail configured on /chat/completions.
+        #    We use call_type="acompletion" so guardrails configured for
+        #    chat completions also fire for sampling sub-calls.
+        try:
+            from litellm.proxy.proxy_server import proxy_logging_obj as _plo
+
+            if _plo is not None:
+                completion_kwargs = (
+                    await typing.cast("ProxyLogging", _plo).pre_call_hook(
+                        user_api_key_dict=user_api_key_auth,
+                        data=completion_kwargs,
+                        call_type="acompletion",
+                    )
+                )
+        except ImportError:
+            pass  # proxy_logging_obj unavailable — skip guardrails
+        except Exception as guardrail_err:
+            verbose_logger.warning(
+                "MCP sampling: pre-call guardrail rejected request: %s",
+                guardrail_err,
+            )
+            raise
+
         verbose_logger.debug(
             "MCP sampling: calling litellm.acompletion with model=%s, num_messages=%d, has_tools=%s",
             model,
@@ -1194,7 +1220,7 @@ async def handle_sampling_create_message(
             bool(openai_tools),
         )
 
-        # 7. Call LiteLLM
+        # 8. Call LiteLLM
         # Use proxy's llm_router if available, else fallback to litellm.acompletion
         try:
             from litellm.proxy.proxy_server import llm_router
@@ -1205,7 +1231,7 @@ async def handle_sampling_create_message(
                 response = await litellm.acompletion(**completion_kwargs)
         except ImportError:
             response = await litellm.acompletion(**completion_kwargs)
-        # 8. Convert response to MCP format
+        # 9. Convert response to MCP format
         result = _convert_openai_response_to_mcp_result(
             response=response,
             model_name=model,
@@ -1228,11 +1254,15 @@ async def handle_sampling_create_message(
 
         from litellm.proxy._types import ProxyException
 
-        # Re-raise known LiteLLM errors so they can be handled by the proxy's
-        # global exception handlers or retry logic if applicable.
+        # Re-raise known LiteLLM errors and guardrail rejections so they
+        # can be handled by the proxy's global exception handlers.
+        # HTTPException is raised by pre_call_hook guardrails when they
+        # reject content — it must propagate so the MCP client sees
+        # the rejection rather than a generic "Sampling failed" wrapper.
         if isinstance(
             e,
             (
+                HTTPException,
                 BudgetExceededError,
                 RateLimitError,
                 AuthenticationError,
