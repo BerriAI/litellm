@@ -1251,6 +1251,7 @@ class ResponsesWebSocketStreaming:
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
+        first_message: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1259,6 +1260,7 @@ class ResponsesWebSocketStreaming:
         self.request_data: Dict = request_data or {}
         self.messages: list[Dict] = []
         self.input_messages: list[Dict[str, str]] = []
+        self.first_message = first_message
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1362,6 +1364,11 @@ class ResponsesWebSocketStreaming:
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
+            if self.first_message is not None:
+                self._store_input(self.first_message)
+                self._store_event(self.first_message)
+                await self.backend_ws.send(self.first_message)  # type: ignore[union-attr]
+
             while True:
                 message = await self.websocket.receive_text()
 
@@ -1440,6 +1447,7 @@ class ManagedResponsesWebSocketHandler:
         api_base: Optional[str] = None,
         timeout: Optional[float] = None,
         custom_llm_provider: Optional[str] = None,
+        first_message: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         self.websocket = websocket
@@ -1451,6 +1459,7 @@ class ManagedResponsesWebSocketHandler:
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
+        self.first_message = first_message
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: Dict[str, Any] = {
             k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS
@@ -1819,6 +1828,9 @@ class ManagedResponsesWebSocketHandler:
         each one before waiting for the next message.
         """
         try:
+            if self.first_message is not None:
+                await self._process_response_create(self.first_message)
+
             while True:
                 try:
                     message = await self.websocket.receive_text()

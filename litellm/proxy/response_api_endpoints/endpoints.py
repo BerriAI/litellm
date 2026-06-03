@@ -939,8 +939,8 @@ async def cancel_response(
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: str = fastapi.Query(
-        ..., description="The model to use for the responses WebSocket session."
+    model: Optional[str] = fastapi.Query(
+        None, description="The model to use for the responses WebSocket session."
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
@@ -949,6 +949,10 @@ async def responses_websocket_endpoint(
 
     Keeps a persistent WebSocket connection for response.create events,
     enabling lower-latency agentic workflows with many tool-call round trips.
+
+    Follows the OpenAI split: the bearer token is validated at connection time
+    (before accept); the model is resolved either from the ?model= query param
+    or from the first response.create frame, whichever is present.
 
     See: https://developers.openai.com/api/docs/guides/websocket-mode/
     """
@@ -966,7 +970,8 @@ async def responses_websocket_endpoint(
     )
     from litellm.proxy.route_llm_request import route_request
 
-    # Accept the WebSocket handshake
+    # Accept the WebSocket handshake. Key was already validated by the Depends
+    # above; we can safely accept regardless of whether ?model= was supplied.
     requested_protocols = [
         p.strip()
         for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
@@ -977,10 +982,57 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
+    # If model was not supplied via query param, read the first frame and
+    # extract it from the response.create event. This matches OpenAI's
+    # behaviour where the bearer token scopes the connection and the model
+    # is declared inside the first message.
+    first_message: Optional[str] = None
+    if not model:
+        try:
+            first_message = await websocket.receive_text()
+        except Exception:
+            await websocket.close(code=1008, reason="Client disconnected before sending first message")
+            return
+
+        try:
+            first_event = json.loads(first_message)
+        except json.JSONDecodeError:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": "First message is not valid JSON.",
+                        },
+                    }
+                )
+            )
+            await websocket.close(code=1008, reason="Invalid JSON in first message")
+            return
+
+        model = first_event.get("model")
+        if not model:
+            await websocket.send_text(
+                json.dumps(
+                    {
+                        "type": "error",
+                        "error": {
+                            "type": "invalid_request_error",
+                            "message": "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
+                        },
+                    }
+                )
+            )
+            await websocket.close(code=1008, reason="No model provided")
+            return
+
     data: Dict[str, Any] = {
         "model": model,
         "websocket": websocket,
     }
+    if first_message is not None:
+        data["first_message"] = first_message
 
     # Construct a synthetic Request for pre-call processing
     headers_list = list(websocket.scope.get("headers") or [])
@@ -993,8 +1045,10 @@ async def responses_websocket_endpoint(
     request = Request(scope=scope)
     request._url = websocket.url
 
+    _model_for_body = model
+
     async def return_body():
-        return f'{{"model": "{model}"}}'.encode()
+        return f'{{"model": "{_model_for_body}"}}'.encode()
 
     request.body = return_body  # type: ignore
 
@@ -1027,7 +1081,7 @@ async def responses_websocket_endpoint(
                     {
                         "type": "error",
                         "error": {
-                            "type": "pre_call_error",
+                            "type": "invalid_request_error",
                             "message": str(e),
                         },
                     }
@@ -1035,7 +1089,7 @@ async def responses_websocket_endpoint(
             )
         except Exception:
             pass
-        await websocket.close(code=1011, reason="Pre-call error")
+        await websocket.close(code=1008, reason="Pre-call error")
         return
 
     # Phase 2: route to upstream provider

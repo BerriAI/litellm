@@ -196,3 +196,110 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         assert "x-litellm-response-cost" in response.headers
         response_cost_value = float(response.headers["x-litellm-response-cost"])
         assert response_cost_value == pytest.approx(0.0005, abs=1e-10)
+
+
+import json
+
+
+class TestManagedResponsesWSFirstMessage:
+    @pytest.mark.asyncio
+    async def test_first_message_processed_before_loop(self):
+        """
+        ManagedResponsesWebSocketHandler must process first_message before
+        entering its receive loop. Regression for clients that connect without
+        ?model= (e.g. Codex) and send model inside the first response.create event.
+        """
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        first = json.dumps(
+            {
+                "type": "response.create",
+                "model": "gpt-4o-mini",
+                "store": False,
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hi"}],
+                    }
+                ],
+            }
+        )
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=Exception("disconnect"))
+        ws.send_text = AsyncMock()
+
+        processed: list = []
+
+        async def fake_process(msg: str) -> None:
+            processed.append(msg)
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=ws,
+            model="gpt-4o-mini",
+            logging_obj=MagicMock(),
+            first_message=first,
+        )
+        handler._process_response_create = fake_process  # type: ignore[method-assign]
+
+        await handler.run()
+
+        assert processed == [first]
+
+    @pytest.mark.asyncio
+    async def test_no_first_message_falls_through_to_loop(self):
+        """When first_message is None, run() goes straight to receive_text()."""
+        from litellm.responses.streaming_iterator import ManagedResponsesWebSocketHandler
+
+        subsequent = json.dumps({"type": "response.create", "model": "gpt-4o-mini"})
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=[subsequent, Exception("disconnect")])
+        ws.send_text = AsyncMock()
+
+        processed: list = []
+
+        async def fake_process(msg: str) -> None:
+            processed.append(msg)
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=ws,
+            model="gpt-4o-mini",
+            logging_obj=MagicMock(),
+            first_message=None,
+        )
+        handler._process_response_create = fake_process  # type: ignore[method-assign]
+
+        await handler.run()
+
+        assert processed == [subsequent]
+
+
+class TestResponsesWSStreamingFirstMessage:
+    @pytest.mark.asyncio
+    async def test_client_to_backend_replays_first_message(self):
+        """
+        ResponsesWebSocketStreaming.client_to_backend must send first_message to
+        the backend before entering the receive loop.
+        """
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        first = json.dumps({"type": "response.create", "model": "gpt-4o-mini", "input": []})
+
+        ws = MagicMock()
+        ws.receive_text = AsyncMock(side_effect=Exception("disconnect"))
+
+        backend_ws = MagicMock()
+        backend_ws.send = AsyncMock()
+
+        streaming = ResponsesWebSocketStreaming(
+            websocket=ws,
+            backend_ws=backend_ws,
+            logging_obj=MagicMock(),
+            first_message=first,
+        )
+
+        await streaming.client_to_backend()
+
+        backend_ws.send.assert_awaited_once_with(first)
