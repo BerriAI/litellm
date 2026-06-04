@@ -430,19 +430,20 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Calculates the requested vs resolved vs response model mismatch metadata.
         """
-        requested_model = getattr(self, "model", "")
-        resolved_model = getattr(self, "litellm_params", {}).get(
-            "model", requested_model
+        requested_model: str = getattr(self, "model", "") or ""
+        resolved_model: str = (
+            getattr(self, "litellm_params", {}).get("model", requested_model) or ""
         )
 
-        response_model = ""
+        response_model: str = ""
         if response_obj:
             if hasattr(response_obj, "model"):
-                response_model = getattr(response_obj, "model", "")
+                response_model = getattr(response_obj, "model", "") or ""
             elif isinstance(response_obj, dict):
-                response_model = response_obj.get("model", "")
+                response_model = response_obj.get("model", "") or ""
 
-        model_mismatch = False
+        # Explicitly type hint as Union[str, bool] to prevent mypy inference errors
+        model_mismatch: Union[str, bool] = False
         if requested_model != resolved_model:
             model_mismatch = "requested_vs_resolved_mismatch"
         elif response_model and resolved_model:
@@ -452,7 +453,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ):
                 model_mismatch = "resolved_vs_response_mismatch"
 
-        has_usage = False
+        has_usage: bool = False
         if response_obj:
             if hasattr(response_obj, "usage") and getattr(response_obj, "usage"):
                 has_usage = True
@@ -5833,9 +5834,10 @@ def get_standard_logging_object_payload(  # noqa: PLR0915
         # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
 
         if logging_obj is not None:
-            transparency_data = logging_obj._calculate_model_transparency(
-                response_obj=init_response_obj
-            )
+            # Use typing.cast to bypass strict union mismatch errors down the line
+            safe_response_obj = cast(Any, init_response_obj)
+            transparency_data = logging_obj._calculate_model_transparency(response_obj=safe_response_obj)
+
             payload["requested_model"] = transparency_data.get("requested_model", "")
             payload["resolved_model"] = transparency_data.get("resolved_model", "")
             payload["response_model"] = transparency_data.get("response_model", "")
