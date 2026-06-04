@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -25,11 +26,18 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.table_repositories import (
+    MCPServerRepository,
+    MCPUserCredentialsRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials
-from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 
 def _is_global_env_var_scope(scope: Any) -> bool:
@@ -355,7 +363,7 @@ async def get_all_mcp_servers(
         where: Dict[str, Any] = {}
         if approval_status is not None:
             where["approval_status"] = approval_status
-        mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many(
+        mcp_servers = await MCPServerRepository(prisma_client).table.find_many(
             where=where if where else {}
         )
 
@@ -381,7 +389,9 @@ async def get_mcp_server(
     """
     Returns the matching mcp server from the db iff exists
     """
-    mcp_server = await prisma_client.db.litellm_mcpservertable.find_unique(
+    mcp_server: Optional[LiteLLM_MCPServerTable] = await MCPServerRepository(
+        prisma_client
+    ).table.find_unique(
         where={
             "server_id": server_id,
         }
@@ -399,12 +409,12 @@ async def get_mcp_servers(
     """
     Returns the matching mcp servers from the db with the server_ids
     """
-    _mcp_servers: List[LiteLLM_MCPServerTable] = (
-        await prisma_client.db.litellm_mcpservertable.find_many(
-            where={
-                "server_id": {"in": server_ids},
-            }
-        )
+    _mcp_servers: List[LiteLLM_MCPServerTable] = await MCPServerRepository(
+        prisma_client
+    ).table.find_many(
+        where={
+            "server_id": {"in": server_ids},
+        }
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:
@@ -421,15 +431,15 @@ async def get_mcp_servers_by_verificationtoken(
     """
     Returns the mcp servers from the db for the verification token
     """
-    verification_token_record: LiteLLM_TeamTable = (
-        await prisma_client.db.litellm_verificationtoken.find_unique(
-            where={
-                "token": token,
-            },
-            include={
-                "object_permission": True,
-            },
-        )
+    verification_token_record: LiteLLM_TeamTable = await VerificationTokenRepository(
+        prisma_client
+    ).table.find_unique(
+        where={
+            "token": token,
+        },
+        include={
+            "object_permission": True,
+        },
     )
 
     mcp_servers: Optional[List[str]] = []
@@ -447,15 +457,15 @@ async def get_mcp_servers_by_team(
     """
     Returns the mcp servers from the db for the team id
     """
-    team_record: LiteLLM_TeamTable = (
-        await prisma_client.db.litellm_teamtable.find_unique(
-            where={
-                "team_id": team_id,
-            },
-            include={
-                "object_permission": True,
-            },
-        )
+    team_record: LiteLLM_TeamTable = await TeamRepository(
+        prisma_client
+    ).table.find_unique(
+        where={
+            "team_id": team_id,
+        },
+        include={
+            "object_permission": True,
+        },
     )
 
     mcp_servers: Optional[List[str]] = []
@@ -527,7 +537,7 @@ async def get_virtualkeys_for_mcp_server(
     """
     Get all the virtual keys that have access to the mcp server
     """
-    virtual_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+    virtual_keys = await VerificationTokenRepository(prisma_client).table.find_many(
         where={
             "mcp_servers": {"has": server_id},
         },
@@ -565,7 +575,7 @@ async def delete_mcp_server(
 
     Returns the deleted mcp server record if it exists, otherwise None
     """
-    deleted_server = await prisma_client.db.litellm_mcpservertable.delete(
+    deleted_server = await MCPServerRepository(prisma_client).table.delete(
         where={
             "server_id": server_id,
         },
@@ -601,7 +611,7 @@ async def create_mcp_server(
     data_dict["created_by"] = touched_by
     data_dict["updated_by"] = touched_by
 
-    new_mcp_server = await prisma_client.db.litellm_mcpservertable.create(
+    new_mcp_server = await MCPServerRepository(prisma_client).table.create(
         data=data_dict  # type: ignore
     )
 
@@ -636,7 +646,7 @@ async def update_mcp_server(
         "credentials" in data_dict and data_dict["credentials"] is not None
     )
     if data.auth_type or has_credentials:
-        existing = await prisma_client.db.litellm_mcpservertable.find_unique(
+        existing = await MCPServerRepository(prisma_client).table.find_unique(
             where={"server_id": data.server_id}
         )
 
@@ -679,7 +689,7 @@ async def update_mcp_server(
     # Add audit fields
     data_dict["updated_by"] = touched_by
 
-    updated_mcp_server = await prisma_client.db.litellm_mcpservertable.update(
+    updated_mcp_server = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": data.server_id}, data=data_dict  # type: ignore
     )
 
@@ -692,7 +702,7 @@ async def rotate_mcp_server_credentials_master_key(
 ):
     from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
-    mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+    mcp_servers = await MCPServerRepository(prisma_client).table.find_many()
 
     updated = 0
     for mcp_server in mcp_servers:
@@ -720,7 +730,7 @@ async def rotate_mcp_server_credentials_master_key(
             continue
 
         update_data["updated_by"] = touched_by
-        await prisma_client.db.litellm_mcpservertable.update(
+        await MCPServerRepository(prisma_client).table.update(
             where={"server_id": mcp_server.server_id},
             data=update_data,
         )
@@ -782,7 +792,7 @@ async def rotate_mcp_user_credentials_master_key(
     under the new master key.  Rows that are unreadable under both paths
     are logged and skipped so one corrupt row does not abort the rotation.
     """
-    rows = await prisma_client.db.litellm_mcpusercredentials.find_many()
+    rows = await MCPUserCredentialsRepository(prisma_client).table.find_many()
     rotated = 0
     skipped = 0
     for row in rows:
@@ -799,7 +809,7 @@ async def rotate_mcp_user_credentials_master_key(
         re_encrypted = encrypt_value_helper(
             plaintext, new_encryption_key=new_master_key
         )
-        await prisma_client.db.litellm_mcpusercredentials.update(
+        await MCPUserCredentialsRepository(prisma_client).table.update(
             where={
                 "user_id_server_id": {
                     "user_id": row.user_id,
@@ -874,7 +884,7 @@ async def store_user_credential(
     """Store a user credential for a BYOK MCP server."""
 
     encoded = encrypt_value_helper(credential)
-    await prisma_client.db.litellm_mcpusercredentials.upsert(
+    await MCPUserCredentialsRepository(prisma_client).table.upsert(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
         data={
             "create": {
@@ -894,7 +904,7 @@ async def get_user_credential(
 ) -> Optional[str]:
     """Return credential for a user+server pair, or None."""
 
-    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+    row = await MCPUserCredentialsRepository(prisma_client).table.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
@@ -908,7 +918,7 @@ async def has_user_credential(
     server_id: str,
 ) -> bool:
     """Return True if the user has a stored credential for this server."""
-    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+    row = await MCPUserCredentialsRepository(prisma_client).table.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     return row is not None
@@ -920,7 +930,7 @@ async def delete_user_credential(
     server_id: str,
 ) -> None:
     """Delete the user's stored credential for a BYOK MCP server."""
-    await prisma_client.db.litellm_mcpusercredentials.delete(
+    await MCPUserCredentialsRepository(prisma_client).table.delete(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
 
@@ -967,7 +977,7 @@ async def store_user_oauth_credential(
     # Skip the guard when the caller knows the row is already an OAuth2 credential
     # (e.g. during token refresh), saving an extra DB round-trip.
     if not skip_byok_guard:
-        existing = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+        existing = await MCPUserCredentialsRepository(prisma_client).table.find_unique(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )
         if (
@@ -985,7 +995,7 @@ async def store_user_oauth_credential(
             )
 
     encoded = encrypt_value_helper(json.dumps(payload))
-    await prisma_client.db.litellm_mcpusercredentials.upsert(
+    await MCPUserCredentialsRepository(prisma_client).table.upsert(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
         data={
             "create": {
@@ -1026,7 +1036,7 @@ async def get_user_oauth_credential(
 ) -> Optional[Dict[str, Any]]:
     """Return the decoded OAuth2 payload dict for a user+server pair, or None."""
 
-    row = await prisma_client.db.litellm_mcpusercredentials.find_unique(
+    row = await MCPUserCredentialsRepository(prisma_client).table.find_unique(
         where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
     )
     if row is None:
@@ -1040,7 +1050,7 @@ async def list_user_oauth_credentials(
 ) -> List[Dict[str, Any]]:
     """Return all OAuth2 credential payloads for a user, tagged with server_id."""
 
-    rows = await prisma_client.db.litellm_mcpusercredentials.find_many(
+    rows = await MCPUserCredentialsRepository(prisma_client).table.find_many(
         where={"user_id": user_id}
     )
     results: List[Dict[str, Any]] = []
@@ -1213,7 +1223,7 @@ async def approve_mcp_server(
 ) -> LiteLLM_MCPServerTable:
     """Set approval_status=active and record reviewed_at."""
     now = datetime.now(timezone.utc)
-    updated = await prisma_client.db.litellm_mcpservertable.update(
+    updated = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": server_id},
         data={
             "approval_status": MCPApprovalStatus.active,
@@ -1241,7 +1251,7 @@ async def reject_mcp_server(
     }
     if review_notes is not None:
         data["review_notes"] = review_notes
-    updated = await prisma_client.db.litellm_mcpservertable.update(
+    updated = await MCPServerRepository(prisma_client).table.update(
         where={"server_id": server_id},
         data=data,
     )
@@ -1258,7 +1268,7 @@ async def get_mcp_submissions(
     along with a summary count breakdown by approval_status.
     Mirrors get_guardrail_submissions() from guardrail_endpoints.py.
     """
-    rows = await prisma_client.db.litellm_mcpservertable.find_many(
+    rows = await MCPServerRepository(prisma_client).table.find_many(
         where={"submitted_at": {"not": None}},
         order={"submitted_at": "desc"},
         take=500,  # safety cap; paginate if needed in a future iteration

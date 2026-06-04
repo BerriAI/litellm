@@ -13,6 +13,7 @@ from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.table_repositories import MCPServerRepository
 
 if TYPE_CHECKING:
     from litellm.proxy._types import (
@@ -221,7 +222,7 @@ async def _get_db_mcp_servers_by_identifiers(
         return []
 
     identifier_list = list(identifiers)
-    return await prisma_client.db.litellm_mcpservertable.find_many(
+    return await MCPServerRepository(prisma_client).table.find_many(
         where={
             "OR": [
                 {"server_id": {"in": identifier_list}},

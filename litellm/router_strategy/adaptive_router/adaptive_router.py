@@ -55,6 +55,7 @@ from litellm.router_strategy.adaptive_router.update_queue import (
 _SESSION_STATE_SWEEP_THRESHOLD: int = 1024
 # Same pattern for the owner cache.
 _OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
+from litellm.repositories.table_repositories import AdaptiveRouterStateRepository
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
     AdaptiveRouterConfig,
@@ -113,7 +114,7 @@ class AdaptiveRouter:
         if prisma_client is None:
             return
         try:
-            rows = await prisma_client.db.litellm_adaptiverouterstate.find_many(
+            rows = await AdaptiveRouterStateRepository(prisma_client).table.find_many(
                 where={"router_name": self.router_name}
             )
             loaded = 0

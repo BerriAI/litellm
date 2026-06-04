@@ -17,10 +17,13 @@ from litellm.proxy._types import (
     NewProjectRequest,
     UpdateProjectRequest,
     UserAPIKeyAuth,
-    user_api_key_has_admin_view as _user_has_admin_view,  # noqa: F401  re-exported
+)
+from litellm.proxy._types import (  # noqa: F401  re-exported
+    user_api_key_has_admin_view as _user_has_admin_view,
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import _premium_user_check
+from litellm.repositories.team_repository import TeamRepository
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
@@ -205,7 +208,7 @@ async def _user_has_admin_privileges(
         # Check if user is team admin for any team
         if user_obj.teams is not None and len(user_obj.teams) > 0:
             # Get all teams user is in
-            teams = await prisma_client.db.litellm_teamtable.find_many(
+            teams = await TeamRepository(prisma_client).table.find_many(
                 where={"team_id": {"in": user_obj.teams}}
             )
 
@@ -282,7 +285,7 @@ async def _team_admin_can_invite_user(
     if not target_user_obj.teams or len(target_user_obj.teams) == 0:
         return False
 
-    teams = await prisma_client.db.litellm_teamtable.find_many(
+    teams = await TeamRepository(prisma_client).table.find_many(
         where={"team_id": {"in": admin_user_obj.teams}}
     )
     admin_team_ids = [

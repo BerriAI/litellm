@@ -61,25 +61,38 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.guardrails.tool_name_extraction import (
     TOOL_CAPABLE_CALL_TYPES,
     extract_request_tool_names,
 )
-from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
+from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.table_repositories import (
+    AccessGroupRepository,
+    EndUserRepository,
+    JWTKeyMappingRepository,
+    ManagedVectorStoresRepository,
+    TagRepository,
+    TeamMembershipRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
-from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -958,7 +971,7 @@ async def get_default_end_user_budget(
 
     # Fetch from database
     try:
-        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+        budget_record = await BudgetRepository(prisma_client).table.find_unique(
             where={"budget_id": litellm.max_end_user_budget_id}
         )
 
@@ -1017,7 +1030,7 @@ async def get_team_member_default_budget(
         return LiteLLM_BudgetTable(**cached_budget)
 
     try:
-        budget_record = await prisma_client.db.litellm_budgettable.find_unique(
+        budget_record = await BudgetRepository(prisma_client).table.find_unique(
             where={"budget_id": budget_id}
         )
 
@@ -1176,7 +1189,7 @@ async def get_end_user_object(
 
     # Fetch from database
     try:
-        response = await prisma_client.db.litellm_endusertable.find_unique(
+        response = await EndUserRepository(prisma_client).table.find_unique(
             where={"user_id": end_user_id},
             include={"litellm_budget_table": True, "object_permission": True},
         )
@@ -1376,7 +1389,7 @@ async def get_tag_objects_batch(
     # Batch fetch uncached tags from DB in one query
     if uncached_tags:
         try:
-            db_tags = await prisma_client.db.litellm_tagtable.find_many(
+            db_tags = await TagRepository(prisma_client).table.find_many(
                 where={"tag_name": {"in": uncached_tags}},
                 include={"litellm_budget_table": True},
             )
@@ -1470,7 +1483,7 @@ async def get_team_membership(
 
     # else, check db
     try:
-        response = await prisma_client.db.litellm_teammembership.find_unique(
+        response = await TeamMembershipRepository(prisma_client).table.find_unique(
             where={"user_id_team_id": {"user_id": user_id, "team_id": team_id}},
             include={"litellm_budget_table": True},
         )
@@ -1623,7 +1636,7 @@ async def _get_fuzzy_user_object(
 
     response = None
     if sso_user_id is not None:
-        response = await prisma_client.db.litellm_usertable.find_unique(
+        response = await UserRepository(prisma_client).table.find_unique(
             where={"sso_user_id": sso_user_id},
             include={"organization_memberships": True},
         )
@@ -1631,14 +1644,14 @@ async def _get_fuzzy_user_object(
     if response is None and user_email is not None:
         # Use case-insensitive query to handle emails with different casing
         # This matches the pattern used in _check_duplicate_user_email
-        response = await prisma_client.db.litellm_usertable.find_first(
+        response = await UserRepository(prisma_client).table.find_first(
             where={"user_email": {"equals": user_email, "mode": "insensitive"}},
             include={"organization_memberships": True},
         )
 
         if response is not None and sso_user_id is not None:  # update sso_user_id
             asyncio.create_task(  # background task to update user with sso id
-                prisma_client.db.litellm_usertable.update(
+                UserRepository(prisma_client).table.update(
                     where={"user_id": response.user_id},
                     data={"sso_user_id": sso_user_id},
                 )
@@ -1688,7 +1701,7 @@ async def get_user_object(
         )
 
         if should_check_db:
-            response = await prisma_client.db.litellm_usertable.find_unique(
+            response = await UserRepository(prisma_client).table.find_unique(
                 where={"user_id": user_id}, include={"organization_memberships": True}
             )
 
@@ -1712,7 +1725,7 @@ async def get_user_object(
                 if litellm.default_internal_user_params is not None:
                     new_user_params.update(litellm.default_internal_user_params)
 
-                response = await prisma_client.db.litellm_usertable.create(
+                response = await UserRepository(prisma_client).table.create(
                     data=new_user_params,
                     include={"organization_memberships": True},
                 )
@@ -1861,7 +1874,7 @@ async def _delete_cache_key_object(
 async def _get_team_db_check(
     team_id: str, prisma_client: PrismaClient, team_id_upsert: Optional[bool] = None
 ):
-    response = await prisma_client.db.litellm_teamtable.find_unique(
+    response = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id}
     )
 
@@ -1883,7 +1896,7 @@ async def _get_team_db_check(
 
 
 async def _get_team_object_from_db(team_id: str, prisma_client: PrismaClient):
-    return await prisma_client.db.litellm_teamtable.find_unique(
+    return await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id}
     )
 
@@ -2112,7 +2125,7 @@ async def get_access_object(
 
     # Not in cache - fetch from DB
     try:
-        response = await prisma_client.db.litellm_accessgrouptable.find_unique(
+        response = await AccessGroupRepository(prisma_client).table.find_unique(
             where={"access_group_id": access_group_id}
         )
 
@@ -2194,7 +2207,7 @@ async def get_team_object_by_alias(
 
     # Query database by team_alias
     try:
-        teams = await prisma_client.db.litellm_teamtable.find_many(
+        teams = await TeamRepository(prisma_client).table.find_many(
             where={"team_alias": team_alias}
         )
 
@@ -2302,7 +2315,7 @@ async def get_org_object_by_alias(
 
     # Query database by organization_alias
     try:
-        orgs = await prisma_client.db.litellm_organizationtable.find_many(
+        orgs = await OrganizationRepository(prisma_client).table.find_many(
             where={"organization_alias": org_alias}
         )
 
@@ -2527,7 +2540,7 @@ async def get_jwt_key_mapping_object(
 
     Returns the hashed token (str) if a matching active mapping is found, else None.
     """
-    mapping = await prisma_client.db.litellm_jwtkeymapping.find_first(
+    mapping = await JWTKeyMappingRepository(prisma_client).table.find_first(
         where={
             "jwt_claim_name": jwt_claim_name,
             "jwt_claim_value": jwt_claim_value,
@@ -2716,7 +2729,7 @@ async def get_managed_vector_store_rows_by_uuids(
     if not cache_misses:
         return result
 
-    rows = await prisma_client.db.litellm_managedvectorstorestable.find_many(
+    rows = await ManagedVectorStoresRepository(prisma_client).table.find_many(
         where={"vector_store_id": {"in": cache_misses}},
         take=len(cache_misses),
     )
@@ -2791,7 +2804,7 @@ async def get_org_object(
         if include_budget_table:
             query_kwargs["include"] = {"litellm_budget_table": True}
 
-        response = await prisma_client.db.litellm_organizationtable.find_unique(
+        response = await OrganizationRepository(prisma_client).table.find_unique(
             **query_kwargs
         )
 
@@ -4181,7 +4194,7 @@ async def get_project_object(
         return deserialized_project
 
     # Fetch from DB
-    project_row = await prisma_client.db.litellm_projecttable.find_unique(
+    project_row = await ProjectRepository(prisma_client).table.find_unique(
         where={"project_id": project_id},
         include={"litellm_budget_table": True},
     )
