@@ -71,6 +71,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
+    MCPEnvVar,
     MCPTransport,
     MCPTransportType,
     UserAPIKeyAuth,
@@ -3957,7 +3958,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
-            env_vars=server.env_vars,
+            env_vars=self._env_vars_to_models(server.env_vars),
             status=status,
             last_health_check=datetime.now(),
             health_check_error=health_check_error,
@@ -4030,6 +4031,14 @@ class MCPServerManager:
 
         return list_mcp_servers
 
+    @staticmethod
+    def _env_vars_to_models(
+        env_vars: Optional[List[Dict[str, Any]]],
+    ) -> Optional[List[MCPEnvVar]]:
+        if env_vars is None:
+            return None
+        return [MCPEnvVar.model_validate(env_var) for env_var in env_vars]
+
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
@@ -4050,7 +4059,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
-            env_vars=server.env_vars,
+            env_vars=self._env_vars_to_models(server.env_vars),
             status=None,  # No health check performed
             last_health_check=None,  # No health check performed
             health_check_error=None,
