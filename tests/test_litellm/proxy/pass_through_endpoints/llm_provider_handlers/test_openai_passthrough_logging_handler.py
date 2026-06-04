@@ -624,46 +624,36 @@ class TestOpenAIPassthroughLoggingHandler:
     @patch(
         "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
     )
-    @patch(
-        "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.OpenAIPassthroughLoggingHandler.get_provider_config"
-    )
     def test_responses_api_cost_tracking(
-        self, mock_get_provider_config, mock_get_standard_logging, mock_completion_cost
+        self, mock_get_standard_logging, mock_completion_cost
     ):
-        """Test cost tracking for responses API route"""
+        """Test cost tracking for responses API route using OpenAIResponsesAPIConfig"""
         # Arrange
         mock_completion_cost.return_value = 0.000050
         mock_get_standard_logging.return_value = {"test": "logging_payload"}
 
-        # Mock the provider config's transform_response to return a valid ModelResponse
-        from litellm import ModelResponse
-
-        mock_model_response = ModelResponse(
-            id="resp_abc123",
-            model="gpt-4o-2024-08-06",
-            choices=[
-                {
-                    "message": {
-                        "role": "assistant",
-                        "content": "Hello! How can I help you today?",
-                    }
-                }
-            ],
-            usage={"prompt_tokens": 20, "completion_tokens": 15, "total_tokens": 35},
-        )
-
-        mock_provider_config = MagicMock()
-        mock_provider_config.transform_response.return_value = mock_model_response
-        mock_get_provider_config.return_value = mock_provider_config
-
-        # Mock responses API response
+        # Mock responses API response with realistic structure
         mock_responses_response = {
             "id": "resp_abc123",
             "object": "response",
-            "created": 1677652288,
+            "created_at": 1677652288,
             "model": "gpt-4o-2024-08-06",
-            "output": [{"type": "text", "text": "Hello! How can I help you today?"}],
-            "usage": {"input_tokens": 20, "output_tokens": 15},
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_001",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "Hello! How can I help you today?",
+                        }
+                    ],
+                }
+            ],
+            "usage": {"input_tokens": 20, "output_tokens": 15, "total_tokens": 35},
+            "status": "completed",
         }
 
         mock_httpx_response = self._create_mock_httpx_response(mock_responses_response)
@@ -698,6 +688,21 @@ class TestOpenAIPassthroughLoggingHandler:
         assert result["kwargs"]["model"] == "gpt-4o"
         assert result["kwargs"]["custom_llm_provider"] == "openai"
 
+        # Verify the result is a ResponsesAPIResponse (not an empty ModelResponse)
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        assert isinstance(result["result"], ResponsesAPIResponse)
+        usage = result["result"].usage
+        assert usage is not None
+        # With valid JSON, strict ResponsesAPIResponse() construction should always
+        # produce a proper ResponseAPIUsage model — never a plain dict.
+        # Asserting this catches unexpected model_construct fallbacks early.
+        assert not isinstance(
+            usage, dict
+        ), "usage should be a ResponseAPIUsage model, not a dict"
+        assert usage.input_tokens == 20
+        assert usage.output_tokens == 15
+
         # Verify cost calculation was called with responses call type
         mock_completion_cost.assert_called_once()
         call_args = mock_completion_cost.call_args
@@ -709,6 +714,84 @@ class TestOpenAIPassthroughLoggingHandler:
         assert mock_logging_obj.model_call_details["response_cost"] == 0.000050
         assert mock_logging_obj.model_call_details["model"] == "gpt-4o"
         assert mock_logging_obj.model_call_details["custom_llm_provider"] == "openai"
+
+    @patch("litellm.completion_cost")
+    @patch(
+        "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
+    )
+    def test_responses_api_returns_usage_not_zero(
+        self, mock_get_standard_logging, mock_completion_cost
+    ):
+        """Regression test: Responses API passthrough must produce non-zero usage.
+
+        Previously the is_responses branch used OpenAIConfig().transform_response()
+        (chat completions parser) which expects 'choices' in the response. Responses API
+        responses have 'output'/'usage' instead, causing APIError → empty ModelResponse
+        → Langfuse logs input=0, output=0.
+        """
+        mock_completion_cost.return_value = 0.001
+        mock_get_standard_logging.return_value = {"test": "logging_payload"}
+
+        mock_responses_response = {
+            "id": "resp_usage_test",
+            "object": "response",
+            "created_at": 1677652288,
+            "model": "gpt-5.5",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "msg_001",
+                    "status": "completed",
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "output_text",
+                            "text": "langfuse-responses-ok",
+                        }
+                    ],
+                }
+            ],
+            "usage": {
+                "input_tokens": 110009,
+                "output_tokens": 759,
+                "total_tokens": 110768,
+            },
+            "status": "completed",
+        }
+
+        mock_httpx_response = self._create_mock_httpx_response(mock_responses_response)
+        mock_logging_obj = self._create_mock_logging_obj()
+        passthrough_payload = self._create_passthrough_logging_payload()
+
+        kwargs = {
+            "passthrough_logging_payload": passthrough_payload,
+            "model": "gpt-5.5",
+            "custom_llm_provider": "openai",
+        }
+
+        result = OpenAIPassthroughLoggingHandler.openai_passthrough_handler(
+            httpx_response=mock_httpx_response,
+            response_body=mock_responses_response,
+            logging_obj=mock_logging_obj,
+            url_route="https://api.openai.com/v1/responses",
+            result="",
+            start_time=self.start_time,
+            end_time=self.end_time,
+            cache_hit=False,
+            request_body={"model": "gpt-5.5", "input": "test"},
+            **kwargs,
+        )
+
+        from litellm.types.llms.openai import ResponsesAPIResponse
+
+        assert isinstance(result["result"], ResponsesAPIResponse)
+        usage = result["result"].usage
+        assert usage is not None
+        assert not isinstance(
+            usage, dict
+        ), "usage should be a ResponseAPIUsage model, not a dict"
+        assert usage.input_tokens > 0
+        assert usage.output_tokens > 0
 
 
 class TestOpenAIPassthroughIntegration:

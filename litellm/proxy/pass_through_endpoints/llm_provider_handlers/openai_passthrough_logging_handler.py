@@ -1,7 +1,8 @@
 """
 OpenAI Passthrough Logging Handler
 
-Handles cost tracking and logging for OpenAI passthrough endpoints, specifically /chat/completions.
+Handles cost tracking and logging for OpenAI passthrough endpoints, specifically /chat/completions,
+/v1/responses, /v1/images/generations, and /v1/images/edits.
 """
 
 from datetime import datetime
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.llms.openai.openai import OpenAIConfig as OpenAIConfigType
+from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
@@ -253,7 +255,12 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         try:
             response_cost = 0.0
             litellm_model_response: Optional[
-                Union[ModelResponse, TextCompletionResponse, ImageResponse]
+                Union[
+                    ModelResponse,
+                    TextCompletionResponse,
+                    ImageResponse,
+                    litellm.ResponsesAPIResponse,
+                ]
             ] = None
             handler_instance = OpenAIPassthroughLoggingHandler()
 
@@ -336,21 +343,16 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                     litellm_model_response._hidden_params = {}
                 litellm_model_response._hidden_params["response_cost"] = response_cost
             elif is_responses:
-                # Handle responses API cost calculation
-                provider_config = handler_instance.get_provider_config(model=model)
-                existing_litellm_params = kwargs.get("litellm_params", {}) or {}
-                litellm_model_response = provider_config.transform_response(
-                    raw_response=httpx_response,
-                    model_response=litellm.ModelResponse(),
-                    model=model,
-                    messages=request_body.get("messages", []),
-                    logging_obj=logging_obj,
-                    optional_params=request_body.get("optional_params", {}),
-                    api_key="",
-                    request_data=request_body,
-                    encoding=litellm.encoding,
-                    json_mode=False,
-                    litellm_params=existing_litellm_params,
+                # Handle responses API cost calculation using the Responses API config
+                # which correctly parses Responses API JSON (output/usage) instead of
+                # Chat Completions JSON (choices/prompt_tokens/completion_tokens).
+                responses_provider_config = OpenAIResponsesAPIConfig()
+                litellm_model_response = (
+                    responses_provider_config.transform_response_api_response(
+                        model=model,
+                        raw_response=httpx_response,
+                        logging_obj=logging_obj,
+                    )
                 )
 
                 # Calculate cost using LiteLLM's cost calculator with responses call type
@@ -398,7 +400,15 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
             endpoint_type = (
                 "chat_completions"
                 if is_chat_completions
-                else "image_generation" if is_image_generation else "image_editing"
+                else (
+                    "image_generation"
+                    if is_image_generation
+                    else (
+                        "image_editing"
+                        if is_image_editing
+                        else "responses" if is_responses else "unknown"
+                    )
+                )
             )
             verbose_proxy_logger.debug(
                 f"OpenAI passthrough cost tracking - Endpoint: {endpoint_type}, Model: {model}, Cost: ${response_cost:.6f}"
