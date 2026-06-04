@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import unittest.mock
 import pytest
 from unittest.mock import Mock, patch
 
@@ -671,3 +672,87 @@ class TestSSRFGuardTransport:
         with patch("socket.getaddrinfo", return_value=mock_infos):
             with pytest.raises(ValueError, match="private/reserved"):
                 transport.handle_request(redirect_request)
+
+
+class TestSSRFTraceConfig:
+    """Tests for the on_request_start trace hook that blocks IP-literal aiohttp
+    redirect targets — the gap _SSRFGuardResolver cannot cover because aiohttp
+    skips DNS resolution when the Location header is already an IP literal."""
+
+    def _run(self, coro):
+        return asyncio.run(coro)
+
+    def _mock_params(self, url: str):
+        params = unittest.mock.Mock()
+        params.url = url
+        return params
+
+    def test_trace_callback_blocks_aws_metadata_ip_literal(self):
+        from litellm.llms.custom_httpx.aiohttp_handler import _on_ssrf_request_start
+
+        async def run():
+            with pytest.raises(ValueError, match="private/reserved"):
+                await _on_ssrf_request_start(
+                    unittest.mock.Mock(),
+                    unittest.mock.Mock(),
+                    self._mock_params("http://169.254.169.254/latest/meta-data/"),
+                )
+
+        self._run(run())
+
+    def test_trace_callback_blocks_private_rfc1918_ip_literal(self):
+        from litellm.llms.custom_httpx.aiohttp_handler import _on_ssrf_request_start
+
+        async def run():
+            with pytest.raises(ValueError, match="private/reserved"):
+                await _on_ssrf_request_start(
+                    unittest.mock.Mock(),
+                    unittest.mock.Mock(),
+                    self._mock_params("http://10.0.0.1/internal"),
+                )
+
+        self._run(run())
+
+    def test_trace_callback_allows_public_ip_literal(self):
+        from litellm.llms.custom_httpx.aiohttp_handler import _on_ssrf_request_start
+
+        async def run():
+            # Public IP — must not raise
+            await _on_ssrf_request_start(
+                unittest.mock.Mock(),
+                unittest.mock.Mock(),
+                self._mock_params("https://104.18.7.8/v1/chat/completions"),
+            )
+
+        self._run(run())
+
+    def test_trace_callback_passes_hostname_urls_through(self):
+        """Hostname URLs are not IP literals — resolver handles them at DNS time."""
+        from litellm.llms.custom_httpx.aiohttp_handler import _on_ssrf_request_start
+
+        async def run():
+            await _on_ssrf_request_start(
+                unittest.mock.Mock(),
+                unittest.mock.Mock(),
+                self._mock_params("https://api.openai.com/v1/chat/completions"),
+            )
+
+        self._run(run())
+
+    def test_trace_callback_bypassed_when_flag_set(self):
+        from litellm.llms.custom_httpx.aiohttp_handler import _on_ssrf_request_start
+
+        litellm.allow_requests_to_internal_ips = True
+        try:
+
+            async def run():
+                # Private IP literal must NOT raise when flag is set
+                await _on_ssrf_request_start(
+                    unittest.mock.Mock(),
+                    unittest.mock.Mock(),
+                    self._mock_params("http://169.254.169.254/latest/meta-data/"),
+                )
+
+            self._run(run())
+        finally:
+            litellm.allow_requests_to_internal_ips = False

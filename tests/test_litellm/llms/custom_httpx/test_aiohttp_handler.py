@@ -354,8 +354,15 @@ class TestBaseLLMAIOHTTPHandler:
 
         assert isinstance(kwargs.get("resolver"), _SSRFGuardResolver)
 
-        # Verify ClientSession received the connector
-        mock_client_session.assert_called_once_with(connector=mock_connector_instance)
+        # Verify ClientSession received the connector and SSRF trace config
+        mock_client_session.assert_called_once()
+        _, call_kwargs = mock_client_session.call_args
+        assert call_kwargs.get("connector") is mock_connector_instance
+        trace_configs = call_kwargs.get("trace_configs", [])
+        assert len(trace_configs) == 1
+        import aiohttp as _aiohttp
+
+        assert isinstance(trace_configs[0], _aiohttp.TraceConfig)
         assert result is mock_session_instance
 
     def test_get_or_create_transport(self):
@@ -428,6 +435,32 @@ class TestBaseLLMAIOHTTPHandler:
 
         # Should not raise any exceptions
         await handler.close()
+
+    def test_del_without_running_loop_uses_new_event_loop(self):
+        """__del__ falls back to asyncio.new_event_loop() when no loop is running.
+
+        This covers the RuntimeError branch added to replace the deprecated
+        asyncio.get_event_loop() call — the fallback is needed during interpreter
+        shutdown or in synchronous contexts where no event loop is active.
+        """
+        mock_session = Mock()
+        mock_session.closed = False
+
+        handler = BaseLLMAIOHTTPHandler()
+        handler.client_session = mock_session
+        handler._owns_session = True
+
+        with patch(
+            "asyncio.get_running_loop", side_effect=RuntimeError("no running loop")
+        ):
+            with patch("asyncio.new_event_loop") as mock_new_loop:
+                mock_loop = Mock()
+                mock_new_loop.return_value = mock_loop
+                handler.__del__()
+
+        mock_new_loop.assert_called_once()
+        mock_loop.run_until_complete.assert_called_once()
+        mock_loop.close.assert_called_once()
 
     def test_transport_priority_hierarchy(self):
         """Test that session creation follows the right priority: transport > connector > default"""
