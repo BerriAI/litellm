@@ -174,8 +174,8 @@ def _select_model_by_priority(
 
     * **speedPriority** — higher means "prefer faster models".
       Metric: ``output_tokens_per_second`` from model info when available;
-      otherwise inverse of ``max_output_tokens`` (smaller / simpler models
-      tend to have lower latency).
+      otherwise a neutral score for every candidate, since no reliable
+      latency proxy exists (context-window size does not track speed).
 
     * **intelligencePriority** — higher means "prefer smarter models".
       Metric: ``max_output_tokens`` is used as a rough capability proxy
@@ -205,8 +205,6 @@ def _select_model_by_priority(
         output_cost = info.get("output_cost_per_token") or 0.0
         total_cost = input_cost + output_cost
         max_output = info.get("max_output_tokens") or info.get("max_tokens") or 0
-        # Use output_tokens_per_second if available; fall back to inverse of
-        # max_output as a rough proxy (smaller/simpler models tend to be faster).
         output_tps = info.get("output_tokens_per_second") or 0.0
         scored.append(
             {
@@ -238,11 +236,11 @@ def _select_model_by_priority(
     # costPriority: lower cost → higher score  (invert)
     cost_scores = _normalise(costs, invert=True)
     # speedPriority: use output_tokens_per_second if any model has it,
-    # otherwise fall back to inverse max_output (smaller models → faster).
+    # otherwise a neutral score (no reliable latency proxy is available).
     if any(v > 0 for v in output_tps_values):
         speed_scores = _normalise(output_tps_values, invert=False)
     else:
-        speed_scores = _normalise(max_outputs, invert=True)
+        speed_scores = [0.5] * len(scored)
     # intelligencePriority: higher max_output → smarter
     intel_scores = _normalise(max_outputs, invert=False)
 

@@ -173,6 +173,60 @@ def _mcp_session_id_from_headers(
     return None
 
 
+def _jsonrpc_text_has_top_level_method(text: str) -> bool:
+    """Whether a (possibly truncated) JSON-RPC envelope has a ``method`` key at
+    the root object's top level.
+
+    Used to tell a request/notification (carries ``method``) apart from a
+    response (carries ``result``/``error`` and no top-level ``method``). A
+    response payload can itself nest a ``method`` field, so only keys at the
+    root object's depth are inspected rather than searching the whole string.
+    Returns ``True`` only when a top-level ``method`` key is positively found;
+    truncation that hides it yields ``False``.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    in_object: List[bool] = []
+    reading_key = False
+    expect_key = False
+    key_chars: List[str] = []
+    for ch in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+                if reading_key and depth == 1 and "".join(key_chars) == "method":
+                    return True
+            elif reading_key:
+                key_chars.append(ch)
+            continue
+        if ch == '"':
+            in_string = True
+            reading_key = expect_key and depth >= 1 and in_object[-1]
+            key_chars = []
+            expect_key = False
+        elif ch == "{" or ch == "[":
+            depth += 1
+            in_object.append(ch == "{")
+            expect_key = ch == "{"
+        elif ch == "}" or ch == "]":
+            if in_object:
+                in_object.pop()
+            depth -= 1
+            if depth <= 0:
+                break
+            expect_key = False
+        elif ch == ",":
+            expect_key = bool(in_object) and in_object[-1]
+        elif ch == ":":
+            expect_key = False
+    return False
+
+
 if MCP_AVAILABLE:
     from mcp.server import Server
     from mcp.server.lowlevel.server import NotificationOptions
@@ -3781,20 +3835,22 @@ if MCP_AVAILABLE:
                             _peeked.get("id"),
                         )
                 except (json.JSONDecodeError, TypeError):
-                    # Body may be truncated by the peek cap.  Use a substring
-                    # heuristic so we don't deadlock on large response payloads.
-                    # A false-positive (skipping the lock) is harmless; a
-                    # false-negative (acquiring it) would deadlock.
-                    _body_str = body[:512].decode("utf-8", errors="replace")
+                    # Peek cap truncated the body, so it can't be fully parsed.
+                    # Scan the top-level keys (depth-aware) instead of a flat
+                    # substring search: a response's result payload may nest a
+                    # "method" field, and misreading that would acquire the lock
+                    # and deadlock the in-flight tool call awaiting this
+                    # response. A false skip is harmless; a false acquire is not.
+                    _body_str = body.decode("utf-8", errors="replace")
                     if (
                         '"jsonrpc"' in _body_str
-                        and '"method"' not in _body_str
                         and ('"result"' in _body_str or '"error"' in _body_str)
+                        and not _jsonrpc_text_has_top_level_method(_body_str)
                     ):
                         is_jsonrpc_response = True
                         verbose_logger.debug(
-                            "MCP: heuristic detected truncated JSON-RPC response POST, "
-                            "skipping session lock to avoid deadlock"
+                            "MCP: detected truncated JSON-RPC response POST via "
+                            "top-level key scan, skipping session lock to avoid deadlock"
                         )
 
             session_lock: Optional[asyncio.Lock] = None

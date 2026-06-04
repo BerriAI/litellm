@@ -2595,6 +2595,134 @@ async def test_stateful_mcp_get_stream_does_not_block_post():
         mcp_server._stateful_session_locks.pop(session_id, None)
 
 
+def test_jsonrpc_text_has_top_level_method_ignores_nested_method():
+    """The top-level-key scan must not be fooled by a ``method`` field nested
+    inside a JSON-RPC response's ``result`` payload — a flat substring search
+    would, and that misread is what deadlocks the session lock."""
+    from litellm.proxy._experimental.mcp_server.server import (
+        _jsonrpc_text_has_top_level_method,
+    )
+
+    request = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}'
+    assert _jsonrpc_text_has_top_level_method(request) is True
+
+    # method key out of order (after params) is still top-level
+    reordered = '{"jsonrpc":"2.0","params":{"x":1},"method":"foo"}'
+    assert _jsonrpc_text_has_top_level_method(reordered) is True
+
+    # response whose result nests a "method" key (and arrays of them)
+    response = (
+        '{"jsonrpc":"2.0","id":1,"result":{"toolResult":{"method":"GET"},'
+        '"steps":[{"method":"x"}]}}'
+    )
+    assert _jsonrpc_text_has_top_level_method(response) is False
+
+    # truncated response: result value never closes, no top-level method seen
+    truncated = '{"jsonrpc":"2.0","id":1,"result":{"text":"' + "q" * 5000
+    assert _jsonrpc_text_has_top_level_method(truncated) is False
+
+
+@pytest.mark.asyncio
+async def test_truncated_jsonrpc_response_with_nested_method_skips_lock():
+    """Regression: a large JSON-RPC *response* POST whose ``result`` payload
+    nests a ``method`` key must skip the per-session lock so it does not
+    deadlock behind the in-flight request POST that is holding the lock while
+    it awaits this very response (e.g. sampling/createMessage)."""
+    try:
+        from litellm.proxy._experimental.mcp_server import server as mcp_server
+        from litellm.proxy._experimental.mcp_server.server import (
+            handle_streamable_http_mcp,
+            session_manager_stateful,
+        )
+    except ImportError:
+        pytest.skip("MCP server not available")
+
+    session_id = "nested-method-response-session"
+    owner_auth = UserAPIKeyAuth(api_key="owner-key", user_id="owner")
+    mcp_server._stateful_session_auth_contexts[session_id] = (
+        mcp_server.MCPAuthenticatedUser(user_api_key_auth=owner_auth)
+    )
+    mcp_server._stateful_session_owners[session_id] = mcp_server._owner_fingerprint_for(
+        owner_auth
+    )
+
+    gate = asyncio.Event()
+    request_in_handle = asyncio.Event()
+    response_handled = asyncio.Event()
+
+    async def handle(s, r, se):
+        msg = await r()
+        body = msg.get("body", b"") or b""
+        if b'"result"' in body:
+            response_handled.set()
+        else:
+            request_in_handle.set()
+            await gate.wait()
+
+    async def call(body: bytes):
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"mcp-session-id", session_id.encode())],
+        }
+        receive = AsyncMock(
+            return_value={
+                "type": "http.request",
+                "body": body,
+                "more_body": False,
+            }
+        )
+        await handle_streamable_http_mcp(scope, receive, AsyncMock())
+
+    # The in-flight request POST holds the session lock while blocked.
+    request_body = b'{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{}}'
+    # A JSON-RPC response larger than the routing peek cap so it can't be fully
+    # parsed, with a nested "method" key in the first bytes to trip a flat
+    # substring heuristic.
+    response_body = (
+        '{"jsonrpc":"2.0","id":99,"result":{"toolResult":'
+        '{"method":"GET","payload":"' + ("x" * 5000) + '"}}}'
+    ).encode()
+
+    try:
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
+                new_callable=AsyncMock,
+                return_value=(owner_auth, None, None, None, None, None),
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._SESSION_MANAGERS_INITIALIZED",
+                True,
+            ),
+            patch.object(
+                session_manager_stateful, "handle_request", side_effect=handle
+            ),
+            patch.object(
+                session_manager_stateful,
+                "_server_instances",
+                {session_id: MagicMock()},
+            ),
+        ):
+            req_task = asyncio.create_task(call(request_body))
+            await asyncio.wait_for(request_in_handle.wait(), timeout=1.0)
+
+            resp_task = asyncio.create_task(call(response_body))
+            # Under a flat substring heuristic the response would acquire the
+            # lock held by req_task and this wait would time out (deadlock).
+            await asyncio.wait_for(response_handled.wait(), timeout=1.0)
+
+            gate.set()
+            await asyncio.gather(req_task, resp_task)
+    finally:
+        gate.set()
+        mcp_server._stateful_session_auth_contexts.pop(session_id, None)
+        mcp_server._stateful_session_owners.pop(session_id, None)
+        mcp_server._stateful_session_locks.pop(session_id, None)
+        mcp_server._stateful_session_active_request_counts.pop(session_id, None)
+
+
 @pytest.mark.asyncio
 @pytest.mark.no_parallel
 async def test_mcp_routing_with_conflicting_alias_and_group_name():

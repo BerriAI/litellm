@@ -156,6 +156,38 @@ class TestSelectModelByPriority:
         result = _select_model_by_priority(["gpt-4o"], prefs)
         assert result == "gpt-4o"
 
+    def test_speed_priority_is_neutral_when_no_tps_data(self):
+        """When no candidate exposes output_tokens_per_second, speedPriority
+        must not fall back to context-window size as a latency proxy: that
+        biased selection toward the smallest-context model regardless of real
+        speed. With a neutral score the tie resolves to the first candidate,
+        so the larger-context model listed first is kept."""
+        no_tps_info = {
+            "big-ctx": {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "max_output_tokens": 100000,
+                "max_tokens": 100000,
+            },
+            "small-ctx": {
+                "input_cost_per_token": 0.0,
+                "output_cost_per_token": 0.0,
+                "max_output_tokens": 1000,
+                "max_tokens": 1000,
+            },
+        }
+
+        def info(model, **kwargs):
+            return no_tps_info[model]
+
+        with patch("litellm.get_model_info", side_effect=info):
+            prefs = _prefs(speed=1.0)
+            # The inverse-max_output proxy would pick "small-ctx" here; a
+            # neutral score keeps the first candidate.
+            assert _select_model_by_priority(["big-ctx", "small-ctx"], prefs) == (
+                "big-ctx"
+            )
+
 
 # ---------------------------------------------------------------------------
 # _resolve_model_from_preferences — priority integration
