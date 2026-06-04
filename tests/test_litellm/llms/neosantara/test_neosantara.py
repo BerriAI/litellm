@@ -16,6 +16,7 @@ def test_neosantara_json_registry():
     assert config.base_url == NEOSANTARA_API_BASE
     assert config.api_key_env == "NEOSANTARA_API_KEY"
     assert config.api_base_env == "NEOSANTARA_API_BASE"
+    assert config.param_mappings["max_completion_tokens"] == "max_tokens"
     assert "/v1/chat/completions" in config.supported_endpoints
     assert "/v1/responses" in config.supported_endpoints
 
@@ -65,6 +66,21 @@ def test_neosantara_chat_complete_url():
         )
         == "https://api.neosantara.xyz/v1/chat/completions"
     )
+
+
+def test_neosantara_maps_max_completion_tokens_to_max_tokens():
+    from litellm.llms.openai_like.dynamic_config import create_config_class
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    config = create_config_class(JSONProviderRegistry.get("neosantara"))()
+    optional_params = config.map_openai_params(
+        non_default_params={"max_completion_tokens": 7},
+        optional_params={},
+        model="gemini-3-flash",
+        drop_params=False,
+    )
+
+    assert optional_params == {"max_tokens": 7}
 
 
 def test_neosantara_responses_api_config():
