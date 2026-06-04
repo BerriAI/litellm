@@ -240,6 +240,7 @@ api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
 gigachat_key: Optional[str] = None
+xai_key: Optional[str] = None
 databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -277,6 +278,7 @@ ovhcloud_key: Optional[str] = None
 lemonade_key: Optional[str] = None
 sap_service_key: Optional[str] = None
 amazon_nova_api_key: Optional[str] = None
+inception_key: Optional[str] = None
 common_cloud_provider_auth_params: dict = {
     "params": ["project", "region_name", "token"],
     "providers": ["vertex_ai", "bedrock", "watsonx", "azure", "vertex_ai_beta"],
@@ -550,6 +552,7 @@ cohere_models: Set = set()
 cohere_chat_models: Set = set()
 mistral_chat_models: Set = set()
 text_completion_codestral_models: Set = set()
+text_completion_inception_models: Set = set()
 anthropic_models: Set = set()
 openrouter_models: Set = set()
 datarobot_models: Set = set()
@@ -627,6 +630,7 @@ publicai_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
+inception_models: Set = set()
 hyperbolic_models: Set = set()
 black_forest_labs_models: Set = set()
 recraft_models: Set = set()
@@ -791,6 +795,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
                 fireworks_ai_embedding_models.add(key)
         elif value.get("litellm_provider") == "text-completion-codestral":
             text_completion_codestral_models.add(key)
+        elif value.get("litellm_provider") == "text-completion-inception":
+            text_completion_inception_models.add(key)
         elif value.get("litellm_provider") == "xai":
             xai_models.add(key)
         elif value.get("litellm_provider") == "zai":
@@ -877,6 +883,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             morph_models.add(key)
         elif value.get("litellm_provider") == "lambda_ai":
             lambda_ai_models.add(key)
+        elif value.get("litellm_provider") == "inception":
+            inception_models.add(key)
         elif value.get("litellm_provider") == "hyperbolic":
             hyperbolic_models.add(key)
         elif value.get("litellm_provider") == "black_forest_labs":
@@ -979,6 +987,7 @@ model_list = list(
     | watsonx_models
     | gemini_models
     | text_completion_codestral_models
+    | text_completion_inception_models
     | xai_models
     | zai_models
     | fal_ai_models
@@ -1017,6 +1026,7 @@ model_list = list(
     | v0_models
     | morph_models
     | lambda_ai_models
+    | inception_models
     | black_forest_labs_models
     | recraft_models
     | cometapi_models
@@ -1073,6 +1083,7 @@ models_by_provider: dict = {
     "fireworks_ai": fireworks_ai_models | fireworks_ai_embedding_models,
     "aleph_alpha": aleph_alpha_models,
     "text-completion-codestral": text_completion_codestral_models,
+    "text-completion-inception": text_completion_inception_models,
     "xai": xai_models,
     "zai": zai_models,
     "fal_ai": fal_ai_models,
@@ -1117,6 +1128,7 @@ models_by_provider: dict = {
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,
+    "inception": inception_models,
     "hyperbolic": hyperbolic_models,
     "black_forest_labs": black_forest_labs_models,
     "recraft": recraft_models,
@@ -1868,6 +1880,9 @@ if TYPE_CHECKING:
     from .llms.codestral.completion.transformation import (
         CodestralTextCompletionConfig as CodestralTextCompletionConfig,
     )
+    from .llms.inception.completion.transformation import (
+        InceptionTextCompletionConfig as InceptionTextCompletionConfig,
+    )
     from .llms.azure.azure import (
         AzureOpenAIAssistantsAPIConfig as AzureOpenAIAssistantsAPIConfig,
     )
@@ -1935,6 +1950,9 @@ if TYPE_CHECKING:
     from .llms.ragflow.chat.transformation import RAGFlowConfig as RAGFlowConfig
     from .llms.lambda_ai.chat.transformation import (
         LambdaAIChatConfig as LambdaAIChatConfig,
+    )
+    from .llms.inception.chat.transformation import (
+        InceptionChatConfig as InceptionChatConfig,
     )
     from .llms.hyperbolic.chat.transformation import (
         HyperbolicChatConfig as HyperbolicChatConfig,

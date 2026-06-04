@@ -48,6 +48,18 @@ def _isolate_proxy_module_globals():
                 setattr(proxy_server, name, value)
 
 
+@pytest.fixture(autouse=True)
+def _reset_graceful_shutdown_state():
+    """Graceful shutdown state is process-scoped; keep it from leaking between tests."""
+    from litellm.proxy.shutdown.graceful_shutdown_manager import (
+        GracefulShutdownManager,
+    )
+
+    GracefulShutdownManager.reset()
+    yield
+    GracefulShutdownManager.reset()
+
+
 def build_cache_config(enable_cache: bool = True) -> Optional[Dict]:
     """
     Build Redis cache configuration from environment variables.

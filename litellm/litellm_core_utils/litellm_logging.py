@@ -5300,8 +5300,12 @@ class StandardLoggingPayloadSetup:
                     tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
                 )  # Limit to first 100 lines
 
-        # Get additional error details
-        error_message = str(original_exception)
+        explicit_message = getattr(original_exception, "message", None)
+        error_message = (
+            explicit_message
+            if isinstance(explicit_message, str) and explicit_message
+            else str(original_exception)
+        )
 
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,
