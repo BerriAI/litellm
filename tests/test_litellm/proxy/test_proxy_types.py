@@ -47,6 +47,24 @@ def test_audit_log_masking():
     assert json_before_value["key"] == "sk-1*****7890"
 
 
+def test_team_membership_null_budget_table():
+    """
+    Regression test for: LiteLLM_TeamMembership.litellm_budget_table missing = None.
+    In Pydantic v2, Optional[T] without a default is required; rows with budget_id=null
+    raised a validation error and returned 401.
+    Related: https://github.com/BerriAI/litellm/issues/28689
+    """
+    from litellm.proxy._types import LiteLLM_TeamMembership
+
+    membership = LiteLLM_TeamMembership(user_id="u1", team_id="t1")
+    assert membership.litellm_budget_table is None
+
+    membership_explicit = LiteLLM_TeamMembership(
+        user_id="u1", team_id="t1", litellm_budget_table=None
+    )
+    assert membership_explicit.litellm_budget_table is None
+
+
 def test_internal_jobs_user_has_proxy_admin_role():
     """
     Test that the internal jobs system user has PROXY_ADMIN role.
