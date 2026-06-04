@@ -1215,6 +1215,11 @@ class KeyRequest(LiteLLMPydanticObjectBase):
 from litellm.models.team import (  # noqa: E402
     LiteLLM_ModelTable as LiteLLM_ModelTable,
 )
+from litellm.models.model import (  # noqa: E402
+    LiteLLM_ProxyModelTable as LiteLLM_ProxyModelTable,
+)
+
+
 # MCP Types
 class SpecialMCPServerName(str, enum.Enum):
     all_team_servers = "all-team-mcpservers"
