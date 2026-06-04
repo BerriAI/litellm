@@ -11,7 +11,7 @@ from litellm.models.credentials import (
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
-from litellm.models.project import Project
+from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import Team
 from litellm.models.user import User
 from litellm.models.verification_token import VerificationToken
@@ -24,7 +24,7 @@ __all__ = [
     "LiteLLM_ProxyModelTable",
     "LiteLLM_ObjectPermissionTable",
     "Organization",
-    "Project",
+    "LiteLLM_ProjectTable",
     "Team",
     "User",
     "VerificationToken",

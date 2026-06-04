@@ -135,7 +135,7 @@ class MockPrismaClient:
         self.db.litellm_deletedverificationtoken = MockTable()
         self.db.litellm_config = MockTable()
         self.db.litellm_organizationtable = MockTable()
-        self.db.litellm_projecttable = MockTable()
+        self.db.litellm_projecttable = MockTable(pk_field="project_id")
         self.db.litellm_objectpermissiontable = MockTable(
             pk_field="object_permission_id"
         )
