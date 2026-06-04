@@ -3078,6 +3078,83 @@ def test_vertex_ai_gemini3_tool_combination_no_drop():
     assert len(tools) == 3
 
 
+def test_get_optional_params_keeps_google_search_with_server_side_flag():
+    """
+    include_server_side_tool_invocations must be in non_default_params before
+    map_openai_params runs (not only via add_provider_specific_params after).
+    """
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="gemini-3.1-pro-preview",
+        custom_llm_provider="gemini",
+        tools=[
+            {"google_search": {}},
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": "Send a message back",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    },
+                },
+            },
+        ],
+        include_server_side_tool_invocations=True,
+    )
+
+    assert optional_params.get("include_server_side_tool_invocations") is True
+    tool_keys = set()
+    for tool in optional_params.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" in tool_keys
+
+
+def test_map_openai_params_tools_before_include_server_side_flag():
+    """
+    Request bodies often list tools before include_server_side_tool_invocations.
+    Search tools must not be dropped when the flag is present later in the dict.
+    """
+    v = VertexGeminiConfig()
+    optional_params: dict = {}
+    non_default_params = {
+        "tools": [
+            {"google_search": {}},
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": "Send a message back",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    },
+                },
+            },
+        ],
+        "include_server_side_tool_invocations": True,
+    }
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-3.1-pro-preview",
+        drop_params=True,
+    )
+
+    assert result.get("include_server_side_tool_invocations") is True
+    tool_keys = set()
+    for tool in result.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" in tool_keys
+
+
 def test_vertex_ai_mixed_tools_and_web_search_options_drops_search():
     """
     When function tools and web_search_options are sent separately (Codex-style),

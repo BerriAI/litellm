@@ -285,6 +285,80 @@ def test_extra_body_tags_not_forwarded_to_vertex_ai():
     assert result["custom_param"] == "allowed"
 
 
+def test_extra_body_google_maps_rewrites_json_response_format():
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "response_mime_type": "application/json",
+        "response_schema": {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        },
+        "extra_body": {
+            "tools": [{"googleMaps": {}}],
+        },
+    }
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    generation_config = result["generationConfig"]
+    assert "response_mime_type" not in generation_config
+    assert generation_config["responseFormat"] == {
+        "text": {
+            "mimeType": "APPLICATION_JSON",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+            },
+        }
+    }
+
+
+def test_extra_body_generation_config_cannot_restore_google_maps_json_mime_type():
+    messages = [{"role": "user", "content": "test"}]
+    optional_params = {
+        "tools": [{"googleMaps": {}}],
+        "response_mime_type": "application/json",
+        "extra_body": {
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "response_json_schema": {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                },
+            },
+        },
+    }
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-2.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    generation_config = result["generationConfig"]
+    assert "response_mime_type" not in generation_config
+    assert "response_json_schema" not in generation_config
+    assert generation_config["responseFormat"] == {
+        "text": {
+            "mimeType": "APPLICATION_JSON",
+            "schema": {
+                "type": "object",
+                "properties": {"answer": {"type": "string"}},
+            },
+        }
+    }
+
+
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
     messages = [{"role": "user", "content": "test"}]
