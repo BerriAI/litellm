@@ -25,6 +25,7 @@ class SnowflakeBaseConfig:
             "temperature",
             "max_tokens",
             "top_p",
+            "stream",
             "response_format",
             "tools",
             "tool_choice",

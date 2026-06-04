@@ -1322,7 +1322,9 @@ def completion(  # type: ignore # noqa: PLR0915
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
-    base_model = kwargs.get("base_model", None)
+    base_model = kwargs.get("base_model", None) or (
+        model_info.get("base_model") if isinstance(model_info, dict) else None
+    )
     ### DISABLE FLAGS ###
     disable_add_transform_inline_image_block = kwargs.get(
         "disable_add_transform_inline_image_block", None
@@ -1534,11 +1536,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "logit_bias": logit_bias,
             "user": user,
             # params to identify the model
-            "model": (
-                model_info.get("base_model")
-                if isinstance(model_info, dict) and model_info.get("base_model")
-                else model
-            ),
+            "model": model,
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
