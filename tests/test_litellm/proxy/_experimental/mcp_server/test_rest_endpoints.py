@@ -544,6 +544,138 @@ class TestListToolsRestAPI:
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
 
+    async def test_single_server_upstream_error_surfaces_server_error(
+        self, monkeypatch
+    ):
+        """A non-auth upstream failure (e.g. 429) on the single-server route must
+        surface as ``server_error`` — not laundered into a 200 success-empty body."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamError,
+        )
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "mock_databricks"
+            allowed_tools = None
+            mcp_info = {"server_name": "mock_databricks"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPUpstreamError(status_code=429, server_name="mock_databricks")
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == []
+        assert result["error"] == "server_error"
+        assert "mock_databricks" in result["message"]
+        assert result["message"] != "Successfully retrieved tools"
+
+    async def test_multi_server_upstream_error_surfaces_partial_failure(
+        self, monkeypatch
+    ):
+        """When every queried server fails with an upstream error, the multi-server
+        route must report ``partial_failure`` — not a 200 ``Successfully retrieved
+        tools`` with an empty list."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamError,
+        )
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            server_id = "server-1"
+            alias = "server-1"
+            server_name = "server-1"
+            name = "mock_databricks"
+            allowed_tools = None
+            mcp_info = {"server_name": "mock_databricks"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPUpstreamError(status_code=429, server_name="mock_databricks")
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id=None,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+
+        assert result["tools"] == []
+        assert result["error"] == "partial_failure"
+        assert "mock_databricks" in result["message"]
+        assert result["message"] != "Successfully retrieved tools"
+
     @pytest.mark.parametrize("upstream_status", [401, 403])
     async def test_upstream_auth_failure_surfaces_status_and_challenge(
         self, monkeypatch, upstream_status
