@@ -286,6 +286,49 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
         )
 
+        # Hoist role="system" entries from messages[] into the top-level
+        # system field. Anthropic's Messages API recently added support for
+        # system entries inside the messages array (Claude 4.8 announcement),
+        # but Bedrock and other downstream providers still expect system on
+        # the top-level field. Normalize here so every adapter sees the same
+        # canonical layout (#29698).
+        if isinstance(messages, list) and any(
+            isinstance(m, dict) and m.get("role") == "system" for m in messages
+        ):
+            hoisted_system: List[Dict[str, Any]] = []
+            remaining_messages: List[Any] = []
+            for m in messages:
+                if isinstance(m, dict) and m.get("role") == "system":
+                    content = m.get("content")
+                    if isinstance(content, str) and content:
+                        hoisted_system.append({"type": "text", "text": content})
+                    elif isinstance(content, list):
+                        hoisted_system.extend(
+                            c for c in content if isinstance(c, dict)
+                        )
+                    # Drop empty/None system entries silently.
+                else:
+                    remaining_messages.append(m)
+            messages = remaining_messages
+            if hoisted_system:
+                existing_system = anthropic_messages_optional_request_params.get(
+                    "system"
+                )
+                if existing_system is None:
+                    anthropic_messages_optional_request_params["system"] = (
+                        hoisted_system
+                    )
+                elif isinstance(existing_system, str):
+                    anthropic_messages_optional_request_params["system"] = [
+                        {"type": "text", "text": existing_system},
+                        *hoisted_system,
+                    ]
+                elif isinstance(existing_system, list):
+                    anthropic_messages_optional_request_params["system"] = [
+                        *existing_system,
+                        *hoisted_system,
+                    ]
+
         # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")
         if system_param is not None:
