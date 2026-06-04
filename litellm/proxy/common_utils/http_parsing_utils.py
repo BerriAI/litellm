@@ -213,6 +213,38 @@ def _safe_get_request_headers(request: Optional[Request]) -> dict:
     return headers
 
 
+# Caller-supplied telemetry-control headers. Observability integrations map
+# these onto trace identity/routing (langfuse_* -> trace_id/session_id/user_id,
+# opik_* -> project, helicone_* -> metadata, traceparent -> parent span) on a
+# shared, single-credential backend, so any authenticated tenant could otherwise
+# spoof or graft onto another tenant's traces. The legitimate way to set trace
+# fields is key/team metadata, not client request headers.
+_UNTRUSTED_TELEMETRY_HEADER_PREFIXES = ("langfuse_", "opik_", "helicone_")
+_UNTRUSTED_TELEMETRY_HEADER_NAMES = frozenset({"traceparent", "tracestate"})
+
+
+def strip_untrusted_telemetry_headers(headers: Any) -> dict:
+    """Return a copy of ``headers`` with caller-supplied telemetry-control headers
+    removed (langfuse_/opik_/helicone_ prefixes and W3C traceparent/tracestate).
+
+    Returns a new dict so it is safe to call on the shared cached header dict from
+    ``_safe_get_request_headers`` without mutating it.
+    """
+    if not isinstance(headers, dict):
+        return headers
+    return {
+        name: value
+        for name, value in headers.items()
+        if not (
+            isinstance(name, str)
+            and (
+                name.lower().startswith(_UNTRUSTED_TELEMETRY_HEADER_PREFIXES)
+                or name.lower() in _UNTRUSTED_TELEMETRY_HEADER_NAMES
+            )
+        )
+    }
+
+
 def check_file_size_under_limit(
     request_data: dict,
     file: UploadFile,

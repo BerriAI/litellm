@@ -68,6 +68,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
     populate_request_with_path_params,
+    strip_untrusted_telemetry_headers,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
@@ -692,7 +693,9 @@ def _ensure_parent_otel_span_on_request_state(request: Request) -> None:
         pass
     parent_otel_span = open_telemetry_logger.create_litellm_proxy_request_started_span(
         start_time=start_time,
-        headers=_safe_get_request_headers(request),
+        # Drop a caller-supplied traceparent so it can't graft the proxy's
+        # request span onto another tenant's trace.
+        headers=strip_untrusted_telemetry_headers(_safe_get_request_headers(request)),
     )
     open_telemetry_logger.set_proxy_request_route_attributes(
         parent_otel_span,

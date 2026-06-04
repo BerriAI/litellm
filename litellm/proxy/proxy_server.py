@@ -297,6 +297,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     check_file_size_under_limit,
     get_form_data,
+    strip_untrusted_telemetry_headers,
 )
 from litellm.proxy.common_utils.load_config_utils import (
     get_config_file_contents_from_gcs,
@@ -12847,7 +12848,9 @@ async def async_queue_request(
         data["proxy_server_request"] = {
             "url": str(request.url),
             "method": request.method,
-            "headers": _safe_get_request_headers(request).copy(),
+            "headers": strip_untrusted_telemetry_headers(
+                _safe_get_request_headers(request).copy()
+            ),
             "body": copy.copy(data),  # use copy instead of deepcopy
         }
 

@@ -29,7 +29,10 @@ from litellm.proxy.common_utils.callback_utils import (
     decrypt_callback_vars,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _safe_get_request_headers,
+    strip_untrusted_telemetry_headers,
+)
 
 # Cache special headers as a frozenset for O(1) lookup performance
 _SPECIAL_HEADERS_CACHE = frozenset(
@@ -1400,7 +1403,7 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data["proxy_server_request"] = {
         "url": str(request.url),
         "method": request.method,
-        "headers": _headers,
+        "headers": strip_untrusted_telemetry_headers(_headers),
         "body": None,  # filled in post-strip; see below
         "arrival_time": arrival_time,  # Track when request arrived at proxy
     }

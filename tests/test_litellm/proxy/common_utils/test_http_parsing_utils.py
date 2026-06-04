@@ -996,3 +996,49 @@ class TestGetRequestBody:
         mock_request = MagicMock()
         mock_request.method = "GET"
         assert await get_request_body(mock_request) == {}
+
+
+class TestStripUntrustedTelemetryHeaders:
+    """VERIA-140: caller-supplied telemetry-control headers must be dropped so a
+    tenant cannot spoof/graft another tenant's traces on a shared backend."""
+
+    def test_strips_prefixes_and_w3c_headers_case_insensitively(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_untrusted_telemetry_headers,
+        )
+
+        result = strip_untrusted_telemetry_headers(
+            {
+                "Authorization": "Bearer x",
+                "langfuse_existing_trace_id": "t",
+                "Langfuse_Session_Id": "s",
+                "opik_project_name": "p",
+                "helicone_user_id": "u",
+                "traceparent": "00-a-b-01",
+                "TraceState": "vendor=1",
+                "anthropic-version": "2023-06-01",
+                "user-agent": "ua",
+            }
+        )
+        assert result == {
+            "Authorization": "Bearer x",
+            "anthropic-version": "2023-06-01",
+            "user-agent": "ua",
+        }
+
+    def test_returns_copy_does_not_mutate_input(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_untrusted_telemetry_headers,
+        )
+
+        original = {"langfuse_x": "1", "keep": "2"}
+        result = strip_untrusted_telemetry_headers(original)
+        assert result == {"keep": "2"}
+        assert original == {"langfuse_x": "1", "keep": "2"}
+
+    def test_non_dict_returned_as_is(self):
+        from litellm.proxy.common_utils.http_parsing_utils import (
+            strip_untrusted_telemetry_headers,
+        )
+
+        assert strip_untrusted_telemetry_headers(None) is None

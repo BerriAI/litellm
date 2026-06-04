@@ -4603,3 +4603,50 @@ def test_apply_overrides_provider_prefix_in_model_skips_router_lookup(
     assert data["api_base"] == "https://hotel-eastus.openai.azure.com/"
     assert data["api_key"] == "key-hotel-eastus"
     router.get_deployment_by_model_group_name.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_telemetry_headers():
+    """VERIA-140: caller-supplied telemetry-control headers (langfuse_/opik_/
+    helicone_ prefixes and traceparent) must not survive into
+    proxy_server_request headers, where observability integrations would treat
+    them as authoritative trace identity on a shared, single-credential backend.
+    """
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "langfuse_existing_trace_id": "victim-trace",
+        "Opik_Project_Name": "victim-project",
+        "helicone_user_id": "victim",
+        "traceparent": "00-deadbeef-spoof-01",
+        "anthropic-version": "2023-06-01",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    stored = {h.lower() for h in updated["proxy_server_request"]["headers"]}
+    assert "langfuse_existing_trace_id" not in stored
+    assert "opik_project_name" not in stored
+    assert "helicone_user_id" not in stored
+    assert "traceparent" not in stored
+    # A genuine provider header is untouched.
+    assert "anthropic-version" in stored
