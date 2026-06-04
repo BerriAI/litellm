@@ -4,7 +4,7 @@ Credentials domain model.
 
 from typing import Any, Dict, Optional
 
-from litellm.backend.models.base import DomainModel
+from litellm.models.base import DomainModel
 
 
 class Credentials(DomainModel):

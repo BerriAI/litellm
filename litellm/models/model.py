@@ -4,7 +4,7 @@ Model domain model for proxy models.
 
 from typing import Any, Dict, Optional
 
-from litellm.backend.models.base import DomainModel
+from litellm.models.base import DomainModel
 
 
 class Model(DomainModel):

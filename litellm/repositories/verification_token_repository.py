@@ -6,10 +6,10 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.backend.models.verification_token import (
+from litellm.models.verification_token import (
     VerificationToken,
 )
-from litellm.gateway.repositories.base_repository import BaseRepository
+from litellm.repositories.base_repository import BaseRepository
 
 
 class VerificationTokenRepository(BaseRepository[VerificationToken]):
