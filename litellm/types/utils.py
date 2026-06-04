@@ -2730,6 +2730,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_rate_limit_category: Optional[str]
     error_rate_limit_type: Optional[str]
 
+
 class GuardrailMode(TypedDict, total=False):
     tags: Optional[Dict[str, Union[str, List[str]]]]
     default: Optional[Union[str, List[str]]]
