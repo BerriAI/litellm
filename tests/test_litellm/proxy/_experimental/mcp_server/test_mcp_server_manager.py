@@ -4098,6 +4098,73 @@ class TestRegistryTableConversionPreservesEnvVars:
         self._assert_env_vars_round_tripped(table)
 
 
+class TestHealthCheckInterpolatesGlobalEnvVars:
+    """The upstream probes (health check and the initialize-instructions
+    prefetch) must substitute global ``${NAME}`` env vars into static headers
+    before opening the connection. Forwarding the raw placeholder makes any
+    server whose auth header is backed by a global env var fail authentication
+    and flip to 'unhealthy', even though real tool calls (which do interpolate)
+    keep working.
+    """
+
+    @staticmethod
+    def _server() -> MCPServer:
+        return MCPServer(
+            server_id="global-env-server",
+            name="global_env_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            static_headers={"Authorization": "Bearer ${API_TOKEN}"},
+            env_vars=[
+                {
+                    "name": "API_TOKEN",
+                    "value": "secret-token",
+                    "scope": "global",
+                    "description": None,
+                }
+            ],
+        )
+
+    @staticmethod
+    def _capture_headers(manager: MCPServerManager) -> Dict[str, Any]:
+        captured: Dict[str, Any] = {}
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+
+        async def _create(server, mcp_auth_header, extra_headers, stdio_env):
+            captured["extra_headers"] = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=_create)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_health_check_interpolates_global_env_vars(self):
+        manager = MCPServerManager()
+        server = self._server()
+        assert server.requires_per_user_auth is False
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        manager._remember_upstream_initialize_instructions = MagicMock()
+        captured = self._capture_headers(manager)
+
+        result = await manager.health_check_server(server.server_id)
+
+        assert captured["extra_headers"] == {"Authorization": "Bearer secret-token"}
+        assert result.status == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_initialize_instructions_prefetch_interpolates_global_env_vars(self):
+        manager = MCPServerManager()
+        server = self._server()
+        captured = self._capture_headers(manager)
+        manager._remember_upstream_initialize_instructions = MagicMock()
+
+        await manager._ensure_upstream_initialize_instructions_cached(server)
+
+        assert captured["extra_headers"] == {"Authorization": "Bearer secret-token"}
+
+
 class TestUserEnvVarsCacheEviction:
     """At capacity the per-user env var cache must shed a single oldest entry
     rather than wiping every entry, so a steady stream of distinct callers does

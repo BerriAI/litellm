@@ -471,8 +471,13 @@ class MCPServerManager:
         )
 
         try:
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server=server,
+                user_api_key_auth=None,
+                raise_on_missing=False,
+            )
             extra_headers: Optional[Dict[str, str]] = (
-                dict(server.static_headers) if server.static_headers else None
+                dict(resolved_static_headers) if resolved_static_headers else None
             )
             client = await self._create_mcp_client(
                 server=server,
@@ -3969,9 +3974,14 @@ class MCPServerManager:
             should_skip_health_check = True
 
         if not should_skip_health_check:
-            extra_headers = {}
-            if server.static_headers:
-                extra_headers.update(server.static_headers)
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server=server,
+                user_api_key_auth=None,
+                raise_on_missing=False,
+            )
+            extra_headers = (
+                dict(resolved_static_headers) if resolved_static_headers else {}
+            )
 
             client = await self._create_mcp_client(
                 server=server,
