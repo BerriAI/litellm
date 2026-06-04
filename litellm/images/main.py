@@ -404,6 +404,7 @@ def image_generation(  # noqa: PLR0915
         elif custom_llm_provider in (
             litellm.LlmProviders.RECRAFT,
             litellm.LlmProviders.AIML,
+            litellm.LlmProviders.BYTEPLUS,
             litellm.LlmProviders.GEMINI,
             litellm.LlmProviders.FAL_AI,
             litellm.LlmProviders.STABILITY,

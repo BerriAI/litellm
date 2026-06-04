@@ -977,6 +977,15 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
+        elif custom_llm_provider == litellm.LlmProviders.BYTEPLUS.value:
+            from litellm.llms.byteplus.image_generation.cost_calculator import (
+                cost_calculator as byteplus_image_cost_calculator,
+            )
+
+            return byteplus_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
         elif custom_llm_provider == litellm.LlmProviders.COMETAPI.value:
             from litellm.llms.cometapi.image_generation.cost_calculator import (
                 cost_calculator as cometapi_image_cost_calculator,
