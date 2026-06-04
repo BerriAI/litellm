@@ -2100,28 +2100,9 @@ class TeamCallbackMetadata(LiteLLMPydanticObjectBase):
         return values
 
 
-class LiteLLM_ObjectPermissionTable(LiteLLMPydanticObjectBase):
-    """Represents a LiteLLM_ObjectPermissionTable record"""
-
-    object_permission_id: str
-    mcp_servers: Optional[List[str]] = []
-    mcp_access_groups: Optional[List[str]] = []
-    mcp_tool_permissions: Optional[Dict[str, List[str]]] = None
-    """
-    Mapping - server_id -> list of tools
-
-    Enforces allowed tools for a specific key/team/organization
-    {
-        "1234567890": ["tool_name_1", "tool_name_2"]
-    }
-    """
-
-    vector_stores: Optional[List[str]] = []
-    agents: Optional[List[str]] = []
-    agent_access_groups: Optional[List[str]] = []
-    mcp_toolsets: Optional[List[str]] = None
-    blocked_tools: Optional[List[str]] = []
-    search_tools: Optional[List[str]] = []
+from litellm.models.object_permission import (  # noqa: E402
+    LiteLLM_ObjectPermissionTable as LiteLLM_ObjectPermissionTable,
+)
 
 
 class LiteLLM_TeamTable(TeamBase):

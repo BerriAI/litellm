@@ -9,7 +9,7 @@ import pytest
 from litellm.models.budget import Budget
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
 from litellm.models.model import Model
-from litellm.models.object_permission import ObjectPermission
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
 from litellm.models.project import Project
 from litellm.models.team import CachedTeam, DeletedTeam, Team, TeamMember
@@ -117,28 +117,27 @@ class TestModel:
 
 class TestObjectPermission:
     def test_object_permission_creation(self):
-        perm = ObjectPermission(
+        perm = LiteLLM_ObjectPermissionTable(
             object_permission_id="test-perm-id",
             mcp_servers=["server1", "server2"],
             vector_stores=["vs1"],
             agents=["agent1"],
+            models=["gpt-4"],
             blocked_tools=["dangerous_tool"],
         )
         assert perm.object_permission_id == "test-perm-id"
         assert len(perm.mcp_servers) == 2
-        assert perm.has_mcp_server_access("server1")
-        assert not perm.has_mcp_server_access("server3")
-        assert perm.has_vector_store_access("vs1")
-        assert perm.has_agent_access("agent1")
-        assert perm.is_tool_blocked("dangerous_tool")
-        assert not perm.is_tool_blocked("safe_tool")
+        assert perm.vector_stores == ["vs1"]
+        assert perm.agents == ["agent1"]
+        assert perm.models == ["gpt-4"]
+        assert perm.blocked_tools == ["dangerous_tool"]
 
-    def test_get_allowed_tools_for_server(self):
-        perm = ObjectPermission(
-            mcp_tool_permissions={"server1": ["tool1", "tool2"]}
+    def test_object_permission_tool_permissions(self):
+        perm = LiteLLM_ObjectPermissionTable(
+            object_permission_id="perm-tools",
+            mcp_tool_permissions={"server1": ["tool1", "tool2"]},
         )
-        assert perm.get_allowed_tools_for_server("server1") == ["tool1", "tool2"]
-        assert perm.get_allowed_tools_for_server("server2") is None
+        assert perm.mcp_tool_permissions == {"server1": ["tool1", "tool2"]}
 
 
 class TestOrganization:
