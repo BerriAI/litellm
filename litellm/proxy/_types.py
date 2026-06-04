@@ -3037,28 +3037,9 @@ class DeleteProjectRequest(LiteLLMPydanticObjectBase):
     project_ids: List[str]
 
 
-class LiteLLM_ProjectTable(LiteLLMPydanticObjectBase):
-    """Database model representation for project"""
-
-    project_id: str
-    project_alias: Optional[str] = None
-    description: Optional[str] = None
-    team_id: Optional[str] = None
-    budget_id: Optional[str] = None
-    metadata: Optional[dict] = None
-    models: List[str] = []
-    spend: float = 0.0
-    model_spend: Optional[dict] = None
-    model_rpm_limit: Optional[dict] = None
-    model_tpm_limit: Optional[dict] = None
-    blocked: bool = False
-    object_permission_id: Optional[str] = None
-    created_by: str
-    updated_by: str
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
+from litellm.models.project import (  # noqa: E402
+    LiteLLM_ProjectTable as LiteLLM_ProjectTable,
+)
 
 
 class NewProjectResponse(LiteLLM_ProjectTable):

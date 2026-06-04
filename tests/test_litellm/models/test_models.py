@@ -11,7 +11,7 @@ from litellm.models.credentials import CreateCredentialItem, CredentialItem
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
-from litellm.models.project import Project
+from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import CachedTeam, DeletedTeam, Team
 from litellm.models.user import User
 from litellm.models.verification_token import (
@@ -140,7 +140,7 @@ class TestOrganization:
 
 class TestProject:
     def test_project_creation(self):
-        project = Project(
+        project = LiteLLM_ProjectTable(
             project_id="proj-123",
             project_alias="My Project",
             team_id="team-123",
