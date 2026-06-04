@@ -8733,7 +8733,7 @@ class Router:
         except Exception:
             return None
 
-    def _remove_deployment_from_wildcard_state(self, model_id: str) -> None:
+    def _remove_deployment_from_wildcard_state(self, model_id: Optional[str]) -> None:
         """
         Drop every reference to model_id from the wildcard-routing data
         structures. Without this, upsert/delete leaves stale credentials in
