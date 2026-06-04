@@ -246,8 +246,7 @@ async def test__transform_request_body_image_config_with_image_size():
     assert rb["generationConfig"]["imageConfig"]["imageSize"] == "4K"
 
 
-@pytest.mark.asyncio
-async def test__transform_request_body_google_maps_json_schema_uses_response_format():
+def test__transform_request_body_google_maps_json_schema_uses_response_format():
     """googleMaps + JSON schema must use responseFormat, not response_mime_type."""
     messages = [{"role": "user", "content": "Find restaurants in Mumbai"}]
     schema = {
