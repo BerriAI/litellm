@@ -5,7 +5,7 @@ Base repository class with common functionality.
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
-from litellm.backend.models.base import DomainModel
+from litellm.models.base import DomainModel
 
 T = TypeVar("T", bound=DomainModel)
 

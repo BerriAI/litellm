@@ -7,8 +7,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import Field, field_validator
 
-from litellm.backend.models.base import DomainModel
-from litellm.backend.models.object_permission import ObjectPermission
+from litellm.models.base import DomainModel
+from litellm.models.object_permission import ObjectPermission
 
 
 class VerificationToken(DomainModel):

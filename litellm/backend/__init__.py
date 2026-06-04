@@ -6,7 +6,7 @@ entities in LiteLLM. These models are independent of the database layer and
 provide a clean interface for business logic.
 """
 
-from litellm.backend.models import (
+from litellm.models import (
     Budget,
     Credentials,
     Model,

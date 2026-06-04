@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 
 from pydantic import Field
 
-from litellm.backend.models.base import DomainModel
+from litellm.models.base import DomainModel
 
 
 class ObjectPermission(DomainModel):

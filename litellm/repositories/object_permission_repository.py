@@ -4,8 +4,8 @@ ObjectPermission repository for database operations on LiteLLM_ObjectPermissionT
 
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.backend.models.object_permission import ObjectPermission
-from litellm.gateway.repositories.base_repository import BaseRepository
+from litellm.models.object_permission import ObjectPermission
+from litellm.repositories.base_repository import BaseRepository
 
 
 class ObjectPermissionRepository(BaseRepository[ObjectPermission]):

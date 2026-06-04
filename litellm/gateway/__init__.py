@@ -6,7 +6,7 @@ for LiteLLM entities. Repositories handle encryption/decryption, caching, and
 config reconciliation from database and configmap.
 """
 
-from litellm.gateway.repositories import (
+from litellm.repositories import (
     BudgetRepository,
     ConfigRepository,
     CredentialsRepository,

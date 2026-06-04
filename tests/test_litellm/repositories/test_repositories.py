@@ -8,28 +8,28 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.backend.models.budget import Budget
-from litellm.backend.models.credentials import Credentials
-from litellm.backend.models.model import Model
-from litellm.backend.models.object_permission import ObjectPermission
-from litellm.backend.models.organization import Organization
-from litellm.backend.models.project import Project
-from litellm.backend.models.team import Team
-from litellm.backend.models.user import User
-from litellm.backend.models.verification_token import VerificationToken
-from litellm.gateway.repositories.base_repository import BaseRepository
-from litellm.gateway.repositories.budget_repository import BudgetRepository
-from litellm.gateway.repositories.config_repository import ConfigRepository
-from litellm.gateway.repositories.credentials_repository import CredentialsRepository
-from litellm.gateway.repositories.model_repository import ModelRepository
-from litellm.gateway.repositories.object_permission_repository import (
+from litellm.models.budget import Budget
+from litellm.models.credentials import Credentials
+from litellm.models.model import Model
+from litellm.models.object_permission import ObjectPermission
+from litellm.models.organization import Organization
+from litellm.models.project import Project
+from litellm.models.team import Team
+from litellm.models.user import User
+from litellm.models.verification_token import VerificationToken
+from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.budget_repository import BudgetRepository
+from litellm.repositories.config_repository import ConfigRepository
+from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
-from litellm.gateway.repositories.organization_repository import OrganizationRepository
-from litellm.gateway.repositories.project_repository import ProjectRepository
-from litellm.gateway.repositories.team_repository import TeamRepository
-from litellm.gateway.repositories.user_repository import UserRepository
-from litellm.gateway.repositories.verification_token_repository import (
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.project_repository import ProjectRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 
@@ -264,11 +264,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.model_repository.encrypt_value_helper",
+        "litellm.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.gateway.repositories.model_repository.decrypt_value_helper",
+        "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_model_encrypts_params(self, mock_decrypt, mock_encrypt, repo):
@@ -282,7 +282,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.model_repository.decrypt_value_helper",
+        "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_all(self, mock_decrypt, repo):
@@ -305,7 +305,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.model_repository.decrypt_value_helper",
+        "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_unblocked(self, mock_decrypt, repo):
@@ -322,7 +322,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.model_repository.decrypt_value_helper",
+        "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_by_name(self, mock_decrypt, repo):
@@ -338,11 +338,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.model_repository.encrypt_value_helper",
+        "litellm.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.gateway.repositories.model_repository.decrypt_value_helper",
+        "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_model(self, mock_decrypt, mock_encrypt, repo):
@@ -361,7 +361,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.model_repository.decrypt_value_helper",
+        "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_delete_model(self, mock_decrypt, repo):
@@ -375,11 +375,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.model_repository.encrypt_value_helper",
+        "litellm.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.gateway.repositories.model_repository.decrypt_value_helper",
+        "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_block_unblock_model(self, mock_decrypt, mock_encrypt, repo):
@@ -1080,11 +1080,11 @@ class TestCredentialsRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.credentials_repository.encrypt_value_helper",
+        "litellm.repositories.credentials_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.gateway.repositories.credentials_repository.decrypt_value_helper",
+        "litellm.repositories.credentials_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_credentials(self, mock_decrypt, mock_encrypt, repo):
@@ -1098,11 +1098,11 @@ class TestCredentialsRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.credentials_repository.encrypt_value_helper",
+        "litellm.repositories.credentials_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.gateway.repositories.credentials_repository.decrypt_value_helper",
+        "litellm.repositories.credentials_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_credentials_with_info(self, mock_decrypt, mock_encrypt, repo):
@@ -1116,11 +1116,11 @@ class TestCredentialsRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.credentials_repository.encrypt_value_helper",
+        "litellm.repositories.credentials_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.gateway.repositories.credentials_repository.decrypt_value_helper",
+        "litellm.repositories.credentials_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_credentials(self, mock_decrypt, mock_encrypt, repo):
@@ -1138,7 +1138,7 @@ class TestCredentialsRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.credentials_repository.decrypt_value_helper",
+        "litellm.repositories.credentials_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_delete_credentials(self, mock_decrypt, repo):
@@ -1152,7 +1152,7 @@ class TestCredentialsRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.gateway.repositories.credentials_repository.decrypt_value_helper",
+        "litellm.repositories.credentials_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_by_name(self, mock_decrypt, repo):

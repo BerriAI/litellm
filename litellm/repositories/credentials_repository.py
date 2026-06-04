@@ -5,8 +5,8 @@ Credentials repository for database operations on LiteLLM_CredentialsTable.
 import json
 from typing import Any, Dict, Optional, Type
 
-from litellm.backend.models.credentials import Credentials
-from litellm.gateway.repositories.base_repository import BaseRepository
+from litellm.models.credentials import Credentials
+from litellm.repositories.base_repository import BaseRepository
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,

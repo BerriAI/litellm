@@ -6,15 +6,15 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from litellm.backend.models.budget import Budget
-from litellm.backend.models.credentials import Credentials
-from litellm.backend.models.model import Model
-from litellm.backend.models.object_permission import ObjectPermission
-from litellm.backend.models.organization import Organization
-from litellm.backend.models.project import Project
-from litellm.backend.models.team import CachedTeam, DeletedTeam, Team, TeamMember
-from litellm.backend.models.user import User
-from litellm.backend.models.verification_token import (
+from litellm.models.budget import Budget
+from litellm.models.credentials import Credentials
+from litellm.models.model import Model
+from litellm.models.object_permission import ObjectPermission
+from litellm.models.organization import Organization
+from litellm.models.project import Project
+from litellm.models.team import CachedTeam, DeletedTeam, Team, TeamMember
+from litellm.models.user import User
+from litellm.models.verification_token import (
     DeletedVerificationToken,
     VerificationToken,
 )
