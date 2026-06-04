@@ -5691,9 +5691,8 @@ def _check_and_merge_model_level_guardrails(
     # server-populated team id; pre_call lookup must do the same so
     # team-scoped guardrails are not silently skipped (greptile/veria-ai
     # Medium on #29654).
-    team_id = (
-        metadata.get("user_api_key_team_id")
-        or litellm_metadata.get("user_api_key_team_id")
+    team_id = metadata.get("user_api_key_team_id") or litellm_metadata.get(
+        "user_api_key_team_id"
     )
 
     model_level_guardrails: Optional[list] = None
