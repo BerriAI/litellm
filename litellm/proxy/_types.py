@@ -23,8 +23,6 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
 from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.openai import (
     AllMessageValues,
-    OpenAIFileObject,
-    ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
     MCPAuthType,
@@ -41,8 +39,6 @@ from litellm.types.utils import (
     EmbeddingResponse,
     GenericBudgetConfigType,
     ImageResponse,
-    LiteLLMBatch,
-    LiteLLMFineTuningJob,
     LiteLLMPydanticObjectBase,
     ModelResponse,
     ProviderField,
@@ -1234,32 +1230,12 @@ class MCPApprovalStatus(str, enum.Enum):
     rejected = "rejected"
 
 
-class MCPEnvVarScope(str, enum.Enum):
-    """Scope for an MCP server environment variable.
-
-    - ``global``: value is provided by the admin and used for all users.
-    - ``user``: each user must provide their own value via the per-user
-      env-var endpoint. The admin-supplied ``value`` is treated as a
-      placeholder/hint and is not used at request time.
-    """
-
-    global_ = "global"
-    user = "user"
-
-
-class MCPEnvVar(LiteLLMPydanticObjectBase):
-    """One environment variable for an MCP server.
-
-    Variables can be interpolated into ``static_headers`` using ``${NAME}``
-    syntax. ``scope=global`` values are stored on the server. ``scope=user``
-    values are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by
-    each user.
-    """
-
-    name: str
-    value: str = ""
-    scope: MCPEnvVarScope = MCPEnvVarScope.global_
-    description: Optional[str] = None
+from litellm.models.mcp_server import (  # noqa: E402
+    MCPEnvVar as MCPEnvVar,
+)
+from litellm.models.mcp_server import (  # noqa: E402
+    MCPEnvVarScope as MCPEnvVarScope,
+)
 
 
 # MCP Proxy Request Types
@@ -1412,66 +1388,9 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
         return values
 
 
-class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
-    """Represents a LiteLLM_MCPServerTable record"""
-
-    server_id: str
-    server_name: Optional[str] = None
-    alias: Optional[str] = None
-    description: Optional[str] = None
-    url: Optional[str] = None
-    spec_path: Optional[str] = None
-    transport: MCPTransportType
-    auth_type: Optional[MCPAuthType] = None
-    credentials: Optional[MCPCredentials] = None
-    instructions: Optional[str] = None
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
-    teams: List[Dict[str, Optional[str]]] = Field(default_factory=list)
-    mcp_access_groups: List[str] = Field(default_factory=list)
-    allowed_tools: List[str] = Field(default_factory=list)
-    tool_name_to_display_name: Optional[Dict[str, str]] = None
-    tool_name_to_description: Optional[Dict[str, str]] = None
-    extra_headers: List[str] = Field(default_factory=list)
-    mcp_info: Optional[MCPInfo] = None
-    static_headers: Optional[Dict[str, str]] = None
-    env_vars: Optional[List[MCPEnvVar]] = None
-    # Health check status
-    status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
-        default="unknown",
-        description="Health status: 'healthy', 'unhealthy', 'unknown'",
-    )
-    last_health_check: Optional[datetime] = None
-    health_check_error: Optional[str] = None
-    # Stdio-specific fields
-    command: Optional[str] = None
-    args: List[str] = Field(default_factory=list)
-    env: Dict[str, str] = Field(default_factory=dict)
-    authorization_url: Optional[str] = None
-    token_url: Optional[str] = None
-    registration_url: Optional[str] = None
-    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
-    allow_all_keys: bool = False
-    available_on_public_internet: bool = True
-    delegate_auth_to_upstream: bool = False
-    oauth_passthrough: bool = False
-    is_byok: bool = False
-    byok_description: List[str] = Field(default_factory=list)
-    byok_api_key_help_url: Optional[str] = None
-    has_user_credential: Optional[bool] = None
-    source_url: Optional[str] = None
-    timeout: Optional[float] = None
-    # BYOM submission fields
-    approval_status: Optional[str] = Field(
-        default="active",
-        description="Approval status: 'pending_review', 'active', 'rejected'",
-    )
-    submitted_by: Optional[str] = None
-    submitted_at: Optional[datetime] = None
-    reviewed_at: Optional[datetime] = None
-    review_notes: Optional[str] = None
+from litellm.models.mcp_server import (  # noqa: E402
+    LiteLLM_MCPServerTable as LiteLLM_MCPServerTable,
+)
 
 
 class MakeMCPServersPublicRequest(LiteLLMPydanticObjectBase):
@@ -2027,26 +1946,12 @@ class TeamRequest(LiteLLMPydanticObjectBase):
 from litellm.models.budget import (  # noqa: E402
     LiteLLM_BudgetTable as LiteLLM_BudgetTable,
 )
-
-
-class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
-    """LiteLLM_BudgetTable + server-managed fields returned on API responses."""
-
-    budget_reset_at: Optional[datetime] = None
-    created_at: datetime
-
-
-class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
-    """
-    Used to track spend of a user_id within a team_id
-    """
-
-    spend: Optional[float] = None
-    user_id: Optional[str] = None
-    team_id: Optional[str] = None
-    budget_id: Optional[str] = None
-
-    model_config = ConfigDict(protected_namespaces=())
+from litellm.models.budget import (  # noqa: E402
+    LiteLLM_BudgetTableFull as LiteLLM_BudgetTableFull,
+)
+from litellm.models.budget import (  # noqa: E402
+    LiteLLM_TeamMemberTable as LiteLLM_TeamMemberTable,
+)
 
 
 class NewOrganizationRequest(LiteLLM_BudgetTable):
@@ -2883,41 +2788,12 @@ from litellm.models.access_group import (  # noqa: E402
 )
 
 
-class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
-    request_id: str
-    api_key: str
-    model: Optional[str] = ""
-    api_base: Optional[str] = ""
-    call_type: str
-    spend: Optional[float] = 0.0
-    total_tokens: Optional[int] = 0
-    prompt_tokens: Optional[int] = 0
-    completion_tokens: Optional[int] = 0
-    startTime: Union[str, datetime, None]
-    endTime: Union[str, datetime, None]
-    user: Optional[str] = ""
-    metadata: Optional[Json] = {}
-    cache_hit: Optional[str] = "False"
-    cache_key: Optional[str] = None
-    request_tags: Optional[Json] = None
-    requester_ip_address: Optional[str] = None
-    messages: Optional[Union[str, list, dict]]
-    response: Optional[Union[str, list, dict]]
-
-
-class LiteLLM_ErrorLogs(LiteLLMPydanticObjectBase):
-    request_id: Optional[str] = str(uuid.uuid4())
-    api_base: Optional[str] = ""
-    model_group: Optional[str] = ""
-    litellm_model_name: Optional[str] = ""
-    model_id: Optional[str] = ""
-    request_kwargs: Optional[dict] = {}
-    exception_type: Optional[str] = ""
-    status_code: Optional[str] = ""
-    exception_string: Optional[str] = ""
-    startTime: Union[str, datetime, None]
-    endTime: Union[str, datetime, None]
-
+from litellm.models.spend_logs import (  # noqa: E402
+    LiteLLM_ErrorLogs as LiteLLM_ErrorLogs,
+)
+from litellm.models.spend_logs import (  # noqa: E402
+    LiteLLM_SpendLogs as LiteLLM_SpendLogs,
+)
 
 AUDIT_ACTIONS = Literal[
     "created", "updated", "deleted", "blocked", "unblocked", "rotated"
@@ -3598,29 +3474,9 @@ class CreatePassThroughEndpoint(LiteLLMPydanticObjectBase):
     headers: dict
 
 
-class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
-    user_id: str
-    team_id: str
-    budget_id: Optional[str] = None
-    spend: Optional[float] = 0.0
-    total_spend: Optional[float] = 0.0
-    # Union so Pydantic picks Full when data has server-managed fields
-    # (/team/info) and Base when callers/tests construct with only
-    # user-settable fields.
-    litellm_budget_table: Optional[
-        Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]
-    ] = None
-
-    def safe_get_team_member_rpm_limit(self) -> Optional[int]:
-        if self.litellm_budget_table is not None:
-            return self.litellm_budget_table.rpm_limit
-        return None
-
-    def safe_get_team_member_tpm_limit(self) -> Optional[int]:
-        if self.litellm_budget_table is not None:
-            return self.litellm_budget_table.tpm_limit
-        return None
-
+from litellm.models.team_membership import (  # noqa: E402
+    LiteLLM_TeamMembership as LiteLLM_TeamMembership,
+)
 
 #### Organization / Team Member Requests ####
 
@@ -4538,39 +4394,18 @@ class ToolDiscoveryQueueItem(TypedDict, total=False):
     user_agent: Optional[str]  # HTTP User-Agent of the caller
 
 
-class LiteLLM_ManagedFileTable(LiteLLMPydanticObjectBase):
-    unified_file_id: str
-    file_object: Optional[OpenAIFileObject] = None
-    model_mappings: Dict[str, str]
-    flat_model_file_ids: List[str]
-    created_by: Optional[str] = None
-    team_id: Optional[str] = None
-    updated_by: Optional[str] = None
-    storage_backend: Optional[str] = None
-    storage_url: Optional[str] = None
-
-
-class LiteLLM_ManagedObjectTable(LiteLLMPydanticObjectBase):
-    unified_object_id: str
-    model_object_id: str
-    file_purpose: Literal["batch", "fine-tune", "response", "container"]
-    file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, ResponsesAPIResponse]
-    created_by: Optional[str] = None
-    team_id: Optional[str] = None
-
-
-class LiteLLM_ManagedVectorStoreTable(LiteLLMPydanticObjectBase):
-    """Table for managing vector stores with target_model_names support."""
-
-    unified_resource_id: str
-    resource_object: Optional[Any] = None  # VectorStoreCreateResponse
-    model_mappings: Dict[str, str]
-    flat_model_resource_ids: List[str]
-    created_by: Optional[str] = None
-    team_id: Optional[str] = None
-    updated_by: Optional[str] = None
-    storage_backend: Optional[str] = None
-    storage_url: Optional[str] = None
+from litellm.models.managed_files import (  # noqa: E402
+    LiteLLM_ManagedFileTable as LiteLLM_ManagedFileTable,
+)
+from litellm.models.managed_files import (  # noqa: E402
+    LiteLLM_ManagedObjectTable as LiteLLM_ManagedObjectTable,
+)
+from litellm.models.managed_files import (  # noqa: E402
+    LiteLLM_ManagedVectorStoreTable as LiteLLM_ManagedVectorStoreTable,
+)
+from litellm.models.managed_files import (  # noqa: E402
+    LiteLLM_ManagedVectorStoresTable as LiteLLM_ManagedVectorStoresTable,
+)
 
 
 class EnterpriseLicenseData(TypedDict, total=False):
@@ -4579,20 +4414,6 @@ class EnterpriseLicenseData(TypedDict, total=False):
     allowed_features: List[str]
     max_users: int
     max_teams: int
-
-
-class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
-    vector_store_id: str
-    custom_llm_provider: str
-    vector_store_name: Optional[str]
-    vector_store_description: Optional[str]
-    vector_store_metadata: Optional[Dict[str, Any]]
-    created_at: Optional[datetime]
-    updated_at: Optional[datetime]
-    litellm_credential_name: Optional[str]
-    litellm_params: Optional[Dict[str, Any]]
-    team_id: Optional[str]
-    user_id: Optional[str]
 
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
