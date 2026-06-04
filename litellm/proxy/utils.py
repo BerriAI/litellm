@@ -658,6 +658,11 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            # Surface the per-MCP-server rate-limit identity so the
+            # ParallelRequestLimiterV3 hook can apply mcp_rpm_limit on the
+            # synthetic call_mcp_tool payload (otherwise a key with
+            # mcp_rpm_limit could exceed it via the MCP path).
+            "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
