@@ -114,5 +114,13 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "byteplus": {
+    "base_url": "https://ark.ap-southeast.bytepluses.com/api/v3",
+    "api_key_env": "BYTEPLUS_API_KEY",
+    "api_base_env": "BYTEPLUS_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }

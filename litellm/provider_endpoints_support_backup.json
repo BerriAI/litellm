@@ -1783,6 +1783,24 @@
         "a2a": false
       }
     },
+    "byteplus": {
+      "display_name": "BytePlus (`byteplus`)",
+      "url": "https://docs.litellm.ai/docs/providers/byteplus",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "publicai": {
       "display_name": "PublicAI (`publicai`)",
       "url": "https://docs.litellm.ai/docs/providers/publicai",
