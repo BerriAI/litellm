@@ -868,6 +868,21 @@ class MCPServerManager:
                 f"Server ID {mcp_server.server_id} not found in registry"
             )
 
+    def _resolve_env_vars_list(
+        self,
+        mcp_server: LiteLLM_MCPServerTable,
+        *,
+        credentials_are_encrypted: bool,
+    ) -> Optional[List[Dict[str, Any]]]:
+        env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
+        if credentials_are_encrypted:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                decrypt_global_env_var_values,
+            )
+
+            decrypt_global_env_var_values(env_vars_list)
+        return env_vars_list
+
     async def build_mcp_server_from_table(
         self,
         mcp_server: LiteLLM_MCPServerTable,
@@ -879,13 +894,9 @@ class MCPServerManager:
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
         )
-        env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
-        if credentials_are_encrypted:
-            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
-                decrypt_global_env_var_values,
-            )
-
-            decrypt_global_env_var_values(env_vars_list)
+        env_vars_list = self._resolve_env_vars_list(
+            mcp_server, credentials_are_encrypted=credentials_are_encrypted
+        )
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
         )
