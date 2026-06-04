@@ -304,6 +304,13 @@ _BANNED_REQUEST_BODY_PARAMS: Tuple[str, ...] = (
     "aws_profile_name",
     "base_model",
     "oci_key_file",
+    # OCI serving-mode / endpoint / compartment selectors are read off
+    # optional_params by the OCI transform; a client could flip the serving mode
+    # to DEDICATED and retarget the served model/endpoint, or point at another
+    # compartment, using the operator's stored OCI credentials.
+    "oci_serving_mode",
+    "oci_endpoint_id",
+    "oci_compartment_id",
     # Observability credentials, hosts, and project identifiers: derived
     # from the canonical ``_supported_callback_params`` allowlist so new
     # integrations are covered automatically. Sorted for stable iteration

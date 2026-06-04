@@ -74,6 +74,24 @@ def test_admin_opt_in_still_permits_extra_body_credentials():
     )
 
 
+def test_admin_opt_in_still_permits_oci_routing_params():
+    # The OCI serving-mode/endpoint/compartment selectors are banned by default
+    # but, like every other credential/routing field, remain available behind the
+    # ``allow_client_side_credentials`` admin opt-in.
+    body = {
+        "model": "oci/some-model",
+        "messages": [{"role": "user", "content": "x"}],
+        "oci_serving_mode": "DEDICATED",
+        "oci_endpoint_id": "ocid1.generativeaiendpoint...",
+    }
+    assert is_request_body_safe(
+        request_body=body,
+        general_settings={"allow_client_side_credentials": True},
+        llm_router=None,
+        model="oci/some-model",
+    )
+
+
 def test_banned_param_under_stringified_extra_body_is_rejected():
     # Raw-HTTP and multipart/form-data clients can send ``extra_body`` as
     # a JSON-encoded string rather than an object. An ``isinstance(...,
@@ -111,6 +129,9 @@ from litellm.proxy.auth.auth_utils import check_regex_or_str_match  # noqa: E402
         "aws_profile_name",  # server-side AWS profile selection
         "base_model",  # cost-lookup model spoofing
         "oci_key_file",  # arbitrary server file path read (DoS)
+        "oci_serving_mode",  # flip ON_DEMAND->DEDICATED to retarget the model
+        "oci_endpoint_id",  # retarget the OCI dedicated endpoint
+        "oci_compartment_id",  # retarget the OCI compartment
     ],
 )
 def test_newly_banned_root_param_is_rejected(banned_param):
