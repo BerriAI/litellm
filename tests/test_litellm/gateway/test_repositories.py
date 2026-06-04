@@ -75,7 +75,17 @@ class MockTable:
         key_field = list(where.keys())[0]
         key_value = where[key_field]
         if key_value in self._records:
-            self._records[key_value].update(data)
+            for field, value in data.items():
+                if isinstance(value, dict) and "push" in value:
+                    current = self._records[key_value].get(field, [])
+                    push_val = value["push"]
+                    if isinstance(push_val, list):
+                        current.extend(push_val)
+                    else:
+                        current.append(push_val)
+                    self._records[key_value][field] = current
+                else:
+                    self._records[key_value][field] = value
             return MockRecord(self._records[key_value])
         return None
 
@@ -88,9 +98,7 @@ class MockTable:
     async def count(self, where: Optional[Dict[str, Any]] = None) -> int:
         return len(self._records)
 
-    async def upsert(
-        self, where: Dict[str, Any], data: Dict[str, Any]
-    ) -> MockRecord:
+    async def upsert(self, where: Dict[str, Any], data: Dict[str, Any]) -> MockRecord:
         key_field = list(where.keys())[0]
         key_value = where[key_field]
         if key_value in self._records:
@@ -184,9 +192,7 @@ class TestModelRepository:
         "litellm.gateway.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
-    async def test_create_model_encrypts_params(
-        self, mock_decrypt, mock_encrypt, repo
-    ):
+    async def test_create_model_encrypts_params(self, mock_decrypt, mock_encrypt, repo):
         model = await repo.create_model(
             model_name="gpt-4",
             litellm_params={"api_key": "sk-secret"},

@@ -92,7 +92,12 @@ class ModelRepository(BaseRepository[Model]):
         return self._to_model_list(records)
 
     async def find_by_team_id(self, team_id: str) -> List[Model]:
-        """Find models associated with a specific team."""
+        """Find models associated with a specific team.
+
+        Note: This filters in-memory since team_id is stored within litellm_params
+        JSON. For large deployments with many models, consider adding a dedicated
+        team_id column with a database index.
+        """
         all_models = await self.find_all()
         return [m for m in all_models if m.team_id == team_id]
 

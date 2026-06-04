@@ -6,6 +6,7 @@ YAML configmap values. DB values override configmap values except for
 None values and empty lists.
 """
 
+import asyncio
 import json
 import os
 from typing import Any, Dict, List, Literal, Optional
@@ -154,8 +155,8 @@ class ConfigRepository:
                 db_param_value, return_original_value=True
             )
             merged_env_vars = self._normalize_env_variable_keys(decrypted_env_vars)
-            for upper_key, value in merged_env_vars.items():
-                os.environ[upper_key] = value
+            for env_key, value in merged_env_vars.items():
+                os.environ[env_key] = value
 
             current_config.setdefault("environment_variables", {}).update(
                 merged_env_vars
@@ -199,8 +200,6 @@ class ConfigRepository:
             )
             return yaml_config
 
-        import asyncio
-
         tasks = [self.get_param(k) for k in self.CONFIG_PARAMS]
         responses = await asyncio.gather(*tasks)
 
@@ -231,6 +230,3 @@ class ConfigRepository:
         params are loaded in a single batch.
         """
         await asyncio.gather(*[self.get_param(k) for k in param_names])
-
-
-import asyncio
