@@ -9135,6 +9135,12 @@ class ProviderConfigManager:
             )
 
             return get_aiml_image_generation_config(model)
+        elif LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.image_generation import (
+                get_byteplus_image_generation_config,
+            )
+
+            return get_byteplus_image_generation_config(model)
         elif LlmProviders.COMETAPI == provider:
             from litellm.llms.cometapi.image_generation import (
                 get_cometapi_image_generation_config,
@@ -9222,6 +9228,10 @@ class ProviderConfigManager:
             from litellm.llms.runwayml.videos.transformation import RunwayMLVideoConfig
 
             return RunwayMLVideoConfig()
+        elif LlmProviders.BYTEPLUS == provider:
+            from litellm.llms.byteplus.videos.transformation import BytePlusVideoConfig
+
+            return BytePlusVideoConfig()
         return None
 
     @staticmethod
