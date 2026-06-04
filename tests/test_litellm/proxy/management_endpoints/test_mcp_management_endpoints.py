@@ -3317,3 +3317,55 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     # server without exposing secrets.
     assert sanitized.server_id == server.server_id
     assert sanitized.alias == server.alias
+
+
+def test_oauth2_flow_accepted_on_create_request():
+    """NewMCPServerRequest carries oauth2_flow through to the persisted dict."""
+    from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+
+    payload = NewMCPServerRequest(
+        server_name="m2m-server",
+        url="https://example.com/mcp",
+        transport="http",
+        auth_type="oauth2",
+        token_url="https://idp.example.com/oauth/token",
+        oauth2_flow="client_credentials",
+    )
+    data_dict = _prepare_mcp_server_data(payload)
+    assert data_dict["oauth2_flow"] == "client_credentials"
+
+
+def test_oauth2_flow_round_trips_on_update_and_response_models():
+    """oauth2_flow survives UpdateMCPServerRequest and the LiteLLM_MCPServerTable
+    response model. Before the fix these models dropped the field (no attribute),
+    which is why a persisted value never round-tripped."""
+    from litellm.proxy._types import (
+        LiteLLM_MCPServerTable,
+        UpdateMCPServerRequest,
+    )
+
+    update = UpdateMCPServerRequest(
+        server_id="srv-1", oauth2_flow="client_credentials"
+    )
+    assert update.oauth2_flow == "client_credentials"
+
+    row = LiteLLM_MCPServerTable(
+        server_id="srv-1",
+        transport="http",
+        oauth2_flow="client_credentials",
+    )
+    assert row.oauth2_flow == "client_credentials"
+
+
+def test_oauth2_flow_defaults_to_none_when_omitted():
+    """Omitting oauth2_flow is valid and resolves to None (runtime infers it)."""
+    from litellm.proxy._types import (
+        LiteLLM_MCPServerTable,
+        UpdateMCPServerRequest,
+    )
+
+    assert UpdateMCPServerRequest(server_id="srv-1").oauth2_flow is None
+    assert (
+        LiteLLM_MCPServerTable(server_id="srv-1", transport="http").oauth2_flow
+        is None
+    )
