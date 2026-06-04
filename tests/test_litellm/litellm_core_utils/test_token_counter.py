@@ -173,6 +173,32 @@ class NeedsToleranceUpdateError(Exception):
     pass
 
 
+def _hf_hub_unreachable(exc: Exception) -> bool:
+    """Whether ``exc`` looks like a HuggingFace hub connectivity failure.
+
+    The llama tokenizers and ``create_pretrained_tokenizer`` download from the
+    HuggingFace hub, which is frequently unreachable or rate-limited in CI.
+    """
+    message = str(exc).lower()
+    return any(
+        marker in message
+        for marker in (
+            "couldn't reach",
+            "could not reach",
+            "connection",
+            "max retries",
+            "timed out",
+            "timeout",
+            "temporarily unavailable",
+            "failed to resolve",
+            "name or service not known",
+            "502 server error",
+            "503 server error",
+            "504 server error",
+        )
+    )
+
+
 def test_tokenizers():
     try:
         ### test the openai, claude, cohere and llama2 tokenizers.
@@ -225,6 +251,12 @@ def test_tokenizers():
 
         print("test tokenizer: It worked!")
     except Exception as e:
+        # The llama2/llama3 token counts and create_pretrained_tokenizer fetch
+        # tokenizers from the HuggingFace hub, which is often unreachable or
+        # rate-limited in CI. Skip rather than fail on those connectivity errors
+        # so this test only fails on real tokenizer regressions.
+        if _hf_hub_unreachable(e):
+            pytest.skip(f"HuggingFace hub unreachable; skipping tokenizer test ({e})")
         pytest.fail(f"An exception occured: {e}")
 
 
@@ -517,7 +549,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from litellm.utils import _select_tokenizer_helper, claude_json_str, encoding
-
 
 # Clear the cache at module load to ensure clean state
 _select_tokenizer_helper.cache_clear()
