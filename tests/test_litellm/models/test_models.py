@@ -90,10 +90,10 @@ class TestModel:
 
     def test_is_blocked(self):
         model_blocked = LiteLLM_ProxyModelTable(
-            model_name="test", litellm_params={}, blocked=True
+            model_id="m1", model_name="test", litellm_params={}, blocked=True
         )
         model_unblocked = LiteLLM_ProxyModelTable(
-            model_name="test", litellm_params={}, blocked=False
+            model_id="m2", model_name="test", litellm_params={}, blocked=False
         )
         assert model_blocked.is_blocked
         assert not model_unblocked.is_blocked

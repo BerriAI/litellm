@@ -127,7 +127,7 @@ class MockPrismaClient:
     def __init__(self):
         self.db = MagicMock()
         self.db.litellm_budgettable = MockTable()
-        self.db.litellm_proxymodeltable = MockTable()
+        self.db.litellm_proxymodeltable = MockTable(pk_field="model_id")
         self.db.litellm_teamtable = MockTable()
         self.db.litellm_deletedteamtable = MockTable()
         self.db.litellm_usertable = MockTable()
