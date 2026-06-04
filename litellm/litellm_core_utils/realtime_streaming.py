@@ -98,9 +98,11 @@ class RealTimeStreaming:
             provider_config is None or provider_config.requires_session_configuration()
         )
         self._pending_messages_until_setup: List[str] = []
+        self._pending_messages_byte_total: int = 0
 
-    # Max pre-setup audio frames buffered per connection to prevent memory exhaustion.
+    # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
+    _MAX_BUFFERED_BYTES: int = 10 * 1024 * 1024  # 10 MB
 
     _SESSION_EVENT_TYPES = frozenset(["session.created", "session.updated"])
     _CLIENT_AUDIO_BUFFER_TYPES = frozenset(
@@ -319,6 +321,7 @@ class RealTimeStreaming:
     async def _flush_pending_messages_until_setup(self) -> None:
         pending = self._pending_messages_until_setup
         self._pending_messages_until_setup = []
+        self._pending_messages_byte_total = 0
         for message in pending:
             try:
                 await self._send_to_backend(message)
@@ -1135,15 +1138,20 @@ class RealTimeStreaming:
                 self.store_input(message=message)
 
                 if self._should_buffer_client_message_until_setup(message):
+                    msg_bytes = len(message.encode("utf-8"))
                     if (
                         len(self._pending_messages_until_setup)
                         < RealTimeStreaming._MAX_BUFFERED_MESSAGES
+                        and self._pending_messages_byte_total + msg_bytes
+                        <= RealTimeStreaming._MAX_BUFFERED_BYTES
                     ):
                         self._pending_messages_until_setup.append(message)
+                        self._pending_messages_byte_total += msg_bytes
                     else:
                         verbose_logger.warning(
-                            "Pre-setup audio buffer full (%d messages); dropping frame",
-                            RealTimeStreaming._MAX_BUFFERED_MESSAGES,
+                            "Pre-setup audio buffer full (%d messages / %d bytes); dropping frame",
+                            len(self._pending_messages_until_setup),
+                            self._pending_messages_byte_total,
                         )
                     continue
 

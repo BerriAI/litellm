@@ -27,7 +27,6 @@ from litellm.types.llms.gemini import (
 )
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
-    OpenAIRealtimeConversationItemCreated,
     OpenAIRealtimeDoneEvent,
     OpenAIRealtimeEvents,
     OpenAIRealtimeEventTypes,
@@ -179,7 +178,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         dict so callers omit ``realtimeInputConfig`` (mapping it with
         ``disabled: true`` breaks native-audio sessions).
         """
-        if isinstance(value, dict) and value.get("type") == "semantic_vad":
+        if (
+            isinstance(value, dict)
+            and value.get("type") == "semantic_vad"
+            and "create_response" not in value
+        ):
             return AutomaticActivityDetection()
 
         automatic_activity_dection = AutomaticActivityDetection()
@@ -247,8 +250,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 if (
                     isinstance(value_typed, dict)
                     and value_typed.get("type") == "semantic_vad"
+                    and "create_response" not in value_typed
                 ):
                     # Pipecat/OpenAI GA semantic VAD — skip; Gemini uses its own VAD.
+                    # Only skip when there is no create_response override so that
+                    # a guardrail-injected create_response:false is not dropped.
                     continue
                 transformed_audio_activity_config = self.map_automatic_turn_detection(
                     value_typed
