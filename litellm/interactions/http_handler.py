@@ -89,6 +89,22 @@ class _BaseHTTPHandler:
 _INTERACTIONS_PROTECTED_BODY_KEYS = ("model", "agent")
 
 
+def _merge_interactions_extra_body(
+    data: dict, extra_body: Optional[Dict[str, Any]]
+) -> dict:
+    """Merge client extra_body into the transformed interactions body: drop the
+    mutually-exclusive routing keys outright, then merge the rest without
+    overwriting any other validated field (e.g. input)."""
+    return safe_merge_extra_body(
+        data,
+        {
+            k: v
+            for k, v in (extra_body or {}).items()
+            if k not in _INTERACTIONS_PROTECTED_BODY_KEYS
+        },
+    )
+
+
 class InteractionsHTTPHandler(_BaseHTTPHandler):
     """
     HTTP handler for Interactions API requests.
@@ -181,16 +197,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             headers=headers,
         )
 
-        # Drop the mutually-exclusive routing keys outright, then merge the rest
-        # without overwriting any other validated field (e.g. input).
-        data = safe_merge_extra_body(
-            data,
-            {
-                k: v
-                for k, v in (extra_body or {}).items()
-                if k not in _INTERACTIONS_PROTECTED_BODY_KEYS
-            },
-        )
+        data = _merge_interactions_extra_body(data, extra_body)
 
         # Logging
         logging_obj.pre_call(
@@ -286,16 +293,7 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             headers=headers,
         )
 
-        # Drop the mutually-exclusive routing keys outright, then merge the rest
-        # without overwriting any other validated field (e.g. input).
-        data = safe_merge_extra_body(
-            data,
-            {
-                k: v
-                for k, v in (extra_body or {}).items()
-                if k not in _INTERACTIONS_PROTECTED_BODY_KEYS
-            },
-        )
+        data = _merge_interactions_extra_body(data, extra_body)
 
         # Logging
         logging_obj.pre_call(

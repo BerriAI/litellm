@@ -13,6 +13,7 @@ import httpx
 from litellm.constants import request_timeout
 from litellm.interactions.http_handler import InteractionsHTTPHandler
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_request_utils import safe_merge_extra_body
 from litellm.llms.base_llm.agents.transformation import BaseAgentsAPIConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.agents import (
@@ -65,8 +66,8 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         data = agents_api_config.transform_create_request(
             name=name, litellm_params=dict(litellm_params)
         )
-        if extra_body:
-            data.update(extra_body)
+        # extra_body must not overwrite the validated fields the transform set.
+        data = safe_merge_extra_body(data, extra_body)
 
         logging_obj.pre_call(
             input=name,
@@ -114,8 +115,8 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         data = agents_api_config.transform_create_request(
             name=name, litellm_params=dict(litellm_params)
         )
-        if extra_body:
-            data.update(extra_body)
+        # extra_body must not overwrite the validated fields the transform set.
+        data = safe_merge_extra_body(data, extra_body)
 
         logging_obj.pre_call(
             input=name,

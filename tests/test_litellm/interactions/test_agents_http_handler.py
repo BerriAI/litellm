@@ -32,7 +32,6 @@ from litellm.types.agents import (
 )
 from litellm.types.router import GenericLiteLLMParams
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -125,6 +124,27 @@ class TestCreateAgent:
         assert kwargs["headers"]["X-Test"] == "1"
         logging_obj.pre_call.assert_called_once()
         logging_obj.post_call.assert_called_once()
+
+    def test_extra_body_cannot_override_validated_name(
+        self, handler, config, litellm_params
+    ):
+        """extra_body must not overwrite the validated agent name the transform
+        set; genuine passthrough keys still merge."""
+        client = _make_sync_client()
+        client.post.return_value = _make_response(200, json_data={"id": "real-agent"})
+
+        handler.create_agent(
+            agents_api_config=config,
+            name="real-agent",
+            litellm_params=litellm_params,
+            logging_obj=_make_logging_obj(),
+            extra_body={"name": "evil-agent", "foo": "bar"},
+            client=client,
+        )
+
+        posted = client.post.call_args.kwargs["json"]
+        assert posted["name"] == "real-agent"
+        assert posted["foo"] == "bar"
 
     def test_sync_dispatches_to_async_when_is_async(
         self, handler, config, litellm_params

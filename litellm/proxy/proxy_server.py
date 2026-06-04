@@ -12849,7 +12849,7 @@ async def async_queue_request(
             "url": str(request.url),
             "method": request.method,
             "headers": strip_untrusted_telemetry_headers(
-                _safe_get_request_headers(request).copy()
+                _safe_get_request_headers(request)
             ),
             "body": copy.copy(data),  # use copy instead of deepcopy
         }

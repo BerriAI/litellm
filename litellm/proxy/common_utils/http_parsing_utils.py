@@ -223,6 +223,16 @@ _UNTRUSTED_TELEMETRY_HEADER_PREFIXES = ("langfuse_", "opik_", "helicone_")
 _UNTRUSTED_TELEMETRY_HEADER_NAMES = frozenset({"traceparent", "tracestate"})
 
 
+def _is_untrusted_telemetry_header(name: Any) -> bool:
+    if not isinstance(name, str):
+        return False
+    lowered = name.lower()
+    return (
+        lowered.startswith(_UNTRUSTED_TELEMETRY_HEADER_PREFIXES)
+        or lowered in _UNTRUSTED_TELEMETRY_HEADER_NAMES
+    )
+
+
 def strip_untrusted_telemetry_headers(headers: Any) -> dict:
     """Return a copy of ``headers`` with caller-supplied telemetry-control headers
     removed (langfuse_/opik_/helicone_ prefixes and W3C traceparent/tracestate).
@@ -235,13 +245,7 @@ def strip_untrusted_telemetry_headers(headers: Any) -> dict:
     return {
         name: value
         for name, value in headers.items()
-        if not (
-            isinstance(name, str)
-            and (
-                name.lower().startswith(_UNTRUSTED_TELEMETRY_HEADER_PREFIXES)
-                or name.lower() in _UNTRUSTED_TELEMETRY_HEADER_NAMES
-            )
-        )
+        if not _is_untrusted_telemetry_header(name)
     }
 
 
