@@ -446,6 +446,50 @@ async def test_resolve_static_headers_stale_user_value_cannot_override_global(
     assert headers == {"X-DB-URL": "admin-db/alice"}
 
 
+@pytest.mark.asyncio
+async def test_resolve_static_headers_dual_scope_var_uses_global_without_412(
+    monkeypatch,
+):
+    """A var declared with both ``global`` and ``user`` scope is covered by the
+    global value (globals win in the merge), so the tool-call path must resolve
+    it from the global instead of raising a 412 when the user hasn't filled it
+    in. This happens during a global-to-user (or user-to-global) migration."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-5",
+        name="srv5",
+        transport="http",
+        url="https://example.com",
+        static_headers={"Authorization": "Bearer ${SHARED_TOKEN}"},
+        env_vars=[
+            {"name": "SHARED_TOKEN", "value": "global-secret", "scope": "global"},
+            {"name": "SHARED_TOKEN", "value": "", "scope": "user"},
+        ],
+    )
+
+    load_calls = []
+
+    async def fake_load_user_env_vars(
+        server, user_api_key_auth, *, force_refresh=False
+    ):
+        load_calls.append(force_refresh)
+        return {}
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+
+    headers = await manager._resolve_static_headers_with_env_vars(
+        server, user_api_key_auth=object()
+    )
+    assert headers == {"Authorization": "Bearer global-secret"}
+    # The global fully covers the reference, so no per-user lookup is needed.
+    assert load_calls == []
+
+
 # ── health-check skip for per-user-env-var-backed headers ──────────────────
 
 

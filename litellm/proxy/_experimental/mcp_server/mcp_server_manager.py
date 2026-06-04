@@ -1645,12 +1645,18 @@ class MCPServerManager:
         if not global_values and not user_specs:
             return static_headers
 
-        # Figure out which user-scoped vars are actually referenced.
+        # Figure out which user-scoped vars are actually referenced. A var that
+        # also carries a global value is always covered by that global (globals
+        # win in the merge below), so it can never be genuinely "missing" even if
+        # the user hasn't filled it in -- only vars without a global fallback do.
         referenced = collect_env_var_references(strings=(static_headers or {}).values())
         referenced_user_vars = referenced & user_var_names
+        required_user_vars = {
+            name for name in referenced_user_vars if name not in global_values
+        }
 
         user_values: Dict[str, str] = {}
-        if referenced_user_vars:
+        if required_user_vars:
             try:
                 user_values = await self._load_user_env_vars(server, user_api_key_auth)
             except Exception as exc:
@@ -1669,7 +1675,7 @@ class MCPServerManager:
 
             if raise_on_missing:
                 missing = sorted(
-                    name for name in referenced_user_vars if not user_values.get(name)
+                    name for name in required_user_vars if not user_values.get(name)
                 )
                 if missing:
                     # A cached negative must never produce a 412: cache
@@ -1681,9 +1687,7 @@ class MCPServerManager:
                         server, user_api_key_auth, force_refresh=True
                     )
                     missing = sorted(
-                        name
-                        for name in referenced_user_vars
-                        if not user_values.get(name)
+                        name for name in required_user_vars if not user_values.get(name)
                     )
                 if missing:
                     raise MCPMissingUserEnvVarsError(
