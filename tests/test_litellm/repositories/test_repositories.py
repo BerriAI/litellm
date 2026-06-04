@@ -2065,3 +2065,46 @@ class TestConfigRepositoryDeepCopy:
         result2 = await repo.reconcile_config(yaml_config, store_model_in_db=True)
         assert "modified" not in yaml_config.get("general_settings", {})
         assert "modified" not in result2.get("general_settings", {})
+
+
+class TestPrismaTableRepository:
+    def test_table_property_returns_named_delegate(self):
+        from litellm.repositories.table_repositories import (
+            AgentsRepository,
+            PolicyRepository,
+        )
+
+        prisma_client = MagicMock()
+        agents = AgentsRepository(prisma_client)
+        policy = PolicyRepository(prisma_client)
+
+        assert agents.table is prisma_client.db.litellm_agentstable
+        assert policy.table is prisma_client.db.litellm_policytable
+        assert agents.table is not policy.table
+
+    def test_table_access_raises_without_db(self):
+        from litellm.repositories.table_repositories import SpendLogsRepository
+
+        repo = SpendLogsRepository(None)
+        with pytest.raises(RuntimeError, match="No DB Connected"):
+            _ = repo.table
+
+    def test_each_repository_binds_its_own_table_name(self):
+        import litellm.repositories.table_repositories as tr
+
+        prisma_client = MagicMock()
+        repos = [
+            obj
+            for name, obj in vars(tr).items()
+            if isinstance(obj, type)
+            and issubclass(obj, tr.PrismaTableRepository)
+            and obj is not tr.PrismaTableRepository
+        ]
+        assert len(repos) >= 40
+        seen = set()
+        for repo_cls in repos:
+            name = repo_cls.table_name
+            assert name.startswith("litellm_")
+            assert name not in seen, f"duplicate table_name {name}"
+            seen.add(name)
+            assert repo_cls(prisma_client).table is getattr(prisma_client.db, name)

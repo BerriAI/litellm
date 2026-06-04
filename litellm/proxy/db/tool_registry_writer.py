@@ -11,11 +11,12 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.table_repositories import ToolRepository
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
     ToolPolicyOverrideRow,
 )
-from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -85,7 +86,7 @@ async def batch_upsert_tools(
         if not data:
             return
         now = datetime.now(timezone.utc)
-        table = prisma_client.db.litellm_tooltable
+        table = ToolRepository(prisma_client).table
         for item in data:
             tool_name = item.get("tool_name", "")
             origin = item.get("origin") or "user_defined"
@@ -135,7 +136,7 @@ async def list_tools(
     """Return all tools, optionally filtered by input_policy."""
     try:
         where = {"input_policy": input_policy} if input_policy is not None else {}
-        rows = await prisma_client.db.litellm_tooltable.find_many(
+        rows = await ToolRepository(prisma_client).table.find_many(
             where=where,
             order={"created_at": "desc"},
         )
@@ -151,7 +152,7 @@ async def get_tool(
 ) -> Optional[LiteLLM_ToolTableRow]:
     """Return a single tool row by tool_name."""
     try:
-        row = await prisma_client.db.litellm_tooltable.find_unique(
+        row = await ToolRepository(prisma_client).table.find_unique(
             where={"tool_name": tool_name},
         )
         if row is None:
@@ -193,7 +194,7 @@ async def update_tool_policy(
         if output_policy is not None:
             update_data["output_policy"] = output_policy
 
-        await prisma_client.db.litellm_tooltable.upsert(
+        await ToolRepository(prisma_client).table.upsert(
             where={"tool_name": tool_name},
             data={
                 "create": create_data,
@@ -218,7 +219,7 @@ async def get_tools_by_names(
     if not tool_names:
         return {}
     try:
-        rows = await prisma_client.db.litellm_tooltable.find_many(
+        rows = await ToolRepository(prisma_client).table.find_many(
             where={"tool_name": {"in": tool_names}},
         )
         return {
@@ -308,7 +309,7 @@ class ToolPolicyRegistry:
     async def sync_tool_policy_from_db(self, prisma_client: "PrismaClient") -> None:
         """Load all tool policies and object-permission blocked_tools from DB."""
         try:
-            tools = await prisma_client.db.litellm_tooltable.find_many()
+            tools = await ToolRepository(prisma_client).table.find_many()
             self._tool_input_policies = {
                 row.tool_name: getattr(row, "input_policy", "untrusted") or "untrusted"
                 for row in tools

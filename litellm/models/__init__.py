@@ -10,16 +10,16 @@ from litellm.models.budget import (
 )
 from litellm.models.config import LiteLLM_Config
 from litellm.models.credentials import (
+    CreateCredentialItem,
     CredentialBase,
     CredentialItem,
-    CreateCredentialItem,
 )
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.managed_files import (
     LiteLLM_ManagedFileTable,
     LiteLLM_ManagedObjectTable,
-    LiteLLM_ManagedVectorStoreTable,
     LiteLLM_ManagedVectorStoresTable,
+    LiteLLM_ManagedVectorStoreTable,
 )
 from litellm.models.mcp_server import LiteLLM_MCPServerTable
 from litellm.models.model import LiteLLM_ProxyModelTable
