@@ -6,6 +6,12 @@ This can be disabled by setting the LITELLM_LOCAL_MODEL_COST_MAP environment var
 ```
 export LITELLM_LOCAL_MODEL_COST_MAP=True
 ```
+
+A custom local file path can be specified via LITELLM_LOCAL_MODEL_COST_MAP_PATH:
+
+```
+export LITELLM_LOCAL_MODEL_COST_MAP_PATH=/etc/litellm/model_prices_and_context_window.json
+```
 """
 
 import json
@@ -42,6 +48,12 @@ class GetModelCostMap:
             .read_text(encoding="utf-8")
         )
         return content
+
+    @staticmethod
+    def load_custom_path_model_cost_map(path: str) -> dict:
+        """Load the model cost map from a custom local file path."""
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
 
     @classmethod
     def _get_backup_model_count(cls) -> int:
@@ -246,7 +258,10 @@ def get_model_cost_map(url: str) -> dict:
     Public entry point — returns the model cost map dict.
 
     1. If ``LITELLM_LOCAL_MODEL_COST_MAP`` is set, uses the local backup only.
-    2. Otherwise fetches from ``url``, validates integrity, and falls back
+    2. If ``LITELLM_LOCAL_MODEL_COST_MAP_PATH`` is set, reads from that file
+       path (useful for Kubernetes ConfigMap injection); falls back to the
+       local backup on any read/parse error.
+    3. Otherwise fetches from ``url``, validates integrity, and falls back
        to the local backup on any failure.
 
     Only the backup model count is cached (a single int) for validation.
@@ -261,6 +276,30 @@ def get_model_cost_map(url: str) -> dict:
         _cost_map_source_info.is_env_forced = True
         _cost_map_source_info.fallback_reason = None
         return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
+
+    custom_path = os.getenv("LITELLM_LOCAL_MODEL_COST_MAP_PATH", "").strip()
+    if custom_path:
+        _cost_map_source_info.url = None
+        _cost_map_source_info.is_env_forced = True
+        try:
+            content = GetModelCostMap.load_custom_path_model_cost_map(custom_path)
+            if not GetModelCostMap._check_is_valid_dict(content):
+                raise ValueError("Custom file content failed validation")
+            _cost_map_source_info.source = "local"
+            _cost_map_source_info.fallback_reason = None
+            return _expand_model_aliases(content)
+        except Exception as e:
+            verbose_logger.warning(
+                "LiteLLM: Failed to load model cost map from custom path %s: %s. "
+                "Falling back to local backup.",
+                custom_path,
+                str(e),
+            )
+            _cost_map_source_info.source = "local"
+            _cost_map_source_info.fallback_reason = (
+                f"Custom path load failed: {str(e)}"
+            )
+            return _expand_model_aliases(GetModelCostMap.load_local_model_cost_map())
 
     _cost_map_source_info.url = url
     _cost_map_source_info.is_env_forced = False
