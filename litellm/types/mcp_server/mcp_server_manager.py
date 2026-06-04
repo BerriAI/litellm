@@ -115,6 +115,8 @@ class MCPServer(BaseModel):
     # different ``server_id`` values are bumped deterministically.  Left
     # ``None`` in default-prefix mode.
     short_prefix: Optional[str] = None
+    allow_sampling: bool = False
+    allow_elicitation: bool = False
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     @property

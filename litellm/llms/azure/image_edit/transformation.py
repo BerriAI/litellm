@@ -97,8 +97,15 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             )
         original_url = httpx.URL(api_base)
 
-        # Extract api_version or use default
-        api_version = cast(Optional[str], litellm_params.get("api_version"))
+        # Resolve api_version: litellm_params > litellm.api_version > AZURE_API_VERSION env > default.
+        # Mirrors the fallback chain used by the Azure chat path in common_utils.py,
+        # so callers that set a global / env api_version don't get an unversioned URL.
+        api_version = (
+            cast(Optional[str], litellm_params.get("api_version"))
+            or litellm.api_version
+            or get_secret_str("AZURE_API_VERSION")
+            or litellm.AZURE_DEFAULT_API_VERSION
+        )
 
         # Create a new dictionary with existing params
         query_params = dict(original_url.params)

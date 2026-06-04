@@ -237,6 +237,7 @@ LLM_CONFIG_NAMES = (
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -957,6 +958,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "OpenRouterResponsesAPIConfig": (
         ".llms.openrouter.responses.transformation",
         "OpenRouterResponsesAPIConfig",
+    ),
+    "BedrockMantleResponsesAPIConfig": (
+        ".llms.bedrock_mantle.responses.transformation",
+        "BedrockMantleResponsesAPIConfig",
     ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
