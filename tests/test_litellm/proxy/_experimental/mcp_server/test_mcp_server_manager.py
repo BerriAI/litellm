@@ -4098,5 +4098,50 @@ class TestRegistryTableConversionPreservesEnvVars:
         self._assert_env_vars_round_tripped(table)
 
 
+class TestUserEnvVarsCacheEviction:
+    """At capacity the per-user env var cache must shed a single oldest entry
+    rather than wiping every entry, so a steady stream of distinct callers does
+    not periodically stampede the DB by invalidating every still-valid value.
+    """
+
+    @staticmethod
+    def _patch_cache(monkeypatch, max_size):
+        from litellm.proxy._experimental.mcp_server import mcp_server_manager as m
+
+        cache: Dict[Any, Any] = {}
+        monkeypatch.setattr(m, "_user_env_vars_cache", cache)
+        monkeypatch.setattr(m, "_USER_ENV_VARS_CACHE_MAX_SIZE", max_size)
+        return m, cache
+
+    def test_eviction_drops_single_oldest_entry_not_whole_cache(self, monkeypatch):
+        m, cache = self._patch_cache(monkeypatch, max_size=3)
+
+        for i in range(3):
+            m._write_user_env_vars_cache(f"user{i}", "srv", {"V": str(i)})
+        assert set(cache) == {("user0", "srv"), ("user1", "srv"), ("user2", "srv")}
+
+        m._write_user_env_vars_cache("user3", "srv", {"V": "3"})
+
+        assert len(cache) == 3
+        assert ("user0", "srv") not in cache
+        assert ("user3", "srv") in cache
+        assert cache[("user1", "srv")][0] == {"V": "1"}
+
+    def test_refreshing_existing_key_does_not_evict(self, monkeypatch):
+        m, cache = self._patch_cache(monkeypatch, max_size=2)
+
+        m._write_user_env_vars_cache("a", "srv", {"V": "1"})
+        m._write_user_env_vars_cache("b", "srv", {"V": "2"})
+        m._write_user_env_vars_cache("a", "srv", {"V": "1-new"})
+
+        assert set(cache) == {("a", "srv"), ("b", "srv")}
+        assert cache[("a", "srv")][0] == {"V": "1-new"}
+        # The just-refreshed key must now sit at the tail so the next insert
+        # evicts the genuinely older entry instead.
+        m._write_user_env_vars_cache("c", "srv", {"V": "3"})
+        assert ("b", "srv") not in cache
+        assert ("a", "srv") in cache
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
