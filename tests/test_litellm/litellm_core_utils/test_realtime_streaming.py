@@ -1770,3 +1770,79 @@ async def test_follow_up_setup_updates_cached_session_configuration_request():
     await streaming.client_ack_messages()
 
     assert streaming.session_configuration_request == follow_up_setup
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeypatch):
+    """Pipecat may send audio before session.update when setup is deferred."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+
+    config = GeminiRealtimeConfig()
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    assert streaming._backend_setup_complete is False
+
+    await streaming.client_ack_messages()
+
+    backend_ws.send.assert_not_called()
+    assert len(streaming._pending_messages_until_setup) == 1
+
+    streaming._backend_setup_complete = True
+    await streaming._flush_pending_messages_until_setup()
+
+    assert backend_ws.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_flushes_audio_on_backend_session_created(monkeypatch):
+    """Buffered audio is released when Gemini setupComplete becomes session.created."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    backend_ws.recv = AsyncMock(
+        side_effect=[
+            json.dumps({"setupComplete": {}}).encode(),
+            ConnectionClosed(None, None),
+        ]
+    )
+    logging_obj = MagicMock()
+    logging_obj.litellm_trace_id = "trace_defer"
+    logging_obj.async_success_handler = AsyncMock()
+    logging_obj.success_handler = MagicMock()
+    config = GeminiRealtimeConfig()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    streaming._pending_messages_until_setup.append(
+        json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    )
+
+    await streaming.backend_to_client_send_messages()
+
+    assert streaming._backend_setup_complete is True
+    assert streaming._pending_messages_until_setup == []
+    assert backend_ws.send.call_count == 1

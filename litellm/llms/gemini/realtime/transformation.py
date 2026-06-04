@@ -173,9 +173,21 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
     def map_automatic_turn_detection(
         self, value: OpenAIRealtimeTurnDetection
     ) -> AutomaticActivityDetection:
+        """Map OpenAI ``server_vad`` to Gemini ``automaticActivityDetection``.
+
+        OpenAI ``semantic_vad`` has no Gemini Live equivalent — return an empty
+        dict so callers omit ``realtimeInputConfig`` (mapping it with
+        ``disabled: true`` breaks native-audio sessions).
+        """
+        if isinstance(value, dict) and value.get("type") == "semantic_vad":
+            return AutomaticActivityDetection()
+
         automatic_activity_dection = AutomaticActivityDetection()
         if "create_response" in value and isinstance(value["create_response"], bool):
             automatic_activity_dection["disabled"] = not value["create_response"]
+        elif isinstance(value, dict) and value.get("type") == "server_vad":
+            # OpenAI server VAD enables activity detection by default.
+            automatic_activity_dection["disabled"] = False
         else:
             automatic_activity_dection["disabled"] = True
         if "prefix_padding_ms" in value and isinstance(value["prefix_padding_ms"], int):
@@ -197,6 +209,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             "tools",
             "input_audio_transcription",
             "turn_detection",
+            "voice",
         ]
 
     def map_openai_params(
@@ -231,17 +244,30 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 optional_params["inputAudioTranscription"] = {}
             elif key == "turn_detection":
                 value_typed = cast(OpenAIRealtimeTurnDetection, value)
+                if (
+                    isinstance(value_typed, dict)
+                    and value_typed.get("type") == "semantic_vad"
+                ):
+                    # Pipecat/OpenAI GA semantic VAD — skip; Gemini uses its own VAD.
+                    continue
                 transformed_audio_activity_config = self.map_automatic_turn_detection(
                     value_typed
                 )
-                if (
-                    len(transformed_audio_activity_config) > 0
-                ):  # if the config is not empty, add it to the optional params
+                if transformed_audio_activity_config:
                     optional_params["realtimeInputConfig"] = (
                         BidiGenerateContentRealtimeInputConfig(
                             automaticActivityDetection=transformed_audio_activity_config
                         )
                     )
+            elif key == "voice":
+                from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+                    VertexGeminiConfig,
+                )
+
+                vertex_gemini_config = VertexGeminiConfig()
+                speech_config = vertex_gemini_config._map_audio_params({"voice": value})
+                if speech_config:
+                    optional_params["generationConfig"]["speechConfig"] = speech_config
         if len(optional_params["generationConfig"]) == 0:
             optional_params.pop("generationConfig")
         return optional_params
@@ -297,6 +323,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     and "transcription" in input_cfg
                 ):
                     normalized["input_audio_transcription"] = input_cfg["transcription"]
+            output_cfg = audio.get("output")
+            if isinstance(output_cfg, dict) and output_cfg.get("voice"):
+                normalized["voice"] = output_cfg["voice"]
 
         extracted_turn_detection = GeminiRealtimeConfig._extract_turn_detection(
             normalized
@@ -307,6 +336,18 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             normalized["turn_detection"] = extracted_turn_detection
 
         return normalized
+
+    @staticmethod
+    def _finalize_gemini_live_setup(model: str, setup: dict) -> dict:
+        """Drop fields Gemini Live native-audio rejects on ``setup``."""
+        if "native-audio" not in model.lower():
+            return setup
+        generation_config = setup.get("generationConfig")
+        if isinstance(generation_config, dict):
+            # Native-audio Live models reject speechConfig on setup (1007 invalid
+            # argument). Voice is configured on the native Live client path instead.
+            generation_config.pop("speechConfig", None)
+        return setup
 
     def _handle_session_update(
         self,
@@ -351,7 +392,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             verbose_logger.debug(
                 "Gemini Realtime: Sending initial setup with tools to backend"
             )
-            return [json.dumps({"setup": new_overrides})]
+            return [
+                json.dumps(
+                    {"setup": self._finalize_gemini_live_setup(model, new_overrides)}
+                )
+            ]
 
         if not new_overrides:
             verbose_logger.debug(
@@ -420,7 +465,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug(
             "Gemini Realtime: Forwarding session.update as follow-up setup"
         )
-        return [json.dumps({"setup": follow_up_setup})]
+        return [
+            json.dumps(
+                {"setup": self._finalize_gemini_live_setup(model, follow_up_setup)}
+            )
+        ]
 
     def _handle_conversation_item(self, json_message: dict) -> List[str]:
         """
@@ -666,6 +715,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "object": "realtime.response",
                 "id": response_id,
                 "status": "in_progress",
+                "status_details": None,
                 "output": [],
                 "conversation_id": conversation_id,
                 "modalities": _modalities,
@@ -675,9 +725,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         response_items.append(response_created)
 
-        ## - return response.output_item.added ← adds ‘item_id’ same for all subsequent events
+        ## - return response.output_item.added
         response_output_item_added = OpenAIRealtimeStreamResponseOutputItemAdded(
             type="response.output_item.added",
+            event_id="event_{}".format(uuid.uuid4()),
             response_id=response_id,
             output_index=0,
             item={
@@ -690,20 +741,28 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             },
         )
         response_items.append(response_output_item_added)
-        ## - return conversation.item.created
-        conversation_item_created = OpenAIRealtimeConversationItemCreated(
-            type="conversation.item.created",
-            event_id="event_{}".format(uuid.uuid4()),
-            item={
-                "id": output_item_id,
-                "object": "realtime.item",
-                "type": "message",
-                "status": "in_progress",
-                "role": "assistant",
-                "content": [],
-            },
+        ## - return conversation.item.added
+        # Pipecat 1.3.x handles "conversation.item.added" (not ".created").
+        # Sending ".created" raises "Unimplemented server event type" which
+        # kills the receive task handler.
+        response_items.append(
+            cast(
+                OpenAIRealtimeEvents,
+                {
+                    "type": "conversation.item.added",
+                    "event_id": "event_{}".format(uuid.uuid4()),
+                    "previous_item_id": None,
+                    "item": {
+                        "id": output_item_id,
+                        "object": "realtime.item",
+                        "type": "message",
+                        "status": "in_progress",
+                        "role": "assistant",
+                        "content": [],
+                    },
+                },
+            )
         )
-        response_items.append(conversation_item_created)
         ## - return response.content_part.added
         response_content_part_added = OpenAIRealtimeResponseContentPartAdded(
             type="response.content_part.added",
@@ -749,9 +808,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         return OpenAIRealtimeResponseDelta(
             type=(
-                "response.text.delta"
+                "response.output_text.delta"
                 if delta_type == "text"
-                else "response.audio.delta"
+                else "response.output_audio.delta"
             ),
             content_index=0,
             event_id="event_{}".format(uuid.uuid4()),
@@ -778,7 +837,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             current_response_id = "resp_{}".format(uuid.uuid4())
         if delta_type == "text":
             return OpenAIRealtimeResponseTextDone(
-                type="response.text.done",
+                type="response.output_text.done",
                 content_index=0,
                 event_id="event_{}".format(uuid.uuid4()),
                 item_id=current_output_item_id,
@@ -788,7 +847,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             )
         elif delta_type == "audio":
             return OpenAIRealtimeResponseAudioDone(
-                type="response.audio.done",
+                type="response.output_audio.done",
                 content_index=0,
                 event_id="event_{}".format(uuid.uuid4()),
                 item_id=current_output_item_id,
@@ -914,7 +973,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
         events: List[OpenAIRealtimeFunctionCallArgumentsDone] = []
         for idx, fc in enumerate(function_calls):
-            call_id = fc.get("id", "")
+            call_id = fc.get("id", "") or f"call_{uuid.uuid4().hex[:16]}"
             name = fc.get("name", "")
 
             # Store call_id → name mapping for round-trip. Use an LRU so
@@ -962,7 +1021,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 current_delta_chunks = []
                 any_delta_chunk = False
                 for event in transformed_message:
-                    if event["type"] == "response.text.delta":
+                    if event["type"] == "response.output_text.delta":
                         current_delta_chunks.append(
                             cast(OpenAIRealtimeResponseDelta, event)
                         )
@@ -973,7 +1032,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     )
             else:
                 if (
-                    transformed_message["type"] == "response.text.delta"
+                    transformed_message["type"] == "response.output_text.delta"
                 ):  # ONLY ACCUMULATE TEXT DELTA CHUNKS - AUDIO WILL CAUSE SERVER MEMORY ISSUES
                     if current_delta_chunks is None:
                         current_delta_chunks = []
@@ -1067,6 +1126,20 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
             _chat_completion_usage,
         )
+        _usage_dict = responses_api_usage.model_dump()
+        # Pipecat 1.3.x validates usage with the singular forms
+        # ``input_token_details`` / ``output_token_details`` as required
+        # fields. LiteLLM's ResponsesAPIUsage uses the plural
+        # ``input_tokens_details`` / ``output_tokens_details``. Add the
+        # singular aliases so Pipecat's Pydantic model doesn't raise.
+        _usage_dict.setdefault(
+            "input_token_details",
+            {"cached_tokens": 0, "text_tokens": 0, "audio_tokens": 0},
+        )
+        _usage_dict.setdefault(
+            "output_token_details",
+            {"text_tokens": 0, "audio_tokens": 0},
+        )
         response_done_event = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id="event_{}".format(uuid.uuid4()),
@@ -1074,6 +1147,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 object="realtime.response",
                 id=current_response_id,
                 status="completed",
+                status_details=None,  # type: ignore[typeddict-item]
                 output=(
                     [output_item["item"] for output_item in output_items]
                     if output_items
@@ -1081,7 +1155,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 ),
                 conversation_id=current_conversation_id,
                 modalities=_modalities,
-                usage=responses_api_usage.model_dump(),
+                usage=_usage_dict,
             ),
         )
         if temperature is not None:
@@ -1292,24 +1366,17 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     )
                 )
 
-            output_tx = server_content.get("outputTranscription")
-            if isinstance(output_tx, dict) and output_tx.get("text"):
-                returned_message.append(
-                    cast(
-                        OpenAIRealtimeEvents,
-                        {
-                            "type": "response.audio_transcript.delta",
-                            "event_id": "event_{}".format(uuid.uuid4()),
-                            "delta": output_tx["text"],
-                            "item_id": current_output_item_id
-                            or "item_{}".format(uuid.uuid4()),
-                            "response_id": current_response_id
-                            or "resp_{}".format(uuid.uuid4()),
-                            "output_index": 0,
-                            "content_index": 0,
-                        },
-                    )
-                )
+            # outputTranscription: intentionally not forwarded as
+            # response.audio_transcript.delta.
+            # Pipecat 1.3.x raises "Unimplemented server event type:
+            # response.audio_transcript.delta" on this event, which kills its
+            # receive task handler — tool calls (e.g. terminate_call) never
+            # land after that. Both the native Gemini and Vertex AI backends
+            # may emit outputTranscription automatically; suppressing it here
+            # keeps the OpenAI-realtime wire protocol clean for clients that
+            # don't yet handle this event type.
+            # If clients do need output transcription, this can be re-enabled
+            # once Pipecat ships a handler for response.audio_transcript.delta.
 
             # If serverContent only contained transcription(s) and no model
             # content, mark it as already handled so the main loop skips it
@@ -1416,6 +1483,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                                 "object": "realtime.response",
                                 "id": current_response_id,
                                 "status": "in_progress",
+                                "status_details": None,
                                 "output": [],
                                 "conversation_id": current_conversation_id,
                                 "modalities": tool_call_modalities,
@@ -1460,6 +1528,29 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             },
                         )
                     )
+                    # conversation.item.added — Pipecat 1.3.x registers the
+                    # call_id into _pending_function_calls inside
+                    # _handle_evt_conversation_item_added, which is triggered
+                    # by this event (NOT by response.output_item.added and NOT
+                    # by the old conversation.item.created which Pipecat 1.3.x
+                    # does not handle). Without this event the subsequent
+                    # response.function_call_arguments.done finds an empty
+                    # pending-calls dict and drops the tool invocation silently.
+                    returned_message.append(
+                        cast(
+                            OpenAIRealtimeEvents,
+                            {
+                                "type": "conversation.item.added",
+                                "event_id": f"event_{uuid.uuid4()}",
+                                "previous_item_id": None,
+                                "item": {
+                                    **function_call_item,
+                                    "status": "in_progress",
+                                    "arguments": "",
+                                },
+                            },
+                        )
+                    )
                     # response.function_call_arguments.delta — Gemini delivers
                     # the full arguments string in a single toolCall frame
                     # rather than streaming partial chunks, so emit one delta
@@ -1496,14 +1587,6 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             item={**function_call_item},
                         )
                     )
-                    # conversation.item.created
-                    returned_message.append(
-                        OpenAIRealtimeConversationItemCreated(
-                            type="conversation.item.created",
-                            event_id=f"event_{uuid.uuid4()}",
-                            item={**function_call_item},
-                        )
-                    )
 
                 # response.done - close the response so clients can submit tool
                 # results. Mirror the non-tool-call RESPONSE_DONE path: if Gemini
@@ -1537,6 +1620,15 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 tool_call_responses_api_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
                     _tool_call_chat_completion_usage,
                 )
+                _tool_usage_dict = tool_call_responses_api_usage.model_dump()
+                _tool_usage_dict.setdefault(
+                    "input_token_details",
+                    {"cached_tokens": 0, "text_tokens": 0, "audio_tokens": 0},
+                )
+                _tool_usage_dict.setdefault(
+                    "output_token_details",
+                    {"text_tokens": 0, "audio_tokens": 0},
+                )
                 tool_call_done_event = OpenAIRealtimeDoneEvent(
                     type="response.done",
                     event_id=f"event_{uuid.uuid4()}",
@@ -1544,6 +1636,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         id=current_response_id,
                         object="realtime.response",
                         status="completed",
+                        status_details=None,  # type: ignore[typeddict-item]
                         output=[
                             {
                                 "id": te["item_id"],
@@ -1558,7 +1651,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                         ],
                         conversation_id=current_conversation_id,
                         modalities=tool_call_modalities,
-                        usage=tool_call_responses_api_usage.model_dump(),
+                        usage=_tool_usage_dict,
                     ),
                 )
                 tool_call_temperature = tool_call_generation_config.get("temperature")

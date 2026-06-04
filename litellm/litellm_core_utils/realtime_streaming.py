@@ -92,8 +92,21 @@ class RealTimeStreaming:
         # Track whether we have already sent the guardrail turn-detection update
         # that disables provider auto-response for transcription guardrails.
         self._guardrail_turn_detection_update_sent: bool = False
+        # Deferred Gemini Live setup: Pipecat may stream audio before session.update.
+        # Buffer client audio until the backend acknowledges setup (setupComplete).
+        self._backend_setup_complete: bool = (
+            provider_config is None or provider_config.requires_session_configuration()
+        )
+        self._pending_messages_until_setup: List[str] = []
 
     _SESSION_EVENT_TYPES = frozenset(["session.created", "session.updated"])
+    _CLIENT_AUDIO_BUFFER_TYPES = frozenset(
+        [
+            "input_audio_buffer.append",
+            "input_audio_buffer.commit",
+            "input_audio_buffer.clear",
+        ]
+    )
     _AUDIO_FORMAT_MAP: Dict[str, Dict[str, Any]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
@@ -284,6 +297,33 @@ class RealTimeStreaming:
             return sent
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
         return True
+
+    def _uses_deferred_backend_setup(self) -> bool:
+        """True when setup is deferred until the client's first session.update."""
+        if self.provider_config is None:
+            return False
+        return not self.provider_config.requires_session_configuration()
+
+    def _should_buffer_client_message_until_setup(self, message: str) -> bool:
+        if not self._uses_deferred_backend_setup() or self._backend_setup_complete:
+            return False
+        try:
+            msg_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return False
+        return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
+
+    async def _flush_pending_messages_until_setup(self) -> None:
+        pending = self._pending_messages_until_setup
+        self._pending_messages_until_setup = []
+        for message in pending:
+            try:
+                await self._send_to_backend(message)
+            except Exception as e:
+                verbose_logger.debug(
+                    "Failed to flush buffered client message after setup: %s", e
+                )
+                break
 
     def _cache_session_configuration_request(self, transformed_message: str) -> None:
         """Store setup payload once sent to backend.
@@ -547,6 +587,12 @@ class RealTimeStreaming:
                 isinstance(event, dict) and event.get("type") == "session.created"
             )
             if is_session_created_event:
+                if (
+                    self._uses_deferred_backend_setup()
+                    and not self._backend_setup_complete
+                ):
+                    self._backend_setup_complete = True
+                    await self._flush_pending_messages_until_setup()
                 if self._session_created_sent_to_client:
                     # A synthetic session.created (with placeholder defaults) was
                     # already forwarded to the client when we connected.  The
@@ -1080,6 +1126,10 @@ class RealTimeStreaming:
                 # turn_detection injection) so audit logs reflect what we
                 # actually forward to the backend.
                 self.store_input(message=message)
+
+                if self._should_buffer_client_message_until_setup(message):
+                    self._pending_messages_until_setup.append(message)
+                    continue
 
                 ## FORWARD TO BACKEND
                 # Only mark the guardrail turn_detection update as sent after the
