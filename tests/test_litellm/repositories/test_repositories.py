@@ -1937,7 +1937,7 @@ class TestTeamRepositoryArchiveData:
         assert archive_data["admins"] == []
         assert archive_data["members"] == []
         assert archive_data["models"] == []
-        assert archive_data["spend"] is None
+        assert archive_data["spend"] == 0.0
         assert archive_data["blocked"] is False
         assert "team_alias" not in archive_data
         assert "organization_id" not in archive_data
