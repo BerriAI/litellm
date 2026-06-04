@@ -60,12 +60,20 @@ class CredentialsRepository(BaseRepository[Credentials]):
         """Convert a database record to a Credentials model with decryption."""
         if record is None:
             return None
-        model = super()._to_model(record)
-        if model and model.credential_values:
-            model.credential_values = self._decrypt_credential_values(
-                model.credential_values
+
+        data = record.dict() if hasattr(record, "dict") else dict(record)
+
+        if isinstance(data.get("credential_values"), str):
+            data["credential_values"] = json.loads(data["credential_values"])
+        if isinstance(data.get("credential_info"), str):
+            data["credential_info"] = json.loads(data["credential_info"])
+
+        if data.get("credential_values"):
+            data["credential_values"] = self._decrypt_credential_values(
+                data["credential_values"]
             )
-        return model
+
+        return Credentials(**data)
 
     async def find_by_id(
         self, credential_id: str, id_field: str = "credential_id"
