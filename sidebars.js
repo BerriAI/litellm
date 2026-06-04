@@ -975,6 +975,7 @@ const sidebars = {
           ]
         },
         "providers/hyperbolic",
+        "providers/inception",
         "providers/infinity",
         "providers/jina_ai",
         "providers/lambda_ai",
