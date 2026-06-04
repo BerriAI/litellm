@@ -151,12 +151,12 @@ def test_default_api_base():
                 continue
 
             for other_provider in litellm.provider_list:
-                if other_provider != provider and provider != "{}_chat".format(
+                if other_provider.value != provider and provider != "{}_chat".format(
                     other_provider.value
                 ):
-                    if provider == "codestral" and other_provider == "mistral":
+                    if provider == "codestral" and other_provider.value == "mistral":
                         continue
-                    elif provider == "github" and other_provider == "azure":
+                    elif provider == "github" and other_provider.value == "azure":
                         continue
                     assert other_provider.value not in api_base.replace("/openai", "")
 
