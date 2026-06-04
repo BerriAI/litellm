@@ -829,6 +829,29 @@ async def test_delete_mcp_server_skips_env_var_cleanup_when_server_missing():
     prisma.db.litellm_mcpuserenvvars.delete_many.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_delete_mcp_server_succeeds_when_orphan_cleanup_fails():
+    """The server-row delete is the commit point: a transient failure cleaning
+    the FK-less per-user env var rows must not turn a successful delete into a
+    caller error, otherwise the caller retries and hits a 404 for a server that
+    is already gone."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    deleted = object()
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=deleted)
+    prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock(
+        side_effect=Exception("connection pool exhausted")
+    )
+
+    result = await delete_mcp_server(prisma, "srv-1")
+
+    assert result is deleted
+    prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
+
+
 # ── DB helpers: global env vars encrypted at rest ─────────────────────────
 
 

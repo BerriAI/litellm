@@ -4086,6 +4086,7 @@ class TestRegistryTableConversionPreservesEnvVars:
         table = manager._build_mcp_server_table(self._server_with_env_vars())
         self._assert_env_vars_round_tripped(table)
 
+    @pytest.mark.asyncio
     async def test_health_check_server_preserves_env_vars(self):
         # OAuth2 without client credentials needs a per-user token, so the
         # health check is skipped (no network) and we exercise the table
