@@ -1070,6 +1070,86 @@ def _build_sampling_request(
     return Request(scope=scope)
 
 
+async def _build_completion_kwargs(
+    params: "CreateMessageRequestParams",
+    model: str,
+    user_api_key_auth: Any,
+    raw_headers: Optional[Dict[str, str]],
+    client_ip: Optional[str],
+) -> Dict[str, Any]:
+    openai_messages = _convert_mcp_messages_to_openai(
+        messages=params.messages,
+        system_prompt=params.systemPrompt,
+    )
+    completion_kwargs: Dict[str, Any] = {
+        "model": model,
+        "messages": openai_messages,
+        "max_tokens": params.maxTokens,
+    }
+    if params.temperature is not None:
+        completion_kwargs["temperature"] = params.temperature
+    if params.stopSequences:
+        completion_kwargs["stop"] = params.stopSequences
+    openai_tools = _convert_mcp_tools_to_openai(params.tools)
+    if openai_tools:
+        completion_kwargs["tools"] = openai_tools
+    openai_tool_choice = _convert_mcp_tool_choice_to_openai(params.toolChoice)
+    if openai_tool_choice is not None:
+        completion_kwargs["tool_choice"] = openai_tool_choice
+    completion_kwargs["metadata"] = {}
+    if params.metadata:
+        completion_kwargs["metadata"]["mcp_metadata"] = params.metadata
+
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.proxy.proxy_server import proxy_config
+
+    completion_kwargs["user"] = getattr(user_api_key_auth, "user_id", None)
+    _dummy_request = _build_sampling_request(
+        raw_headers=raw_headers, client_ip=client_ip
+    )
+    completion_kwargs = await add_litellm_data_to_request(
+        data=completion_kwargs,
+        request=_dummy_request,
+        user_api_key_dict=user_api_key_auth,
+        proxy_config=proxy_config,
+    )
+    return completion_kwargs
+
+
+async def _run_guardrails_and_call_llm(
+    completion_kwargs: Dict[str, Any],
+    user_api_key_auth: Any,
+) -> Any:
+    try:
+        from litellm.proxy.proxy_server import proxy_logging_obj as _plo
+
+        if _plo is not None:
+            completion_kwargs = await typing.cast("ProxyLogging", _plo).pre_call_hook(
+                user_api_key_dict=user_api_key_auth,
+                data=completion_kwargs,
+                call_type="acompletion",
+            )
+    except ImportError:
+        pass
+    except Exception as guardrail_err:
+        verbose_logger.warning(
+            "MCP sampling: pre-call guardrail rejected request: %s",
+            guardrail_err,
+        )
+        raise
+
+    import litellm
+
+    try:
+        from litellm.proxy.proxy_server import llm_router
+
+        if llm_router is not None:
+            return await llm_router.acompletion(**completion_kwargs)
+        return await litellm.acompletion(**completion_kwargs)
+    except ImportError:
+        return await litellm.acompletion(**completion_kwargs)
+
+
 async def handle_sampling_create_message(
     context: Any,
     params: "CreateMessageRequestParams",
@@ -1113,9 +1193,6 @@ async def handle_sampling_create_message(
         )
 
     try:
-        import litellm
-
-        # 1. Resolve model from preferences
         model = _resolve_model_from_preferences(
             model_preferences=params.modelPreferences,
             default_model=default_model,
@@ -1126,12 +1203,10 @@ async def handle_sampling_create_message(
             params.modelPreferences,
         )
 
-        # 1b. Enforce model-permission checks
         access_denial = await _check_model_access(model, user_api_key_auth)
         if access_denial is not None:
             return access_denial
 
-        # 1c. Enforce budget checks (key/team/user/org/global)
         budget_denial = await _run_budget_checks(
             model=model,
             user_api_key_auth=user_api_key_auth,
@@ -1141,78 +1216,16 @@ async def handle_sampling_create_message(
         if budget_denial is not None:
             return budget_denial
 
-        # 2. Convert MCP messages to OpenAI format
-        openai_messages = _convert_mcp_messages_to_openai(
-            messages=params.messages,
-            system_prompt=params.systemPrompt,
+        completion_kwargs = await _build_completion_kwargs(
+            params=params,
+            model=model,
+            user_api_key_auth=user_api_key_auth,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
-        # 3. Build completion kwargs
-        completion_kwargs: Dict[str, Any] = {
-            "model": model,
-            "messages": openai_messages,
-            "max_tokens": params.maxTokens,
-        }
-        if params.temperature is not None:
-            completion_kwargs["temperature"] = params.temperature
-        if params.stopSequences:
-            completion_kwargs["stop"] = params.stopSequences
-        # 4. Convert tools and tool_choice if provided
-        openai_tools = _convert_mcp_tools_to_openai(params.tools)
-        if openai_tools:
-            completion_kwargs["tools"] = openai_tools
-        openai_tool_choice = _convert_mcp_tool_choice_to_openai(params.toolChoice)
-        if openai_tool_choice is not None:
-            completion_kwargs["tool_choice"] = openai_tool_choice
-        # 5. Add metadata for tracking
-        completion_kwargs["metadata"] = {}
-        if params.metadata:
-            # We nest MCP metadata to avoid collisions with internal LiteLLM auth keys
-            completion_kwargs["metadata"]["mcp_metadata"] = params.metadata
 
-        # 6. Inject auth context for cost tracking and guardrails
-        if user_api_key_auth:
-            from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
-            from litellm.proxy.proxy_server import proxy_config
-
-            completion_kwargs["user"] = getattr(user_api_key_auth, "user_id", None)
-
-            _dummy_request = _build_sampling_request(
-                raw_headers=raw_headers,
-                client_ip=client_ip,
-            )
-            completion_kwargs = await add_litellm_data_to_request(
-                data=completion_kwargs,
-                request=_dummy_request,
-                user_api_key_dict=user_api_key_auth,
-                proxy_config=proxy_config,
-            )
-
-        # 7. Run pre-call guardrail hooks (content filtering, PII redaction,
-        #    prompt-injection detection, etc.).  Without this, a malicious
-        #    upstream MCP server with allow_sampling=True could send prompts
-        #    that bypass every guardrail configured on /chat/completions.
-        #    We use call_type="acompletion" so guardrails configured for
-        #    chat completions also fire for sampling sub-calls.
-        try:
-            from litellm.proxy.proxy_server import proxy_logging_obj as _plo
-
-            if _plo is not None:
-                completion_kwargs = await typing.cast(
-                    "ProxyLogging", _plo
-                ).pre_call_hook(
-                    user_api_key_dict=user_api_key_auth,
-                    data=completion_kwargs,
-                    call_type="acompletion",
-                )
-        except ImportError:
-            pass  # proxy_logging_obj unavailable — skip guardrails
-        except Exception as guardrail_err:
-            verbose_logger.warning(
-                "MCP sampling: pre-call guardrail rejected request: %s",
-                guardrail_err,
-            )
-            raise
-
+        openai_messages = completion_kwargs["messages"]
+        openai_tools = completion_kwargs.get("tools")
         verbose_logger.debug(
             "MCP sampling: calling litellm.acompletion with model=%s, num_messages=%d, has_tools=%s",
             model,
@@ -1220,21 +1233,13 @@ async def handle_sampling_create_message(
             bool(openai_tools),
         )
 
-        # 8. Call LiteLLM
-        # Use proxy's llm_router if available, else fallback to litellm.acompletion
-        try:
-            from litellm.proxy.proxy_server import llm_router
+        response = await _run_guardrails_and_call_llm(
+            completion_kwargs=completion_kwargs,
+            user_api_key_auth=user_api_key_auth,
+        )
 
-            if llm_router is not None:
-                response = await llm_router.acompletion(**completion_kwargs)
-            else:
-                response = await litellm.acompletion(**completion_kwargs)
-        except ImportError:
-            response = await litellm.acompletion(**completion_kwargs)
-        # 9. Convert response to MCP format
         result = _convert_openai_response_to_mcp_result(
-            response=response,
-            model_name=model,
+            response=response, model_name=model
         )
         verbose_logger.info(
             "MCP sampling: completed successfully, model=%s, stopReason=%s",
@@ -1254,11 +1259,6 @@ async def handle_sampling_create_message(
 
         from litellm.proxy._types import ProxyException
 
-        # Re-raise known LiteLLM errors and guardrail rejections so they
-        # can be handled by the proxy's global exception handlers.
-        # HTTPException is raised by pre_call_hook guardrails when they
-        # reject content — it must propagate so the MCP client sees
-        # the rejection rather than a generic "Sampling failed" wrapper.
         if isinstance(
             e,
             (
