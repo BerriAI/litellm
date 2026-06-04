@@ -5268,3 +5268,91 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+def test_transform_request_drops_tool_choice_when_no_tools():
+    """
+    Bedrock Converse rejects toolChoice when there is no toolConfig. A caller can
+    send tool_choice without tools (some OpenAI-compatible clients do this), which
+    previously leaked through and produced "tool_choice.type: Field required".
+    """
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"tool_choice": {"auto": {}}},
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolConfig" not in result
+    serialized = json.dumps(result)
+    assert "tool_choice" not in serialized
+    assert "toolChoice" not in serialized
+
+
+def test_transform_request_drops_parallel_tool_use_when_no_tools():
+    """
+    parallel_tool_calls=false maps to a disable_parallel_tool_use tool_choice block
+    that, for Claude 4.5 on Bedrock, is merged into additionalModelRequestFields.
+    Without tools Bedrock rejects it (tool_choice has no type and there is no
+    toolConfig), so it must not be applied when tools are absent.
+    """
+    config = AmazonConverseConfig()
+    model = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    optional_params = config.map_openai_params(
+        model=model,
+        non_default_params={"parallel_tool_calls": False},
+        optional_params={},
+        drop_params=False,
+    )
+    assert "_parallel_tool_use_config" in optional_params
+
+    result = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolConfig" not in result
+    assert "tool_choice" not in result.get("additionalModelRequestFields", {})
+    assert "tool_choice" not in json.dumps(result)
+
+
+def test_transform_request_drops_parallel_tool_use_when_only_tool_search_tools():
+    """
+    Raw tools can be present yet produce no toolConfig: tool_search tools are
+    filtered out of the Converse request. The parallel_tool_use guard must key off
+    the processed bedrock_tools (same source of truth as tool_choice), not the raw
+    tools list, or a tool_search-only request with parallel_tool_calls=False
+    reproduces the Bedrock 400.
+    """
+    config = AmazonConverseConfig()
+    model = "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    optional_params = config.map_openai_params(
+        model=model,
+        non_default_params={"parallel_tool_calls": False},
+        optional_params={},
+        drop_params=False,
+    )
+    assert "_parallel_tool_use_config" in optional_params
+    optional_params["tools"] = [
+        {"type": "tool_search_tool_regex_20251119", "name": "search"}
+    ]
+
+    result = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert "toolConfig" not in result
+    assert "tool_choice" not in result.get("additionalModelRequestFields", {})
+    assert "tool_choice" not in json.dumps(result)
