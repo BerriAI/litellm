@@ -5,67 +5,67 @@
     }
   },
   "src/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/accessGroups/useAccessGroups.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/accessGroups/useCreateAccessGroup.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/accessGroups/useEditAccessGroup.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/blogPosts/useBlogPosts.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/cloudzero/useCloudZeroDryRun.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/cloudzero/useCloudZeroExport.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 3
     }
   },
   "src/app/(dashboard)/hooks/configOverrides/hashicorpVaultApi.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 4
     }
   },
   "src/app/(dashboard)/hooks/guardrails/useRegisterGuardrail.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -75,12 +75,12 @@
     }
   },
   "src/app/(dashboard)/hooks/keys/useKeys.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/keys/useResetKeySpend.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -95,7 +95,7 @@
     }
   },
   "src/app/(dashboard)/hooks/projects/useCreateProject.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -105,7 +105,7 @@
     }
   },
   "src/app/(dashboard)/hooks/projects/useDeleteProject.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -115,7 +115,7 @@
     }
   },
   "src/app/(dashboard)/hooks/projects/useProjectDetails.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -125,7 +125,7 @@
     }
   },
   "src/app/(dashboard)/hooks/projects/useProjects.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -135,32 +135,32 @@
     }
   },
   "src/app/(dashboard)/hooks/projects/useUpdateProject.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/proxyConfig/useProxyConfig.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 2
     }
   },
   "src/app/(dashboard)/hooks/router/useRouterFields.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/teams/useTeams.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 2
     }
   },
@@ -357,7 +357,7 @@
     }
   },
   "src/components/CostTrackingSettings/pricing_calculator/use_multi_cost_estimate.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -382,12 +382,12 @@
     }
   },
   "src/components/CostTrackingSettings/use_discount_config.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 2
     }
   },
   "src/components/CostTrackingSettings/use_margin_config.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 2
     }
   },
@@ -702,7 +702,7 @@
     }
   },
   "src/components/WebRTCTester.jsx": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 2
     },
     "react/no-unescaped-entities": {
@@ -970,11 +970,11 @@
     }
   },
   "src/components/cloudzero_export_modal.tsx": {
+    "local/no-bare-fetch": {
+      "count": 3
+    },
     "no-restricted-imports": {
       "count": 1
-    },
-    "no-restricted-syntax": {
-      "count": 3
     },
     "react-hooks/immutability": {
       "count": 1
@@ -1175,10 +1175,10 @@
     }
   },
   "src/components/guardrails/edit_guardrail_form.tsx": {
-    "no-restricted-imports": {
+    "local/no-bare-fetch": {
       "count": 1
     },
-    "no-restricted-syntax": {
+    "no-restricted-imports": {
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
@@ -1254,7 +1254,7 @@
     }
   },
   "src/components/mcp_tools/ByokCredentialModal.tsx": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -1500,11 +1500,11 @@
     }
   },
   "src/components/networking.tsx": {
+    "local/no-bare-fetch": {
+      "count": 270
+    },
     "max-params": {
       "count": 23
-    },
-    "no-restricted-syntax": {
-      "count": 270
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -1622,7 +1622,7 @@
     }
   },
   "src/components/playground/chat_ui/CodeInterpreterOutput.tsx": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 2
     }
   },
@@ -1655,10 +1655,10 @@
     }
   },
   "src/components/playground/llm_calls/a2a_send_message.tsx": {
-    "max-params": {
+    "local/no-bare-fetch": {
       "count": 2
     },
-    "no-restricted-syntax": {
+    "max-params": {
       "count": 2
     }
   },
@@ -1683,15 +1683,15 @@
     }
   },
   "src/components/playground/llm_calls/embeddings_api.tsx": {
-    "max-params": {
+    "local/no-bare-fetch": {
       "count": 1
     },
-    "no-restricted-syntax": {
+    "max-params": {
       "count": 1
     }
   },
   "src/components/playground/llm_calls/fetch_agents.tsx": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -1706,10 +1706,10 @@
     }
   },
   "src/components/playground/llm_calls/interactions_api.tsx": {
-    "max-params": {
+    "local/no-bare-fetch": {
       "count": 1
     },
-    "no-restricted-syntax": {
+    "max-params": {
       "count": 1
     }
   },
@@ -1905,7 +1905,7 @@
     }
   },
   "src/components/prompts/prompt_editor_view/conversation_panel/useConversation.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -1971,7 +1971,7 @@
     }
   },
   "src/components/survey/SurveyModal.tsx": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -2038,7 +2038,7 @@
     }
   },
   "src/components/team/useMyTeamMember.ts": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -2066,11 +2066,11 @@
     }
   },
   "src/components/ui_theme_settings.tsx": {
+    "local/no-bare-fetch": {
+      "count": 3
+    },
     "no-restricted-imports": {
       "count": 1
-    },
-    "no-restricted-syntax": {
-      "count": 3
     },
     "react-hooks/immutability": {
       "count": 1
@@ -2223,7 +2223,7 @@
     }
   },
   "src/components/workflow_runs/index.tsx": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 3
     },
     "react-hooks/set-state-in-effect": {
@@ -2236,7 +2236,7 @@
     }
   },
   "src/contexts/ThemeContext.tsx": {
-    "no-restricted-syntax": {
+    "local/no-bare-fetch": {
       "count": 1
     }
   },

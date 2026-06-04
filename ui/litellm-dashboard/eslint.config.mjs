@@ -3,6 +3,7 @@ import tseslint from "typescript-eslint";
 import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import prettier from "eslint-config-prettier/flat";
 import unusedImports from "eslint-plugin-unused-imports";
+import noBareFetch from "./eslint-rules/no-bare-fetch.mjs";
 
 const eslintConfig = [
   {
@@ -13,7 +14,7 @@ const eslintConfig = [
   ...nextCoreWebVitals,
   prettier,
   {
-    plugins: { "unused-imports": unusedImports },
+    plugins: { "unused-imports": unusedImports, local: { rules: { "no-bare-fetch": noBareFetch } } },
     rules: {
       "unused-imports/no-unused-imports": "error",
       "@typescript-eslint/no-explicit-any": "warn",
@@ -32,13 +33,7 @@ const eslintConfig = [
       "max-depth": ["warn", 4],
       "max-params": ["error", 4],
       "max-nested-callbacks": ["error", 4],
-      "no-restricted-syntax": [
-        "error",
-        {
-          selector: "CallExpression[callee.name='fetch']",
-          message: "Use React Query (@tanstack/react-query) for data fetching instead of a raw fetch().",
-        },
-      ],
+      "local/no-bare-fetch": "error",
       "no-restricted-imports": [
         "error",
         {
