@@ -1854,6 +1854,117 @@ async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeyp
 
 
 @pytest.mark.asyncio
+async def test_deferred_setup_sends_session_update_before_buffered_audio(monkeypatch):
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    client_ws = MagicMock()
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    session_update = json.dumps(
+        {"type": "session.update", "session": {"modalities": ["audio"]}}
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg, session_update, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+    config = GeminiRealtimeConfig()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+
+    await streaming.client_ack_messages()
+
+    assert backend_ws.send.await_count == 1
+    sent_payload = json.loads(backend_ws.send.await_args_list[0].args[0])
+    assert "setup" in sent_payload
+    assert "realtimeInput" not in sent_payload
+    assert streaming._pending_messages_until_setup == [audio_msg]
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_flush_buffers_audio_received_during_flush():
+    import asyncio
+
+    client_ws = MagicMock()
+    client_ws.send_text = AsyncMock()
+    new_audio_msg = json.dumps(
+        {"type": "input_audio_buffer.append", "audio": "new-audio"}
+    )
+    client_ws.receive_text = AsyncMock(
+        side_effect=[new_audio_msg, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.requires_session_configuration = MagicMock(return_value=False)
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": {
+                "type": "session.created",
+                "event_id": "event_1",
+                "session": {"id": "sess_1", "modalities": ["audio"]},
+            },
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    streaming = RealTimeStreaming(
+        websocket=client_ws,
+        backend_ws=backend_ws,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    old_audio_msg = json.dumps(
+        {"type": "input_audio_buffer.append", "audio": "old-audio"}
+    )
+    streaming._pending_messages_until_setup = [old_audio_msg]
+    streaming._pending_messages_byte_total = len(old_audio_msg.encode("utf-8"))
+
+    first_flush_started = asyncio.Event()
+    release_flush = asyncio.Event()
+    sent_messages = []
+
+    async def send_to_backend(message):
+        sent_messages.append(message)
+        if message == old_audio_msg:
+            first_flush_started.set()
+            await release_flush.wait()
+        return True
+
+    streaming._send_to_backend = send_to_backend  # type: ignore[method-assign]
+    setup_task = asyncio.create_task(
+        streaming._handle_provider_config_message(json.dumps({"setupComplete": {}}))
+    )
+
+    await asyncio.wait_for(first_flush_started.wait(), timeout=1)
+    await streaming.client_ack_messages()
+
+    assert sent_messages == [old_audio_msg]
+    assert streaming._pending_messages_until_setup == [new_audio_msg]
+
+    release_flush.set()
+    await asyncio.wait_for(setup_task, timeout=1)
+
+    assert sent_messages == [old_audio_msg, new_audio_msg]
+    assert streaming._pending_messages_until_setup == []
+
+
+@pytest.mark.asyncio
 async def test_deferred_setup_flush_retains_unsent_messages_after_send_failure():
     client_ws = MagicMock()
     backend_ws = MagicMock()

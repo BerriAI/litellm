@@ -97,6 +97,7 @@ class RealTimeStreaming:
         self._backend_setup_complete: bool = (
             provider_config is None or provider_config.requires_session_configuration()
         )
+        self._flushing_pending_messages_until_setup: bool = False
         self._pending_messages_until_setup: List[str] = []
         self._pending_messages_byte_total: int = 0
 
@@ -310,7 +311,12 @@ class RealTimeStreaming:
         return not self.provider_config.requires_session_configuration()
 
     def _should_buffer_client_message_until_setup(self, message: str) -> bool:
-        if not self._uses_deferred_backend_setup() or self._backend_setup_complete:
+        if not self._uses_deferred_backend_setup():
+            return False
+        if (
+            self._backend_setup_complete
+            and not self._flushing_pending_messages_until_setup
+        ):
             return False
         try:
             msg_obj = json.loads(message)
@@ -318,7 +324,7 @@ class RealTimeStreaming:
             return False
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
-    async def _flush_pending_messages_until_setup(self) -> None:
+    async def _flush_pending_messages_until_setup(self) -> bool:
         pending = self._pending_messages_until_setup
         self._pending_messages_until_setup = []
         self._pending_messages_byte_total = 0
@@ -340,7 +346,8 @@ class RealTimeStreaming:
                     e,
                     len(unsent),
                 )
-                break
+                return False
+        return True
 
     async def _send_event_to_client(self, event: Any, event_str: str) -> bool:
         if self._client_wants_beta and isinstance(event, dict):
@@ -622,7 +629,14 @@ class RealTimeStreaming:
                     and not self._backend_setup_complete
                 ):
                     self._backend_setup_complete = True
-                    await self._flush_pending_messages_until_setup()
+                    self._flushing_pending_messages_until_setup = True
+                    try:
+                        while self._pending_messages_until_setup:
+                            flushed = await self._flush_pending_messages_until_setup()
+                            if not flushed:
+                                break
+                    finally:
+                        self._flushing_pending_messages_until_setup = False
                 if self._session_created_sent_to_client:
                     # A synthetic session.created (with placeholder defaults) was
                     # already forwarded to the client when we connected.  The
@@ -956,6 +970,7 @@ class RealTimeStreaming:
 
                 ## GUARDRAIL: intercept conversation.item.create for text-based injection.
                 guardrail_turn_detection_injected = False
+                msg_type: Optional[str] = None
                 try:
                     msg_obj = json.loads(message)
                     msg_type = msg_obj.get("type")
@@ -1176,9 +1191,26 @@ class RealTimeStreaming:
                     continue
 
                 if self._pending_messages_until_setup:
+                    should_send_setup_before_buffered_messages = (
+                        not self._backend_setup_complete
+                        and not self._flushing_pending_messages_until_setup
+                        and msg_type == "session.update"
+                    )
+                    if not should_send_setup_before_buffered_messages:
+                        self._pending_messages_until_setup.append(message)
+                        self._pending_messages_byte_total += len(
+                            message.encode("utf-8")
+                        )
+                        if (
+                            self._backend_setup_complete
+                            and not self._flushing_pending_messages_until_setup
+                        ):
+                            await self._flush_pending_messages_until_setup()
+                        continue
+
+                if self._flushing_pending_messages_until_setup:
                     self._pending_messages_until_setup.append(message)
                     self._pending_messages_byte_total += len(message.encode("utf-8"))
-                    await self._flush_pending_messages_until_setup()
                     continue
 
                 ## FORWARD TO BACKEND
