@@ -1161,7 +1161,7 @@ class Message(SafeAttributeModel, OpenAIObject):
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
     annotations: Optional[List[ChatCompletionAnnotation]] = None
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         content: Optional[str] = None,
         role: Literal["assistant", "user", "system", "tool", "function"] = "assistant",
@@ -1284,7 +1284,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
     reasoning_items: Optional[List[ChatCompletionReasoningItem]] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         content=None,
         role=None,
@@ -2965,7 +2965,7 @@ class StandardLoggingPayload(TypedDict):
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
-    # Add these 5 lines for Issue #29680:
+    # Added for Issue #29680:
     requested_model: NotRequired[str]
     resolved_model: NotRequired[str]
     response_model: NotRequired[str]
