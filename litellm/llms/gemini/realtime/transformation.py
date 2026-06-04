@@ -1366,17 +1366,25 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     )
                 )
 
-            # outputTranscription: intentionally not forwarded as
-            # response.audio_transcript.delta.
-            # Pipecat 1.3.x raises "Unimplemented server event type:
-            # response.audio_transcript.delta" on this event, which kills its
-            # receive task handler — tool calls (e.g. terminate_call) never
-            # land after that. Both the native Gemini and Vertex AI backends
-            # may emit outputTranscription automatically; suppressing it here
-            # keeps the OpenAI-realtime wire protocol clean for clients that
-            # don't yet handle this event type.
-            # If clients do need output transcription, this can be re-enabled
-            # once Pipecat ships a handler for response.audio_transcript.delta.
+            output_tx = server_content.get("outputTranscription")
+            if isinstance(output_tx, dict) and output_tx.get("text"):
+                # Emit as the GA event name; _GA_TO_BETA_EVENT_TYPES translates
+                # this back to response.audio_transcript.delta for beta clients.
+                returned_message.append(
+                    cast(
+                        OpenAIRealtimeEvents,
+                        {
+                            "type": "response.output_audio_transcript.delta",
+                            "event_id": "event_{}".format(uuid.uuid4()),
+                            "transcript": output_tx["text"],
+                            "item_id": "item_{}".format(uuid.uuid4()),
+                            "content_index": 0,
+                            "output_index": 0,
+                            "response_id": current_response_id or "",
+                            "delta": output_tx["text"],
+                        },
+                    )
+                )
 
             # If serverContent only contained transcription(s) and no model
             # content, mark it as already handled so the main loop skips it

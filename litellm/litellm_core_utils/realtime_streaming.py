@@ -99,6 +99,9 @@ class RealTimeStreaming:
         )
         self._pending_messages_until_setup: List[str] = []
 
+    # Max pre-setup audio frames buffered per connection to prevent memory exhaustion.
+    _MAX_BUFFERED_MESSAGES: int = 200
+
     _SESSION_EVENT_TYPES = frozenset(["session.created", "session.updated"])
     _CLIENT_AUDIO_BUFFER_TYPES = frozenset(
         [
@@ -320,8 +323,12 @@ class RealTimeStreaming:
             try:
                 await self._send_to_backend(message)
             except Exception as e:
+                remaining = len(pending) - pending.index(message) - 1
                 verbose_logger.debug(
-                    "Failed to flush buffered client message after setup: %s", e
+                    "Failed to flush buffered client message after setup: %s "
+                    "(%d subsequent message(s) dropped)",
+                    e,
+                    remaining,
                 )
                 break
 
@@ -1128,7 +1135,16 @@ class RealTimeStreaming:
                 self.store_input(message=message)
 
                 if self._should_buffer_client_message_until_setup(message):
-                    self._pending_messages_until_setup.append(message)
+                    if (
+                        len(self._pending_messages_until_setup)
+                        < RealTimeStreaming._MAX_BUFFERED_MESSAGES
+                    ):
+                        self._pending_messages_until_setup.append(message)
+                    else:
+                        verbose_logger.warning(
+                            "Pre-setup audio buffer full (%d messages); dropping frame",
+                            RealTimeStreaming._MAX_BUFFERED_MESSAGES,
+                        )
                     continue
 
                 ## FORWARD TO BACKEND
