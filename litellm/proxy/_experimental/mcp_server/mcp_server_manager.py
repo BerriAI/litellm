@@ -904,10 +904,10 @@ class MCPServerManager:
         self,
         mcp_server: LiteLLM_MCPServerTable,
         *,
-        credentials_are_encrypted: bool,
+        env_vars_are_encrypted: bool,
     ) -> Optional[List[Dict[str, Any]]]:
         env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
-        if credentials_are_encrypted:
+        if env_vars_are_encrypted:
             from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
                 decrypt_global_env_var_values,
             )
@@ -920,6 +920,7 @@ class MCPServerManager:
         mcp_server: LiteLLM_MCPServerTable,
         *,
         credentials_are_encrypted: bool = True,
+        env_vars_are_encrypted: Optional[bool] = None,
     ) -> MCPServer:
         _mcp_info: MCPInfo = mcp_server.mcp_info or {}
         env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
@@ -927,7 +928,12 @@ class MCPServerManager:
             getattr(mcp_server, "static_headers", None)
         )
         env_vars_list = self._resolve_env_vars_list(
-            mcp_server, credentials_are_encrypted=credentials_are_encrypted
+            mcp_server,
+            env_vars_are_encrypted=(
+                credentials_are_encrypted
+                if env_vars_are_encrypted is None
+                else env_vars_are_encrypted
+            ),
         )
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
@@ -1126,7 +1132,14 @@ class MCPServerManager:
             return
         try:
             if mcp_server.server_id not in self.registry:
-                new_server = await self.build_mcp_server_from_table(mcp_server)
+                # Callers hand us a record returned by the db.py read/write
+                # helpers, which already decrypt global env var values (the
+                # `credentials` field is the only one still encrypted here).
+                # Re-decrypting plaintext would zero the values, so build with
+                # env_vars_are_encrypted=False.
+                new_server = await self.build_mcp_server_from_table(
+                    mcp_server, env_vars_are_encrypted=False
+                )
                 self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
@@ -1149,7 +1162,11 @@ class MCPServerManager:
             return
         try:
             if mcp_server.server_id in self.registry:
-                new_server = await self.build_mcp_server_from_table(mcp_server)
+                # See add_server: db.py helpers already decrypted env var
+                # values, so don't decrypt them a second time here.
+                new_server = await self.build_mcp_server_from_table(
+                    mcp_server, env_vars_are_encrypted=False
+                )
                 # Carry the previously-resolved short prefix across so the
                 # tool names stay stable for clients holding cached lists.
                 existing_prefix = self.registry[mcp_server.server_id].short_prefix

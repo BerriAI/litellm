@@ -889,6 +889,52 @@ async def test_build_mcp_server_from_table_decrypts_global_env_vars(env_vars_sal
     assert headers == {"X-Db": "s3cr3t-p@ss"}
 
 
+@pytest.mark.asyncio
+async def test_add_server_does_not_double_decrypt_global_env_vars(env_vars_salt_key):
+    """The create/fetch endpoints hand ``add_server`` a record whose global env
+    var values were already decrypted by the db.py helpers (only ``credentials``
+    stays encrypted). Building the registry entry must not decrypt them a second
+    time: a second decrypt of an already-plaintext value (e.g. ``postgresql``)
+    fails and zeroes it, which would forward the raw ``${NAME}`` placeholder
+    upstream instead of the interpolated secret."""
+    import json
+
+    from litellm.proxy._experimental.mcp_server.db import (
+        _prepare_mcp_server_data,
+        decrypt_global_env_var_values,
+    )
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._types import LiteLLM_MCPServerTable, MCPEnvVar
+
+    req = _global_env_var_server_request(
+        [MCPEnvVar(name="DB_PASSWORD", value="s3cr3t-p@ss", scope="global")]
+    )
+    env_vars = json.loads(_prepare_mcp_server_data(req)["env_vars"])
+    # Mirror what create_mcp_server / get_mcp_server return to add_server.
+    decrypt_global_env_var_values(env_vars)
+    assert env_vars[0]["value"] == "s3cr3t-p@ss"
+
+    table = LiteLLM_MCPServerTable(
+        server_id="srv-add",
+        alias="echo",
+        url="https://upstream.example.com/mcp",
+        transport="http",
+        auth_type="none",
+        static_headers={"X-Db": "${DB_PASSWORD}"},
+        env_vars=env_vars,
+        approval_status="active",
+    )
+
+    manager = MCPServerManager()
+    await manager.add_server(table)
+
+    server = manager.registry["srv-add"]
+    headers = await manager._resolve_static_headers_with_env_vars(server, None)
+    assert headers == {"X-Db": "s3cr3t-p@ss"}
+
+
 def test_decrypt_global_env_var_drops_undecryptable_value(
     env_vars_salt_key, monkeypatch
 ):
