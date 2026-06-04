@@ -374,8 +374,13 @@ class RealTimeStreaming:
                     return False
                 await self.websocket.send_text(json.dumps(translated))
                 return True
-            except Exception:
-                pass
+            except Exception as e:
+                verbose_logger.warning(
+                    "Failed to translate %s to beta protocol, forwarding "
+                    "untranslated event to client: %s",
+                    event.get("type"),
+                    e,
+                )
         await self.websocket.send_text(event_str)
         return True
 

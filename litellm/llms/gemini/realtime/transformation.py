@@ -78,6 +78,12 @@ _KNOWN_GEMINI_TOP_LEVEL_KEYS: set = {
     map_key.split(".", 1)[0] for map_key in MAP_GEMINI_FIELD_TO_OPENAI_EVENT
 }
 
+# Gemini Live native-audio model ids carry this marker (e.g.
+# ``gemini-2.5-flash-native-audio-preview-09-2025``). These models reject a
+# ``speechConfig`` on ``setup`` with a 1007 invalid-argument error, so it is
+# stripped in ``_finalize_gemini_live_setup``.
+_GEMINI_NATIVE_AUDIO_MODEL_MARKER = "native-audio"
+
 
 class GeminiRealtimeConfig(BaseRealtimeConfig):
     # Cap the LRU of in-flight tool calls so long sessions with many tool
@@ -375,12 +381,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         model: str, setup: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Drop fields Gemini Live native-audio rejects on ``setup``."""
-        if "native-audio" not in model.lower():
+        if _GEMINI_NATIVE_AUDIO_MODEL_MARKER not in model.lower():
             return setup
         generation_config = setup.get("generationConfig")
         if isinstance(generation_config, dict):
-            # Native-audio Live models reject speechConfig on setup (1007 invalid
-            # argument). Voice is configured on the native Live client path instead.
             generation_config.pop("speechConfig", None)
         return setup
 
