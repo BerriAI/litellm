@@ -28,9 +28,7 @@ class ModelRepository(BaseRepository[Model]):
     def model_class(self) -> Type[Model]:
         return Model
 
-    def _encrypt_litellm_params(
-        self, litellm_params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _encrypt_litellm_params(self, litellm_params: Dict[str, Any]) -> Dict[str, Any]:
         """Encrypt sensitive values in litellm_params."""
         encrypted = {}
         for key, value in litellm_params.items():
@@ -42,9 +40,7 @@ class ModelRepository(BaseRepository[Model]):
                 encrypted[key] = value
         return encrypted
 
-    def _decrypt_litellm_params(
-        self, litellm_params: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def _decrypt_litellm_params(self, litellm_params: Dict[str, Any]) -> Dict[str, Any]:
         """Decrypt sensitive values in litellm_params."""
         decrypted = {}
         for key, value in litellm_params.items():

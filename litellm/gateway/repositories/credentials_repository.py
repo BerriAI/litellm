@@ -74,7 +74,9 @@ class CredentialsRepository(BaseRepository[Credentials]):
 
     async def find_by_name(self, credential_name: str) -> Optional[Credentials]:
         """Find credentials by name."""
-        record = await self.table.find_unique(where={"credential_name": credential_name})
+        record = await self.table.find_unique(
+            where={"credential_name": credential_name}
+        )
         return self._to_model(record)
 
     async def create_credentials(

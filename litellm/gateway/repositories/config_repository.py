@@ -59,7 +59,9 @@ class ConfigRepository:
 
     async def set_param(self, param_name: str, param_value: Any) -> ConfigParam:
         """Set a config parameter in the database."""
-        value_json = json.dumps(param_value) if not isinstance(param_value, str) else param_value
+        value_json = (
+            json.dumps(param_value) if not isinstance(param_value, str) else param_value
+        )
         await self.table.upsert(
             where={"param_name": param_name},
             data={
@@ -126,9 +128,7 @@ class ConfigRepository:
                 decrypted[key] = str(value)
         return decrypted
 
-    def _normalize_env_variable_keys(
-        self, env_vars: Dict[str, str]
-    ) -> Dict[str, str]:
+    def _normalize_env_variable_keys(self, env_vars: Dict[str, str]) -> Dict[str, str]:
         """Normalize env variable keys to include both original and uppercase versions."""
         normalized: Dict[str, str] = {}
         for key, value in env_vars.items():

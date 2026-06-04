@@ -53,14 +53,16 @@ class Team(DomainModel):
 
     @field_validator("members_with_roles", mode="before")
     @classmethod
-    def parse_members_with_roles(
-        cls, v: Any
-    ) -> List[TeamMember]:
+    def parse_members_with_roles(cls, v: Any) -> List[TeamMember]:
         if v is None or v == {} or v == []:
             return []
         if isinstance(v, dict):
             return [
-                TeamMember(user_id=uid, role=r) if isinstance(r, str) else TeamMember(user_id=uid, **r)
+                (
+                    TeamMember(user_id=uid, role=r)
+                    if isinstance(r, str)
+                    else TeamMember(user_id=uid, **r)
+                )
                 for uid, r in v.items()
             ]
         if isinstance(v, list):

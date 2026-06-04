@@ -122,8 +122,6 @@ class ProjectRepository(BaseRepository[Project]):
         """Delete a project."""
         return await self.delete(project_id, id_field="project_id")
 
-    async def update_spend(
-        self, project_id: str, spend: float
-    ) -> Optional[Project]:
+    async def update_spend(self, project_id: str, spend: float) -> Optional[Project]:
         """Update project spend."""
         return await self.update(project_id, {"spend": spend}, id_field="project_id")
