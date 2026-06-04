@@ -9,6 +9,7 @@ non-existent model deployment.  The agent name is already carried in
 ``data["name"]`` and must not pollute the ``model`` slot.
 """
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -42,9 +43,10 @@ def _build_agents_client():
     return TestClient(app)
 
 
-def _patch_proxy_server_imports(client=None):
+def _patch_proxy_server_imports(client=None, **overrides):
     """Return a context-manager that stubs _proxy_server_imports so tests
-    don't need a running proxy."""
+    don't need a running proxy. ``overrides`` replaces individual srv entries
+    (e.g. ``general_settings`` / ``llm_router``)."""
     mock_srv = {
         "general_settings": {},
         "llm_router": MagicMock(),
@@ -58,6 +60,7 @@ def _patch_proxy_server_imports(client=None):
         "user_temperature": None,
         "version": "0.0.0",
     }
+    mock_srv.update(overrides)
     return patch(
         "litellm.proxy.google_endpoints.agents_endpoints._proxy_server_imports",
         return_value=mock_srv,
@@ -197,3 +200,91 @@ class TestManagedAgentsModelParam:
         kwargs = mock_process.call_args.kwargs
         assert kwargs["model"] is None
         assert kwargs["route_type"] == "alist_agents"
+
+
+class TestManagedAgentsQueryTemplateBoundary:
+    """The GET/DELETE ``litellm_params_template`` query parameter skips the
+    auth-time is_request_body_safe() bouncer that guards POST bodies, so it must
+    be run through the same banned-param gate before it is merged into data."""
+
+    @pytest.mark.parametrize(
+        "template",
+        [
+            {"api_base": "https://attacker.example"},
+            {
+                "api_base": "https://attacker.example",
+                "litellm_credential_name": "shared-gemini",
+            },
+            {"vertex_credentials": "stolen"},
+        ],
+    )
+    def test_merge_query_template_rejects_banned_params(self, template):
+        """A banned param smuggled via the query template is rejected with a 400
+        and never reaches ``data``."""
+        from fastapi import HTTPException
+
+        from litellm.proxy.google_endpoints.agents_endpoints import (
+            _merge_query_params_into_data,
+        )
+
+        data = {"custom_llm_provider": "gemini"}
+        with patch(
+            "litellm.proxy.google_endpoints.agents_endpoints._safe_get_request_query_params",
+            return_value={"litellm_params_template": json.dumps(template)},
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                _merge_query_params_into_data(
+                    data, MagicMock(), general_settings={}, llm_router=None
+                )
+
+        assert exc_info.value.status_code == 400
+        for banned_key in template:
+            assert banned_key not in data
+
+    def test_merge_query_template_allows_legit_params(self):
+        """Non-blocklisted fields (api_key, custom_llm_provider) are the supported
+        per-request credential path and must still merge into data."""
+        from litellm.proxy.google_endpoints.agents_endpoints import (
+            _merge_query_params_into_data,
+        )
+
+        data = {"custom_llm_provider": "gemini"}
+        template = {"api_key": "AIza-test", "custom_llm_provider": "openai"}
+        with patch(
+            "litellm.proxy.google_endpoints.agents_endpoints._safe_get_request_query_params",
+            return_value={"litellm_params_template": json.dumps(template)},
+        ):
+            result = _merge_query_params_into_data(
+                data, MagicMock(), general_settings={}, llm_router=None
+            )
+
+        assert result["api_key"] == "AIza-test"
+        # pre-existing keys (path/provider) are never overwritten by the template
+        assert result["custom_llm_provider"] == "gemini"
+
+    def test_get_agent_rejects_banned_query_template_end_to_end(self):
+        """The 400 surfaces through the GET endpoint and base_process is skipped."""
+        try:
+            client = _build_agents_client()
+        except ImportError as exc:
+            pytest.skip(f"Skipping: missing dependency {exc}")
+
+        with (
+            _patch_proxy_server_imports(llm_router=None),
+            _patch_base_process() as mock_process,
+            _patch_auth(),
+        ):
+            resp = client.get(
+                "/v1beta/agents/my-custom-slides-agent",
+                params={
+                    "litellm_params_template": json.dumps(
+                        {
+                            "api_base": "https://attacker.example",
+                            "litellm_credential_name": "shared-gemini",
+                        }
+                    )
+                },
+            )
+
+        assert resp.status_code == 400
+        mock_process.assert_not_called()

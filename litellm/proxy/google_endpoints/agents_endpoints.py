@@ -15,17 +15,22 @@ These are distinct from the A2A agent registry at /v1/agents.
 """
 
 import json
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_query_params,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 router = APIRouter(tags=["gemini managed agents"])
 
@@ -69,7 +74,12 @@ def _enforce_caller_supplied_provider_key(
     )
 
 
-def _merge_query_params_into_data(data: dict, request: Request) -> dict:
+def _merge_query_params_into_data(
+    data: dict,
+    request: Request,
+    general_settings: dict,
+    llm_router: Optional["Router"],
+) -> dict:
     """
     For GET/DELETE endpoints that cannot carry a JSON body, read a
     JSON-encoded ``litellm_params_template`` query parameter and merge its
@@ -106,6 +116,21 @@ def _merge_query_params_into_data(data: dict, request: Request) -> dict:
         except (json.JSONDecodeError, ValueError):
             template = {}
         if isinstance(template, dict):
+            # This template skips the auth-time is_request_body_safe() bouncer
+            # that guards POST bodies, so a banned param smuggled here (e.g.
+            # api_base alongside litellm_credential_name) would otherwise reach
+            # the agents client unchecked. Apply the same gate before merging;
+            # legitimate per-request fields like api_key / custom_llm_provider
+            # are not on the blocklist and still pass through.
+            try:
+                is_request_body_safe(
+                    request_body=template,
+                    general_settings=general_settings,
+                    llm_router=llm_router,
+                    model="",
+                )
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail={"error": str(e)})
             for key, value in template.items():
                 data.setdefault(key, value)
 
@@ -239,7 +264,9 @@ async def list_gemini_agents(
     """
     srv = _proxy_server_imports()
     data: dict = {"custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    _merge_query_params_into_data(
+        data, request, srv["general_settings"], srv["llm_router"]
+    )
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -297,7 +324,9 @@ async def get_gemini_agent(
     """
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    _merge_query_params_into_data(
+        data, request, srv["general_settings"], srv["llm_router"]
+    )
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -355,7 +384,9 @@ async def delete_gemini_agent(
     """
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    _merge_query_params_into_data(
+        data, request, srv["general_settings"], srv["llm_router"]
+    )
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -413,7 +444,9 @@ async def list_gemini_agent_versions(
     """
     srv = _proxy_server_imports()
     data = {"name": name, "custom_llm_provider": "gemini"}
-    _merge_query_params_into_data(data, request)
+    _merge_query_params_into_data(
+        data, request, srv["general_settings"], srv["llm_router"]
+    )
     _enforce_caller_supplied_provider_key(data, user_api_key_dict)
 
     processor = ProxyBaseLLMRequestProcessing(data=data)
