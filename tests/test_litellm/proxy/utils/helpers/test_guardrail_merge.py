@@ -147,6 +147,50 @@ def test_check_and_merge_model_level_guardrails_group_with_no_guardrails_returns
     assert "guardrails" not in result["metadata"]
 
 
+def test_check_and_merge_model_level_guardrails_ignores_client_model_info_id_when_distrusted():
+    """veria-ai HIGH on #29654: when allow_client_pricing_override is set,
+    add_litellm_data_to_request preserves the client-supplied
+    metadata.model_info, so a caller could spoof an unknown/unguarded
+    model_info.id while requesting a guarded alias and bypass the merge.
+    On the pre_call path (trust_client_model_info=False), the helper must
+    ignore the spoofed id and fall back to the alias-union path.
+    """
+    router = MagicMock()
+    # Spoofed id resolves to an unguarded deployment.
+    spoofed_deployment = SimpleNamespace(litellm_params={"guardrails": []})
+    router.get_deployment.return_value = spoofed_deployment
+    # The real alias group has a guarded deployment.
+    router.get_model_list.return_value = [
+        {"litellm_params": {"guardrails": ["alias-secret-scan"]}}
+    ]
+
+    data = {
+        "model": "guarded-alias",
+        "metadata": {"model_info": {"id": "spoofed-unguarded-deployment"}},
+    }
+    result = _check_and_merge_model_level_guardrails(
+        data, router, trust_client_model_info=False
+    )
+    assert "alias-secret-scan" in result["metadata"]["guardrails"]
+    # The model_id lookup must NOT have been used.
+    router.get_deployment.assert_not_called()
+    router.get_model_list.assert_called_once()
+
+
+def test_check_and_merge_model_level_guardrails_trusts_client_model_info_id_by_default():
+    """Post_call paths (default trust_client_model_info=True) still use the
+    model_id route because route_request has populated model_info.id by then.
+    """
+    router = _router_with_deployment(["post-call-guardrail"])
+    data = {
+        "model": "any",
+        "metadata": {"model_info": {"id": "deployment-123"}},
+    }
+    result = _check_and_merge_model_level_guardrails(data, router)
+    assert "post-call-guardrail" in result["metadata"]["guardrails"]
+    router.get_deployment.assert_called_once_with(model_id="deployment-123")
+
+
 def test_check_and_merge_model_level_guardrails_returns_data_when_deployment_none():
     router = _router_without_deployment()
     data = {"metadata": {"model_info": {"id": "x"}}, "model": "m"}

@@ -1182,8 +1182,15 @@ class ProxyBaseLLMRequestProcessing:
             _check_and_merge_model_level_guardrails,
         )
 
+        # trust_client_model_info=False on pre_call: route_request hasn't run
+        # and add_litellm_data_to_request preserves client-supplied
+        # model_info when allow_client_pricing_override is set, so a caller
+        # could otherwise spoof an unguarded model_info.id while requesting
+        # a guarded alias and bypass guardrails (veria-ai HIGH on #29654).
         self.data = _check_and_merge_model_level_guardrails(
-            data=self.data, llm_router=llm_router
+            data=self.data,
+            llm_router=llm_router,
+            trust_client_model_info=False,
         )
 
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore

@@ -5657,13 +5657,25 @@ def _to_ns(dt):
     return int(dt.timestamp() * 1e9)
 
 
-def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Router]) -> dict:
+def _check_and_merge_model_level_guardrails(
+    data: dict,
+    llm_router: Optional[Router],
+    trust_client_model_info: bool = True,
+) -> dict:
     """
     Check if the model has guardrails defined and merge them with existing guardrails in the request data.
 
     Args:
         data: The request data dict
         llm_router: The LLM router instance to get deployment info from
+        trust_client_model_info: If False, ignore metadata.model_info.id and
+            resolve guardrails by alias-union only. Set to False on the
+            pre_call path because add_litellm_data_to_request preserves
+            client-supplied model_info when allow_client_pricing_override is
+            set, so a caller could spoof an unguarded model_info.id while
+            requesting a guarded alias and bypass guardrails (veria-ai HIGH
+            on #29654). Defaults to True for post_call paths where the
+            router has populated model_info.id itself.
 
     Returns:
         Modified data dict with merged guardrails (if any model-level guardrails exist)
@@ -5671,26 +5683,25 @@ def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Rou
     if llm_router is None:
         return data
 
-    # Get the model ID from the data
     metadata = data.get("metadata") or {}
     model_info = metadata.get("model_info") or {}
-    model_id = model_info.get("id", None)
+    model_id = model_info.get("id") if trust_client_model_info else None
 
     model_level_guardrails: Optional[list] = None
     if model_id is not None:
         deployment = llm_router.get_deployment(model_id=model_id)
         if deployment is None:
             return data
-        model_level_guardrails = deployment.litellm_params.get("guardrails")
+        deployment_guardrails = deployment.litellm_params.get("guardrails")
+        if isinstance(deployment_guardrails, list):
+            model_level_guardrails = deployment_guardrails
     else:
-        # Pre_call paths run before route_request populates model_info.id,
-        # and add_litellm_data_to_request strips any client-supplied
-        # metadata.model_info as a pricing-spoofing guard. The router has
-        # not yet picked the deployment, so we don't know which one's
-        # litellm_params.guardrails will apply. Take the UNION across all
-        # deployments in the group so a guardrail set on ANY eligible
-        # deployment still fires (#29652, addresses veria-ai HIGH on the
-        # single-deployment fallback that would skip non-first deployments).
+        # Pre_call paths run before route_request picks a deployment, so we
+        # don't know which deployment's litellm_params.guardrails will apply.
+        # Take the UNION across all deployments in the group so a guardrail
+        # set on ANY eligible deployment still fires (#29652; addresses
+        # veria-ai HIGH on the single-deployment fallback that would skip
+        # non-first deployments).
         model_alias = data.get("model")
         if not isinstance(model_alias, str) or not model_alias:
             return data
@@ -5699,7 +5710,10 @@ def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Rou
         union: list = []
         for dep in deployments:
             litellm_params = dep.get("litellm_params") or {}
-            for g in litellm_params.get("guardrails") or []:
+            guardrails = litellm_params.get("guardrails")
+            if not isinstance(guardrails, list):
+                continue
+            for g in guardrails:
                 key = g if isinstance(g, str) else repr(g)
                 if key not in seen:
                     seen.add(key)
