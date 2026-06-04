@@ -13,16 +13,24 @@ def normalize(value):
     return value
 
 
-def _router_with_deployment(guardrails):
+def _router_with_deployment(guardrails, *, by_alias: bool = False):
+    """Build a stub router whose `get_deployment(model_id=...)` returns a
+    deployment with the given guardrails. ``by_alias=True`` also stubs the
+    `get_deployment_by_model_group_name(...)` fallback used by the pre_call
+    path (#29652) where ``metadata.model_info.id`` isn't yet populated."""
     deployment = SimpleNamespace(litellm_params={"guardrails": guardrails})
     router = MagicMock()
     router.get_deployment.return_value = deployment
+    router.get_deployment_by_model_group_name.return_value = (
+        deployment if by_alias else None
+    )
     return router
 
 
 def _router_without_deployment():
     router = MagicMock()
     router.get_deployment.return_value = None
+    router.get_deployment_by_model_group_name.return_value = None
     return router
 
 
@@ -59,8 +67,10 @@ def test_check_and_merge_model_level_guardrails_returns_data_when_router_none():
     }
 
 
-def test_check_and_merge_model_level_guardrails_returns_data_when_model_id_missing():
-    router = _router_with_deployment(["pii"])
+def test_check_and_merge_model_level_guardrails_returns_data_when_model_id_missing_and_alias_unknown():
+    """When model_id is missing AND the model alias doesn't resolve to a
+    deployment (router returns None for both lookups), data is unchanged."""
+    router = _router_with_deployment(["pii"])  # by_alias=False by default
     data = {"metadata": {"model_info": {}}, "model": "m", "extra": "v"}
     result = _check_and_merge_model_level_guardrails(data, router)
     snapshot = {
@@ -76,6 +86,20 @@ def test_check_and_merge_model_level_guardrails_returns_data_when_model_id_missi
         "extra": "v",
     }
     router.get_deployment.assert_not_called()
+    # Alias fallback was attempted; it just didn't find a deployment.
+    router.get_deployment_by_model_group_name.assert_called_once()
+
+
+def test_check_and_merge_model_level_guardrails_falls_back_to_model_alias_when_model_id_missing():
+    """Pre_call path: model_info.id isn't populated yet because route_request
+    hasn't run. The helper must fall back to looking up the deployment by
+    the model alias (#29652) so DB/UI-assigned guardrails still fire."""
+    router = _router_with_deployment(["pii"], by_alias=True)
+    data = {"metadata": {"model_info": {}}, "model": "m", "extra": "v"}
+    result = _check_and_merge_model_level_guardrails(data, router)
+    # Merge happened via the alias fallback.
+    assert "pii" in result["metadata"]["guardrails"]
+    router.get_deployment_by_model_group_name.assert_called_once()
 
 
 def test_check_and_merge_model_level_guardrails_returns_data_when_deployment_none():
@@ -93,7 +117,8 @@ def test_check_and_merge_model_level_guardrails_returns_data_when_guardrails_non
 
 
 def test_check_and_merge_model_level_guardrails_handles_missing_metadata():
-    router = _router_with_deployment(["pii"])
+    """No metadata at all + alias unknown to the router → data unchanged."""
+    router = _router_with_deployment(["pii"])  # by_alias=False
     data = {"model": "m"}
     result = _check_and_merge_model_level_guardrails(data, router)
     snapshot = {

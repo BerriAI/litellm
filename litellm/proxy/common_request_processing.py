@@ -961,7 +961,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return custom_headers
 
-    async def common_processing_pre_call_logic(
+    async def common_processing_pre_call_logic(  # noqa: PLR0915
         self,
         request: Request,
         general_settings: dict,
@@ -1169,6 +1169,22 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        # Merge model-level guardrails before pre_call_hook so DB/UI-configured
+        # guardrails actually execute on pre_call. Without this, guardrails set
+        # via litellm_params.guardrails are only honored on post_call paths
+        # (#29652, partial fix in #23774 covered non-streaming post_call only).
+        # Inline import is intentional: litellm.proxy.utils imports
+        # common_request_processing at module load (cyclic) and the helper is
+        # defined later in utils.py; module-level import here would risk a
+        # NameError on the import-order CodeQL flagged.
+        from litellm.proxy.utils import (  # noqa: PLC0415
+            _check_and_merge_model_level_guardrails,
+        )
+
+        self.data = _check_and_merge_model_level_guardrails(
+            data=self.data, llm_router=llm_router
+        )
 
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict,

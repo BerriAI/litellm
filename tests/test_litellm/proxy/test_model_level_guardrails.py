@@ -10,7 +10,7 @@ import os
 import sys
 
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../..")))
 
@@ -93,9 +93,14 @@ class TestCheckAndMergeModelLevelGuardrails:
         assert result is data
 
     def test_returns_data_unchanged_when_no_model_info(self):
-        """Returns data unchanged when metadata has no model_info."""
+        """Returns data unchanged when metadata has no model_info AND the
+        model alias does not resolve to a deployment."""
         data = {"model": "gpt-4", "metadata": {}}
         mock_router = MagicMock()
+        # Neither the model_id lookup nor the alias-fallback lookup
+        # finds a deployment.
+        mock_router.get_deployment.return_value = None
+        mock_router.get_deployment_by_model_group_name.return_value = None
         result = _check_and_merge_model_level_guardrails(
             data=data, llm_router=mock_router
         )
@@ -575,3 +580,111 @@ async def test_streaming_iterator_hook_skips_guardrail_not_on_model():
 
         assert guardrail.was_called is False
         assert chunks == ["chunk-1"]
+
+
+# ---------------------------------------------------------------------------
+# Regression: pre_call ordering — _check_and_merge_model_level_guardrails
+# must run BEFORE pre_call_hook so DB/UI-configured guardrails fire on
+# pre_call paths (#29652; #23774 only covered post_call).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
+    """
+    common_processing_pre_call_logic must merge model-level guardrails into
+    data BEFORE proxy_logging_obj.pre_call_hook is invoked. Otherwise
+    pre_call guardrails (e.g. apply_guardrail event) never see the
+    UI/DB-assigned guardrail name.
+    """
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    # Stub router that reports a deployment with one model-level guardrail.
+    # Mirrors the real proxy: at pre_call_hook time model_info has been
+    # stripped by add_litellm_data_to_request (see veria-ai review on PR
+    # #29654) and route_request hasn't yet populated model_info.id — so
+    # the resolver has to fall back to the model alias.
+    mock_router = MagicMock()
+    mock_deployment = MagicMock()
+    mock_deployment.litellm_params.get.return_value = ["my-pre-call-guardrail"]
+    # get_deployment(model_id=...) returns None (no model_info.id yet).
+    mock_router.get_deployment.return_value = None
+    # get_deployment_by_model_group_name(model_alias) resolves the alias.
+    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
+
+    processing = ProxyBaseLLMRequestProcessing(
+        data={
+            "model": "my-model",
+            "metadata": {},  # model_info already stripped
+        }
+    )
+
+    captured_pre_call_data: dict = {}
+
+    async def fake_pre_call_hook(*, user_api_key_dict, data, call_type):
+        captured_pre_call_data.update(data)
+        return data
+
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = fake_pre_call_hook
+
+    # Minimal stubs for the surrounding setup steps in
+    # common_processing_pre_call_logic. We only care about the ordering
+    # between _check_and_merge_model_level_guardrails and pre_call_hook.
+    async def passthrough_add_litellm_data(*, data, **kwargs):
+        return data
+
+    proxy_config = MagicMock()
+    proxy_config._get_hierarchical_router_settings = AsyncMock(return_value=None)
+
+    # Stop the function before any post-pre_call_hook logic so we can keep
+    # the test focused. Raising _StopAfterPreCall in the next await fires
+    # right after the guardrail merge + pre_call_hook complete.
+    class _StopAfterPreCall(Exception):
+        pass
+
+    proxy_config._get_hierarchical_router_settings.side_effect = _StopAfterPreCall()
+
+    with (
+        patch(
+            "litellm.proxy.common_request_processing.add_litellm_data_to_request",
+            side_effect=passthrough_add_litellm_data,
+        ),
+        patch(
+            "litellm.proxy.common_request_processing.litellm.utils.function_setup",
+            return_value=(MagicMock(), processing.data),
+        ),
+        patch(
+            "litellm.proxy.proxy_server.prisma_client",
+            None,
+        ),
+    ):
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        try:
+            await processing.common_processing_pre_call_logic(
+                request=MagicMock(headers={}, url=MagicMock(path="/v1/chat/completions")),
+                general_settings={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+                proxy_logging_obj=proxy_logging,
+                proxy_config=proxy_config,
+                route_type="acompletion",
+                version=None,
+                user_model=None,
+                user_temperature=None,
+                user_request_timeout=None,
+                user_max_tokens=None,
+                user_api_base=None,
+                model=None,
+                llm_router=mock_router,
+            )
+        except _StopAfterPreCall:
+            pass
+
+    # The pre_call_hook must have received data with the model-level
+    # guardrail already merged in. Before the fix, this assertion fails
+    # because pre_call_hook saw the original data without merge.
+    merged = (captured_pre_call_data.get("metadata") or {}).get("guardrails") or (
+        captured_pre_call_data.get("guardrails") or []
+    )
+    assert "my-pre-call-guardrail" in merged

@@ -658,7 +658,6 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
-            "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
@@ -5672,11 +5671,21 @@ def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Rou
     model_info = metadata.get("model_info") or {}
     model_id = model_info.get("id", None)
 
-    if model_id is None:
-        return data
+    deployment = None
+    if model_id is not None:
+        deployment = llm_router.get_deployment(model_id=model_id)
+    else:
+        # Pre_call paths run before route_request populates model_info.id,
+        # and add_litellm_data_to_request strips any client-supplied
+        # metadata.model_info as a pricing-spoofing guard. Fall back to
+        # resolving the deployment via the model alias so DB/UI-assigned
+        # model-level guardrails fire on pre_call too (#29652).
+        model_alias = data.get("model")
+        if isinstance(model_alias, str) and model_alias:
+            deployment = llm_router.get_deployment_by_model_group_name(
+                model_group_name=model_alias
+            )
 
-    # Check if the model has guardrails
-    deployment = llm_router.get_deployment(model_id=model_id)
     if deployment is None:
         return data
 
