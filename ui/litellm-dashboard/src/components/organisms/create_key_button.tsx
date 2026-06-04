@@ -1657,17 +1657,12 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       )}
 
       {apiKey && (
-        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null}>
-          <Grid numItems={1} className="gap-2 w-full">
-            <Title>Save your Key</Title>
-            <Col numColSpan={1}>
-              {apiKey != null ? (
-                <CreatedKeyDisplay apiKey={apiKey} />
-              ) : (
-                <Text>Key being created, this might take 30s</Text>
-              )}
-            </Col>
-          </Grid>
+        <Modal open={isModalVisible} onOk={handleOk} onCancel={handleCancel} footer={null} width={560}>
+          {apiKey != null ? (
+            <CreatedKeyDisplay apiKey={apiKey} />
+          ) : (
+            <Text>Key being created, this might take 30s</Text>
+          )}
         </Modal>
       )}
     </div>

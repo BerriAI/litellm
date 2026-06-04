@@ -7,51 +7,91 @@ vi.mock("@/components/molecules/message_manager", () => ({
   default: { success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn(), loading: vi.fn(), destroy: vi.fn() },
 }));
 
+vi.mock("@/components/networking", () => ({
+  proxyBaseUrl: "https://litellm.example.com",
+}));
+
 import MessageManager from "@/components/molecules/message_manager";
 
 describe("CreatedKeyDisplay", () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.mocked(MessageManager.success).mockClear();
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("should render", () => {
+  it("renders the API key value", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
-    expect(screen.getByText("sk-test-123")).toBeInTheDocument();
+    expect(screen.getByTestId("created-key-value")).toHaveTextContent("sk-test-123");
   });
 
-  it("should display the security warning", () => {
+  it("displays the security warning and modal heading", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
-    expect(screen.getByText(/you will not be able to view it again/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /api key created/i })).toBeInTheDocument();
+    expect(screen.getByText(/make sure to copy your api key now/i)).toBeInTheDocument();
+    expect(screen.getByText(/you won't be able to see it again/i)).toBeInTheDocument();
   });
 
-  it("should show the copy button with initial label", () => {
+  it("builds a coding agent prompt that advertises the gateway endpoints and docs without leaking the key", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
-    expect(screen.getByRole("button", { name: /copy virtual key/i })).toBeInTheDocument();
+    const prompt = screen.getByTestId("coding-agent-prompt").textContent ?? "";
+
+    expect(prompt).toMatch(/Base URL: https:\/\/litellm\.example\.com/);
+    expect(prompt).not.toContain("sk-test-123");
+    expect(prompt).toContain("$LITELLM_API_KEY");
+    expect(prompt).toContain("Authorization: Bearer <key>");
+
+    expect(prompt).toContain("/chat/completions");
+    expect(prompt).toContain("/v1/messages");
+    expect(prompt).toContain("/v1/responses");
+    expect(prompt).toContain("/mcp");
+    expect(prompt).toContain("/v1/models");
+
+    expect(prompt).toContain("https://docs.litellm.ai/docs/learn/gateway_quickstart");
+    expect(prompt).toContain("https://docs.litellm.ai/docs/tutorials/claude_responses_api");
+    expect(prompt).toContain("https://docs.litellm.ai/docs/anthropic_unified");
+    expect(prompt).toContain("https://docs.litellm.ai/docs/mcp");
+    expect(prompt).toContain("https://docs.litellm.ai/llms.txt");
   });
 
-  it("should change button text to Copied after clicking copy", async () => {
-    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+  it("does not produce a trailing slash in the base URL when proxyBaseUrl is provided", () => {
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
-
-    await user.click(screen.getByRole("button", { name: /copy virtual key/i }));
-
-    expect(screen.getByRole("button", { name: /copied/i })).toBeInTheDocument();
+    const prompt = screen.getByTestId("coding-agent-prompt").textContent ?? "";
+    expect(prompt).not.toMatch(/Base URL: https:\/\/litellm\.example\.com\//);
   });
 
-  it("should show a success message when the key is copied", async () => {
+  it("copies the API key to clipboard when the primary button is clicked", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
 
     await user.click(screen.getByRole("button", { name: /copy virtual key/i }));
 
     expect(MessageManager.success).toHaveBeenCalledWith("Key copied to clipboard");
+    expect(screen.getByRole("button", { name: /copied/i })).toBeInTheDocument();
   });
 
-  it("should revert button text back after 2 seconds", async () => {
+  it("renders coding agent logos next to the prompt heading", () => {
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+    const logos = screen.getByTestId("coding-agent-logos");
+    const images = logos.querySelectorAll("img");
+    const altText = Array.from(images).map((img) => img.getAttribute("alt"));
+
+    expect(altText).toEqual(["Cursor", "Claude Code", "OpenAI Codex", "GitHub Copilot"]);
+  });
+
+  it("copies the coding agent prompt to clipboard when its copy button is clicked", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+
+    await user.click(screen.getByRole("button", { name: /copy prompt for coding agents/i }));
+
+    expect(MessageManager.success).toHaveBeenCalledWith("Prompt copied to clipboard");
+  });
+
+  it("reverts the primary button label after 2 seconds", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<CreatedKeyDisplay apiKey="sk-test-123" />);
 
@@ -63,5 +103,24 @@ describe("CreatedKeyDisplay", () => {
     });
 
     expect(screen.getByRole("button", { name: /copy virtual key/i })).toBeInTheDocument();
+  });
+
+  it("does not relabel the primary button when the icon copy button is clicked", async () => {
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+
+    await user.click(screen.getByRole("button", { name: /^copy api key$/i }));
+
+    expect(screen.getByRole("button", { name: /copy virtual key/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^copied!$/i })).not.toBeInTheDocument();
+  });
+
+  it("uses absolute /ui/assets/logos/ paths so logos resolve regardless of the current route", () => {
+    render(<CreatedKeyDisplay apiKey="sk-test-123" />);
+    const images = screen.getByTestId("coding-agent-logos").querySelectorAll("img");
+
+    Array.from(images).forEach((img) => {
+      expect(img.getAttribute("src")).toMatch(/^\/ui\/assets\/logos\//);
+    });
   });
 });
