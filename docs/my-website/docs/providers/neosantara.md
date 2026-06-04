@@ -49,7 +49,7 @@ import litellm
 os.environ["NEOSANTARA_API_KEY"] = ""  # your Neosantara API key
 
 response = litellm.responses(
-    model="neosantara/claude-4.5-sonnet",
+    model="neosantara/claude-opus-4-6",
     input="Halo, apa kabar?",
 )
 
@@ -66,7 +66,7 @@ model_list:
       api_key: os.environ/NEOSANTARA_API_KEY
   - model_name: neosantara-responses
     litellm_params:
-      model: neosantara/claude-4.5-sonnet
+      model: neosantara/claude-opus-4-6
       api_key: os.environ/NEOSANTARA_API_KEY
 ```
 

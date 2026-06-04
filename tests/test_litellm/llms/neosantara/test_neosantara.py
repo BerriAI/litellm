@@ -5,8 +5,11 @@ NEOSANTARA_API_BASE = "https://api.neosantara.xyz/v1"
 
 
 def test_neosantara_json_registry():
+    import litellm
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
+    assert litellm.LlmProviders.NEOSANTARA.value == "neosantara"
+    assert litellm.LlmProviders("neosantara") == litellm.LlmProviders.NEOSANTARA
     assert JSONProviderRegistry.exists("neosantara")
     config = JSONProviderRegistry.get("neosantara")
     assert config is not None
@@ -70,7 +73,7 @@ def test_neosantara_responses_api_config():
 
     config = ProviderConfigManager.get_provider_responses_api_config(
         provider="neosantara",
-        model="claude-4.5-sonnet",
+        model="claude-opus-4-6",
     )
 
     assert isinstance(config, OpenAIResponsesAPIConfig)
