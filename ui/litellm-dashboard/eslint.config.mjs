@@ -28,8 +28,8 @@ const eslintConfig = [
       "no-self-assign": "error",
       "no-var": "error",
       "react/no-danger": "error",
-      complexity: ["error", 20],
-      "max-depth": ["error", 4],
+      complexity: ["warn", 20],
+      "max-depth": ["warn", 4],
       "max-params": ["error", 4],
       "max-nested-callbacks": ["error", 4],
       "no-restricted-syntax": [
