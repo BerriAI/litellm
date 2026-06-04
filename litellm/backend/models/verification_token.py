@@ -42,6 +42,8 @@ class VerificationToken(DomainModel):
     blocked: Optional[bool] = None
     litellm_budget_table: Optional[Dict[str, Any]] = None
     org_id: Optional[str] = None
+    organization_id: Optional[str] = None
+    budget_id: Optional[str] = None
     created_by: Optional[str] = None
     updated_by: Optional[str] = None
     last_active: Optional[datetime] = None
