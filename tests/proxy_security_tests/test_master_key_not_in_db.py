@@ -50,3 +50,11 @@ async def test_master_key_not_inserted(test_client):
             "SECURITY ALERT: the master key was found in the litellm_verificationtoken "
             "table. The master key must never be inserted into the DB."
         )
+
+    # Canary against any other unexpected startup write (default key, rotation
+    # artifact, ...). The job gives each run a fresh DB, so a clean startup must
+    # leave the table empty; if startup ever legitimately seeds a token, narrow
+    # this while keeping the master-key assertion above.
+    assert (
+        not stored_tokens
+    ), f"startup unexpectedly wrote token(s) to litellm_verificationtoken: {stored_tokens}"
