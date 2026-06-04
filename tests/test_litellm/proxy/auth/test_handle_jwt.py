@@ -233,7 +233,7 @@ async def test_find_team_with_model_access_uses_request_method_for_passthrough_a
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
