@@ -3984,5 +3984,140 @@ class TestApprovalStatusGate:
         assert "never-seen" not in manager.registry
 
 
+class TestGetPublicMCPServers:
+    """
+    /public/mcp_hub strict-whitelist semantics — mirrors /public/model_hub
+    and /public/agent_hub. Regression test for the PR #20607 OR-with-default
+    behavior that made `litellm.public_mcp_servers` ignored by the hub.
+    """
+
+    def _make_server(self, server_id, available_on_public_internet=True):
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            available_on_public_internet=available_on_public_internet,
+        )
+
+    def _make_manager(self, servers):
+        manager = MCPServerManager()
+        for s in servers:
+            manager.config_mcp_servers[s.server_id] = s
+        return manager
+
+    @patch("litellm.public_mcp_servers", None)
+    def test_returns_empty_when_whitelist_is_none(self):
+        """No /make_public call yet → hub returns nothing, regardless of
+        per-server flags."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+    @patch("litellm.public_mcp_servers", [])
+    def test_returns_empty_when_whitelist_is_empty(self):
+        """Explicit empty whitelist → hub returns nothing."""
+        manager = self._make_manager(
+            [self._make_server("a", available_on_public_internet=True)]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+    @patch("litellm.public_mcp_servers", ["a"])
+    def test_returns_only_whitelisted_when_flag_defaults_to_true(self):
+        """
+        Regression: prior to the fix, every server with
+        available_on_public_internet=True (the default) leaked into the hub
+        regardless of the whitelist. Whitelist must be authoritative.
+        """
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_servers", ["a"])
+    def test_does_not_leak_servers_via_internal_flag(self):
+        """
+        available_on_public_internet is an IP-gating flag, not a hub flag.
+        A server with the flag True that is not in the whitelist must not
+        appear in the hub.
+        """
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=False),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_servers", ["does-not-exist"])
+    def test_stale_whitelist_id_returns_empty(self):
+        """Whitelist references an unknown server_id → no spurious results."""
+        manager = self._make_manager(
+            [self._make_server("a", available_on_public_internet=True)]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+
+class TestGetPublicMCPServersLegacyMode:
+    """
+    Legacy migration knob: litellm.public_mcp_hub_strict_whitelist=False
+    preserves the pre-fix OR-with-default semantics for one release so
+    operators that relied on the old behavior have a window to call
+    /v1/mcp/make_public before /public/mcp_hub goes empty.
+    """
+
+    def _make_server(self, server_id, available_on_public_internet=True):
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            available_on_public_internet=available_on_public_internet,
+        )
+
+    def _make_manager(self, servers):
+        manager = MCPServerManager()
+        for s in servers:
+            manager.config_mcp_servers[s.server_id] = s
+        return manager
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", None)
+    def test_legacy_returns_default_flag_servers_when_whitelist_is_none(self):
+        """Legacy mode + no whitelist → every server with the default
+        available_on_public_internet=True appears (old behavior)."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", ["b"])
+    def test_legacy_unions_whitelist_and_default_flag(self):
+        """Legacy mode unions the whitelist with any
+        available_on_public_internet=True server."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert sorted(s.server_id for s in result) == ["a", "b"]
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
