@@ -81,7 +81,6 @@ from litellm.types.utils import (
 from litellm.utils import (
     ModelResponse,
     Usage,
-    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
@@ -338,50 +337,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
     @staticmethod
-    def _supports_model_capability(model: str, key: str) -> bool:
-        """Check a boolean capability ``key`` in the model map.
-
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
-        """
-        try:
-            if _supports_factory(
-                model=model,
-                custom_llm_provider="anthropic",
-                key=key,
-            ):
-                return True
-        except Exception:
-            pass
-        candidates = [model]
-        for prefix in (
-            "bedrock/converse/",
-            "bedrock/invoke/",
-            "bedrock/",
-            "vertex_ai/",
-        ):
-            if model.startswith(prefix):
-                candidates.append(model[len(prefix) :])
-        try:
-            from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-            base = BedrockModelInfo.get_base_model(model)
-            if base:
-                candidates.append(base)
-                candidates.append(f"bedrock/{base}")
-        except Exception:
-            pass
-        try:
-            for cand in candidates:
-                if cand in litellm.model_cost and (
-                    litellm.model_cost[cand].get(key) is True
-                ):
-                    return True
-        except Exception:
-            pass
-        return False
-
-    @staticmethod
     def _supports_effort_level(model: str, level: str) -> bool:
         """Check ``supports_{level}_reasoning_effort`` in the model map."""
         return AnthropicConfig._supports_model_capability(
@@ -394,7 +349,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if effort == "max" and not (
             AnthropicConfig._is_claude_4_6_model(model)
             or AnthropicConfig._is_claude_4_7_model(model)
-            or AnthropicConfig._is_claude_4_8_model(model)
             or AnthropicConfig._supports_effort_level(model, "max")
         ):
             return f"effort='max' is not supported by this model. Got model: {model}"
@@ -469,7 +423,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "claude-3-7-sonnet" in model
             or AnthropicConfig._is_claude_4_6_model(model)
             or AnthropicConfig._is_claude_4_7_model(model)
-            or AnthropicConfig._is_claude_4_8_model(model)
             or supports_reasoning(
                 model=model,
                 custom_llm_provider=self.custom_llm_provider,

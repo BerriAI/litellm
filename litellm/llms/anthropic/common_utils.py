@@ -272,38 +272,66 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
-    def _is_claude_4_8_model(model: str) -> bool:
-        """Check if the model is a Claude 4.8 model (Opus 4.8)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-8",
-                "opus_4_8",
-                "opus-4.8",
-                "opus_4.8",
-            )
-        )
+    def _supports_model_capability(model: str, key: str) -> bool:
+        """Check a boolean capability ``key`` in the model map.
 
-    @staticmethod
-    def _is_adaptive_thinking_model(model: str) -> bool:
-        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``."""
+        Strips bedrock/vertex prefixes so a provider-routed Claude still
+        resolves to the Anthropic model-map entry.
+        """
         from litellm.utils import _supports_factory
 
         try:
             if _supports_factory(
                 model=model,
-                custom_llm_provider=None,
-                key="supports_adaptive_thinking",
+                custom_llm_provider="anthropic",
+                key=key,
             ):
                 return True
         except Exception:
             pass
-        return (
-            AnthropicModelInfo._is_claude_4_6_model(model)
-            or AnthropicModelInfo._is_claude_4_7_model(model)
-            or AnthropicModelInfo._is_claude_4_8_model(model)
-        )
+        candidates = [model]
+        for prefix in (
+            "bedrock/converse/",
+            "bedrock/invoke/",
+            "bedrock/",
+            "vertex_ai/",
+        ):
+            if model.startswith(prefix):
+                candidates.append(model[len(prefix) :])
+        try:
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            base = BedrockModelInfo.get_base_model(model)
+            if base:
+                candidates.append(base)
+                candidates.append(f"bedrock/{base}")
+        except Exception:
+            pass
+        try:
+            for cand in candidates:
+                if cand in litellm.model_cost and (
+                    litellm.model_cost[cand].get(key) is True
+                ):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
+    def _is_adaptive_thinking_model(model: str) -> bool:
+        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``.
+
+        Driven by the ``supports_adaptive_thinking`` flag in the model map; the
+        4.6/4.7 name checks remain only as a fallback for provider-routed ids
+        whose map entries predate the flag.
+        """
+        if AnthropicModelInfo._supports_model_capability(
+            model, "supports_adaptive_thinking"
+        ):
+            return True
+        return AnthropicModelInfo._is_claude_4_6_model(
+            model
+        ) or AnthropicModelInfo._is_claude_4_7_model(model)
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
