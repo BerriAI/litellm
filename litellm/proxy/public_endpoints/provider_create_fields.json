@@ -2889,34 +2889,6 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
-    "provider": "BytePlus",
-    "provider_display_name": "BytePlus",
-    "litellm_provider": "byteplus",
-    "credential_fields": [
-      {
-        "key": "api_key",
-        "label": "API Key",
-        "placeholder": null,
-        "tooltip": "BytePlus Ark API key (ark-...)",
-        "required": true,
-        "field_type": "password",
-        "options": null,
-        "default_value": null
-      },
-      {
-        "key": "api_base",
-        "label": "API Base",
-        "placeholder": "https://ark.ap-southeast.bytepluses.com/api/v3",
-        "tooltip": "Optional. Defaults to the ap-southeast (Singapore) endpoint.",
-        "required": false,
-        "field_type": "text",
-        "options": null,
-        "default_value": null
-      }
-    ],
-    "default_model_placeholder": "byteplus/deepseek-v4-flash-260425"
-  },
-  {
     "provider": "VolcEngine",
     "provider_display_name": "VolcEngine",
     "litellm_provider": "volcengine",
