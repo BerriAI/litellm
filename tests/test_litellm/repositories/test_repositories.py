@@ -1609,6 +1609,60 @@ class TestTeamRepositoryExtended:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_delete_team_with_full_data(self, repo):
+        repo._prisma_client.db.litellm_teamtable._records["team-full"] = {
+            "team_id": "team-full",
+            "team_alias": "Full Team",
+            "organization_id": "org-1",
+            "object_permission_id": "perm-1",
+            "members": ["m1", "m2"],
+            "admins": ["a1"],
+            "members_with_roles": '[{"user_id": "u1", "role": "admin"}]',
+            "metadata": '{"key": "value"}',
+            "max_budget": 1000.0,
+            "soft_budget": 800.0,
+            "spend": 150.0,
+            "models": ["gpt-4"],
+            "max_parallel_requests": 10,
+            "tpm_limit": 5000,
+            "rpm_limit": 50,
+            "budget_duration": "monthly",
+            "budget_reset_at": "2025-01-01T00:00:00",
+            "blocked": True,
+            "model_spend": '{"gpt-4": 100.0}',
+            "model_max_budget": '{"gpt-4": 500.0}',
+            "router_settings": '{"timeout": 30}',
+            "team_member_permissions": ["read"],
+            "access_group_ids": ["group-1"],
+            "policies": ["policy-1"],
+            "model_id": 42,
+            "allow_team_guardrail_config": True,
+        }
+
+        class MockTx:
+            def __init__(self, client):
+                self.litellm_deletedteamtable = client.db.litellm_deletedteamtable
+                self.litellm_teamtable = client.db.litellm_teamtable
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        repo._prisma_client.db.tx = lambda: MockTx(repo._prisma_client)
+        deleted = await repo.delete_team(
+            "team-full",
+            deleted_by="admin",
+            deleted_by_api_key="sk-admin",
+            litellm_changed_by="system",
+        )
+        assert deleted is not None
+        assert deleted.team_id == "team-full"
+        assert deleted.organization_id == "org-1"
+        assert deleted.max_budget == 1000.0
+
+    @pytest.mark.asyncio
     async def test_to_model_with_json_fields(self, repo):
         repo._prisma_client.db.litellm_teamtable._records["team-json"] = {
             "team_id": "team-json",
@@ -1826,6 +1880,34 @@ class TestTeamRepositoryArchiveData:
     def repo(self):
         client = MockPrismaClient()
         return TeamRepository(client)
+
+    def test_build_archive_data_minimal_fields(self, repo):
+        from litellm.models.team import Team
+
+        team = Team(team_id="team-minimal")
+        archive_data = repo._build_archive_data(team)
+        assert archive_data["team_id"] == "team-minimal"
+        assert archive_data["admins"] == []
+        assert archive_data["members"] == []
+        assert archive_data["models"] == []
+        assert archive_data["spend"] == 0.0
+        assert archive_data["blocked"] is False
+        assert "team_alias" not in archive_data
+        assert "organization_id" not in archive_data
+        assert "object_permission_id" not in archive_data
+        assert "members_with_roles" not in archive_data
+        assert "metadata" not in archive_data
+        assert "max_budget" not in archive_data
+        assert "soft_budget" not in archive_data
+        assert "max_parallel_requests" not in archive_data
+        assert "tpm_limit" not in archive_data
+        assert "rpm_limit" not in archive_data
+        assert "budget_duration" not in archive_data
+        assert "budget_reset_at" not in archive_data
+        assert "model_spend" not in archive_data
+        assert "model_max_budget" not in archive_data
+        assert "router_settings" not in archive_data
+        assert "model_id" not in archive_data
 
     def test_build_archive_data_excludes_invalid_columns(self, repo):
         from litellm.models.team import Team
