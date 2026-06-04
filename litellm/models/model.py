@@ -15,7 +15,7 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
 class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
-    model_id: Optional[str] = None
+    model_id: str
     model_name: str
     litellm_params: dict
     model_info: Optional[dict] = None
