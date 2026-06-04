@@ -7,8 +7,20 @@ from datetime import datetime
 import pytest
 
 from litellm.models.access_group import LiteLLM_AccessGroupTable
-from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.budget import (
+    LiteLLM_BudgetTable,
+    LiteLLM_BudgetTableFull,
+    LiteLLM_TeamMemberTable,
+)
 from litellm.models.config import LiteLLM_Config
+from litellm.models.managed_files import (
+    LiteLLM_ManagedFileTable,
+    LiteLLM_ManagedObjectTable,
+    LiteLLM_ManagedVectorStoresTable,
+)
+from litellm.models.mcp_server import LiteLLM_MCPServerTable
+from litellm.models.spend_logs import LiteLLM_ErrorLogs, LiteLLM_SpendLogs
+from litellm.models.team_membership import LiteLLM_TeamMembership
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
 from litellm.models.end_user import LiteLLM_EndUserTable
 from litellm.models.skills import LiteLLM_SkillsTable
@@ -379,3 +391,135 @@ class TestEndUserTable:
     def test_end_user_spend_coerced_when_none(self):
         eu = LiteLLM_EndUserTable(user_id="eu2", blocked=True, spend=None)
         assert eu.spend == 0.0
+
+
+class TestBudgetTableFull:
+    def test_full_adds_server_managed_fields(self):
+        now = datetime.now()
+        budget = LiteLLM_BudgetTableFull(
+            budget_id="b1", max_budget=10.0, created_at=now, budget_reset_at=now
+        )
+        assert budget.created_at == now
+        assert budget.budget_reset_at == now
+        assert budget.max_budget == 10.0
+
+    def test_full_requires_created_at(self):
+        with pytest.raises(Exception):
+            LiteLLM_BudgetTableFull(budget_id="b1")
+
+
+class TestTeamMemberTable:
+    def test_tracks_user_within_team(self):
+        member = LiteLLM_TeamMemberTable(
+            user_id="u1", team_id="t1", spend=3.0, budget_id="b1", max_budget=5.0
+        )
+        assert member.user_id == "u1"
+        assert member.team_id == "t1"
+        assert member.spend == 3.0
+        assert member.max_budget == 5.0
+
+
+class TestTeamMembership:
+    def test_safe_get_limits_with_budget_table(self):
+        membership = LiteLLM_TeamMembership(
+            user_id="u1",
+            team_id="t1",
+            litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=100, tpm_limit=2000),
+        )
+        assert membership.safe_get_team_member_rpm_limit() == 100
+        assert membership.safe_get_team_member_tpm_limit() == 2000
+
+    def test_safe_get_limits_without_budget_table(self):
+        membership = LiteLLM_TeamMembership(user_id="u1", team_id="t1")
+        assert membership.safe_get_team_member_rpm_limit() is None
+        assert membership.safe_get_team_member_tpm_limit() is None
+
+    def test_full_budget_variant_parsed_for_server_fields(self):
+        now = datetime.now()
+        membership = LiteLLM_TeamMembership(
+            user_id="u1",
+            team_id="t1",
+            litellm_budget_table={
+                "budget_id": "b1",
+                "rpm_limit": 7,
+                "created_at": now,
+                "budget_reset_at": now,
+            },
+        )
+        assert isinstance(membership.litellm_budget_table, LiteLLM_BudgetTableFull)
+        assert membership.safe_get_team_member_rpm_limit() == 7
+
+
+class TestMCPServerTable:
+    def test_mcp_server_defaults(self):
+        server = LiteLLM_MCPServerTable(server_id="s1", transport="sse")
+        assert server.server_id == "s1"
+        assert server.transport == "sse"
+        assert server.status == "unknown"
+        assert server.approval_status == "active"
+        assert server.allow_all_keys is False
+        assert server.available_on_public_internet is True
+        assert server.teams == []
+        assert server.env == {}
+
+    def test_mcp_server_requires_transport(self):
+        with pytest.raises(Exception):
+            LiteLLM_MCPServerTable(server_id="s1")
+
+
+class TestSpendLogs:
+    def test_spend_logs_creation(self):
+        log = LiteLLM_SpendLogs(
+            request_id="r1",
+            api_key="sk-1",
+            call_type="completion",
+            startTime=None,
+            endTime=None,
+            messages=None,
+            response=None,
+        )
+        assert log.request_id == "r1"
+        assert log.spend == 0.0
+        assert log.cache_hit == "False"
+
+    def test_error_logs_creation(self):
+        log = LiteLLM_ErrorLogs(
+            request_id="r1", startTime=None, endTime=None, status_code="500"
+        )
+        assert log.request_id == "r1"
+        assert log.status_code == "500"
+
+
+class TestManagedTables:
+    def test_managed_file_table(self):
+        table = LiteLLM_ManagedFileTable(
+            unified_file_id="f1",
+            model_mappings={"gpt-4": "file-abc"},
+            flat_model_file_ids=["file-abc"],
+        )
+        assert table.unified_file_id == "f1"
+        assert table.model_mappings == {"gpt-4": "file-abc"}
+        assert table.flat_model_file_ids == ["file-abc"]
+
+    def test_managed_object_table_requires_purpose(self):
+        with pytest.raises(Exception):
+            LiteLLM_ManagedObjectTable(
+                unified_object_id="o1", model_object_id="m1", file_object={}
+            )
+
+    def test_managed_vector_stores_table(self):
+        table = LiteLLM_ManagedVectorStoresTable(
+            vector_store_id="vs1",
+            custom_llm_provider="openai",
+            vector_store_name=None,
+            vector_store_description=None,
+            vector_store_metadata=None,
+            created_at=None,
+            updated_at=None,
+            litellm_credential_name=None,
+            litellm_params=None,
+            team_id=None,
+            user_id=None,
+        )
+        assert table.vector_store_id == "vs1"
+        assert table.custom_llm_provider == "openai"
