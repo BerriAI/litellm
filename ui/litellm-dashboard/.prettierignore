@@ -9,3 +9,4 @@ build
 .next-static
 *.min.js
 coverage/
+eslint-suppressions.json
