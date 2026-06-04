@@ -54,6 +54,7 @@ def mock_response(
         ContextWindowExceededError,
         InternalServerError,
         RateLimitError,
+        RateLimitErrorCategory,
     )
 
     if mock_response == "litellm.InternalServerError":
@@ -73,6 +74,7 @@ def mock_response(
             message="this is a mock rate limit error",
             llm_provider="anthropic",
             model=model,
+            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
     return AnthropicMessagesResponse(
         **{

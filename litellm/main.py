@@ -78,7 +78,7 @@ from litellm.constants import (
     DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT,
     DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT,
 )
-from litellm.exceptions import LiteLLMUnknownProvider
+from litellm.exceptions import LiteLLMUnknownProvider, RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.audio_utils.utils import (
@@ -703,6 +703,7 @@ def _handle_mock_potential_exceptions(
                 mock_response, "llm_provider", custom_llm_provider or "openai"
             ),  # type: ignore
             model=model,
+            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
     elif (
         isinstance(mock_response, str)

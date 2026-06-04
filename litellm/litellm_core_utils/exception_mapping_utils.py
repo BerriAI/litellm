@@ -22,6 +22,7 @@ from ..exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    RateLimitErrorCategory,
     ServiceUnavailableError,
     Timeout,
     UnprocessableEntityError,
@@ -404,6 +405,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider=custom_llm_provider,
                         response=getattr(original_exception, "response", None),
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
                     exception_mapping_worked = True
@@ -511,6 +513,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 elif (
                     "The api_key client option must be set either by passing api_key to the client or by setting the OPENAI_API_KEY environment variable"
@@ -592,6 +595,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
@@ -731,6 +735,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"AnthropicException - {error_str}",
                             llm_provider="anthropic",
                             model=model,
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif (
                         original_exception.status_code == 500
@@ -799,6 +804,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="replicate",
                         model=model,
                         response=getattr(original_exception, "response", None),
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 elif hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 401:
@@ -850,6 +856,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="replicate",
                             model=model,
                             response=getattr(original_exception, "response", None),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
@@ -908,6 +915,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider=custom_llm_provider,
                         model=model,
                         response=getattr(original_exception, "response", None),
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 elif (
                     "The server received an invalid response from an upstream server."
@@ -984,6 +992,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             model=model,
                             llm_provider=custom_llm_provider,
                             litellm_debug_info=extra_information,
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
@@ -1074,6 +1083,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider="bedrock",
                         response=getattr(original_exception, "response", None),
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 elif (
                     "Connect timeout on endpoint URL" in error_str
@@ -1155,6 +1165,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
@@ -1274,6 +1285,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
@@ -1410,6 +1422,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                                 url=" https://cloud.google.com/vertex-ai/",
                             ),
                         ),
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 elif (
                     "500 Internal Server Error" in error_str
@@ -1488,6 +1501,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                                     url=" https://cloud.google.com/vertex-ai/",
                                 ),
                             ),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     if original_exception.status_code == 500:
                         exception_mapping_worked = True
@@ -1607,6 +1621,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="cohere",
                         model=model,
                         response=getattr(original_exception, "response", None),
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 elif "invalid type:" in error_str:
                     exception_mapping_worked = True
@@ -1659,6 +1674,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         llm_provider="huggingface",
                         model=model,
                         response=getattr(original_exception, "response", None),
+                        category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                     )
                 if hasattr(original_exception, "status_code"):
                     if original_exception.status_code == 401:
@@ -1691,6 +1707,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="huggingface",
                             model=model,
                             response=getattr(original_exception, "response", None),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
@@ -1758,6 +1775,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="ai21",
                             model=model,
                             response=getattr(original_exception, "response", None),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     else:
                         exception_mapping_worked = True
@@ -1842,6 +1860,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="nlp_cloud",
                             model=model,
                             response=getattr(original_exception, "response", None),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif (
                         original_exception.status_code == 500
@@ -1967,6 +1986,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="together_ai",
                             model=model,
                             response=getattr(original_exception, "response", None),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 524:
                         exception_mapping_worked = True
@@ -2030,6 +2050,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="aleph_alpha",
                             model=model,
                             response=getattr(original_exception, "response", None),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 500:
                         exception_mapping_worked = True
@@ -2273,6 +2294,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider="azure",
                             litellm_debug_info=extra_information,
                             response=getattr(original_exception, "response", None),
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 502:
                         exception_mapping_worked = True
@@ -2377,6 +2399,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             llm_provider=custom_llm_provider,
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
+                            category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True

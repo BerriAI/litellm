@@ -47,6 +47,14 @@ class RateLimitErrorCategory(str, enum.Enum):
     LITELLM_BATCH_RATE_LIMIT = "litellm_batch_rate_limit"
     """LiteLLM's own batch rate limiter (token/request budget across a batch input file) blocked the request."""
 
+    UNKNOWN_RATE_LIMIT = "unknown_rate_limit"
+    """Default for callers that did not explicitly classify the rate-limit source.
+
+    New code SHOULD pass an explicit category; this value exists so silent
+    miscategorization (vs. the previous ``VENDOR_RATE_LIMIT`` default) becomes
+    visible in dashboards rather than a confidently-wrong label.
+    """
+
 
 class RateLimitType(str, enum.Enum):
     """
@@ -438,8 +446,15 @@ class RateLimitError(openai.RateLimitError):  # type: ignore
         litellm_debug_info: Optional[str] = None,
         max_retries: Optional[int] = None,
         num_retries: Optional[int] = None,
+        # An explicit ``category`` is now required for correct labeling — every
+        # callsite (vendor mappers in ``exception_mapping_utils.py``, proxy-side
+        # hooks, router-side throttles) is expected to pass the value that
+        # matches its source. The default below is an honest "unknown" sentinel,
+        # NOT a vendor assumption: silently inheriting it makes the omission
+        # surface in dashboards (as ``unknown_rate_limit``) instead of a
+        # confidently-wrong vendor label.
         category: Union[str, RateLimitErrorCategory] = (
-            RateLimitErrorCategory.VENDOR_RATE_LIMIT
+            RateLimitErrorCategory.UNKNOWN_RATE_LIMIT
         ),
         rate_limit_type: Optional[Union[str, RateLimitType]] = None,
         headers: Optional[Dict[str, str]] = None,

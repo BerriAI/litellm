@@ -57,12 +57,15 @@ class TestRateLimitErrorCategory:
 
 
 class TestRateLimitErrorCategoryAttribute:
-    def test_should_default_to_vendor_rate_limit_when_unspecified(self):
-        # Existing callers (the exception_mapping_utils 429 paths) construct
-        # RateLimitError without passing `category`. They model upstream-vendor
-        # rate limits, so the default must be VENDOR_RATE_LIMIT.
+    def test_should_default_to_unknown_rate_limit_when_unspecified(self):
+        # The default category is intentionally an honest "unknown" sentinel
+        # (NOT a vendor assumption) so that any future caller that forgets to
+        # pass a category surfaces in dashboards as ``unknown_rate_limit``
+        # rather than getting silently mislabeled as a vendor 429. Every
+        # vendor-mapping callsite in ``exception_mapping_utils`` and the
+        # litellm-side router/proxy raises now pass an explicit category.
         e = RateLimitError(message="oops", llm_provider="openai", model="gpt-4")
-        assert e.category == RateLimitErrorCategory.VENDOR_RATE_LIMIT
+        assert e.category == RateLimitErrorCategory.UNKNOWN_RATE_LIMIT
 
     def test_should_accept_string_category(self):
         e = RateLimitError(
@@ -296,19 +299,24 @@ class TestStandardLoggingPayloadCarriesCategory:
         assert info["error_rate_limit_category"] == "litellm_rate_limit"
         assert info["error_code"] == "429"
 
-    def test_should_propagate_vendor_category_for_plain_rate_limit_error(self):
+    def test_should_propagate_unknown_category_for_plain_rate_limit_error(self):
         from litellm.litellm_core_utils.litellm_logging import (
             StandardLoggingPayloadSetup,
         )
 
         e = RateLimitError(
-            message="vendor 429",
+            message="rate limited",
             llm_provider="openai",
             model="gpt-4",
         )
         info = StandardLoggingPayloadSetup.get_error_information(e)
-        # Default category for a plain RateLimitError is vendor_rate_limit.
-        assert info["error_rate_limit_category"] == "vendor_rate_limit"
+        # The default category for a plain ``RateLimitError`` (i.e. constructed
+        # without an explicit ``category=``) is the honest ``unknown_rate_limit``
+        # sentinel — see ``RateLimitErrorCategory.UNKNOWN_RATE_LIMIT``. Vendor
+        # callsites are expected to pass ``VENDOR_RATE_LIMIT`` explicitly; the
+        # default exists so silent omissions surface in dashboards instead of
+        # being mislabeled as vendor errors.
+        assert info["error_rate_limit_category"] == "unknown_rate_limit"
 
     def test_should_propagate_litellm_batch_rate_limit_category(self):
         from litellm.litellm_core_utils.litellm_logging import (
