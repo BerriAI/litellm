@@ -125,7 +125,8 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
             <Text className="text-sm text-gray-600 block">
               These values are private to you. Your admin configured this MCP
               server to require these per-user credentials. Saved values are
-              never shown back; re-enter a value to update it.
+              never shown back; leave an already-set field blank to keep it, or
+              enter a value to set or change it.
             </Text>
             <Form
               form={form}
@@ -146,7 +147,11 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
                     </span>
                   }
                   extra={spec.description || undefined}
-                  rules={[{ required: true, message: `${spec.name} is required` }]}
+                  rules={
+                    spec.is_set
+                      ? undefined
+                      : [{ required: true, message: `${spec.name} is required` }]
+                  }
                 >
                   <Input.Password
                     placeholder={

@@ -889,6 +889,42 @@ async def test_build_mcp_server_from_table_decrypts_global_env_vars(env_vars_sal
     assert headers == {"X-Db": "s3cr3t-p@ss"}
 
 
+def test_decrypt_global_env_var_drops_undecryptable_value(
+    env_vars_salt_key, monkeypatch
+):
+    """A global value encrypted under a previous salt key must be dropped (not
+    forwarded as ciphertext) and surfaced as a warning, so a rotated
+    ``LITELLM_SALT_KEY`` can't silently leak ciphertext into ``${NAME}`` headers."""
+    import json
+    from unittest.mock import MagicMock
+
+    import litellm.proxy._experimental.mcp_server.db as mcp_db
+    from litellm.proxy._experimental.mcp_server.db import (
+        _prepare_mcp_server_data,
+        decrypt_global_env_var_values,
+    )
+    from litellm.proxy._types import MCPEnvVar
+
+    req = _global_env_var_server_request(
+        [MCPEnvVar(name="DB_PASSWORD", value="s3cr3t-p@ss", scope="global")]
+    )
+    entries = json.loads(_prepare_mcp_server_data(req)["env_vars"])
+    ciphertext = entries[0]["value"]
+    assert ciphertext != "s3cr3t-p@ss"  # encrypted under the original salt key
+
+    # Rotate the salt key so the stored ciphertext no longer decrypts.
+    monkeypatch.setenv("LITELLM_SALT_KEY", "a-totally-different-salt-key-0000")
+    logger = MagicMock()
+    monkeypatch.setattr(mcp_db, "verbose_proxy_logger", logger)
+
+    decrypt_global_env_var_values(entries)
+
+    assert entries[0]["value"] == ""
+    assert ciphertext not in json.dumps(entries)
+    logger.warning.assert_called_once()
+    assert "DB_PASSWORD" in logger.warning.call_args.args
+
+
 # ── REST exception handling ───────────────────────────────────────────────
 
 

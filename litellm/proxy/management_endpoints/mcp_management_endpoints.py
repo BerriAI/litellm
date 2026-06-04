@@ -2275,9 +2275,10 @@ if MCP_AVAILABLE:
         "/server/{server_id}/user-env-vars",
         description=(
             "Store the calling user's per-user MCP env var values for this "
-            "server. This fully replaces any previously stored values: a "
-            "variable omitted from the request (or sent empty) is cleared, "
-            "not preserved. Send the complete set you want retained."
+            "server. Submitted values are merged over any previously stored "
+            "values, so you only send the fields you want to set or change; a "
+            "variable omitted (or sent empty) keeps its stored value. Use "
+            "DELETE to clear all stored values."
         ),
         dependencies=[Depends(user_api_key_auth)],
         response_model=MCPUserEnvVarsStatus,
@@ -2304,20 +2305,27 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"MCP Server {server_id} not found"},
             )
-        # Filter to only known per-user var names declared by the admin —
-        # never persist arbitrary keys the user invents.
+        # Only known per-user var names declared by the admin are accepted —
+        # never persist arbitrary keys the user invents. Submitted values are
+        # merged over the existing set so a user updating one credential does
+        # not have to re-enter the others (which are write-only and never shown
+        # back); an omitted/empty field keeps its stored value.
         _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
         allowed_names = {spec["name"] for spec in user_specs}
-        filtered = {
+        updates = {
             k: v for k, v in payload.values.items() if k in allowed_names and v != ""
         }
-        await store_user_env_vars(prisma_client, user_id, server_id, filtered)
+        existing = await get_user_env_vars(prisma_client, user_id, server_id)
+        merged = {
+            k: v for k, v in {**existing, **updates}.items() if k in allowed_names
+        }
+        await store_user_env_vars(prisma_client, user_id, server_id, merged)
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             invalidate_user_env_vars_cache,
         )
 
         invalidate_user_env_vars_cache(user_id, server_id)
-        return _compute_user_env_var_status(server=server, stored_values=filtered)
+        return _compute_user_env_var_status(server=server, stored_values=merged)
 
     @router.delete(
         "/server/{server_id}/user-env-vars",

@@ -3910,6 +3910,9 @@ class TestStoreMCPUserEnvVars:
             patch.object(
                 mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
             ),
+            patch.object(
+                mgmt_endpoints, "get_user_env_vars", AsyncMock(return_value={})
+            ),
             patch.object(mgmt_endpoints, "store_user_env_vars", store_mock),
         ):
             result = await mgmt_endpoints.store_mcp_user_env_vars(
@@ -3929,6 +3932,47 @@ class TestStoreMCPUserEnvVars:
         assert persisted == {"CORP_USERNAME": "alice"}
         # CORP_PASSWORD remains unset in the returned status.
         assert result.missing_count == 1
+
+    @pytest.mark.asyncio
+    async def test_merges_over_existing_values(self):
+        """Updating one credential must not wipe other already-stored values.
+
+        The user updates only CORP_PASSWORD; their previously-stored
+        CORP_USERNAME (write-only, never shown back in the form) must be
+        preserved instead of being cleared.
+        """
+        server = _make_env_var_server(
+            env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
+        )
+        store_mock = AsyncMock()
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_env_vars",
+                AsyncMock(
+                    return_value={"CORP_USERNAME": "alice", "CORP_PASSWORD": "old"}
+                ),
+            ),
+            patch.object(mgmt_endpoints, "store_user_env_vars", store_mock),
+        ):
+            result = await mgmt_endpoints.store_mcp_user_env_vars(
+                server_id="srv-1",
+                payload=mgmt_endpoints.MCPUserEnvVarsRequest(
+                    values={"CORP_PASSWORD": "new"}
+                ),
+                user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
+            )
+        store_mock.assert_awaited_once()
+        _, _, _, persisted = store_mock.await_args.args
+        assert persisted == {"CORP_USERNAME": "alice", "CORP_PASSWORD": "new"}
+        # Both credentials report as set in the returned status.
+        assert result.missing_count == 0
 
     @pytest.mark.asyncio
     async def test_missing_user_id_raises_400(self):
