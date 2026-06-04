@@ -28,6 +28,8 @@ litellm/tests/config_*.yaml
 litellm/tests/langfuse.log
 langfuse.log
 .langfuse.log
+.pin_list.txt
+.cov_new.xml
 litellm/tests/test_custom_logger.py
 litellm/tests/langfuse.log
 litellm/tests/dynamo*.log
@@ -121,3 +123,4 @@ crash.*.log
 # .terraform.lock.hcl is intentionally NOT ignored — it pins provider versions
 # and should be committed.
 .vscode
+.pin_list.txt
