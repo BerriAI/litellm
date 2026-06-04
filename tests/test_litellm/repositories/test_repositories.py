@@ -11,7 +11,7 @@ import pytest
 from litellm.models.base import DomainModel
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import CredentialItem
-from litellm.models.team import Team
+from litellm.models.team import LiteLLM_TeamTable
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
@@ -506,7 +506,7 @@ class TestTeamRepository:
             organization_id="org-1",
             admins=["admin1"],
             members=["user1"],
-            members_with_roles={"user1": "developer"},
+            members_with_roles=[{"user_id": "user1", "role": "user"}],
             metadata={"dept": "engineering"},
             max_budget=1000.0,
             soft_budget=800.0,
@@ -551,7 +551,7 @@ class TestTeamRepository:
             organization_id="org-new",
             admins=["admin1"],
             members=["member1"],
-            members_with_roles={"user1": "admin"},
+            members_with_roles=[{"user_id": "user1", "role": "admin"}],
             metadata={"updated": True},
             max_budget=500.0,
             soft_budget=400.0,
@@ -1719,7 +1719,7 @@ class TestTeamRepositoryExtended:
             "model_spend": '{"gpt-4": 10.0}',
             "model_max_budget": '{"gpt-4": 100.0}',
             "router_settings": '{"timeout": 30}',
-            "budget_limits": '{"daily": 50}',
+            "budget_limits": '[{"budget_duration": "1d", "max_budget": 50.0}]',
             "members_with_roles": '[{"user_id": "u1", "role": "admin"}]',
             "members": [],
             "admins": [],
@@ -1931,13 +1931,13 @@ class TestTeamRepositoryArchiveData:
 
     def test_build_archive_data_minimal_fields(self, repo):
 
-        team = Team(team_id="team-minimal")
+        team = LiteLLM_TeamTable(team_id="team-minimal")
         archive_data = repo._build_archive_data(team)
         assert archive_data["team_id"] == "team-minimal"
         assert archive_data["admins"] == []
         assert archive_data["members"] == []
         assert archive_data["models"] == []
-        assert archive_data["spend"] == 0.0
+        assert archive_data["spend"] is None
         assert archive_data["blocked"] is False
         assert "team_alias" not in archive_data
         assert "organization_id" not in archive_data
@@ -1958,14 +1958,13 @@ class TestTeamRepositoryArchiveData:
 
     def test_build_archive_data_excludes_invalid_columns(self, repo):
 
-        team = Team(
+        team = LiteLLM_TeamTable(
             team_id="team-1",
             team_alias="My Team",
             admins=["admin1"],
             members=["member1"],
             models=["gpt-4"],
             default_team_member_models=["gpt-3.5-turbo"],
-            budget_limits={"daily": 100},
         )
         archive_data = repo._build_archive_data(team)
         assert "default_team_member_models" not in archive_data
@@ -1979,16 +1978,16 @@ class TestTeamRepositoryArchiveData:
     def test_build_archive_data_with_all_valid_fields(self, repo):
         from datetime import datetime
 
-        from litellm.models.team import TeamMember
+        from litellm.models.team import Member
 
-        team = Team(
+        team = LiteLLM_TeamTable(
             team_id="team-full",
             team_alias="Full Team",
             organization_id="org-1",
             object_permission_id="perm-1",
             admins=["admin1", "admin2"],
             members=["m1", "m2"],
-            members_with_roles=[TeamMember(user_id="u1", role="admin")],
+            members_with_roles=[Member(user_id="u1", role="admin")],
             metadata={"key": "value"},
             max_budget=1000.0,
             soft_budget=800.0,
