@@ -216,10 +216,12 @@ class ECSFormatter(Formatter):
 
     def __init__(
         self,
-        service_name: str = os.getenv("LITELLM_SERVICE_NAME", "litellm"),
+        service_name: Optional[str] = None,
     ):
         super().__init__()
-        self._service_name = service_name
+        self._service_name = service_name or os.getenv(
+            "LITELLM_SERVICE_NAME", "litellm"
+        )
 
     def formatTime(
         self, record: logging.LogRecord, datefmt: Optional[str] = None
@@ -397,12 +399,17 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
 
 def _get_uvicorn_json_log_config():
     """
-    Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
+    Generate a uvicorn log_config dictionary that applies structured formatting to all loggers.
 
-    This ensures that uvicorn's access logs, error logs, and all application logs
-    are formatted as JSON when json_logs is enabled.
+    Uses ECSFormatter when LITELLM_ECS_LOGS=true so uvicorn access/error logs
+    are consistent with application logs for downstream ECS consumers.
+    Falls back to JsonFormatter when only JSON_LOGS=true.
     """
-    json_formatter_class = "litellm._logging.JsonFormatter"
+    formatter_class = (
+        "litellm._logging.ECSFormatter"
+        if ecs_logs
+        else "litellm._logging.JsonFormatter"
+    )
 
     # Use the module-level log_level variable for consistency
     uvicorn_log_level = log_level.upper()
@@ -412,13 +419,13 @@ def _get_uvicorn_json_log_config():
         "disable_existing_loggers": False,
         "formatters": {
             "json": {
-                "()": json_formatter_class,
+                "()": formatter_class,
             },
             "default": {
-                "()": json_formatter_class,
+                "()": formatter_class,
             },
             "access": {
-                "()": json_formatter_class,
+                "()": formatter_class,
             },
         },
         "handlers": {
