@@ -673,6 +673,40 @@ async def test_delete_user_env_vars_is_idempotent_delete_many():
     assert call.kwargs["where"] == {"user_id": "alice", "server_id": "srv-1"}
 
 
+@pytest.mark.asyncio
+async def test_delete_mcp_server_removes_orphaned_user_env_vars():
+    """Deleting a server must also drop every user's per-user env var rows for
+    it; there is no FK cascade, so skipping this leaves orphaned credentials."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=object())
+
+    await delete_mcp_server(prisma, "srv-1")
+
+    prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
+    call = prisma.db.litellm_mcpuserenvvars.delete_many.call_args
+    assert call.kwargs["where"] == {"server_id": "srv-1"}
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_skips_env_var_cleanup_when_server_missing():
+    """A no-op delete (server not found) must not touch the env var table."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=None)
+
+    result = await delete_mcp_server(prisma, "srv-1")
+
+    assert result is None
+    prisma.db.litellm_mcpuserenvvars.delete_many.assert_not_awaited()
+
+
 # ── DB helpers: global env vars encrypted at rest ─────────────────────────
 
 

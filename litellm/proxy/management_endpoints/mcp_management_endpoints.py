@@ -2273,7 +2273,12 @@ if MCP_AVAILABLE:
 
     @router.post(
         "/server/{server_id}/user-env-vars",
-        description="Store the calling user's per-user MCP env var values for this server.",
+        description=(
+            "Store the calling user's per-user MCP env var values for this "
+            "server. This fully replaces any previously stored values: a "
+            "variable omitted from the request (or sent empty) is cleared, "
+            "not preserved. Send the complete set you want retained."
+        ),
         dependencies=[Depends(user_api_key_auth)],
         response_model=MCPUserEnvVarsStatus,
     )

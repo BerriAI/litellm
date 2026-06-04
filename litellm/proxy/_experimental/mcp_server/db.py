@@ -469,6 +469,9 @@ async def delete_mcp_server(
     """
     Delete the mcp server from the db by server_id
 
+    Also removes any per-user env var rows for the server, which have no FK
+    cascade, so deleting a server never leaves orphaned credential rows behind.
+
     Returns the deleted mcp server record if it exists, otherwise None
     """
     deleted_server = await prisma_client.db.litellm_mcpservertable.delete(
@@ -476,6 +479,10 @@ async def delete_mcp_server(
             "server_id": server_id,
         },
     )
+    if deleted_server is not None:
+        await prisma_client.db.litellm_mcpuserenvvars.delete_many(
+            where={"server_id": server_id}
+        )
     return deleted_server
 
 
