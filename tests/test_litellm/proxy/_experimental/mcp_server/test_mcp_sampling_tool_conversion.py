@@ -255,3 +255,58 @@ class TestConvertMcpMessagesMultiTurnTools:
 
         assert result[0]["role"] == "system"
         assert result[0]["content"] == "You are helpful."
+
+
+# ---------------------------------------------------------------------------
+# _convert_mcp_messages_to_openai — marker hoisting on unexpected roles
+# ---------------------------------------------------------------------------
+
+
+class TestConvertMcpMessagesMarkerHoisting:
+    """The role-matched fast paths only fire for assistant/tool_use and
+    user/tool_result. Content that arrives on an unexpected role must still
+    be hoisted to the correct message position by the generic fallback,
+    not silently dropped or embedded inline as a content part."""
+
+    def test_should_hoist_tool_use_arriving_on_user_role(self):
+        messages = [
+            _sampling_msg("user", _tool_use(
+                name="search", tool_id="call_1", input_data={"q": "x"}
+            )),
+        ]
+        result = _convert_mcp_messages_to_openai(messages)
+
+        assert len(result) == 1
+        assert result[0]["role"] == "assistant"
+        assert result[0]["tool_calls"][0]["function"]["name"] == "search"
+
+    def test_should_hoist_tool_result_arriving_on_assistant_role(self):
+        messages = [
+            _sampling_msg("assistant", _tool_result(
+                tool_use_id="call_1", content=[_text("done")]
+            )),
+        ]
+        result = _convert_mcp_messages_to_openai(messages)
+
+        assert len(result) == 1
+        assert result[0]["role"] == "tool"
+        assert result[0]["tool_call_id"] == "call_1"
+        assert "done" in result[0]["content"]
+
+    def test_should_keep_text_when_hoisting_tool_use_on_user_role(self):
+        messages = [
+            _sampling_msg("user", [
+                _text("here you go"),
+                _tool_use(name="lookup", tool_id="call_2", input_data={}),
+            ]),
+        ]
+        result = _convert_mcp_messages_to_openai(messages)
+
+        assert len(result) == 1
+        msg = result[0]
+        assert msg["role"] == "assistant"
+        assert msg["tool_calls"][0]["function"]["name"] == "lookup"
+        assert any(
+            isinstance(p, dict) and p.get("text") == "here you go"
+            for p in msg["content"]
+        )
