@@ -406,43 +406,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Optional[Callable[[], None]] = None
 
-    # def _calculate_model_transparency(self, response_obj: Any = None) -> dict:
-    #     """
-    #     Calculates the requested vs resolved vs response model mismatch metadata.
-    #     """
-    #     requested_model = self.kwargs.get("model", "")
-    #     # The router usually populates the final resolved model here
-    #     resolved_model = self.kwargs.get("litellm_params", {}).get("model", requested_model)
-
-    #     response_model = ""
-    #     if response_obj:
-    #         if hasattr(response_obj, "model"):
-    #             response_model = getattr(response_obj, "model", "")
-    #         elif isinstance(response_obj, dict):
-    #             response_model = response_obj.get("model", "")
-
-    #     model_mismatch = False
-    #     if requested_model != resolved_model:
-    #         model_mismatch = "requested_vs_resolved_mismatch"
-    #     elif response_model and resolved_model:
-    #         # Note: providers sometimes append dates to models (e.g., gpt-4-0613)
-    #         if resolved_model not in response_model and response_model not in resolved_model:
-    #             model_mismatch = "resolved_vs_response_mismatch"
-
-    #     has_usage = False
-    #     if response_obj:
-    #         if hasattr(response_obj, "usage") and getattr(response_obj, "usage"):
-    #             has_usage = True
-    #         elif isinstance(response_obj, dict) and response_obj.get("usage"):
-    #             has_usage = True
-
-    #     return {
-    #         "requested_model": requested_model,
-    #         "resolved_model": resolved_model,
-    #         "response_model": response_model,
-    #         "model_mismatch": model_mismatch,
-    #         "usage_source": "upstream" if has_usage else "missing"
-    #     }
     def _calculate_model_transparency(self, response_obj: Any = None) -> dict:
         """
         Calculates the requested vs resolved vs response model mismatch metadata.
@@ -5293,18 +5256,15 @@ def get_standard_logging_object_payload(
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
 
-        # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
-        # --- 🚀 ADD STEP 2 INJECTION HERE 🚀 ---
-        if logging_obj and hasattr(logging_obj, "_calculate_model_transparency"):
+       # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
+        
+        if logging_obj is not None:
             transparency_data = logging_obj._calculate_model_transparency(response_obj=init_response_obj)
             payload["requested_model"] = transparency_data.get("requested_model", "")
             payload["resolved_model"] = transparency_data.get("resolved_model", "")
             payload["response_model"] = transparency_data.get("response_model", "")
             payload["model_mismatch"] = transparency_data.get("model_mismatch", False)
             payload["usage_source"] = transparency_data.get("usage_source", "missing")
-        # ---------------------------------------
-
-        # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
 
         return payload
 
