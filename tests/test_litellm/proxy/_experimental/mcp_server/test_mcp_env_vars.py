@@ -446,6 +446,82 @@ async def test_resolve_static_headers_stale_user_value_cannot_override_global(
     assert headers == {"X-DB-URL": "admin-db/alice"}
 
 
+# ── health-check skip for per-user-env-var-backed headers ──────────────────
+
+
+@pytest.mark.parametrize(
+    "static_headers, env_vars, expected",
+    [
+        (
+            {"Authorization": "Bearer ${GITHUB_TOKEN}"},
+            [{"name": "GITHUB_TOKEN", "value": "", "scope": "user"}],
+            True,
+        ),
+        (
+            {"Authorization": "Bearer ${SHARED_TOKEN}"},
+            [{"name": "SHARED_TOKEN", "value": "abc", "scope": "global"}],
+            False,
+        ),
+        (
+            {"X-Static": "literal"},
+            [{"name": "GITHUB_TOKEN", "value": "", "scope": "user"}],
+            False,
+        ),
+        (None, [{"name": "GITHUB_TOKEN", "value": "", "scope": "user"}], False),
+        ({"Authorization": "Bearer ${GITHUB_TOKEN}"}, None, False),
+    ],
+)
+def test_references_per_user_env_var(static_headers, env_vars, expected):
+    """Only headers that actually reference a *per-user* var count: globals and
+    declared-but-unreferenced user vars do not, since the userless probe can
+    still resolve (or simply not need) them."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-x",
+        name="srv",
+        transport="http",
+        url="https://example.com",
+        static_headers=static_headers,
+        env_vars=env_vars,
+    )
+    assert manager._references_per_user_env_var(server) is expected
+
+
+@pytest.mark.asyncio
+async def test_health_check_skips_servers_referencing_per_user_env_var(
+    mock_server, monkeypatch
+):
+    """A userless health probe cannot fill per-user ${NAME} placeholders, so a
+    server whose static_headers reference one must report 'unknown' without
+    connecting. Otherwise it forwards the literal placeholder upstream, gets a
+    401, and flips to 'unhealthy' even though real user calls succeed."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    manager.registry[mock_server.server_id] = mock_server
+
+    created = []
+
+    async def fake_create_client(*args, **kwargs):
+        created.append((args, kwargs))
+        raise RuntimeError("upstream rejected literal ${NAME}")
+
+    monkeypatch.setattr(manager, "_create_mcp_client", fake_create_client)
+
+    result = await manager.health_check_server(mock_server.server_id)
+
+    assert created == []
+    assert result.status == "unknown"
+    assert result.health_check_error is None
+
+
 # ── _load_user_env_vars guard paths ────────────────────────────────────────
 
 

@@ -432,7 +432,8 @@ class MCPServerManager:
           - server is OpenAPI (spec_path),
           - non-empty upstream instructions are already cached,
           - auth preconditions match health_check_server's skip rules
-            (per-user auth / missing static auth token),
+            (per-user auth / missing static auth token / static headers that
+            reference a per-user env var),
           - a prior probe attempt for this server is within
             MCP_HEALTH_CHECK_TIMEOUT seconds (the probe is a health-check-shaped
             op and already uses this knob for its inner call timeout; reusing it
@@ -446,6 +447,8 @@ class MCPServerManager:
         if self._upstream_initialize_instructions_by_server_id.get(server.server_id):
             return
         if server.requires_per_user_auth:
+            return
+        if self._references_per_user_env_var(server):
             return
         if (
             server.auth_type
@@ -1586,6 +1589,25 @@ class MCPServerManager:
                 resolved_env[env_key] = env_value
 
         return resolved_env
+
+    def _references_per_user_env_var(self, server: MCPServer) -> bool:
+        """True when ``server.static_headers`` reference a per-user ``${NAME}`` env var.
+
+        Such placeholders can only be filled from a calling user's stored values,
+        so a userless probe (health check / instructions prefetch) would forward
+        the literal ``${NAME}`` upstream and get rejected. Callers skip the probe
+        and report ``unknown`` instead of a misleading ``unhealthy``.
+        """
+        static_headers = server.static_headers
+        env_vars = getattr(server, "env_vars", None)
+        if not static_headers or not env_vars:
+            return False
+        _global_values, user_specs = parse_admin_env_vars(env_vars)
+        user_var_names = {spec["name"] for spec in user_specs}
+        if not user_var_names:
+            return False
+        referenced = collect_env_var_references(strings=static_headers.values())
+        return bool(referenced & user_var_names)
 
     async def _resolve_static_headers_with_env_vars(
         self,
@@ -4042,6 +4064,11 @@ class MCPServerManager:
             and server.auth_type != MCPAuth.aws_sigv4
             and not server.authentication_token
         ):
+            should_skip_health_check = True
+        # Skip if static_headers reference a per-user env var: a userless probe
+        # can't fill ${NAME} and would forward the literal placeholder upstream,
+        # flipping the server to unhealthy even though real user calls succeed.
+        elif self._references_per_user_env_var(server):
             should_skip_health_check = True
 
         if not should_skip_health_check:
