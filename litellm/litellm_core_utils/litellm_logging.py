@@ -430,7 +430,6 @@ class Logging(LiteLLMLoggingBaseClass):
         """
         Calculates the requested vs resolved vs response model mismatch metadata.
         """
-        # FIX: Use self.model and self.litellm_params instead of self.kwargs
         requested_model = getattr(self, "model", "")
         resolved_model = getattr(self, "litellm_params", {}).get(
             "model", requested_model
@@ -447,7 +446,6 @@ class Logging(LiteLLMLoggingBaseClass):
         if requested_model != resolved_model:
             model_mismatch = "requested_vs_resolved_mismatch"
         elif response_model and resolved_model:
-            # Note: providers sometimes append dates to models (e.g., gpt-4-0613)
             if (
                 resolved_model not in response_model
                 and response_model not in resolved_model
@@ -1192,12 +1190,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 if self.litellm_request_debug:
                     verbose_logger.warning(  # .warning ensures this shows up in all environments
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {api_base}, **masked_headers},
+                        extra={"api_base": api_base, **masked_headers},
                     )
                 else:
                     verbose_logger.debug(
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {api_base}, **masked_headers},
+                        extra={"api_base": api_base, **masked_headers},
                     )
             else:
                 headers = additional_args.get("headers", {})
@@ -5616,7 +5614,7 @@ def get_standard_logging_object_payload(  # noqa: PLR0915
     error_str: Optional[str] = None,
     original_exception: Optional[Exception] = None,
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
-) -> Optional[StandardLoggingPayload]: 
+) -> Optional[StandardLoggingPayload]:
     try:
         kwargs = kwargs or {}
 
