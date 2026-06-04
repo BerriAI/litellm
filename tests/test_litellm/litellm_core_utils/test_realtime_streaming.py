@@ -293,6 +293,51 @@ def test_translate_event_to_beta_drops_conversation_item_done():
     )
 
 
+@pytest.mark.asyncio
+async def test_provider_config_path_translates_ga_events_for_beta_clients():
+    client_ws = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.send_text = AsyncMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+
+    provider_config = MagicMock()
+    provider_config.transform_realtime_response = MagicMock(
+        return_value={
+            "response": [
+                {
+                    "type": "response.output_text.delta",
+                    "event_id": "event_1",
+                    "delta": "hello",
+                },
+                {"type": "conversation.item.done", "event_id": "event_2"},
+            ],
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_delta_chunks": [],
+            "current_conversation_id": None,
+            "current_item_chunks": [],
+            "current_delta_type": None,
+            "session_configuration_request": None,
+        }
+    )
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=provider_config,
+        model="gemini-2.5-flash",
+    )
+
+    await streaming._handle_provider_config_message("{}")
+
+    assert client_ws.send_text.await_count == 1
+    sent = json.loads(client_ws.send_text.await_args.args[0])
+    assert sent["type"] == "response.text.delta"
+    assert sent["delta"] == "hello"
+
+
 def test_client_sent_openai_beta_realtime_header_detects_header():
     ws = MagicMock()
     ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
@@ -1806,6 +1851,40 @@ async def test_deferred_setup_buffers_audio_until_backend_setup_complete(monkeyp
     await streaming._flush_pending_messages_until_setup()
 
     assert backend_ws.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_flush_retains_unsent_messages_after_send_failure():
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+    buffered_messages = [
+        json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="}),
+        json.dumps({"type": "input_audio_buffer.commit"}),
+    ]
+    streaming._pending_messages_until_setup = list(buffered_messages)
+    streaming._pending_messages_byte_total = sum(
+        len(message.encode("utf-8")) for message in buffered_messages
+    )
+    streaming._send_to_backend = AsyncMock(  # type: ignore[method-assign]
+        side_effect=Exception("transient")
+    )
+
+    await streaming._flush_pending_messages_until_setup()
+
+    assert streaming._pending_messages_until_setup == buffered_messages
+    assert streaming._pending_messages_byte_total == sum(
+        len(message.encode("utf-8")) for message in buffered_messages
+    )
+
+    streaming._send_to_backend = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    await streaming._flush_pending_messages_until_setup()
+
+    assert streaming._pending_messages_until_setup == []
+    assert streaming._pending_messages_byte_total == 0
+    assert streaming._send_to_backend.await_count == 2
 
 
 @pytest.mark.asyncio

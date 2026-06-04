@@ -322,18 +322,38 @@ class RealTimeStreaming:
         pending = self._pending_messages_until_setup
         self._pending_messages_until_setup = []
         self._pending_messages_byte_total = 0
-        for message in pending:
+        for idx, message in enumerate(pending):
             try:
                 await self._send_to_backend(message)
             except Exception as e:
-                remaining = len(pending) - pending.index(message) - 1
+                unsent = pending[idx:]
+                self._pending_messages_until_setup = (
+                    unsent + self._pending_messages_until_setup
+                )
+                self._pending_messages_byte_total = sum(
+                    len(msg.encode("utf-8"))
+                    for msg in self._pending_messages_until_setup
+                )
                 verbose_logger.debug(
                     "Failed to flush buffered client message after setup: %s "
-                    "(%d subsequent message(s) dropped)",
+                    "(%d buffered message(s) retained)",
                     e,
-                    remaining,
+                    len(unsent),
                 )
                 break
+
+    async def _send_event_to_client(self, event: Any, event_str: str) -> bool:
+        if self._client_wants_beta and isinstance(event, dict):
+            try:
+                translated = self._translate_event_to_beta(event)
+                if translated is None:
+                    return False
+                await self.websocket.send_text(json.dumps(translated))
+                return True
+            except Exception:
+                pass
+        await self.websocket.send_text(event_str)
+        return True
 
     def _cache_session_configuration_request(self, transformed_message: str) -> None:
         """Store setup payload once sent to backend.
@@ -625,7 +645,7 @@ class RealTimeStreaming:
             ## update if a prior attempt was dropped by the provider transform.
             if is_session_created_event and self._has_audio_transcription_guardrails():
                 self.store_message(event_str)
-                await self.websocket.send_text(event_str)
+                await self._send_event_to_client(event, event_str)
                 await self._maybe_send_guardrail_turn_detection_update()
                 continue
             ## GUARDRAIL: run on transcription events in provider_config path too
@@ -637,7 +657,7 @@ class RealTimeStreaming:
                 transcript = event.get("transcript", "")
                 self._collect_user_input_from_backend_event(cast(dict, event))
                 self.store_message(event_str)
-                await self.websocket.send_text(event_str)
+                await self._send_event_to_client(event, event_str)
                 blocked = await self.run_realtime_guardrails(
                     cast(str, transcript),
                     item_id=cast(Optional[str], event.get("item_id")),
@@ -647,7 +667,7 @@ class RealTimeStreaming:
                 continue
             ## LOGGING
             self.store_message(event_str)
-            await self.websocket.send_text(event_str)
+            await self._send_event_to_client(event, event_str)
 
     async def _handle_raw_backend_message(self, raw_response) -> bool:
         """Process a backend message without provider_config (raw path).
@@ -1153,6 +1173,12 @@ class RealTimeStreaming:
                             len(self._pending_messages_until_setup),
                             self._pending_messages_byte_total,
                         )
+                    continue
+
+                if self._pending_messages_until_setup:
+                    self._pending_messages_until_setup.append(message)
+                    self._pending_messages_byte_total += len(message.encode("utf-8"))
+                    await self._flush_pending_messages_until_setup()
                     continue
 
                 ## FORWARD TO BACKEND

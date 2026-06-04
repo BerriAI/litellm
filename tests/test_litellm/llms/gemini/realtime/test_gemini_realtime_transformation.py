@@ -943,6 +943,12 @@ def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
                     "promptTokenCount": 17,
                     "responseTokenCount": 4,
                     "totalTokenCount": 21,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 17},
+                    ],
+                    "responseTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 4},
+                    ],
                 },
             }
         ),
@@ -966,6 +972,8 @@ def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
     assert usage["input_tokens"] == 17
     assert usage["output_tokens"] == 4
     assert usage["total_tokens"] == 21
+    assert usage["input_token_details"]["text_tokens"] == 17
+    assert usage["output_token_details"]["text_tokens"] == 4
 
 
 def test_gemini_tool_call_response_done_falls_back_to_empty_usage():
@@ -1504,6 +1512,12 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
                     "promptTokenCount": 5,
                     "responseTokenCount": 11,
                     "totalTokenCount": 16,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 5},
+                    ],
+                    "responseTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 11},
+                    ],
                 }
             }
         ),
@@ -1544,6 +1558,8 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
     assert usage["input_tokens"] == 5
     assert usage["output_tokens"] == 11
     assert usage["total_tokens"] == 16
+    assert usage["input_token_details"]["text_tokens"] == 5
+    assert usage["output_token_details"]["text_tokens"] == 11
     assert config._pending_usage_metadata is None
 
 

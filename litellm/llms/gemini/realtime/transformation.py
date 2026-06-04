@@ -97,6 +97,33 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         # bypassing spend and budget accounting.
         self._pending_usage_metadata: Optional[dict] = None
 
+    @staticmethod
+    def _usage_detail_alias(details: Any, defaults: Dict[str, int]) -> Dict[str, Any]:
+        if not isinstance(details, dict):
+            return dict(defaults)
+        return {
+            **defaults,
+            **{key: value for key, value in details.items() if value is not None},
+        }
+
+    @staticmethod
+    def _add_pipecat_usage_detail_aliases(usage_dict: Dict[str, Any]) -> Dict[str, Any]:
+        usage_dict.setdefault(
+            "input_token_details",
+            GeminiRealtimeConfig._usage_detail_alias(
+                usage_dict.get("input_tokens_details"),
+                {"cached_tokens": 0, "text_tokens": 0, "audio_tokens": 0},
+            ),
+        )
+        usage_dict.setdefault(
+            "output_token_details",
+            GeminiRealtimeConfig._usage_detail_alias(
+                usage_dict.get("output_tokens_details"),
+                {"text_tokens": 0, "audio_tokens": 0},
+            ),
+        )
+        return usage_dict
+
     def validate_environment(
         self, headers: dict, model: str, api_key: Optional[str] = None
     ) -> dict:
@@ -1139,19 +1166,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
             _chat_completion_usage,
         )
         _usage_dict = responses_api_usage.model_dump()
-        # Pipecat 1.3.x validates usage with the singular forms
-        # ``input_token_details`` / ``output_token_details`` as required
-        # fields. LiteLLM's ResponsesAPIUsage uses the plural
-        # ``input_tokens_details`` / ``output_tokens_details``. Add the
-        # singular aliases so Pipecat's Pydantic model doesn't raise.
-        _usage_dict.setdefault(
-            "input_token_details",
-            {"cached_tokens": 0, "text_tokens": 0, "audio_tokens": 0},
-        )
-        _usage_dict.setdefault(
-            "output_token_details",
-            {"text_tokens": 0, "audio_tokens": 0},
-        )
+        self._add_pipecat_usage_detail_aliases(_usage_dict)
         response_done_event = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id="event_{}".format(uuid.uuid4()),
@@ -1641,14 +1656,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     _tool_call_chat_completion_usage,
                 )
                 _tool_usage_dict = tool_call_responses_api_usage.model_dump()
-                _tool_usage_dict.setdefault(
-                    "input_token_details",
-                    {"cached_tokens": 0, "text_tokens": 0, "audio_tokens": 0},
-                )
-                _tool_usage_dict.setdefault(
-                    "output_token_details",
-                    {"text_tokens": 0, "audio_tokens": 0},
-                )
+                self._add_pipecat_usage_detail_aliases(_tool_usage_dict)
                 tool_call_done_event = OpenAIRealtimeDoneEvent(
                     type="response.done",
                     event_id=f"event_{uuid.uuid4()}",
