@@ -44,7 +44,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
   useEffect(() => {
     const fetchModelHubData = async () => {
       if (!accessToken) return;
-      
+
       try {
         const response = await modelHubCall(accessToken);
         if (response?.data) {
@@ -111,22 +111,22 @@ const PromptTable: React.FC<PromptTableProps> = ({
       cell: ({ row }) => {
         const prompt = row.original;
         const model = extractModel(prompt);
-        
+
         if (!model) {
           return <span className="text-xs text-gray-400">-</span>;
         }
-        
+
         const provider = getProviderFromModelHub(model, modelHubData);
         const { logo } = getProviderLogoAndName(provider || "");
-        
+
         return (
           <Tooltip title={model}>
             <div className="flex items-center space-x-2">
               {/* Provider Icon */}
               <div className="flex-shrink-0">
                 {provider && logo ? (
-                  <img 
-                    src={logo} 
+                  <img
+                    src={logo}
                     alt={`${provider} logo`}
                     className="w-4 h-4"
                     onError={(e) => {
@@ -137,22 +137,21 @@ const PromptTable: React.FC<PromptTableProps> = ({
                       }
 
                       try {
-                        const fallbackDiv = document.createElement('div');
-                        fallbackDiv.className = 'w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs';
-                        fallbackDiv.textContent = provider?.charAt(0) || '-';
+                        const fallbackDiv = document.createElement("div");
+                        fallbackDiv.className =
+                          "w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                        fallbackDiv.textContent = provider?.charAt(0) || "-";
                         parent.replaceChild(fallbackDiv, target);
                       } catch (error) {
-                        console.error('Failed to replace provider logo fallback:', error);
+                        console.error("Failed to replace provider logo fallback:", error);
                       }
                     }}
                   />
                 ) : (
-                  <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">
-                    -
-                  </div>
+                  <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-xs">-</div>
                 )}
               </div>
-              
+
               {/* Model Name */}
               <span className="max-w-[15ch] truncate block">{model}</span>
             </div>
@@ -196,9 +195,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
           development: "text-green-600 bg-green-50",
         };
         return (
-          <span className={`text-xs px-2 py-0.5 rounded ${colorMap[env] || "text-gray-600 bg-gray-50"}`}>
-            {env}
-          </span>
+          <span className={`text-xs px-2 py-0.5 rounded ${colorMap[env] || "text-gray-600 bg-gray-50"}`}>{env}</span>
         );
       },
     },
@@ -207,11 +204,7 @@ const PromptTable: React.FC<PromptTableProps> = ({
       accessorKey: "created_by",
       cell: ({ row }) => {
         const prompt = row.original;
-        return (
-          <span className="text-xs text-gray-600">
-            {prompt.created_by || "-"}
-          </span>
-        );
+        return <span className="text-xs text-gray-600">{prompt.created_by || "-"}</span>;
       },
     },
     {

@@ -472,10 +472,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
       {entityType === "team" && (
         <div className="mb-4">
           <Text className="mb-2">Filter by team</Text>
-          <TeamMultiSelect
-            value={selectedTags}
-            onChange={setSelectedTags}
-          />
+          <TeamMultiSelect value={selectedTags} onChange={setSelectedTags} />
         </div>
       )}
       <UsageExportHeader

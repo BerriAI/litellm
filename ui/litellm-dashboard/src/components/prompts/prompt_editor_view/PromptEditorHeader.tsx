@@ -53,9 +53,7 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           style={{ width: "200px" }}
         />
         {version && (
-          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded font-medium">
-            {version}
-          </span>
+          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-700 rounded font-medium">{version}</span>
         )}
         <Select
           value={environment}
@@ -77,24 +75,15 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           model={promptModel}
           promptVariables={promptVariables}
           accessToken={accessToken}
-          version={version?.replace('v', '') || "1"}
+          version={version?.replace("v", "") || "1"}
           proxySettings={proxySettings}
         />
         {editMode && onShowHistory && (
-          <TremorButton
-            icon={ClockIcon}
-            variant="secondary"
-            onClick={onShowHistory}
-          >
+          <TremorButton icon={ClockIcon} variant="secondary" onClick={onShowHistory}>
             History
           </TremorButton>
         )}
-        <TremorButton
-          icon={SaveIcon}
-          onClick={onSave}
-          loading={isSaving}
-          disabled={isSaving}
-        >
+        <TremorButton icon={SaveIcon} onClick={onSave} loading={isSaving} disabled={isSaving}>
           {editMode ? "Update" : "Save"}
         </TremorButton>
       </div>
@@ -103,4 +92,3 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
 };
 
 export default PromptEditorHeader;
-
