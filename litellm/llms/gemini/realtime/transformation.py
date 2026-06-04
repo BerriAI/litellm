@@ -344,7 +344,9 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return normalized
 
     @staticmethod
-    def _finalize_gemini_live_setup(model: str, setup: dict) -> dict:
+    def _finalize_gemini_live_setup(
+        model: str, setup: BidiGenerateContentSetup
+    ) -> BidiGenerateContentSetup:
         """Drop fields Gemini Live native-audio rejects on ``setup``."""
         if "native-audio" not in model.lower():
             return setup
