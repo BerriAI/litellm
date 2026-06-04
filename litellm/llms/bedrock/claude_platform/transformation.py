@@ -13,6 +13,10 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     Bedrock Claude Platform uses Anthropic's Messages API with AWS gateway auth.
     """
 
+    # Bedrock rejects `x-anthropic-billing-header:` text blocks in the system
+    # array as a reserved keyword (#20951), so strip them on the wire.
+    _strips_x_anthropic_billing_header: bool = True
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
