@@ -324,6 +324,23 @@ class RealTimeStreaming:
             return False
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
+    def _buffer_pending_message_until_setup(self, message: str) -> None:
+        msg_bytes = len(message.encode("utf-8"))
+        if (
+            len(self._pending_messages_until_setup)
+            < RealTimeStreaming._MAX_BUFFERED_MESSAGES
+            and self._pending_messages_byte_total + msg_bytes
+            <= RealTimeStreaming._MAX_BUFFERED_BYTES
+        ):
+            self._pending_messages_until_setup.append(message)
+            self._pending_messages_byte_total += msg_bytes
+        else:
+            verbose_logger.warning(
+                "Pre-setup buffer full (%d messages / %d bytes); dropping frame",
+                len(self._pending_messages_until_setup),
+                self._pending_messages_byte_total,
+            )
+
     async def _flush_pending_messages_until_setup(self) -> bool:
         pending = self._pending_messages_until_setup
         self._pending_messages_until_setup = []
@@ -1173,21 +1190,7 @@ class RealTimeStreaming:
                 self.store_input(message=message)
 
                 if self._should_buffer_client_message_until_setup(message):
-                    msg_bytes = len(message.encode("utf-8"))
-                    if (
-                        len(self._pending_messages_until_setup)
-                        < RealTimeStreaming._MAX_BUFFERED_MESSAGES
-                        and self._pending_messages_byte_total + msg_bytes
-                        <= RealTimeStreaming._MAX_BUFFERED_BYTES
-                    ):
-                        self._pending_messages_until_setup.append(message)
-                        self._pending_messages_byte_total += msg_bytes
-                    else:
-                        verbose_logger.warning(
-                            "Pre-setup audio buffer full (%d messages / %d bytes); dropping frame",
-                            len(self._pending_messages_until_setup),
-                            self._pending_messages_byte_total,
-                        )
+                    self._buffer_pending_message_until_setup(message)
                     continue
 
                 if self._pending_messages_until_setup:
@@ -1197,10 +1200,7 @@ class RealTimeStreaming:
                         and msg_type == "session.update"
                     )
                     if not should_send_setup_before_buffered_messages:
-                        self._pending_messages_until_setup.append(message)
-                        self._pending_messages_byte_total += len(
-                            message.encode("utf-8")
-                        )
+                        self._buffer_pending_message_until_setup(message)
                         if (
                             self._backend_setup_complete
                             and not self._flushing_pending_messages_until_setup
@@ -1209,8 +1209,7 @@ class RealTimeStreaming:
                         continue
 
                 if self._flushing_pending_messages_until_setup:
-                    self._pending_messages_until_setup.append(message)
-                    self._pending_messages_byte_total += len(message.encode("utf-8"))
+                    self._buffer_pending_message_until_setup(message)
                     continue
 
                 ## FORWARD TO BACKEND

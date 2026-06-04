@@ -2036,3 +2036,77 @@ async def test_deferred_setup_flushes_audio_on_backend_session_created(monkeypat
     assert streaming._backend_setup_complete is True
     assert streaming._pending_messages_until_setup == []
     assert backend_ws.send.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_caps_non_audio_buffered_messages(monkeypatch):
+    """A client that withholds session.update cannot grow the pre-setup buffer
+    without bound by streaming non-audio frames after the first audio frame."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    cap = RealTimeStreaming._MAX_BUFFERED_MESSAGES
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    flood_msg = json.dumps({"type": "foo", "data": "x" * 1024})
+
+    client_ws = MagicMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg]
+        + [flood_msg] * (cap + 50)
+        + [ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash-native-audio",
+    )
+    assert streaming._backend_setup_complete is False
+
+    await streaming.client_ack_messages()
+
+    backend_ws.send.assert_not_called()
+    assert len(streaming._pending_messages_until_setup) == cap
+    assert (
+        streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
+    )
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
+    """Non-audio frames appended after the first audio frame honor the byte budget."""
+    monkeypatch.setattr(litellm, "gemini_live_defer_setup", True, raising=False)
+    from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
+
+    audio_msg = json.dumps({"type": "input_audio_buffer.append", "audio": "AA=="})
+    big_non_audio = json.dumps(
+        {"type": "foo", "data": "x" * (RealTimeStreaming._MAX_BUFFERED_BYTES + 1)}
+    )
+
+    client_ws = MagicMock()
+    client_ws.receive_text = AsyncMock(
+        side_effect=[audio_msg, big_non_audio, ConnectionClosed(None, None)]
+    )
+    backend_ws = MagicMock()
+    backend_ws.send = AsyncMock()
+    logging_obj = MagicMock()
+
+    streaming = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        logging_obj,
+        provider_config=GeminiRealtimeConfig(),
+        model="gemini-live-2.5-flash-native-audio",
+    )
+
+    await streaming.client_ack_messages()
+
+    assert streaming._pending_messages_until_setup == [audio_msg]
+    assert (
+        streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
+    )
