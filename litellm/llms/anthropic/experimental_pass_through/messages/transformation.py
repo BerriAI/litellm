@@ -303,9 +303,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     if isinstance(content, str) and content:
                         hoisted_system.append({"type": "text", "text": content})
                     elif isinstance(content, list):
-                        hoisted_system.extend(
-                            c for c in content if isinstance(c, dict)
-                        )
+                        hoisted_system.extend(c for c in content if isinstance(c, dict))
                     # Drop empty/None system entries silently.
                 else:
                     remaining_messages.append(m)
