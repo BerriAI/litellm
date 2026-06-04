@@ -147,10 +147,17 @@ class ToolPermissionGuardrail(CustomGuardrail):
         immediate in-memory sync take effect, mirroring the PresidioGuardrail
         override of this method.
         """
-        super().update_in_memory_litellm_params(litellm_params)
-        params = (
-            litellm_params if isinstance(litellm_params, dict) else vars(litellm_params)
-        )
+        # ``litellm_params`` may arrive as the raw DB dict (the proxy ``cast()``s
+        # it to ``LitellmParams`` without converting), so handle both shapes. The
+        # base ``setattr`` loop is model-only, so apply the dict case here.
+        if isinstance(litellm_params, dict):
+            params = litellm_params
+            for key, value in params.items():
+                setattr(self, key, value)
+        else:
+            super().update_in_memory_litellm_params(litellm_params)
+            params = vars(litellm_params)
+
         self._load_rules(params.get("rules"))
         default_action = params.get("default_action")
         if isinstance(default_action, str):
