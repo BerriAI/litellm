@@ -5,7 +5,6 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 import os
 from functools import lru_cache
 
-import litellm
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from packaging.version import Version
@@ -50,7 +49,6 @@ def langfuse_client_init(
     langfuse_host=None,
     flush_interval=1,
     allow_env_credentials: bool = True,
-    ssl_verify=None,
 ) -> LangfuseClass:
     """
     Initialize Langfuse client with caching to prevent multiple initializations.
@@ -106,7 +104,7 @@ def langfuse_client_init(
     if Version(langfuse.version.__version__) >= Version("2.6.0"):
         parameters["sdk_integration"] = "litellm"
 
-    http_client = _get_httpx_client(params={"ssl_verify": ssl_verify})
+    http_client = _get_httpx_client()
     parameters["httpx_client"] = http_client.client
 
     client = Langfuse(**parameters)
@@ -130,7 +128,6 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_secret=langfuse_secret,
             langfuse_host=langfuse_host,
             flush_interval=flush_interval,
-            ssl_verify=litellm.ssl_verify,
         )
 
     @property
@@ -230,7 +227,6 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
             allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
-            ssl_verify=litellm.ssl_verify,
         )
         langfuse_prompt_client = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,
@@ -256,7 +252,6 @@ class LangfusePromptManagement(LangFuseLogger, PromptManagementBase, CustomLogge
             langfuse_secret_key=dynamic_callback_params.get("langfuse_secret_key"),
             langfuse_host=dynamic_callback_params.get("langfuse_host"),
             allow_env_credentials=dynamic_callback_params.get("langfuse_host") is None,
-            ssl_verify=litellm.ssl_verify,
         )
         langfuse_prompt_client = self._get_prompt_from_id(
             langfuse_prompt_id=prompt_id,
