@@ -12,6 +12,7 @@ Simulates:
 import json
 import os
 import sys
+import tempfile
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -231,6 +232,109 @@ class TestBackupModelCostMapExists:
         assert (
             len(backup) > 100
         ), f"Backup has only {len(backup)} models, expected > 100"
+
+
+class TestCustomPathModelCostMap:
+    """Tests for LITELLM_LOCAL_MODEL_COST_MAP_PATH env var."""
+
+    def test_should_load_from_custom_path(self):
+        """When LITELLM_LOCAL_MODEL_COST_MAP_PATH is set, reads from that file."""
+        custom_map = {"gpt-custom": {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002}}
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(custom_map, f)
+            tmp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP_PATH": tmp_path}):
+                with patch("httpx.get") as mock_get:
+                    result = get_model_cost_map("https://fake-url.com/model_prices.json")
+                    mock_get.assert_not_called()
+            assert result == custom_map
+        finally:
+            os.unlink(tmp_path)
+
+    def test_should_fallback_to_backup_on_missing_file(self):
+        """When the custom path file does not exist, falls back to bundled backup."""
+        nonexistent = "/tmp/this_file_does_not_exist_12345.json"
+        with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP_PATH": nonexistent}):
+            result = get_model_cost_map("https://fake-url.com/model_prices.json")
+
+        assert isinstance(result, dict)
+        assert len(result) > 100
+
+    def test_should_fallback_to_backup_on_invalid_json(self):
+        """When the custom path file has invalid JSON, falls back to bundled backup."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            f.write("this is not valid json {{{")
+            tmp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP_PATH": tmp_path}):
+                result = get_model_cost_map("https://fake-url.com/model_prices.json")
+            assert isinstance(result, dict)
+            assert len(result) > 100
+        finally:
+            os.unlink(tmp_path)
+
+    def test_should_fallback_to_backup_on_empty_json(self):
+        """When the custom path file contains an empty dict, falls back to bundled backup."""
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump({}, f)
+            tmp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP_PATH": tmp_path}):
+                result = get_model_cost_map("https://fake-url.com/model_prices.json")
+            assert isinstance(result, dict)
+            assert len(result) > 100
+        finally:
+            os.unlink(tmp_path)
+
+    def test_custom_path_takes_priority_over_remote_url(self):
+        """LITELLM_LOCAL_MODEL_COST_MAP_PATH prevents the remote fetch entirely."""
+        custom_map = {f"model-{i}": {} for i in range(200)}
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(custom_map, f)
+            tmp_path = f.name
+
+        try:
+            with patch.dict(os.environ, {"LITELLM_LOCAL_MODEL_COST_MAP_PATH": tmp_path}):
+                with patch("httpx.get") as mock_get:
+                    result = get_model_cost_map("https://fake-url.com/model_prices.json")
+                    mock_get.assert_not_called()
+            assert len(result) == 200
+        finally:
+            os.unlink(tmp_path)
+
+    def test_litellm_local_model_cost_map_takes_priority_over_custom_path(self):
+        """LITELLM_LOCAL_MODEL_COST_MAP=True wins over LITELLM_LOCAL_MODEL_COST_MAP_PATH."""
+        custom_map = {"only-custom-model": {}}
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(custom_map, f)
+            tmp_path = f.name
+
+        try:
+            env = {
+                "LITELLM_LOCAL_MODEL_COST_MAP": "True",
+                "LITELLM_LOCAL_MODEL_COST_MAP_PATH": tmp_path,
+            }
+            with patch.dict(os.environ, env):
+                result = get_model_cost_map("https://fake-url.com/model_prices.json")
+            # Should use bundled backup (which has many more models), not the custom file
+            assert len(result) > 100
+            assert "only-custom-model" not in result
+        finally:
+            os.unlink(tmp_path)
 
 
 class TestBadHostedModelCostMap:
