@@ -2,7 +2,7 @@
 Tests for backend domain models.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 
@@ -12,7 +12,11 @@ from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.project import LiteLLM_ProjectTable
-from litellm.models.team import CachedTeam, DeletedTeam, Team
+from litellm.models.team import (
+    LiteLLM_DeletedTeamTable,
+    LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
+)
 from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import (
     LiteLLM_DeletedVerificationToken,
@@ -171,7 +175,7 @@ class TestProject:
 
 class TestTeam:
     def test_team_creation(self):
-        team = Team(
+        team = LiteLLM_TeamTable(
             team_id="team-123",
             team_alias="Engineering",
             admins=["user1"],
@@ -182,49 +186,44 @@ class TestTeam:
         )
         assert team.team_id == "team-123"
         assert team.team_alias == "Engineering"
-        assert team.is_admin("user1")
-        assert not team.is_admin("user2")
-        assert team.is_member("user2")
-        assert team.is_member("user1")
-        assert not team.is_member("user4")
-
-    def test_has_model_access(self):
-        team_with_models = Team(team_id="t1", models=["gpt-4", "claude-3"])
-        team_no_models = Team(team_id="t2", models=[])
-
-        assert team_with_models.has_model_access("gpt-4")
-        assert not team_with_models.has_model_access("gpt-3")
-        assert team_no_models.has_model_access("any-model")
-
-    def test_is_over_budget(self):
-        team = Team(team_id="t1", max_budget=100.0, spend=150.0)
-        team_no_budget = Team(team_id="t2", spend=1000.0)
-
-        assert team.is_over_budget()
-        assert not team_no_budget.is_over_budget()
+        assert team.admins == ["user1"]
+        assert team.members == ["user2", "user3"]
+        assert team.models == ["gpt-4"]
+        assert team.max_budget == 1000.0
 
     def test_members_with_roles_parsing(self):
-        team_dict = Team(
-            team_id="t1",
-            members_with_roles={"user1": "admin", "user2": "user"},
-        )
-        assert len(team_dict.members_with_roles) == 2
-
-        team_list = Team(
+        team = LiteLLM_TeamTable(
             team_id="t2",
             members_with_roles=[
                 {"user_id": "user1", "role": "admin"},
                 {"user_id": "user2", "role": "user"},
             ],
         )
-        assert len(team_list.members_with_roles) == 2
+        assert len(team.members_with_roles) == 2
+        assert team.members_with_roles[0].user_id == "user1"
+        assert team.members_with_roles[0].role == "admin"
+
+    def test_members_with_roles_empty_dict_coerced(self):
+        team = LiteLLM_TeamTable(team_id="t3", members_with_roles={})
+        assert team.members_with_roles == []
+
+    def test_json_string_fields_parsed(self):
+        team = LiteLLM_TeamTable(
+            team_id="t4",
+            metadata='{"k": "v"}',
+            model_max_budget='{"gpt-4": 5.0}',
+        )
+        assert team.metadata == {"k": "v"}
+        assert team.model_max_budget == {"gpt-4": 5.0}
 
     def test_cached_team(self):
-        cached = CachedTeam(team_id="t1", last_refreshed_at=1234567890.0)
+        cached = LiteLLM_TeamTableCachedObj(
+            team_id="t1", last_refreshed_at=1234567890.0
+        )
         assert cached.last_refreshed_at == 1234567890.0
 
     def test_deleted_team(self):
-        deleted = DeletedTeam(
+        deleted = LiteLLM_DeletedTeamTable(
             team_id="t1",
             deleted_by="admin",
             deleted_at=datetime.utcnow(),

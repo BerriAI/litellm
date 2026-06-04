@@ -1014,14 +1014,9 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
     search_tools: Optional[List[str]] = None
 
 
-class BudgetLimitEntry(LiteLLMPydanticObjectBase):
-    """A single budget window with its own limit and independent reset schedule."""
-
-    budget_duration: str  # e.g. "24h", "7d", "30d"
-    max_budget: float  # max spend in USD for this window
-    reset_at: Optional[datetime] = None  # populated at creation/reset time
-
-
+from litellm.models.team import (  # noqa: E402
+    BudgetLimitEntry as BudgetLimitEntry,
+)
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -1217,21 +1212,9 @@ class KeyRequest(LiteLLMPydanticObjectBase):
         return values
 
 
-class LiteLLM_ModelTable(LiteLLMPydanticObjectBase):
-    id: Optional[int] = None
-    model_aliases: Optional[Union[str, dict]] = None  # json dump the dict
-    created_by: str
-    updated_by: str
-    team: Optional["LiteLLM_TeamTable"] = None
-
-    model_config = ConfigDict(protected_namespaces=())
-
-
-from litellm.models.model import (  # noqa: E402
-    LiteLLM_ProxyModelTable as LiteLLM_ProxyModelTable,
+from litellm.models.team import (  # noqa: E402
+    LiteLLM_ModelTable as LiteLLM_ModelTable,
 )
-
-
 # MCP Types
 class SpecialMCPServerName(str, enum.Enum):
     all_team_servers = "all-team-mcpservers"
@@ -1753,33 +1736,8 @@ class DeleteCustomerRequest(LiteLLMPydanticObjectBase):
     user_ids: List[str]
 
 
-class MemberBase(LiteLLMPydanticObjectBase):
-    user_id: Optional[str] = Field(
-        default=None,
-        description="The unique ID of the user to add. Either user_id or user_email must be provided",
-    )
-    user_email: Optional[str] = Field(
-        default=None,
-        description="The email address of the user to add. Either user_id or user_email must be provided",
-    )
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_user_info(cls, values):
-        if not isinstance(values, dict):
-            raise ValueError("input needs to be a dictionary")
-        if values.get("user_id") is None and values.get("user_email") is None:
-            raise ValueError("Either user id or user email must be provided")
-        return values
-
-
-class Member(MemberBase):
-    role: Literal[
-        "admin",
-        "user",
-    ] = Field(
-        description="The role of the user within the team. 'admin' users can manage team settings and members, 'user' is a regular team member"
-    )
+from litellm.models.team import MemberBase as MemberBase  # noqa: E402
+from litellm.models.team import Member as Member  # noqa: E402
 
 
 class OrgMember(MemberBase):
@@ -1790,33 +1748,7 @@ class OrgMember(MemberBase):
     ]
 
 
-class TeamBase(LiteLLMPydanticObjectBase):
-    team_alias: Optional[str] = None
-    team_id: Optional[str] = None
-    organization_id: Optional[str] = None
-    admins: list = []
-    members: list = []
-    members_with_roles: List[Member] = []
-    team_member_permissions: Optional[List[str]] = None
-    metadata: Optional[dict] = None
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-
-    # Budget fields
-    max_budget: Optional[float] = None
-    soft_budget: Optional[float] = None
-    budget_duration: Optional[str] = None
-    budget_limits: Optional[List[BudgetLimitEntry]] = (
-        None  # multiple concurrent budget windows
-    )
-
-    models: list = []
-    blocked: bool = False
-    router_settings: Optional[dict] = None
-    access_group_ids: Optional[List[str]] = None
-    default_team_member_models: Optional[List[str]] = (
-        None  # default allowed_models seeded onto new team members
-    )
+from litellm.models.team import TeamBase as TeamBase  # noqa: E402
 
 
 class NewTeamRequest(TeamBase):
@@ -2019,76 +1951,15 @@ from litellm.models.object_permission import (  # noqa: E402
 )
 
 
-class LiteLLM_TeamTable(TeamBase):
-    team_id: str  # type: ignore
-    spend: Optional[float] = None
-    max_parallel_requests: Optional[int] = None
-    budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    model_id: Optional[int] = None
-    litellm_model_table: Optional[LiteLLM_ModelTable] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-    updated_at: Optional[datetime] = None
-    created_at: Optional[datetime] = None
-
-    #########################################################
-    # Object Permission - MCP, Vector Stores etc.
-    #########################################################
-    object_permission_id: Optional[str] = None
-
-    model_config = ConfigDict(protected_namespaces=())
-
-    @model_validator(mode="before")
-    @classmethod
-    def set_model_info(cls, values):
-        dict_fields = [
-            "metadata",
-            "aliases",
-            "config",
-            "permissions",
-            "model_max_budget",
-            "model_aliases",
-            "router_settings",
-            "budget_limits",
-        ]
-
-        if isinstance(values, BaseModel):
-            values = values.model_dump()
-
-        if (
-            isinstance(values.get("members_with_roles"), dict)
-            and not values["members_with_roles"]
-        ):
-            values["members_with_roles"] = []
-
-        for field in dict_fields:
-            value = values.get(field)
-            if value is not None and isinstance(value, str):
-                try:
-                    values[field] = json.loads(value)
-                except json.JSONDecodeError:
-                    raise ValueError(f"Field {field} should be a valid dictionary")
-
-        return values
-
-
-class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
-    last_refreshed_at: Optional[float] = None
-
-
-class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):
-    """
-    Recording of deleted teams for audit purposes. Mirrors LiteLLM_TeamTable
-    plus metadata captured at deletion time.
-    """
-
-    id: Optional[str] = None
-    deleted_at: Optional[datetime] = None
-    deleted_by: Optional[str] = None
-    deleted_by_api_key: Optional[str] = None
-    litellm_changed_by: Optional[str] = None
-
-    model_config = ConfigDict(protected_namespaces=())
+from litellm.models.team import (  # noqa: E402
+    LiteLLM_TeamTable as LiteLLM_TeamTable,
+)
+from litellm.models.team import (  # noqa: E402
+    LiteLLM_TeamTableCachedObj as LiteLLM_TeamTableCachedObj,
+)
+from litellm.models.team import (  # noqa: E402
+    LiteLLM_DeletedTeamTable as LiteLLM_DeletedTeamTable,
+)
 
 
 class TeamRequest(LiteLLMPydanticObjectBase):
