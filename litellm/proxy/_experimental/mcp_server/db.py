@@ -90,6 +90,47 @@ def decrypt_global_env_var_values(env_vars: Optional[Iterable[Any]]) -> None:
             entry.value = decrypted
 
 
+def _reencrypt_global_env_var_values(
+    env_vars: Optional[Iterable[Any]], new_encryption_key: str
+) -> Optional[List[Dict[str, Any]]]:
+    """Re-encrypt ``scope="global"`` env var values for master-key rotation.
+
+    Each global value is decrypted with the current salt key and re-encrypted
+    under ``new_encryption_key``. Returns the rebuilt list when at least one
+    value was rotated, else ``None`` so the caller can skip the DB write. A
+    value that fails to decrypt is left untouched (and logged) so a corrupt
+    entry is preserved for recovery rather than overwritten.
+    """
+    if not env_vars:
+        return None
+    rebuilt = [dict(v) for v in env_vars]
+    rotated = False
+    for entry in rebuilt:
+        if not _is_global_env_var_scope(entry.get("scope")):
+            continue
+        value = entry.get("value")
+        if not value:
+            continue
+        decrypted = decrypt_value_helper(
+            value=value,
+            key="mcp_global_env_var",
+            exception_type="debug",
+            return_original_value=False,
+        )
+        if decrypted is None:
+            verbose_proxy_logger.warning(
+                "rotate_mcp_server_credentials_master_key: could not decrypt "
+                "global env var %s, skipping",
+                entry.get("name"),
+            )
+            continue
+        entry["value"] = encrypt_value_helper(
+            decrypted, new_encryption_key=new_encryption_key
+        )
+        rotated = True
+    return rebuilt if rotated else None
+
+
 def _prepare_mcp_server_data(
     data: Union[NewMCPServerRequest, UpdateMCPServerRequest],
     exclude_unset: bool = False,
@@ -600,33 +641,38 @@ async def update_mcp_server(
 async def rotate_mcp_server_credentials_master_key(
     prisma_client: PrismaClient, touched_by: str, new_master_key: str
 ):
+    from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
     mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
 
     for mcp_server in mcp_servers:
+        update_data: Dict[str, Any] = {}
+
         credentials = mcp_server.credentials
-        if not credentials:
+        if credentials:
+            # Decrypt with current key first, then re-encrypt with new key
+            decrypted_credentials = decrypt_credentials(
+                credentials=cast(MCPCredentials, dict(credentials)),
+            )
+            encrypted_credentials = encrypt_credentials(
+                credentials=decrypted_credentials,
+                encryption_key=new_master_key,
+            )
+            update_data["credentials"] = safe_dumps(encrypted_credentials)
+
+        rotated_env_vars = _reencrypt_global_env_var_values(
+            mcp_server.env_vars, new_master_key
+        )
+        if rotated_env_vars is not None:
+            update_data["env_vars"] = safe_dumps(rotated_env_vars)
+
+        if not update_data:
             continue
 
-        credentials_copy = dict(credentials)
-        # Decrypt with current key first, then re-encrypt with new key
-        decrypted_credentials = decrypt_credentials(
-            credentials=cast(MCPCredentials, credentials_copy),
-        )
-        encrypted_credentials = encrypt_credentials(
-            credentials=decrypted_credentials,
-            encryption_key=new_master_key,
-        )
-
-        from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-
-        serialized_credentials = safe_dumps(encrypted_credentials)
-
+        update_data["updated_by"] = touched_by
         await prisma_client.db.litellm_mcpservertable.update(
             where={"server_id": mcp_server.server_id},
-            data={
-                "credentials": serialized_credentials,
-                "updated_by": touched_by,
-            },
+            data=update_data,
         )
 
 
@@ -703,6 +749,46 @@ async def rotate_mcp_user_credentials_master_key(
                 }
             },
             data={"credential_b64": re_encrypted},
+        )
+
+
+async def rotate_mcp_user_env_vars_master_key(
+    prisma_client: PrismaClient, new_master_key: str
+):
+    """Re-encrypt every ``LiteLLM_MCPUserEnvVars`` row with ``new_master_key``.
+
+    Reads each ``values_b64`` blob with the current salt key and writes it back
+    encrypted under the new master key. Rows that fail to decrypt are logged and
+    skipped so one corrupt row does not abort the rotation nor overwrite values
+    that may still be recoverable.
+    """
+    rows = await prisma_client.db.litellm_mcpuserenvvars.find_many()
+    for row in rows:
+        plaintext = decrypt_value_helper(
+            value=row.values_b64,
+            key="mcp_user_env_vars",
+            exception_type="debug",
+            return_original_value=False,
+        )
+        if plaintext is None:
+            verbose_proxy_logger.warning(
+                "rotate_mcp_user_env_vars_master_key: could not decrypt env vars "
+                "for user_id=%s server_id=%s, skipping",
+                row.user_id,
+                row.server_id,
+            )
+            continue
+        re_encrypted = encrypt_value_helper(
+            plaintext, new_encryption_key=new_master_key
+        )
+        await prisma_client.db.litellm_mcpuserenvvars.update(
+            where={
+                "user_id_server_id": {
+                    "user_id": row.user_id,
+                    "server_id": row.server_id,
+                }
+            },
+            data={"values_b64": re_encrypted},
         )
 
 
