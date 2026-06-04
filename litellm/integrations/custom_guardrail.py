@@ -49,6 +49,26 @@ from litellm.exceptions import (
     ModifyResponseException,
 )
 
+# Keys a caller must never be able to inject via a guardrail's dynamic
+# ``extra_body``: the validation target the hook builds (what actually gets
+# scanned) and the operator-controlled ``on_flagged`` action (whether a flag
+# blocks). Letting a client override these spoofs the guardrail (scan benign
+# decoy text, or downgrade blocking to monitor). Operator tuning keys
+# (success/failure thresholds, evaluation_id, assertions, ...) are not listed
+# and still pass through.
+_GUARDRAIL_PROTECTED_REQUEST_KEYS = frozenset(
+    {
+        "messages",
+        "text",
+        "input",
+        "output",
+        "response",
+        "llmOutput",
+        "validation_target",
+        "on_flagged",
+    }
+)
+
 
 class CustomGuardrail(CustomLogger):
     # If True, during_call runs async_moderation_hook instead of the unified apply_guardrail path.
@@ -545,7 +565,14 @@ class CustomGuardrail(CustomLogger):
                         )
                     return {}
 
-                # Return the extra_body if it exists, otherwise empty dict
+                # Drop keys that would let a caller override the validation
+                # target or the on_flagged action; keep operator tuning keys.
+                if isinstance(extra_body, dict):
+                    return {
+                        k: v
+                        for k, v in extra_body.items()
+                        if k not in _GUARDRAIL_PROTECTED_REQUEST_KEYS
+                    }
                 return extra_body
 
         return {}

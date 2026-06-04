@@ -1,4 +1,4 @@
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -1190,3 +1190,62 @@ class TestCustomGuardrailSpendLogMatchRedaction:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
         assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestGuardrailDynamicParamsStripValidationTargets:
+    """VERIA-130: a guardrail's dynamic extra_body must not let a caller override
+    the validation target the hook scans, or the operator's on_flagged action.
+    Operator tuning keys (thresholds, evaluation_id, ...) must still pass."""
+
+    def _dynamic_params(self, extra_body: dict, *, premium: bool = True) -> dict:
+        cg = CustomGuardrail(guardrail_name="test-rail")
+        config = [{"test-rail": {"extra_body": extra_body}}]
+        with (
+            patch.object(cg, "get_guardrail_from_metadata", return_value=config),
+            patch.object(cg, "_validate_premium_user", return_value=premium),
+        ):
+            return cg.get_guardrail_dynamic_request_body_params(request_data={})
+
+    def test_validation_target_and_on_flagged_are_stripped(self):
+        result = self._dynamic_params(
+            {
+                "messages": [{"role": "user", "content": "benign decoy"}],
+                "text": "decoy",
+                "input": "x",
+                "output": "y",
+                "response": "spoofed",
+                "llmOutput": "spoofed",
+                "validation_target": "response",
+                "on_flagged": "monitor",
+            }
+        )
+        for key in (
+            "messages",
+            "text",
+            "input",
+            "output",
+            "response",
+            "llmOutput",
+            "validation_target",
+            "on_flagged",
+        ):
+            assert key not in result
+
+    def test_legitimate_tuning_keys_preserved(self):
+        result = self._dynamic_params(
+            {
+                "success_threshold": 0.8,
+                "failure_threshold": 0.2,
+                "evaluation_id": "eval-123",
+                "assertions": ["no-pii"],
+            }
+        )
+        assert result == {
+            "success_threshold": 0.8,
+            "failure_threshold": 0.2,
+            "evaluation_id": "eval-123",
+            "assertions": ["no-pii"],
+        }
+
+    def test_non_premium_user_gets_no_dynamic_params(self):
+        assert self._dynamic_params({"success_threshold": 0.8}, premium=False) == {}
