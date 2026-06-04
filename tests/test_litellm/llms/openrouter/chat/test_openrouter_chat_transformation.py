@@ -553,3 +553,131 @@ def test_openrouter_non_reasoning_models_do_not_add_reasoning_effort():
     )
 
     assert "reasoning_effort" not in supported_params
+
+
+def test_openrouter_auto_exposes_routed_model_in_hidden_params():
+    """Regression for #29406.
+
+    When the request used `openrouter/auto`, OpenRouter returns the actual
+    routed model in the response body's `model` field. `transform_response`
+    must surface it via `_hidden_params["routed_model"]` (and an
+    `llm_provider-x-litellm-routed-model` additional header) so callers
+    can track routing decisions, audit costs, and debug auto-routing
+    without re-calling OpenRouter's REST API.
+    """
+    from unittest.mock import Mock, patch
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    config = OpenrouterConfig()
+
+    routed = "anthropic/claude-sonnet-4"
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "gen-auto-1",
+        "model": routed,
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_response.headers = {}
+
+    model_response = ModelResponse(
+        id="gen-auto-1",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="hi", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model="openrouter/auto",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    with patch.object(
+        OpenAIGPTConfig, "transform_response", return_value=model_response
+    ):
+        result = config.transform_response(
+            model="openrouter/auto",
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert result._hidden_params["routed_model"] == routed
+    assert (
+        result._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-routed-model"
+        ]
+        == routed
+    )
+
+
+def test_openrouter_non_auto_does_not_set_routed_model_when_model_matches():
+    """When the caller requested a specific model and OpenRouter echoes it
+    back unchanged, no `routed_model` hint is added (avoids noise on
+    non-auto calls)."""
+    from unittest.mock import Mock, patch
+    from litellm.types.utils import Choices, Message, ModelResponse, Usage
+
+    config = OpenrouterConfig()
+
+    same_model = "openrouter/anthropic/claude-sonnet-4.5"
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.json.return_value = {
+        "id": "gen-non-auto-1",
+        "model": same_model,
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": "hi"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_response.headers = {}
+
+    model_response = ModelResponse(
+        id="gen-non-auto-1",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="hi", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model=same_model,
+        object="chat.completion",
+        usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2),
+    )
+
+    with patch.object(
+        OpenAIGPTConfig, "transform_response", return_value=model_response
+    ):
+        result = config.transform_response(
+            model=same_model,
+            raw_response=mock_response,
+            model_response=model_response,
+            logging_obj=Mock(),
+            request_data={},
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={},
+            litellm_params={},
+            encoding=None,
+        )
+
+    assert "routed_model" not in (result._hidden_params or {})

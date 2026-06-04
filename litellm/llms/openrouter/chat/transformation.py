@@ -227,6 +227,22 @@ class OpenrouterConfig(OpenAIGPTConfig):
                     model_response._hidden_params["additional_headers"][
                         "llm_provider-x-litellm-response-cost"
                     ] = float(response_cost)
+
+            # When the request used OpenRouter Auto (`openrouter/auto`), the
+            # response body's `model` field carries the model OpenRouter
+            # actually routed to (e.g. `anthropic/claude-3.7-sonnet`). Expose
+            # it so callers can track routing decisions without re-calling
+            # OpenRouter's REST API directly (#29406).
+            routed_model = response_json.get("model")
+            if routed_model and isinstance(routed_model, str) and routed_model != model:
+                if not hasattr(model_response, "_hidden_params"):
+                    model_response._hidden_params = {}
+                model_response._hidden_params["routed_model"] = routed_model
+                if "additional_headers" not in model_response._hidden_params:
+                    model_response._hidden_params["additional_headers"] = {}
+                model_response._hidden_params["additional_headers"][
+                    "llm_provider-x-litellm-routed-model"
+                ] = routed_model
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass
