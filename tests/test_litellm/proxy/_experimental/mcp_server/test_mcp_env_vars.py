@@ -1315,6 +1315,99 @@ async def test_add_server_does_not_double_decrypt_global_env_vars(env_vars_salt_
     assert headers == {"X-Db": "s3cr3t-p@ss"}
 
 
+@pytest.mark.asyncio
+async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_string(
+    env_vars_salt_key,
+):
+    """Regression for the reload-reuse path: Prisma can hand back ``env_vars`` on
+    a write as the raw JSON string that was persisted, not a parsed list. The
+    create/update wrappers must still decrypt globals on the returned row, else
+    ``add_server`` (which trusts the caller) seeds the registry with ciphertext
+    and the subsequent ``reload_servers_from_database`` reuses that broken entry
+    (timestamps match), so headers forward ciphertext upstream."""
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server.db import (
+        _prepare_mcp_server_data,
+        create_mcp_server,
+        update_mcp_server,
+    )
+    from litellm.proxy._types import (
+        MCPEnvVar,
+        NewMCPServerRequest,
+        UpdateMCPServerRequest,
+    )
+
+    req = _global_env_var_server_request(
+        [MCPEnvVar(name="DB_PASSWORD", value="s3cr3t-p@ss", scope="global")]
+    )
+    encrypted_env_vars_str = _prepare_mcp_server_data(req)["env_vars"]
+    assert "s3cr3t-p@ss" not in encrypted_env_vars_str
+
+    def _prisma_row_with_json_string_env_vars():
+        row = MagicMock()
+        row.env_vars = encrypted_env_vars_str
+        return row
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_mcpservertable.create = AsyncMock(
+        return_value=_prisma_row_with_json_string_env_vars()
+    )
+
+    created = await create_mcp_server(
+        mock_prisma,
+        NewMCPServerRequest(
+            server_id="srv-create",
+            url="https://upstream.example.com/mcp",
+            transport="http",
+        ),
+        touched_by="test-user",
+    )
+    assert isinstance(created.env_vars, list)
+    assert created.env_vars[0]["value"] == "s3cr3t-p@ss"
+
+    mock_prisma_upd = MagicMock()
+    mock_prisma_upd.db.litellm_mcpservertable.update = AsyncMock(
+        return_value=_prisma_row_with_json_string_env_vars()
+    )
+    updated = await update_mcp_server(
+        mock_prisma_upd,
+        UpdateMCPServerRequest(server_id="srv-update"),
+        touched_by="test-user",
+    )
+    assert isinstance(updated.env_vars, list)
+    assert updated.env_vars[0]["value"] == "s3cr3t-p@ss"
+
+
+def test_reencrypt_global_env_var_values_handles_json_string(env_vars_salt_key):
+    """``rotate_mcp_server_credentials_master_key`` reads ``mcp_server.env_vars``
+    straight off the Prisma row, which can be a JSON string. The re-encrypt
+    helper must parse it instead of failing on ``dict(v)`` over a string."""
+    import json
+
+    from litellm.proxy._experimental.mcp_server.db import (
+        _prepare_mcp_server_data,
+        _reencrypt_global_env_var_values,
+    )
+    from litellm.proxy._types import MCPEnvVar
+
+    req = _global_env_var_server_request(
+        [MCPEnvVar(name="DB_PASSWORD", value="s3cr3t-p@ss", scope="global")]
+    )
+    encrypted_env_vars_str = _prepare_mcp_server_data(req)["env_vars"]
+    original_ciphertext = json.loads(encrypted_env_vars_str)[0]["value"]
+
+    rebuilt = _reencrypt_global_env_var_values(
+        encrypted_env_vars_str, new_encryption_key="rotated-master-key-0000"
+    )
+
+    assert rebuilt is not None
+    assert rebuilt[0]["name"] == "DB_PASSWORD"
+    assert rebuilt[0]["value"] != original_ciphertext
+    assert rebuilt[0]["value"] != "s3cr3t-p@ss"
+
+
 def test_decrypt_global_env_var_drops_undecryptable_value(
     env_vars_salt_key, monkeypatch
 ):
