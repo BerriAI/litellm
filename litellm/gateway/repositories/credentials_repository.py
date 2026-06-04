@@ -98,7 +98,9 @@ class CredentialsRepository(BaseRepository[Credentials]):
             data["credential_info"] = json.dumps(credential_info)
 
         record = await self.table.create(data=data)
-        return self._to_model(record)
+        model = self._to_model(record)
+        assert model is not None
+        return model
 
     async def update_credentials(
         self,

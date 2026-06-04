@@ -9,7 +9,7 @@ None values and empty lists.
 import asyncio
 import json
 import os
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
@@ -217,7 +217,15 @@ class ConfigRepository:
             if param_name is not None and param_value is not None:
                 config = self._update_config_fields(
                     current_config=config,
-                    param_name=param_name,
+                    param_name=cast(
+                        Literal[
+                            "general_settings",
+                            "router_settings",
+                            "litellm_settings",
+                            "environment_variables",
+                        ],
+                        param_name,
+                    ),
                     db_param_value=param_value,
                 )
 

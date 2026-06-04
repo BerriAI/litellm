@@ -40,11 +40,18 @@ class BaseRepository(ABC, Generic[T]):
         """Convert a database record to a domain model."""
         if record is None:
             return None
-        return self.model_class.from_db_record(record)
+        model = self.model_class.from_db_record(record)
+        return model  # type: ignore[return-value]
 
     def _to_model_list(self, records: List[Any]) -> List[T]:
         """Convert a list of database records to domain models."""
-        return [self._to_model(r) for r in records if r is not None]
+        result: List[T] = []
+        for r in records:
+            if r is not None:
+                model = self._to_model(r)
+                if model is not None:
+                    result.append(model)
+        return result
 
     async def find_by_id(self, id_value: str, id_field: str = "id") -> Optional[T]:
         """Find a record by its primary key."""
@@ -75,7 +82,9 @@ class BaseRepository(ABC, Generic[T]):
     async def create(self, data: Dict[str, Any]) -> T:
         """Create a new record."""
         record = await self.table.create(data=data)
-        return self._to_model(record)
+        model = self._to_model(record)
+        assert model is not None
+        return model
 
     async def update(
         self, id_value: str, data: Dict[str, Any], id_field: str = "id"

@@ -126,7 +126,9 @@ class ModelRepository(BaseRepository[Model]):
             data["model_info"] = json.dumps(model_info)
 
         record = await self.table.create(data=data)
-        return self._to_model(record)
+        model = self._to_model(record)
+        assert model is not None
+        return model
 
     async def update_model(
         self,
