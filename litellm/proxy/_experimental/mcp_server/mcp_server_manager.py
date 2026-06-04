@@ -684,6 +684,7 @@ class MCPServerManager:
                 ),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
+                timeout=server_config.get("timeout", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -1096,6 +1097,7 @@ class MCPServerManager:
                 credentials_dict.get("subject_token_type") if credentials_dict else None
             )
             or "urn:ietf:params:oauth:token-type:access_token",
+            timeout=getattr(mcp_server, "timeout", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
         return new_server
@@ -1662,7 +1664,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=MCP_CLIENT_TIMEOUT,
+                timeout=server.timeout or MCP_CLIENT_TIMEOUT,
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
                 sampling_callback=sampling_cb,
@@ -1690,7 +1692,7 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=MCP_CLIENT_TIMEOUT,
+                timeout=server.timeout or MCP_CLIENT_TIMEOUT,
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
                 sampling_callback=sampling_cb,
