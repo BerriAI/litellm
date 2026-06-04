@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field, field_validator
 
 from litellm.models.base import DomainModel
-from litellm.models.object_permission import ObjectPermission
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 
 
 class TeamMember(DomainModel):
@@ -49,7 +49,7 @@ class Team(DomainModel):
     budget_limits: Optional[Dict[str, Any]] = None
     model_id: Optional[int] = None
     allow_team_guardrail_config: bool = False
-    object_permission: Optional[ObjectPermission] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
 
     @field_validator("members_with_roles", mode="before")
     @classmethod

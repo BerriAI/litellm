@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 from pydantic import Field, field_validator
 
 from litellm.models.base import DomainModel
-from litellm.models.object_permission import ObjectPermission
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 
 
 class VerificationToken(DomainModel):
@@ -48,7 +48,7 @@ class VerificationToken(DomainModel):
     updated_by: Optional[str] = None
     last_active: Optional[datetime] = None
     object_permission_id: Optional[str] = None
-    object_permission: Optional[ObjectPermission] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     access_group_ids: List[str] = Field(default_factory=list)
     rotation_count: int = 0
     auto_rotate: bool = False

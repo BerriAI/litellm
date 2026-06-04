@@ -5,9 +5,19 @@ Base repository class with common functionality.
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Generic, List, Optional, Type, TypeVar
 
-from litellm.models.base import DomainModel
+from pydantic import BaseModel
 
-T = TypeVar("T", bound=DomainModel)
+T = TypeVar("T", bound=BaseModel)
+
+
+def _record_to_dict(record: Any) -> Dict[str, Any]:
+    if isinstance(record, dict):
+        return record
+    if hasattr(record, "model_dump") and callable(record.model_dump):
+        return record.model_dump()
+    if hasattr(record, "dict") and callable(record.dict):
+        return record.dict()
+    return dict(record)
 
 
 class BaseRepository(ABC, Generic[T]):
@@ -40,8 +50,7 @@ class BaseRepository(ABC, Generic[T]):
         """Convert a database record to a domain model."""
         if record is None:
             return None
-        model = self.model_class.from_db_record(record)
-        return model  # type: ignore[return-value]
+        return self.model_class(**_record_to_dict(record))
 
     def _to_model_list(self, records: List[Any]) -> List[T]:
         """Convert a list of database records to domain models."""

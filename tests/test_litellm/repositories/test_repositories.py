@@ -11,7 +11,7 @@ import pytest
 from litellm.models.budget import Budget
 from litellm.models.credentials import CredentialItem
 from litellm.models.model import Model
-from litellm.models.object_permission import ObjectPermission
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
 from litellm.models.project import Project
 from litellm.models.team import Team
@@ -55,8 +55,9 @@ class MockRecord:
 class MockTable:
     """Mock Prisma table for testing."""
 
-    def __init__(self):
+    def __init__(self, pk_field: Optional[str] = None):
         self._records: Dict[str, Dict[str, Any]] = {}
+        self._pk_field = pk_field
 
     async def find_unique(self, where: Dict[str, Any]) -> Optional[MockRecord]:
         key_field = list(where.keys())[0]
@@ -75,8 +76,15 @@ class MockTable:
         return [MockRecord(r) for r in records]
 
     async def create(self, data: Dict[str, Any]) -> MockRecord:
-        record_data = data
-        self._records[record_data.get("id", str(len(self._records)))] = record_data
+        record_data = dict(data)
+        if self._pk_field and self._pk_field not in record_data:
+            record_data[self._pk_field] = f"{self._pk_field}-{len(self._records)}"
+        key = (
+            record_data.get(self._pk_field)
+            if self._pk_field
+            else record_data.get("id", str(len(self._records)))
+        )
+        self._records[key] = record_data
         return MockRecord(record_data)
 
     async def update(
@@ -133,7 +141,9 @@ class MockPrismaClient:
         self.db.litellm_config = MockTable()
         self.db.litellm_organizationtable = MockTable()
         self.db.litellm_projecttable = MockTable()
-        self.db.litellm_objectpermissiontable = MockTable()
+        self.db.litellm_objectpermissiontable = MockTable(
+            pk_field="object_permission_id"
+        )
         self.db.litellm_credentialstable = MockTable()
 
 

@@ -4,11 +4,11 @@ ObjectPermission repository for database operations on LiteLLM_ObjectPermissionT
 
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.object_permission import ObjectPermission
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.repositories.base_repository import BaseRepository
 
 
-class ObjectPermissionRepository(BaseRepository[ObjectPermission]):
+class ObjectPermissionRepository(BaseRepository[LiteLLM_ObjectPermissionTable]):
     """Repository for object permission database operations."""
 
     @property
@@ -16,12 +16,12 @@ class ObjectPermissionRepository(BaseRepository[ObjectPermission]):
         return self.prisma_client.db.litellm_objectpermissiontable
 
     @property
-    def model_class(self) -> Type[ObjectPermission]:
-        return ObjectPermission
+    def model_class(self) -> Type[LiteLLM_ObjectPermissionTable]:
+        return LiteLLM_ObjectPermissionTable
 
     async def find_by_id(
         self, object_permission_id: str, id_field: str = "object_permission_id"
-    ) -> Optional[ObjectPermission]:
+    ) -> Optional[LiteLLM_ObjectPermissionTable]:
         return await super().find_by_id(object_permission_id, id_field)
 
     async def create_permission(
@@ -36,7 +36,7 @@ class ObjectPermissionRepository(BaseRepository[ObjectPermission]):
         blocked_tools: Optional[List[str]] = None,
         mcp_toolsets: Optional[List[str]] = None,
         search_tools: Optional[List[str]] = None,
-    ) -> ObjectPermission:
+    ) -> LiteLLM_ObjectPermissionTable:
         """Create a new object permission record."""
         data: Dict[str, Any] = {}
         if mcp_servers is not None:
@@ -75,7 +75,7 @@ class ObjectPermissionRepository(BaseRepository[ObjectPermission]):
         blocked_tools: Optional[List[str]] = None,
         mcp_toolsets: Optional[List[str]] = None,
         search_tools: Optional[List[str]] = None,
-    ) -> Optional[ObjectPermission]:
+    ) -> Optional[LiteLLM_ObjectPermissionTable]:
         """Update an object permission record."""
         data: Dict[str, Any] = {}
         if mcp_servers is not None:
@@ -105,6 +105,6 @@ class ObjectPermissionRepository(BaseRepository[ObjectPermission]):
 
     async def delete_permission(
         self, object_permission_id: str
-    ) -> Optional[ObjectPermission]:
+    ) -> Optional[LiteLLM_ObjectPermissionTable]:
         """Delete an object permission record."""
         return await self.delete(object_permission_id, id_field="object_permission_id")
