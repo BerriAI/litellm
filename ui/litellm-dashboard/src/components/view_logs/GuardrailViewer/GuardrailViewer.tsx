@@ -71,11 +71,7 @@ interface GuardrailViewerProps {
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set([
-  "presidio",
-  "bedrock",
-  "litellm_content_filter",
-]);
+const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set(["presidio", "bedrock", "litellm_content_filter"]);
 
 /**
  * Extracts a plain string from guardrail_mode for display purposes.
@@ -103,10 +99,7 @@ const resolveMode = (mode: GuardrailInformation["guardrail_mode"]): string | nul
  * Checks whether guardrail_mode includes the given target stage.
  * Handles arrays (multi-stage guardrails) by checking all elements.
  */
-const modeMatches = (
-  mode: GuardrailInformation["guardrail_mode"],
-  target: string,
-): boolean => {
+const modeMatches = (mode: GuardrailInformation["guardrail_mode"], target: string): boolean => {
   if (mode == null) return false;
   if (typeof mode === "string") return mode === target;
   if (Array.isArray(mode)) return mode.includes(target);
@@ -232,13 +225,25 @@ const ChevronIcon = ({ expanded }: { expanded: boolean }) => (
 
 const DownloadIcon = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-    <path d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    <path
+      d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
   </svg>
 );
 
 const ExternalLinkIcon = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="inline ml-1">
-    <path d="M6 2H3a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V8M8 2h4m0 0v4m0-4L6.5 7.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round" />
+    <path
+      d="M6 2H3a1 1 0 00-1 1v8a1 1 0 001 1h8a1 1 0 001-1V8M8 2h4m0 0v4m0-4L6.5 7.5"
+      stroke="currentColor"
+      strokeWidth="1.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
   </svg>
 );
 
@@ -307,9 +312,7 @@ const GenericGuardrailResponse = ({ response }: { response: any }) => {
         </div>
         {showRaw && (
           <div className="p-3 border-t bg-white">
-            <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">
-              {JSON.stringify(response, null, 2)}
-            </pre>
+            <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">{JSON.stringify(response, null, 2)}</pre>
           </div>
         )}
       </div>
@@ -328,10 +331,7 @@ interface TimelineEntry {
 }
 
 const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
-  const sorted = useMemo(
-    () => [...entries].sort((a, b) => (a.start_time ?? 0) - (b.start_time ?? 0)),
-    [entries],
-  );
+  const sorted = useMemo(() => [...entries].sort((a, b) => (a.start_time ?? 0) - (b.start_time ?? 0)), [entries]);
 
   const timeline = useMemo(() => {
     if (sorted.length === 0) return [];
@@ -364,7 +364,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
     // LLM call — infer from gap between pre-call end and post-call start
     const lastPreEnd = preCalls.length > 0 ? Math.max(...preCalls.map((e) => e.end_time)) : baseTime;
     const firstPostStart = postCalls.length > 0 ? Math.min(...postCalls.map((e) => e.start_time)) : undefined;
-    const llmEndTime = firstPostStart ?? (lastPreEnd + 1);
+    const llmEndTime = firstPostStart ?? lastPreEnd + 1;
     const llmOffsetMs = Math.round((llmEndTime - baseTime) * 1000);
 
     items.push({
@@ -407,9 +407,7 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
 
   return (
     <div>
-      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
-        Request Lifecycle
-      </h4>
+      <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Request Lifecycle</h4>
       <div className="relative">
         {timeline.map((item, idx) => (
           <div key={idx} className="flex items-start gap-3 relative">
@@ -434,27 +432,19 @@ const RequestLifecycle = ({ entries }: { entries: GuardrailInformation[] }) => {
             {/* Content */}
             <div className="pb-4 flex-1 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span
-                  className={`text-sm ${
-                    item.type === "llm" ? "text-blue-600 font-medium" : "text-gray-900"
-                  }`}
-                >
+                <span className={`text-sm ${item.type === "llm" ? "text-blue-600 font-medium" : "text-gray-900"}`}>
                   {item.label}
                 </span>
                 {item.status && (
                   <span
                     className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
-                      item.isSuccess
-                        ? "bg-green-100 text-green-700"
-                        : "bg-red-100 text-red-700"
+                      item.isSuccess ? "bg-green-100 text-green-700" : "bg-red-100 text-red-700"
                     }`}
                   >
                     {item.status}
                   </span>
                 )}
-                <span className="text-xs text-gray-400 font-mono ml-auto flex-shrink-0">
-                  T+{item.offsetMs}ms
-                </span>
+                <span className="text-xs text-gray-400 font-mono ml-auto flex-shrink-0">T+{item.offsetMs}ms</span>
               </div>
             </div>
           </div>
@@ -502,9 +492,7 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
         onClick={() => setExpanded(!expanded)}
       >
         {/* Status icon */}
-        <div className="flex-shrink-0">
-          {success ? <CheckCircleIcon /> : <FailCircleIcon />}
-        </div>
+        <div className="flex-shrink-0">{success ? <CheckCircleIcon /> : <FailCircleIcon />}</div>
 
         {/* Name + badges */}
         <div className="flex items-center gap-2 flex-wrap flex-1 min-w-0">
@@ -516,7 +504,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
           <span
             className={`px-2 py-0.5 rounded text-[11px] font-semibold uppercase flex-shrink-0 ${
-              success ? "bg-green-100 text-green-700 border border-green-200" : "bg-red-100 text-red-700 border border-red-200"
+              success
+                ? "bg-green-100 text-green-700 border border-green-200"
+                : "bg-red-100 text-red-700 border border-red-200"
             }`}
           >
             {success ? "PASSED" : "FAILED"}
@@ -525,7 +515,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
           {matchCountStr && (
             <span
               className={`px-2 py-0.5 rounded text-[11px] font-medium flex-shrink-0 ${
-                totalMasked === 0 ? "bg-green-50 text-green-700 border border-green-200" : "bg-amber-50 text-amber-700 border border-amber-200"
+                totalMasked === 0
+                  ? "bg-green-50 text-green-700 border border-green-200"
+                  : "bg-amber-50 text-amber-700 border border-amber-200"
               }`}
             >
               {matchCountStr}
@@ -540,7 +532,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
 
           {riskScore != null && success && (
             <Tooltip title={`Risk score: ${riskScore}/10`}>
-              <span className={`px-2 py-0.5 border rounded text-[11px] font-semibold flex-shrink-0 ${getRiskColor(riskScore)}`}>
+              <span
+                className={`px-2 py-0.5 border rounded text-[11px] font-semibold flex-shrink-0 ${getRiskColor(riskScore)}`}
+              >
                 Risk {riskScore}/10
               </span>
             </Tooltip>
@@ -562,7 +556,6 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
       {/* Expanded details */}
       {expanded && (
         <div className="border-t border-gray-100 px-4 py-3">
-
           {/* Classification details for llm-judge */}
           {entry.classification && (
             <div className="mb-3 bg-gray-50 rounded-lg p-3 space-y-1">
@@ -629,9 +622,9 @@ const EvaluationCard = ({ entry }: { entry: GuardrailInformation }) => {
               <ContentFilterDetails response={guardrailResponse} />
             </div>
           )}
-          {guardrailProvider &&
-            !PROVIDERS_WITH_CUSTOM_RENDERERS.has(guardrailProvider) &&
-            guardrailResponse && <GenericGuardrailResponse response={guardrailResponse} />}
+          {guardrailProvider && !PROVIDERS_WITH_CUSTOM_RENDERERS.has(guardrailProvider) && guardrailResponse && (
+            <GenericGuardrailResponse response={guardrailResponse} />
+          )}
         </div>
       )}
     </div>
@@ -683,9 +676,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
         <div className="flex items-center gap-4">
           <ShieldIcon />
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">
-              Guardrails &amp; Policy Compliance
-            </h3>
+            <h3 className="text-lg font-semibold text-gray-900">Guardrails &amp; Policy Compliance</h3>
             <div className="flex items-center gap-2 mt-0.5">
               <span className="text-sm text-gray-500">
                 {guardrailEntries.length} guardrail{guardrailEntries.length !== 1 ? "s" : ""} evaluated
@@ -700,7 +691,13 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
               >
                 {allPassed ? (
                   <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-                    <path d="M3 6l2.5 2.5L9 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                    <path
+                      d="M3 6l2.5 2.5L9 4"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                 ) : null}
                 {passedCount} Passed
@@ -711,9 +708,7 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
         <div className="flex items-center gap-6">
           <div className="text-right">
-            <div className="text-sm font-medium text-gray-900">
-              Total: {totalOverheadMs}ms overhead
-            </div>
+            <div className="text-sm font-medium text-gray-900">Total: {totalOverheadMs}ms overhead</div>
           </div>
 
           <button
@@ -742,15 +737,10 @@ const GuardrailViewer = ({ data, accessToken, logEntry }: GuardrailViewerProps) 
 
         {/* Evaluation Details */}
         <div className="px-6 py-5">
-          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">
-            Evaluation Details
-          </h4>
+          <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-4">Evaluation Details</h4>
           <div className="space-y-3">
             {guardrailEntries.map((entry, index) => (
-              <EvaluationCard
-                key={`${entry.guardrail_name ?? "guardrail"}-${index}`}
-                entry={entry}
-              />
+              <EvaluationCard key={`${entry.guardrail_name ?? "guardrail"}-${index}`} entry={entry} />
             ))}
           </div>
         </div>

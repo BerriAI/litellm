@@ -169,9 +169,7 @@ describe("roles", () => {
     it("is a strict superset of rolesWithWriteAccess", () => {
       // Admin Viewer is added on top — the new set must be larger than
       // the write-only set, otherwise the constant has no purpose.
-      expect(rolesAllowedToViewWriteScopedPages.length).toBeGreaterThan(
-        rolesWithWriteAccess.length,
-      );
+      expect(rolesAllowedToViewWriteScopedPages.length).toBeGreaterThan(rolesWithWriteAccess.length);
     });
   });
 });

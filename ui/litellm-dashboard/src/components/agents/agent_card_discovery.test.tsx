@@ -57,36 +57,23 @@ describe("AgentCardDiscovery", () => {
       agent_card: sampleCard,
     });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(
-      <AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />,
-    );
+    renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />);
 
-    expect(
-      screen.getByPlaceholderText("https://upstream-agent.example.com"),
-    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("https://upstream-agent.example.com")).toBeInTheDocument();
 
-    await user.type(
-      screen.getByPlaceholderText("https://upstream-agent.example.com"),
-      "https://upstream.example.com",
-    );
+    await user.type(screen.getByPlaceholderText("https://upstream-agent.example.com"), "https://upstream.example.com");
     await vi.advanceTimersByTimeAsync(500);
 
     await waitFor(() => expect(mockDiscover).toHaveBeenCalled());
-    expect(
-      await screen.findByRole("button", { name: /re-discover/i }),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /re-discover/i })).toBeInTheDocument();
   });
 
   it("shows an error when re-discover is clicked without a URL", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(
-      <AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />,
-    );
+    renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /discover/i }));
-    expect(
-      await screen.findByText(/Enter the agent's base URL first/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/Enter the agent's base URL first/i)).toBeInTheDocument();
     expect(mockDiscover).not.toHaveBeenCalled();
   });
 
@@ -96,14 +83,9 @@ describe("AgentCardDiscovery", () => {
       agent_card: sampleCard,
     });
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(
-      <AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />,
-    );
+    renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />);
 
-    await user.type(
-      screen.getByPlaceholderText("https://upstream-agent.example.com"),
-      "https://upstream.example.com",
-    );
+    await user.type(screen.getByPlaceholderText("https://upstream-agent.example.com"), "https://upstream.example.com");
     await vi.advanceTimersByTimeAsync(500);
 
     expect(await screen.findByText("Upstream card loaded")).toBeInTheDocument();
@@ -111,22 +93,15 @@ describe("AgentCardDiscovery", () => {
     expect(screen.getByText("Summarize")).toBeInTheDocument();
     expect(screen.getByText(/^streaming$/i)).toBeInTheDocument();
     expect(screen.queryByText(/pushNotifications/i)).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /use these selections/i }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /use these selections/i })).not.toBeInTheDocument();
   });
 
   it("shows an inline error when discovery fails", async () => {
     mockDiscover.mockRejectedValueOnce(new Error("upstream unreachable"));
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(
-      <AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />,
-    );
+    renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={vi.fn()} />);
 
-    await user.type(
-      screen.getByPlaceholderText("https://upstream-agent.example.com"),
-      "https://nope.example",
-    );
+    await user.type(screen.getByPlaceholderText("https://upstream-agent.example.com"), "https://nope.example");
     await vi.advanceTimersByTimeAsync(500);
 
     expect(await screen.findByText("Discovery failed")).toBeInTheDocument();
@@ -140,14 +115,9 @@ describe("AgentCardDiscovery", () => {
     });
     const onApply = vi.fn();
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(
-      <AgentCardDiscovery accessToken="tok" onApply={onApply} />,
-    );
+    renderWithProviders(<AgentCardDiscovery accessToken="tok" onApply={onApply} />);
 
-    await user.type(
-      screen.getByPlaceholderText("https://upstream-agent.example.com"),
-      "https://upstream.example.com",
-    );
+    await user.type(screen.getByPlaceholderText("https://upstream-agent.example.com"), "https://upstream.example.com");
     await vi.advanceTimersByTimeAsync(500);
     await screen.findByText("Upstream card loaded");
 
@@ -158,9 +128,7 @@ describe("AgentCardDiscovery", () => {
 
     const summarizeLabel = screen.getByText("Summarize").closest("label");
     expect(summarizeLabel).toBeTruthy();
-    const summarizeCheckbox = summarizeLabel!.querySelector(
-      "input[type='checkbox']",
-    ) as HTMLInputElement;
+    const summarizeCheckbox = summarizeLabel!.querySelector("input[type='checkbox']") as HTMLInputElement;
     await user.click(summarizeCheckbox);
 
     await waitFor(() => {
@@ -179,19 +147,14 @@ describe("AgentCardDiscovery", () => {
           url: "http://localhost:2024",
           discovery_mode: "langgraph_platform",
           params: { assistant_id: "agent" },
-          display_url:
-            "http://localhost:2024/.well-known/agent-card.json?assistant_id=agent",
+          display_url: "http://localhost:2024/.well-known/agent-card.json?assistant_id=agent",
         }}
       />,
     );
 
+    expect(screen.queryByPlaceholderText("https://upstream-agent.example.com")).not.toBeInTheDocument();
     expect(
-      screen.queryByPlaceholderText("https://upstream-agent.example.com"),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.getByText(
-        "http://localhost:2024/.well-known/agent-card.json?assistant_id=agent",
-      ),
+      screen.getByText("http://localhost:2024/.well-known/agent-card.json?assistant_id=agent"),
     ).toBeInTheDocument();
   });
 
@@ -208,8 +171,7 @@ describe("AgentCardDiscovery", () => {
           url: "http://localhost:2024",
           discovery_mode: "langgraph_platform",
           params: { assistant_id: "agent" },
-          display_url:
-            "http://localhost:2024/.well-known/agent-card.json?assistant_id=agent",
+          display_url: "http://localhost:2024/.well-known/agent-card.json?assistant_id=agent",
         }}
       />,
     );
@@ -237,9 +199,11 @@ describe("AgentCardDiscovery", () => {
     );
 
     expect(
-      (screen.getByRole("button", {
-        name: /discover/i,
-      }) as HTMLButtonElement).disabled,
+      (
+        screen.getByRole("button", {
+          name: /discover/i,
+        }) as HTMLButtonElement
+      ).disabled,
     ).toBe(true);
     expect(mockDiscover).not.toHaveBeenCalled();
   });
@@ -281,19 +245,12 @@ describe("AgentCardDiscovery", () => {
 
   it("blocks discover when no access token is provided", async () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
-    renderWithProviders(
-      <AgentCardDiscovery accessToken={null} onApply={vi.fn()} />,
-    );
+    renderWithProviders(<AgentCardDiscovery accessToken={null} onApply={vi.fn()} />);
 
-    await user.type(
-      screen.getByPlaceholderText("https://upstream-agent.example.com"),
-      "https://upstream.example.com",
-    );
+    await user.type(screen.getByPlaceholderText("https://upstream-agent.example.com"), "https://upstream.example.com");
     await user.click(screen.getByRole("button", { name: /discover/i }));
 
-    expect(
-      await screen.findByText(/No access token available/i),
-    ).toBeInTheDocument();
+    expect(await screen.findByText(/No access token available/i)).toBeInTheDocument();
     expect(mockDiscover).not.toHaveBeenCalled();
   });
 });

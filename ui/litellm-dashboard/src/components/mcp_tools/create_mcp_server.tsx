@@ -80,12 +80,13 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
   const [oauthDocsUrl, setOauthDocsUrl] = useState<string | null>(null);
 
   // Single hook call shared by MCPConnectionStatus and MCPToolConfiguration to avoid duplicate requests.
-  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } = useTestMCPConnection({
-    accessToken,
-    oauthAccessToken,
-    formValues,
-    enabled: true,
-  });
+  const { tools, isLoadingTools, toolsError, toolsErrorStackTrace, canFetchTools, fetchTools, clearTools } =
+    useTestMCPConnection({
+      accessToken,
+      oauthAccessToken,
+      formValues,
+      enabled: true,
+    });
 
   const authType = formValues.auth_type as string | undefined;
   const shouldShowAuthValueField = authType ? AUTH_TYPES_REQUIRING_AUTH_VALUE.includes(authType) : false;
@@ -436,9 +437,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         }
 
         NotificationsManager.success(
-          isAdmin
-            ? "MCP Server created successfully"
-            : "MCP Server submitted for admin review"
+          isAdmin ? "MCP Server created successfully" : "MCP Server submitted for admin review",
         );
         form.resetFields();
         setCostConfig({});
@@ -453,7 +452,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
       NotificationsManager.fromBackend(
-        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`
+        isAdmin ? `Error creating MCP Server: ${reason}` : `Error submitting MCP Server: ${reason}`,
       );
     } finally {
       setIsLoading(false);
@@ -584,8 +583,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         >
           {!isAdmin && (
             <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
-              Your submission will be sent for admin review before it becomes active.
-              {" "}Note: the request must be made with a team-scoped API key.
+              Your submission will be sent for admin review before it becomes active. Note: the request must be made
+              with a team-scoped API key.
             </div>
           )}
           <div className="grid grid-cols-1 gap-6">
@@ -698,9 +697,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <OpenAPIFormSection
                 form={form}
                 accessToken={isModalVisible ? accessToken : null}
-                onValuesChange={(updates) =>
-                  setFormValues((prev) => ({ ...prev, ...updates }))
-                }
+                onValuesChange={(updates) => setFormValues((prev) => ({ ...prev, ...updates }))}
                 onKeyToolsChange={setKeyTools}
                 onLogoUrlChange={setLogoUrl}
                 onOAuthDocsUrlChange={setOauthDocsUrl}
@@ -725,7 +722,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                   <Switch />
                 </Form.Item>
 
-                <Form.Item noStyle shouldUpdate={(prev, cur) => prev.is_byok !== cur.is_byok || prev.auth_type !== cur.auth_type}>
+                <Form.Item
+                  noStyle
+                  shouldUpdate={(prev, cur) => prev.is_byok !== cur.is_byok || prev.auth_type !== cur.auth_type}
+                >
                   {({ getFieldValue }) =>
                     getFieldValue("is_byok") ? (
                       <>
@@ -749,7 +749,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                         {!getFieldValue("auth_type") && (
                           <div className="mb-4 p-3 bg-yellow-50 rounded-lg text-sm text-yellow-700 flex items-start gap-2">
                             <InfoCircleOutlined className="mt-0.5 flex-shrink-0" />
-                            <span>Set the <strong>Authentication Type</strong> below to specify how user keys are sent (e.g., Bearer Token, API Key header).</span>
+                            <span>
+                              Set the <strong>Authentication Type</strong> below to specify how user keys are sent
+                              (e.g., Bearer Token, API Key header).
+                            </span>
                           </div>
                         )}
                         <Form.Item
@@ -802,10 +805,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                     label: <span className="text-sm font-semibold text-gray-700">Authentication</span>,
                     children: (
                       <>
-                        <Form.Item
-                          name="auth_type"
-                          rules={[{ required: true, message: "Please select an auth type" }]}
-                        >
+                        <Form.Item name="auth_type" rules={[{ required: true, message: "Please select an auth type" }]}>
                           <Select placeholder="Select auth type" className="rounded-lg" size="large">
                             <Select.Option value="none">None</Select.Option>
                             <Select.Option value="api_key">API Key</Select.Option>
@@ -869,7 +869,12 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
               <>
                 <p className="text-sm text-gray-500 mb-2">
                   For MCP servers hosted on AWS Bedrock AgentCore.{" "}
-                  <a href="https://docs.litellm.ai/docs/mcp_aws_sigv4" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:text-blue-700">
+                  <a
+                    href="https://docs.litellm.ai/docs/mcp_aws_sigv4"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-500 hover:text-blue-700"
+                  >
                     View docs &rarr;
                   </a>
                 </p>
@@ -922,7 +927,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       validator(_, value) {
                         const secretKey = getFieldValue(["credentials", "aws_secret_access_key"]);
                         if (secretKey && !value) {
-                          return Promise.reject(new Error("Access Key ID is required when Secret Access Key is provided"));
+                          return Promise.reject(
+                            new Error("Access Key ID is required when Secret Access Key is provided"),
+                          );
                         }
                         return Promise.resolve();
                       },
@@ -950,7 +957,9 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                       validator(_, value) {
                         const accessKeyId = getFieldValue(["credentials", "aws_access_key_id"]);
                         if (accessKeyId && !value) {
-                          return Promise.reject(new Error("Secret Access Key is required when Access Key ID is provided"));
+                          return Promise.reject(
+                            new Error("Secret Access Key is required when Access Key ID is provided"),
+                          );
                         }
                         return Promise.resolve();
                       },

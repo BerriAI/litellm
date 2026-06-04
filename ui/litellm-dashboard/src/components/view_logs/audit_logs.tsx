@@ -40,14 +40,7 @@ const ACTION_COLOR: Record<string, string> = {
 
 const PAGE_SIZE = 50;
 
-export default function AuditLogs({
-  userID,
-  userRole,
-  token,
-  accessToken,
-  isActive,
-  premiumUser,
-}: AuditLogsProps) {
+export default function AuditLogs({ userID, userRole, token, accessToken, isActive, premiumUser }: AuditLogsProps) {
   const [page, setPage] = useState(1);
 
   // Filter state
@@ -63,17 +56,7 @@ export default function AuditLogs({
   const [drawerOpen, setDrawerOpen] = useState(false);
 
   const query = useQuery({
-    queryKey: [
-      "audit_logs",
-      page,
-      PAGE_SIZE,
-      objectId,
-      changedBy,
-      keyHash,
-      teamId,
-      action,
-      tableName,
-    ],
+    queryKey: ["audit_logs", page, PAGE_SIZE, objectId, changedBy, keyHash, teamId, action, tableName],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
         return { audit_logs: [], total: 0, page: 1, page_size: PAGE_SIZE, total_pages: 0 };
@@ -139,9 +122,7 @@ export default function AuditLogs({
       title: "Object ID",
       dataIndex: "object_id",
       key: "object_id",
-      render: (val: string) => (
-        <span className="font-mono text-xs">{val}</span>
-      ),
+      render: (val: string) => <span className="font-mono text-xs">{val}</span>,
     },
     {
       title: "Changed By",
@@ -155,12 +136,7 @@ export default function AuditLogs({
       dataIndex: "changed_by_api_key",
       key: "changed_by_api_key",
       width: 140,
-      render: (val: string) =>
-        val ? (
-          <span className="font-mono text-xs">{val.slice(0, 12)}…</span>
-        ) : (
-          "—"
-        ),
+      render: (val: string) => (val ? <span className="font-mono text-xs">{val.slice(0, 12)}…</span> : "—"),
     },
   ];
 
@@ -210,29 +186,61 @@ export default function AuditLogs({
               placeholder="Object ID"
               allowClear
               style={{ width: 200 }}
-              onSearch={(val) => { setObjectId(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setObjectId(""); resetPage(); } }}
+              onSearch={(val) => {
+                setObjectId(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setObjectId("");
+                  resetPage();
+                }
+              }}
             />
             <Search
               placeholder="Changed By"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => { setChangedBy(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setChangedBy(""); resetPage(); } }}
+              onSearch={(val) => {
+                setChangedBy(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setChangedBy("");
+                  resetPage();
+                }
+              }}
             />
             <Search
               placeholder="Team ID"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => { setTeamId(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setTeamId(""); resetPage(); } }}
+              onSearch={(val) => {
+                setTeamId(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setTeamId("");
+                  resetPage();
+                }
+              }}
             />
             <Search
               placeholder="Key Hash"
               allowClear
               style={{ width: 180 }}
-              onSearch={(val) => { setKeyHash(val); resetPage(); }}
-              onChange={(e) => { if (!e.target.value) { setKeyHash(""); resetPage(); } }}
+              onSearch={(val) => {
+                setKeyHash(val);
+                resetPage();
+              }}
+              onChange={(e) => {
+                if (!e.target.value) {
+                  setKeyHash("");
+                  resetPage();
+                }
+              }}
             />
             <Select
               placeholder="All Actions"
@@ -244,7 +252,10 @@ export default function AuditLogs({
                 { label: "Deleted", value: "deleted" },
                 { label: "Rotated", value: "rotated" },
               ]}
-              onChange={(val) => { setAction(val); resetPage(); }}
+              onChange={(val) => {
+                setAction(val);
+                resetPage();
+              }}
             />
             <Select
               placeholder="All Tables"
@@ -257,7 +268,10 @@ export default function AuditLogs({
                 { label: "Organizations", value: "LiteLLM_OrganizationTable" },
                 { label: "Models", value: "LiteLLM_ProxyModelTable" },
               ]}
-              onChange={(val) => { setTableName(val); resetPage(); }}
+              onChange={(val) => {
+                setTableName(val);
+                resetPage();
+              }}
             />
 
             {/* Pagination + refresh pushed to the right */}
@@ -298,11 +312,7 @@ export default function AuditLogs({
         />
       </div>
 
-      <AuditLogDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        log={selectedLog}
-      />
+      <AuditLogDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} log={selectedLog} />
     </>
   );
 }

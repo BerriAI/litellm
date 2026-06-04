@@ -74,16 +74,12 @@ describe("OnboardingFormBody", () => {
     await user.click(screen.getByRole("button", { name: /sign up/i }));
 
     await waitFor(() => {
-      expect(onSubmit).toHaveBeenCalledWith(
-        expect.objectContaining({ password: "mypassword" })
-      );
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ password: "mypassword" }));
     });
   });
 
   it("should show 'Reset Password' on the submit button for reset_password variant", () => {
     render(<OnboardingFormBody {...defaultProps} variant="reset_password" />);
-    expect(
-      screen.getByRole("button", { name: /reset password/i })
-    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reset password/i })).toBeInTheDocument();
   });
 });

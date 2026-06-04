@@ -17,10 +17,7 @@ type Fallbacks = FallbackEntry[];
 const modelCardClass =
   "inline-flex items-center gap-2 px-2.5 py-1 rounded-md border border-gray-200 bg-gray-50 text-sm font-medium text-gray-800 shrink-0";
 
-function renderModelNameCell(
-  modelName: string,
-  getProviderFromModel?: (modelName: string) => string,
-): React.ReactNode {
+function renderModelNameCell(modelName: string, getProviderFromModel?: (modelName: string) => string): React.ReactNode {
   const provider = getProviderFromModel?.(modelName) ?? modelName;
   return (
     <span className={modelCardClass}>
@@ -49,18 +46,13 @@ function renderFallbacksChain(
   };
   return (
     <span className="grid grid-cols-[auto_1fr] items-start gap-x-2 w-full min-w-0">
-      <span
-        className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600"
-        aria-hidden
-      >
+      <span className="inline-flex items-center justify-center w-8 h-8 shrink-0 self-start text-blue-600" aria-hidden>
         <ArrowRightIcon className="w-5 h-5 stroke-[2.5]" />
       </span>
       <span className="flex flex-wrap items-start gap-1 min-w-0">
         {list.map((model, i) => (
           <React.Fragment key={model}>
-            {i > 0 && (
-              <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />
-            )}
+            {i > 0 && <Icon icon={ArrowRightIcon} size="xs" className="shrink-0 text-gray-400" />}
             <ChainCard modelName={model} />
           </React.Fragment>
         ))}
@@ -79,7 +71,7 @@ interface FallbacksProps {
 async function testFallbackModelResponse(selectedModel: string, accessToken: string) {
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal != true) {
-    console.log = function () { };
+    console.log = function () {};
   }
   const proxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
   const client = new openai.OpenAI({
@@ -260,8 +252,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
       {!hasFallbacks ? (
         <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-6 text-center">
           <Typography.Text type="secondary">
-            No fallbacks configured. Add fallbacks to automatically try another model when the primary
-            fails.
+            No fallbacks configured. Add fallbacks to automatically try another model when the primary fails.
           </Typography.Text>
         </div>
       ) : (
@@ -278,9 +269,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
             {routerSettings["fallbacks"].map((item: FallbackEntry, index: number) =>
               Object.entries(item).map(([key, value]) => (
                 <TableRow key={index.toString() + key}>
-                  <TableCell className="align-top">
-                    {renderModelNameCell(key, getProviderFromModel)}
-                  </TableCell>
+                  <TableCell className="align-top">{renderModelNameCell(key, getProviderFromModel)}</TableCell>
                   <TableCell className="align-top">
                     {renderFallbacksChain(key, Array.isArray(value) ? value : [], getProviderFromModel)}
                   </TableCell>
@@ -304,11 +293,7 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
                             onKeyDown={(e) => e.key === "Enter" && handleDeleteClick(item)}
                             className="cursor-pointer inline-flex"
                           >
-                            <Icon
-                              icon={TrashIcon}
-                              size="sm"
-                              className="hover:text-red-600"
-                            />
+                            <Icon icon={TrashIcon} size="sm" className="hover:text-red-600" />
                           </span>
                         </Tooltip>
                       </>

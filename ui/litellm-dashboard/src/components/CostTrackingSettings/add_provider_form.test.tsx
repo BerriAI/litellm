@@ -55,23 +55,17 @@ describe("AddProviderForm", () => {
   });
 
   it("should disable the submit button when a provider is selected but no discount is entered", () => {
-    renderWithProviders(
-      <AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" newDiscount="" />
-    );
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" newDiscount="" />);
     expect(screen.getByRole("button", { name: /add provider discount/i })).toBeDisabled();
   });
 
   it("should disable the submit button when a discount is entered but no provider is selected", () => {
-    renderWithProviders(
-      <AddProviderForm {...DEFAULT_PROPS} selectedProvider={undefined} newDiscount="5" />
-    );
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider={undefined} newDiscount="5" />);
     expect(screen.getByRole("button", { name: /add provider discount/i })).toBeDisabled();
   });
 
   it("should enable the submit button when both a provider and a discount value are provided", () => {
-    renderWithProviders(
-      <AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" newDiscount="5" />
-    );
+    renderWithProviders(<AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" newDiscount="5" />);
     expect(screen.getByRole("button", { name: /add provider discount/i })).not.toBeDisabled();
   });
 
@@ -79,12 +73,7 @@ describe("AddProviderForm", () => {
     const onAddProvider = vi.fn();
     const user = userEvent.setup();
     renderWithProviders(
-      <AddProviderForm
-        {...DEFAULT_PROPS}
-        selectedProvider="OpenAI"
-        newDiscount="5"
-        onAddProvider={onAddProvider}
-      />
+      <AddProviderForm {...DEFAULT_PROPS} selectedProvider="OpenAI" newDiscount="5" onAddProvider={onAddProvider} />,
     );
 
     await user.click(screen.getByRole("button", { name: /add provider discount/i }));

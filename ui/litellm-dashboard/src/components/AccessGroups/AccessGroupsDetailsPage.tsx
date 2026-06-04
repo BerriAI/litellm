@@ -13,17 +13,9 @@ import {
   Tabs,
   Tag,
   theme,
-  Typography
+  Typography,
 } from "antd";
-import {
-  ArrowLeftIcon,
-  BotIcon,
-  EditIcon,
-  KeyIcon,
-  LayersIcon,
-  ServerIcon,
-  UsersIcon,
-} from "lucide-react";
+import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
@@ -36,12 +28,8 @@ interface AccessGroupDetailProps {
   onBack: () => void;
 }
 
-export function AccessGroupDetail({
-  accessGroupId,
-  onBack,
-}: AccessGroupDetailProps) {
-  const { data: accessGroup, isLoading } =
-    useAccessGroupDetails(accessGroupId);
+export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
+  const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
   const { token } = theme.useToken();
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [showAllKeys, setShowAllKeys] = useState(false);
@@ -72,12 +60,7 @@ export function AccessGroupDetail({
           paddingInline: token.paddingLG * 2,
         }}
       >
-        <Button
-          icon={<ArrowLeftIcon size={16} />}
-          onClick={onBack}
-          type="text"
-          style={{ marginBottom: 16 }}
-        />
+        <Button icon={<ArrowLeftIcon size={16} />} onClick={onBack} type="text" style={{ marginBottom: 16 }} />
         <Empty description="Access group not found" />
       </Content>
     );
@@ -90,9 +73,7 @@ export function AccessGroupDetail({
   const teamIds = accessGroup.assigned_team_ids ?? [];
 
   const displayedKeys = showAllKeys ? keyIds : keyIds.slice(0, MAX_PREVIEW);
-  const displayedTeams = showAllTeams
-    ? teamIds
-    : teamIds.slice(0, MAX_PREVIEW);
+  const displayedTeams = showAllTeams ? teamIds : teamIds.slice(0, MAX_PREVIEW);
 
   const handleEdit = () => {
     setIsEditModalVisible(true);
@@ -180,9 +161,7 @@ export function AccessGroupDetail({
   ];
 
   return (
-    <Content
-      style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
-    >
+    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
       {/* Header */}
       <div
         style={{
@@ -193,11 +172,7 @@ export function AccessGroupDetail({
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <Button
-            icon={<ArrowLeftIcon size={16} />}
-            onClick={onBack}
-            type="text"
-          />
+          <Button icon={<ArrowLeftIcon size={16} />} onClick={onBack} type="text" />
           <div>
             <Title level={2} style={{ margin: 0 }}>
               {accessGroup.access_group_name}
@@ -207,11 +182,7 @@ export function AccessGroupDetail({
             </Text>
           </div>
         </div>
-        <Button
-          type="primary"
-          icon={<EditIcon size={16} />}
-          onClick={handleEdit}
-        >
+        <Button type="primary" icon={<EditIcon size={16} />} onClick={handleEdit}>
           Edit Access Group
         </Button>
       </div>
@@ -220,9 +191,7 @@ export function AccessGroupDetail({
       <Row style={{ marginBottom: 24 }}>
         <Card>
           <Descriptions title="Group Details" column={1}>
-            <Descriptions.Item label="Description">
-              {accessGroup.description || "—"}
-            </Descriptions.Item>
+            <Descriptions.Item label="Description">{accessGroup.description || "—"}</Descriptions.Item>
             <Descriptions.Item label="Created">
               {new Date(accessGroup.created_at).toLocaleString()}
               {accessGroup.created_by && (
@@ -258,10 +227,7 @@ export function AccessGroupDetail({
             }
             extra={
               keyIds?.length > MAX_PREVIEW ? (
-                <Button
-                  type="link"
-                  onClick={() => setShowAllKeys(!showAllKeys)}
-                >
+                <Button type="link" onClick={() => setShowAllKeys(!showAllKeys)}>
                   {showAllKeys ? "Show Less" : `View All (${keyIds?.length})`}
                 </Button>
               ) : null
@@ -272,18 +238,13 @@ export function AccessGroupDetail({
                 {displayedKeys.map((id) => (
                   <Tag key={id}>
                     <Text code style={{ fontSize: 12 }}>
-                      {id.length > 20
-                        ? `${id.slice(0, 10)}...${id.slice(-6)}`
-                        : id}
+                      {id.length > 20 ? `${id.slice(0, 10)}...${id.slice(-6)}` : id}
                     </Text>
                   </Tag>
                 ))}
               </Flex>
             ) : (
-              <Empty
-                description="No keys attached"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
+              <Empty description="No keys attached" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             )}
           </Card>
         </Col>
@@ -298,13 +259,8 @@ export function AccessGroupDetail({
             }
             extra={
               teamIds?.length > MAX_PREVIEW ? (
-                <Button
-                  type="link"
-                  onClick={() => setShowAllTeams(!showAllTeams)}
-                >
-                  {showAllTeams
-                    ? "Show Less"
-                    : `View All (${teamIds?.length})`}
+                <Button type="link" onClick={() => setShowAllTeams(!showAllTeams)}>
+                  {showAllTeams ? "Show Less" : `View All (${teamIds?.length})`}
                 </Button>
               ) : null
             }
@@ -320,10 +276,7 @@ export function AccessGroupDetail({
                 ))}
               </Flex>
             ) : (
-              <Empty
-                description="No teams attached"
-                image={Empty.PRESENTED_IMAGE_SIMPLE}
-              />
+              <Empty description="No teams attached" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             )}
           </Card>
         </Col>

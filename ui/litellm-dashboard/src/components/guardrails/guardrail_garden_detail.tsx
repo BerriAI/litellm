@@ -12,12 +12,7 @@ interface GuardrailDetailViewProps {
   onGuardrailCreated: () => void;
 }
 
-const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
-  card,
-  onBack,
-  accessToken,
-  onGuardrailCreated,
-}) => {
+const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack, accessToken, onGuardrailCreated }) => {
   const [isAddFormVisible, setIsAddFormVisible] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
@@ -41,10 +36,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
       ]
     : [];
 
-  const tabs = [
-    { key: "overview", label: "Overview" },
-    ...(card.eval ? [{ key: "eval", label: "Eval Results" }] : []),
-  ];
+  const tabs = [{ key: "overview", label: "Overview" }, ...(card.eval ? [{ key: "eval", label: "Eval Results" }] : [])];
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -71,16 +63,14 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
           src={card.logo}
           alt=""
           style={{ width: 40, height: 40, borderRadius: 8, objectFit: "contain" }}
-          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+          onError={(e) => {
+            (e.target as HTMLImageElement).style.display = "none";
+          }}
         />
-        <h1 style={{ fontSize: 28, fontWeight: 400, color: "#202124", margin: 0, lineHeight: 1.2 }}>
-          {card.name}
-        </h1>
+        <h1 style={{ fontSize: 28, fontWeight: 400, color: "#202124", margin: 0, lineHeight: 1.2 }}>{card.name}</h1>
       </div>
 
-      <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 20px 0", lineHeight: 1.6 }}>
-        {card.description}
-      </p>
+      <p style={{ fontSize: 14, color: "#5f6368", margin: "0 0 20px 0", lineHeight: 1.6 }}>{card.description}</p>
 
       {/* Action buttons — outlined style like Vertex */}
       <div style={{ display: "flex", gap: 10, marginBottom: 32 }}>
@@ -129,9 +119,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
           {/* Left column — overview + details table */}
           <div style={{ flex: 1, minWidth: 0 }}>
             <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 12px 0" }}>Overview</h2>
-            <p style={{ fontSize: 14, color: "#3c4043", lineHeight: 1.7, margin: "0 0 32px 0" }}>
-              {card.description}
-            </p>
+            <p style={{ fontSize: 14, color: "#3c4043", lineHeight: 1.7, margin: "0 0 32px 0" }}>{card.description}</p>
 
             <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 4px 0" }}>Guardrail Details</h2>
             <p style={{ fontSize: 13, color: "#5f6368", margin: "0 0 16px 0" }}>Details are as follows</p>
@@ -139,8 +127,12 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #dadce0" }}>
-                  <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500, width: 200 }}>Property</th>
-                  <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500 }}>{card.name}</th>
+                  <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500, width: 200 }}>
+                    Property
+                  </th>
+                  <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500 }}>
+                    {card.name}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -159,9 +151,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({
             {/* Guardrail ID */}
             <div style={{ marginBottom: 28 }}>
               <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>Guardrail ID</div>
-              <div style={{ fontSize: 13, color: "#202124", wordBreak: "break-all" }}>
-                litellm/{card.id}
-              </div>
+              <div style={{ fontSize: 13, color: "#202124", wordBreak: "break-all" }}>litellm/{card.id}</div>
             </div>
 
             {/* Type */}

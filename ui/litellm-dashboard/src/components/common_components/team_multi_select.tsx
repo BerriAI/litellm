@@ -32,13 +32,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
     wait: DEBOUNCE_MS,
   });
 
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteTeams(
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteTeams(
     pageSize,
     debouncedSearch || undefined,
     organizationId,
@@ -60,8 +54,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    const scrollRatio =
-      (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
     if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
     }
@@ -101,8 +94,7 @@ const TeamMultiSelect: React.FC<TeamMultiSelectProps> = ({
     >
       {teams.map((team) => (
         <Select.Option key={team.team_id} value={team.team_id}>
-          <span className="font-medium">{team.team_alias}</span>{" "}
-          <Text type="secondary">({team.team_id})</Text>
+          <span className="font-medium">{team.team_alias}</span> <Text type="secondary">({team.team_id})</Text>
         </Select.Option>
       ))}
     </Select>

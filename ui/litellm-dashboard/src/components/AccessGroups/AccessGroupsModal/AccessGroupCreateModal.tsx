@@ -1,10 +1,7 @@
 import React from "react";
 import { Modal, Form } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import {
-  AccessGroupBaseForm,
-  AccessGroupFormValues,
-} from "./AccessGroupBaseForm";
+import { AccessGroupBaseForm, AccessGroupFormValues } from "./AccessGroupBaseForm";
 import {
   useCreateAccessGroup,
   AccessGroupCreateParams,
@@ -16,11 +13,7 @@ interface AccessGroupCreateModalProps {
   onSuccess?: () => void;
 }
 
-export function AccessGroupCreateModal({
-  visible,
-  onCancel,
-  onSuccess,
-}: AccessGroupCreateModalProps) {
+export function AccessGroupCreateModal({ visible, onCancel, onSuccess }: AccessGroupCreateModalProps) {
   const [form] = Form.useForm<AccessGroupFormValues>();
   const createMutation = useCreateAccessGroup();
 

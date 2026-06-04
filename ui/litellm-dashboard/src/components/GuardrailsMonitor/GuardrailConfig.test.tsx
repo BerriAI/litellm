@@ -85,7 +85,9 @@ describe("GuardrailConfig", () => {
     const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
     render(<GuardrailConfig {...defaultProps} />);
     await user.click(screen.getByRole("button", { name: /re-run on failing logs/i }));
-    await act(async () => { vi.advanceTimersByTime(2500); });
+    await act(async () => {
+      vi.advanceTimersByTime(2500);
+    });
     expect(screen.getByText(/7\/10 would now pass/)).toBeInTheDocument();
   });
 

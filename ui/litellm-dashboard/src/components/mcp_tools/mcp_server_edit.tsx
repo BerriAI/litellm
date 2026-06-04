@@ -581,20 +581,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         // configuration is later switched back.
         delegate_auth_to_upstream: (() => {
           const isOauth2 = restValues.auth_type === AUTH_TYPE.OAUTH2;
-          return isOauth2
-            ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
-            : false;
+          return isOauth2 ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream) : false;
         })(),
         // ``oauth_passthrough`` is the dedicated, non-oauth2 opt-in. It is only
         // honored for ``auth_type=none`` servers that forward ``Authorization``
         // upstream. Kept separate from ``delegate_auth_to_upstream`` so enabling
         // pass-through never regresses oauth2 servers. Force false otherwise.
         oauth_passthrough: (() => {
-          const isNoneAuth =
-            restValues.auth_type === AUTH_TYPE.NONE || restValues.auth_type == null;
-          const extraHeaders = Array.isArray(restValues.extra_headers)
-            ? restValues.extra_headers
-            : [];
+          const isNoneAuth = restValues.auth_type === AUTH_TYPE.NONE || restValues.auth_type == null;
+          const extraHeaders = Array.isArray(restValues.extra_headers) ? restValues.extra_headers : [];
           const hasAuthorizationHeader = extraHeaders.some(
             (h: unknown) => typeof h === "string" && h.toLowerCase() === "authorization",
           );

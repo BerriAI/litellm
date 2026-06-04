@@ -11,15 +11,15 @@ export interface ProviderDisplayInfo {
  */
 export const getProviderDisplayInfo = (providerValue: string): ProviderDisplayInfo => {
   const enumKey = Object.keys(provider_map).find(
-    (key) => provider_map[key as keyof typeof provider_map] === providerValue
+    (key) => provider_map[key as keyof typeof provider_map] === providerValue,
   );
-  
+
   if (enumKey) {
     const displayName = Providers[enumKey as keyof typeof Providers];
     const logo = providerLogoMap[displayName];
     return { displayName, logo, enumKey };
   }
-  
+
   return { displayName: providerValue, logo: "", enumKey: null };
 };
 
@@ -43,4 +43,3 @@ export const handleImageError = (e: React.SyntheticEvent<HTMLImageElement>, fall
     parent.replaceChild(fallbackDiv, target);
   }
 };
-

@@ -20,7 +20,9 @@ export async function dismissFeedbackPopup(page: PlaywrightPage): Promise<void> 
   if (await dismissButton.isVisible({ timeout: 1_500 }).catch(() => false)) {
     await dismissButton.click();
     // Wait for the popup to disappear
-    await expect(dismissButton).not.toBeVisible({ timeout: 2_000 }).catch(() => {});
+    await expect(dismissButton)
+      .not.toBeVisible({ timeout: 2_000 })
+      .catch(() => {});
   }
 }
 

@@ -17,7 +17,8 @@ const REASONS_OPTIONS = [
   {
     id: "ai_integration",
     label: "AI Integration",
-    description: "LiteLLM had the logging/guardrail integration we needed - Langfuse, OTEL, S3 logging, Azure Content Safety guardrails",
+    description:
+      "LiteLLM had the logging/guardrail integration we needed - Langfuse, OTEL, S3 logging, Azure Content Safety guardrails",
   },
   {
     id: "unified_api",
@@ -27,7 +28,8 @@ const REASONS_OPTIONS = [
   {
     id: "breadth_of_models",
     label: "Breadth of Models/Providers",
-    description: "LiteLLM had the provider + endpoint combinations we needed - /ocr endpoint with Mistral OCR, /batches endppint with Bedrock API, etc.",
+    description:
+      "LiteLLM had the provider + endpoint combinations we needed - /ocr endpoint with Mistral OCR, /batches endppint with Bedrock API, etc.",
   },
   {
     id: "other",
@@ -103,7 +105,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
 
       // Submit to feedback endpoint (redirects to Google Form)
       const feedbackUrl = "https://feedback.litellm.ai/survey";
-      
+
       const formData = new URLSearchParams({
         "entry.2015264290": data.usingAtCompany ? "Yes" : "No",
         "entry.1876243786": data.companyName || "",
@@ -173,7 +175,9 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
       return (
         <div className="space-y-6">
           <h2 className="text-2xl font-bold text-gray-900">Are you using LiteLLM at your company?</h2>
-          <p className="text-gray-500">Help us understand how our product is being used in professional environments.</p>
+          <p className="text-gray-500">
+            Help us understand how our product is being used in professional environments.
+          </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
             <button
               onClick={() => updateData("usingAtCompany", true)}
@@ -316,9 +320,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
             onChange={(e) => updateData("email", e.target.value)}
             autoFocus
           />
-          <p className="text-xs text-gray-400">
-            We will only use this to follow up on your feedback. No spam, ever.
-          </p>
+          <p className="text-xs text-gray-400">We will only use this to follow up on your feedback. No spam, ever.</p>
         </div>
       );
     }
@@ -350,7 +352,12 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         </div>
 
         {/* Progress Bar */}
-        <Progress percent={(getStepNumber() / totalSteps) * 100} showInfo={false} strokeColor="#2563eb" className="m-0" />
+        <Progress
+          percent={(getStepNumber() / totalSteps) * 100}
+          showInfo={false}
+          strokeColor="#2563eb"
+          className="m-0"
+        />
 
         {/* Content */}
         <div className="p-8 flex-1 overflow-y-auto">{renderStepContent()}</div>
@@ -382,4 +389,3 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     </div>
   );
 }
-

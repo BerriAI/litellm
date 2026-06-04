@@ -121,8 +121,7 @@ const parseToolsFromFrontmatter = (lines: string[]): Tool[] => {
         description: toolObj?.function?.description || "",
         json: JSON.stringify(toolObj, null, 2),
       });
-    } catch {
-    }
+    } catch {}
   }
 
   return tools;
@@ -215,7 +214,7 @@ const parseDotpromptBody = (body: string): ParsedBody => {
 export const parseExistingPrompt = (apiResponse: any): PromptType => {
   // Extract dotprompt_content from litellm_params
   const dotpromptContent = apiResponse?.prompt_spec?.litellm_params?.dotprompt_content || "";
-  
+
   if (!dotpromptContent) {
     throw new Error("No dotprompt_content found in API response");
   }
@@ -246,7 +245,8 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
       parsedBody.messages.length > 0
         ? parsedBody.messages
         : [{ role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" }],
-    environment: apiResponse?.prompt_spec?.environment || apiResponse?.prompt_spec?.prompt_info?.environment || "development",
+    environment:
+      apiResponse?.prompt_spec?.environment || apiResponse?.prompt_spec?.prompt_info?.environment || "development",
   };
 };
 

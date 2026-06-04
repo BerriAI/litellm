@@ -2,18 +2,7 @@
 
 import React, { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  Button,
-  Card,
-  Drawer,
-  Empty,
-  Input,
-  Space,
-  Table,
-  Tooltip,
-  Typography,
-  message,
-} from "antd";
+import { Button, Card, Drawer, Empty, Input, Space, Table, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import {
   DeleteOutlined,
@@ -23,13 +12,7 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from "@ant-design/icons";
-import {
-  MemoryRow,
-  createMemory,
-  deleteMemory,
-  fetchMemoryList,
-  updateMemory,
-} from "../networking";
+import { MemoryRow, createMemory, deleteMemory, fetchMemoryList, updateMemory } from "../networking";
 import { MemoryEditModal } from "./MemoryEditModal";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 
@@ -80,11 +63,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   // currently-visible page without us needing a manual refetch().
   const MEMORY_LIST_KEY = "memoryList" as const;
 
-  const {
-    data,
-    isLoading,
-    isFetching,
-  } = useQuery({
+  const { data, isLoading, isFetching } = useQuery({
     queryKey: [MEMORY_LIST_KEY, appliedSearch, currentPage],
     queryFn: () => {
       if (!accessToken) throw new Error("Access token required");
@@ -108,15 +87,10 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   //     refetches from scratch (pagination + filter-aware).
   //   - on error: surface the message via antd `message.error`.
 
-  const invalidateList = () =>
-    queryClient.invalidateQueries({ queryKey: [MEMORY_LIST_KEY] });
+  const invalidateList = () => queryClient.invalidateQueries({ queryKey: [MEMORY_LIST_KEY] });
 
   const createMutation = useMutation({
-    mutationFn: (args: {
-      key: string;
-      value: string;
-      metadata: unknown;
-    }) => {
+    mutationFn: (args: { key: string; value: string; metadata: unknown }) => {
       if (!accessToken) throw new Error("Access token required");
       return createMemory(accessToken, args);
     },
@@ -130,11 +104,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (args: {
-      key: string;
-      value?: string;
-      metadata: unknown;
-    }) => {
+    mutationFn: (args: { key: string; value?: string; metadata: unknown }) => {
       if (!accessToken) throw new Error("Access token required");
       const { key, ...payload } = args;
       return updateMemory(accessToken, key, payload);
@@ -177,12 +147,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     }
   };
 
-  const handleSave = async (
-    key: string,
-    value: string,
-    metadataText: string,
-    isCreate: boolean,
-  ): Promise<boolean> => {
+  const handleSave = async (key: string, value: string, metadataText: string, isCreate: boolean): Promise<boolean> => {
     if (!accessToken) return false;
 
     // On edit, an empty textarea is a user's intent to CLEAR existing
@@ -226,10 +191,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
     }
   };
 
-  const renderIdPill = (
-    id: string | null | undefined,
-    onClick?: () => void,
-  ) => {
+  const renderIdPill = (id: string | null | undefined, onClick?: () => void) => {
     if (!id) return <Text type="secondary">-</Text>;
     const short = id.length > 10 ? `${id.slice(0, 7)}...` : id;
     const pillClass =
@@ -256,8 +218,7 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       dataIndex: "memory_id",
       key: "memory_id",
       width: 140,
-      render: (_: unknown, r: MemoryRow) =>
-        renderIdPill(r.memory_id, () => setDetailRow(r)),
+      render: (_: unknown, r: MemoryRow) => renderIdPill(r.memory_id, () => setDetailRow(r)),
     },
     {
       title: "Name",
@@ -310,20 +271,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
       width: 140,
       render: (_: unknown, r: MemoryRow) => (
         <Space size={4}>
-          <Button
-            size="small"
-            type="text"
-            icon={<EyeOutlined />}
-            onClick={() => setDetailRow(r)}
-            aria-label="View"
-          />
-          <Button
-            size="small"
-            type="text"
-            icon={<EditOutlined />}
-            onClick={() => setEditRow(r)}
-            aria-label="Edit"
-          />
+          <Button size="small" type="text" icon={<EyeOutlined />} onClick={() => setDetailRow(r)} aria-label="View" />
+          <Button size="small" type="text" icon={<EditOutlined />} onClick={() => setEditRow(r)} aria-label="Edit" />
           <Button
             size="small"
             type="text"
@@ -345,8 +294,8 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
             Memory
           </Title>
           <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            Inspect what your agents have stored under <Text code>/v1/memory</Text>.
-            Scoped to memories visible to your user / team (admins see all).
+            Inspect what your agents have stored under <Text code>/v1/memory</Text>. Scoped to memories visible to your
+            user / team (admins see all).
           </Paragraph>
         </div>
 
@@ -373,26 +322,14 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
                 }}
                 style={{ width: 280 }}
               />
-              <Button
-                type="primary"
-                ghost
-                onClick={() => setAppliedSearch(searchInput.trim())}
-              >
+              <Button type="primary" ghost onClick={() => setAppliedSearch(searchInput.trim())}>
                 Search
               </Button>
-              <Button
-                icon={<ReloadOutlined />}
-                onClick={() => invalidateList()}
-                loading={isFetching && !isLoading}
-              >
+              <Button icon={<ReloadOutlined />} onClick={() => invalidateList()} loading={isFetching && !isLoading}>
                 Refresh
               </Button>
             </Space>
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={() => setIsCreateOpen(true)}
-            >
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateOpen(true)}>
               New memory
             </Button>
           </Space>
@@ -410,17 +347,14 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
               pageSize: PAGE_SIZE,
               total,
               showSizeChanger: false,
-              showTotal: (n, range) =>
-                `${range[0]}–${range[1]} of ${n}`,
+              showTotal: (n, range) => `${range[0]}–${range[1]} of ${n}`,
               onChange: (page) => setCurrentPage(page),
             }}
             locale={{
               emptyText: (
                 <Empty
                   description={
-                    appliedSearch
-                      ? `No memories with keys starting with "${appliedSearch}"`
-                      : "No memories stored yet"
+                    appliedSearch ? `No memories with keys starting with "${appliedSearch}"` : "No memories stored yet"
                   }
                 />
               ),
@@ -460,17 +394,13 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
                 <Text strong style={{ display: "block" }}>
                   User ID
                 </Text>
-                <Text type={detailRow.user_id ? undefined : "secondary"}>
-                  {detailRow.user_id ?? "-"}
-                </Text>
+                <Text type={detailRow.user_id ? undefined : "secondary"}>{detailRow.user_id ?? "-"}</Text>
               </div>
               <div>
                 <Text strong style={{ display: "block" }}>
                   Team ID
                 </Text>
-                <Text type={detailRow.team_id ? undefined : "secondary"}>
-                  {detailRow.team_id ?? "-"}
-                </Text>
+                <Text type={detailRow.team_id ? undefined : "secondary"}>{detailRow.team_id ?? "-"}</Text>
               </div>
             </Space>
             <div>
@@ -481,39 +411,31 @@ export const MemoryView: React.FC<MemoryViewProps> = ({ accessToken }) => {
                   padding: 12,
                   borderRadius: 6,
                   whiteSpace: "pre-wrap",
-                  fontFamily:
-                    "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
                   fontSize: 13,
                 }}
               >
                 {detailRow.value}
               </Paragraph>
             </div>
-            {detailRow.metadata !== undefined &&
-              detailRow.metadata !== null && (
-                <div>
-                  <Text strong>Metadata</Text>
-                  <Paragraph
-                    style={{
-                      background: "#fafafa",
-                      padding: 12,
-                      borderRadius: 6,
-                      whiteSpace: "pre-wrap",
-                      fontFamily:
-                        "ui-monospace, SFMono-Regular, Menlo, monospace",
-                      fontSize: 12,
-                    }}
-                  >
-                    {JSON.stringify(detailRow.metadata, null, 2)}
-                  </Paragraph>
-                </div>
-              )}
-            <Space
-              split={<Text type="secondary">·</Text>}
-              wrap
-              size="small"
-              style={{ color: "rgba(0,0,0,0.45)" }}
-            >
+            {detailRow.metadata !== undefined && detailRow.metadata !== null && (
+              <div>
+                <Text strong>Metadata</Text>
+                <Paragraph
+                  style={{
+                    background: "#fafafa",
+                    padding: 12,
+                    borderRadius: 6,
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                    fontSize: 12,
+                  }}
+                >
+                  {JSON.stringify(detailRow.metadata, null, 2)}
+                </Paragraph>
+              </div>
+            )}
+            <Space split={<Text type="secondary">·</Text>} wrap size="small" style={{ color: "rgba(0,0,0,0.45)" }}>
               <Text type="secondary">
                 Created {formatTimestamp(detailRow.created_at)}
                 {detailRow.created_by ? ` by ${detailRow.created_by}` : ""}

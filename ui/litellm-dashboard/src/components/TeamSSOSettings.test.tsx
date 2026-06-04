@@ -94,8 +94,13 @@ vi.mock("antd", async (importOriginal) => {
   };
   SelectComponent.displayName = "Select";
 
-  const SelectOption = ({ value: optionValue, children: optionChildren }: { value: string; children: React.ReactNode }) =>
-    React.createElement("option", { value: optionValue }, optionChildren);
+  const SelectOption = ({
+    value: optionValue,
+    children: optionChildren,
+  }: {
+    value: string;
+    children: React.ReactNode;
+  }) => React.createElement("option", { value: optionValue }, optionChildren);
   SelectOption.displayName = "SelectOption";
   SelectComponent.Option = SelectOption;
 
@@ -204,7 +209,9 @@ describe("TeamSSOSettings", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Default Team Settings")).toBeInTheDocument();
-      expect(screen.getByText("These settings will be applied by default when creating new teams.")).toBeInTheDocument();
+      expect(
+        screen.getByText("These settings will be applied by default when creating new teams."),
+      ).toBeInTheDocument();
     });
   });
 

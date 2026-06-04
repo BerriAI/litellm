@@ -19,4 +19,3 @@ const EmptyState: React.FC<EmptyStateProps> = ({ hasVariables }) => {
 };
 
 export default EmptyState;
-

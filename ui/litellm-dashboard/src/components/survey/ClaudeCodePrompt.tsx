@@ -19,8 +19,7 @@ export function ClaudeCodePrompt({ onOpen, onDismiss, isVisible }: ClaudeCodePro
       buttonText="Share feedback"
       icon={Code}
       accentColor="#7c3aed"
-      buttonStyle={{ backgroundColor: '#7c3aed', borderColor: '#7c3aed' }}
+      buttonStyle={{ backgroundColor: "#7c3aed", borderColor: "#7c3aed" }}
     />
   );
 }
-

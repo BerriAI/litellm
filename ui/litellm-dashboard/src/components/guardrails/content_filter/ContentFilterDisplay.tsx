@@ -88,8 +88,8 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
           </div>
           <PatternTable
             patterns={patterns}
-            onActionChange={readOnly ? noOp : (onPatternActionChange || noOp)}
-            onRemove={readOnly ? noOp : (onPatternRemove || noOp)}
+            onActionChange={readOnly ? noOp : onPatternActionChange || noOp}
+            onRemove={readOnly ? noOp : onPatternRemove || noOp}
           />
         </Card>
       )}
@@ -102,8 +102,8 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
           </div>
           <KeywordTable
             keywords={blockedWords}
-            onActionChange={readOnly ? noOp : (onBlockedWordUpdate || noOp)}
-            onRemove={readOnly ? noOp : (onBlockedWordRemove || noOp)}
+            onActionChange={readOnly ? noOp : onBlockedWordUpdate || noOp}
+            onRemove={readOnly ? noOp : onBlockedWordRemove || noOp}
           />
         </Card>
       )}
@@ -112,4 +112,3 @@ const ContentFilterDisplay: React.FC<ContentFilterDisplayProps> = ({
 };
 
 export default ContentFilterDisplay;
-

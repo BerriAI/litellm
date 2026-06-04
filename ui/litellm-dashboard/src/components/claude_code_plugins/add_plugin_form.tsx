@@ -3,13 +3,7 @@ import { Modal, Form, Input, Select } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
-import {
-  validatePluginName,
-  isValidSemanticVersion,
-  isValidEmail,
-  isValidUrl,
-  parseKeywords,
-} from "./helpers";
+import { validatePluginName, isValidSemanticVersion, isValidEmail, isValidUrl, parseKeywords } from "./helpers";
 
 const { TextArea } = Input;
 const { Option } = Select;
@@ -47,7 +41,10 @@ interface ParsePreview {
 
 function parseGitHubUrl(raw: string): ParsePreview | null {
   // Strip protocol and trailing slashes/spaces
-  let s = raw.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  let s = raw
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
 
   if (!s.startsWith("github.com/")) return null;
 
@@ -71,10 +68,7 @@ function parseGitHubUrl(raw: string): ParsePreview | null {
   }
 
   // github.com/org/repo/tree/branch/folder or /blob/branch/folder/FILE.md
-  if (
-    parts.length >= 5 &&
-    (parts[2] === "tree" || parts[2] === "blob")
-  ) {
+  if (parts.length >= 5 && (parts[2] === "tree" || parts[2] === "blob")) {
     // parts[3] = branch, parts[4..] = path segments
     const pathParts = parts.slice(4);
     // If last segment looks like a file (has extension), drop it
@@ -106,12 +100,7 @@ function parseGitHubUrl(raw: string): ParsePreview | null {
   return null;
 }
 
-const AddPluginForm: React.FC<AddPluginFormProps> = ({
-  visible,
-  onClose,
-  accessToken,
-  onSuccess,
-}) => {
+const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [urlPreview, setUrlPreview] = useState<ParsePreview | null>(null);
@@ -141,9 +130,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
     }
 
     if (!validatePluginName(values.name)) {
-      MessageManager.error(
-        "Skill name must be kebab-case (lowercase letters, numbers, and hyphens only)"
-      );
+      MessageManager.error("Skill name must be kebab-case (lowercase letters, numbers, and hyphens only)");
       return;
     }
 
@@ -203,20 +190,8 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
   };
 
   return (
-    <Modal
-      title="Add New Skill"
-      open={visible}
-      onCancel={handleCancel}
-      footer={null}
-      width={700}
-      className="top-8"
-    >
-      <Form
-        form={form}
-        layout="vertical"
-        onFinish={handleSubmit}
-        className="mt-4"
-      >
+    <Modal title="Add New Skill" open={visible} onCancel={handleCancel} footer={null} width={700} className="top-8">
+      <Form form={form} layout="vertical" onFinish={handleSubmit} className="mt-4">
         {/* Smart URL Input */}
         <Form.Item
           label="GitHub URL"
@@ -275,25 +250,12 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
         </div>
 
         {/* Description */}
-        <Form.Item
-          label="Description (Optional)"
-          name="description"
-          tooltip="Brief description of what the skill does"
-        >
-          <TextArea
-            rows={3}
-            placeholder="A skill that helps with..."
-            maxLength={500}
-            className="rounded-lg"
-          />
+        <Form.Item label="Description (Optional)" name="description" tooltip="Brief description of what the skill does">
+          <TextArea rows={3} placeholder="A skill that helps with..." maxLength={500} className="rounded-lg" />
         </Form.Item>
 
         {/* Category */}
-        <Form.Item
-          label="Category (Optional)"
-          name="category"
-          tooltip="Select a category or enter a custom one"
-        >
+        <Form.Item label="Category (Optional)" name="category" tooltip="Select a category or enter a custom one">
           <Select
             placeholder="Select or type a category"
             allowClear
@@ -310,29 +272,17 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({
         </Form.Item>
 
         {/* Keywords */}
-        <Form.Item
-          label="Keywords (Optional)"
-          name="keywords"
-          tooltip="Comma-separated list of keywords for search"
-        >
+        <Form.Item label="Keywords (Optional)" name="keywords" tooltip="Comma-separated list of keywords for search">
           <Input placeholder="search, web, api" className="rounded-lg" />
         </Form.Item>
 
         {/* Version */}
-        <Form.Item
-          label="Version (Optional)"
-          name="version"
-          tooltip="Semantic version (e.g., 1.0.0)"
-        >
+        <Form.Item label="Version (Optional)" name="version" tooltip="Semantic version (e.g., 1.0.0)">
           <Input placeholder="1.0.0" className="rounded-lg" />
         </Form.Item>
 
         {/* Author Name */}
-        <Form.Item
-          label="Author Name (Optional)"
-          name="authorName"
-          tooltip="Name of the skill author or organization"
-        >
+        <Form.Item label="Author Name (Optional)" name="authorName" tooltip="Name of the skill author or organization">
           <Input placeholder="Your Name or Organization" className="rounded-lg" />
         </Form.Item>
 

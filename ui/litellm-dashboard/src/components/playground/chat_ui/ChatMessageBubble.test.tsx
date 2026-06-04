@@ -24,9 +24,7 @@ vi.mock("./ReasoningContent", () => ({
 }));
 
 vi.mock("./MCPEventsDisplay", () => ({
-  default: ({ events }: { events: unknown[] }) => (
-    <div data-testid="mcp-events-display">{events.length} events</div>
-  ),
+  default: ({ events }: { events: unknown[] }) => <div data-testid="mcp-events-display">{events.length} events</div>,
 }));
 
 vi.mock("./SearchResultsDisplay", () => ({
@@ -42,9 +40,7 @@ vi.mock("./ResponseMetrics", () => ({
 }));
 
 vi.mock("./A2AMetrics", () => ({
-  default: ({ a2aMetadata }: { a2aMetadata: unknown }) => (
-    <div data-testid="a2a-metrics">A2A</div>
-  ),
+  default: ({ a2aMetadata }: { a2aMetadata: unknown }) => <div data-testid="a2a-metrics">A2A</div>,
 }));
 
 vi.mock("./CodeInterpreterOutput", () => ({
@@ -75,58 +71,33 @@ const defaultProps = {
 
 describe("ChatMessageBubble", () => {
   it("should render a user message with right-aligned text", () => {
-    render(
-      <ChatMessageBubble
-        {...defaultProps}
-        message={{ role: "user", content: "Hello" }}
-      />,
-    );
+    render(<ChatMessageBubble {...defaultProps} message={{ role: "user", content: "Hello" }} />);
 
     expect(screen.getByText("user")).toBeInTheDocument();
     expect(screen.getByText("Hello")).toBeInTheDocument();
   });
 
   it("should render an assistant message with left-aligned text", () => {
-    render(
-      <ChatMessageBubble
-        {...defaultProps}
-        message={{ role: "assistant", content: "Hi there" }}
-      />,
-    );
+    render(<ChatMessageBubble {...defaultProps} message={{ role: "assistant", content: "Hi there" }} />);
 
     expect(screen.getByText("assistant")).toBeInTheDocument();
     expect(screen.getByText("Hi there")).toBeInTheDocument();
   });
 
   it("should show model badge for assistant messages when model is provided", () => {
-    render(
-      <ChatMessageBubble
-        {...defaultProps}
-        message={{ role: "assistant", content: "Reply", model: "gpt-4" }}
-      />,
-    );
+    render(<ChatMessageBubble {...defaultProps} message={{ role: "assistant", content: "Reply", model: "gpt-4" }} />);
 
     expect(screen.getByText("gpt-4")).toBeInTheDocument();
   });
 
   it("should not show model badge for user messages even when model is set", () => {
-    render(
-      <ChatMessageBubble
-        {...defaultProps}
-        message={{ role: "user", content: "Hello", model: "gpt-4" }}
-      />,
-    );
+    render(<ChatMessageBubble {...defaultProps} message={{ role: "user", content: "Hello", model: "gpt-4" }} />);
 
     expect(screen.queryByText("gpt-4")).not.toBeInTheDocument();
   });
 
   it("should render markdown content via ReactMarkdown", () => {
-    render(
-      <ChatMessageBubble
-        {...defaultProps}
-        message={{ role: "assistant", content: "**bold text**" }}
-      />,
-    );
+    render(<ChatMessageBubble {...defaultProps} message={{ role: "assistant", content: "**bold text**" }} />);
 
     expect(screen.getByTestId("react-markdown")).toHaveTextContent("**bold text**");
   });
@@ -144,10 +115,7 @@ describe("ChatMessageBubble", () => {
 
   it("should render AudioRenderer when isAudio is true", () => {
     render(
-      <ChatMessageBubble
-        {...defaultProps}
-        message={{ role: "assistant", content: "audio-url", isAudio: true }}
-      />,
+      <ChatMessageBubble {...defaultProps} message={{ role: "assistant", content: "audio-url", isAudio: true }} />,
     );
 
     expect(screen.getByTestId("audio-renderer")).toBeInTheDocument();

@@ -34,4 +34,3 @@ export interface AvailableSearchProvider {
 export interface AvailableSearchProvidersResponse {
   providers: AvailableSearchProvider[];
 }
-

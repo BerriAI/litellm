@@ -1,13 +1,5 @@
 import React, { useEffect, useState } from "react";
-import {
-  Card,
-  Typography,
-  Select,
-  Switch,
-  Form,
-  Space,
-  InputNumber,
-} from "antd";
+import { Card, Typography, Select, Switch, Form, Space, InputNumber } from "antd";
 import { getMajorAirlines } from "../../networking";
 
 const { Title, Text } = Typography;
@@ -53,19 +45,18 @@ const DEFAULT_CONFIG: CompetitorIntentConfig = {
   threshold_low: 0.3,
 };
 
-const CompetitorIntentConfiguration: React.FC<
-  CompetitorIntentConfigurationProps
-> = ({ enabled, config, onChange, accessToken }) => {
+const CompetitorIntentConfiguration: React.FC<CompetitorIntentConfigurationProps> = ({
+  enabled,
+  config,
+  onChange,
+  accessToken,
+}) => {
   const effectiveConfig = config ?? DEFAULT_CONFIG;
   const [airlineOptions, setAirlineOptions] = useState<MajorAirline[]>([]);
   const [loadingAirlines, setLoadingAirlines] = useState(false);
 
   useEffect(() => {
-    if (
-      effectiveConfig.competitor_intent_type === "airline" &&
-      accessToken &&
-      airlineOptions.length === 0
-    ) {
+    if (effectiveConfig.competitor_intent_type === "airline" && accessToken && airlineOptions.length === 0) {
       setLoadingAirlines(true);
       getMajorAirlines(accessToken)
         .then((res) => setAirlineOptions(res.airlines ?? []))
@@ -103,7 +94,10 @@ const CompetitorIntentConfiguration: React.FC<
         return primary === v.toLowerCase();
       });
       if (airline) {
-        for (const variant of airline.match.split("|").map((s) => s.trim().toLowerCase()).filter(Boolean)) {
+        for (const variant of airline.match
+          .split("|")
+          .map((s) => s.trim().toLowerCase())
+          .filter(Boolean)) {
           if (!seen.has(variant)) {
             seen.add(variant);
             expanded.push(variant);
@@ -116,7 +110,6 @@ const CompetitorIntentConfiguration: React.FC<
     }
     onChange(enabled, { ...effectiveConfig, brand_self: expanded });
   };
-
 
   if (!enabled) {
     return (
@@ -132,8 +125,8 @@ const CompetitorIntentConfiguration: React.FC<
         size="small"
       >
         <Text type="secondary">
-          Block or reframe competitor comparison questions. When enabled, airline type
-          auto-loads competitors from IATA; generic type requires manual competitor list.
+          Block or reframe competitor comparison questions. When enabled, airline type auto-loads competitors from IATA;
+          generic type requires manual competitor list.
         </Text>
       </Card>
     );
@@ -152,8 +145,8 @@ const CompetitorIntentConfiguration: React.FC<
       size="small"
     >
       <Text type="secondary" style={{ display: "block", marginBottom: 16 }}>
-        Block or reframe competitor comparison questions. Airline type uses major airlines
-        (excluding your brand); generic requires manual competitor list.
+        Block or reframe competitor comparison questions. Airline type uses major airlines (excluding your brand);
+        generic requires manual competitor list.
       </Text>
       <Form layout="vertical" size="small">
         <Form.Item label="Type">
@@ -196,9 +189,7 @@ const CompetitorIntentConfiguration: React.FC<
             loading={loadingAirlines}
             showSearch
             filterOption={(input, option) =>
-              (option?.label?.toString().toLowerCase() ?? "").includes(
-                input.toLowerCase()
-              )
+              (option?.label?.toString().toLowerCase() ?? "").includes(input.toLowerCase())
             }
             optionFilterProp="label"
             options={
@@ -236,11 +227,7 @@ const CompetitorIntentConfiguration: React.FC<
         )}
 
         {effectiveConfig.competitor_intent_type === "generic" && (
-          <Form.Item
-            label="Competitors"
-            required
-            help="Competitor names to detect (required for generic type)"
-          >
+          <Form.Item label="Competitors" required help="Competitor names to detect (required for generic type)">
             <Select
               mode="tags"
               style={{ width: "100%" }}
@@ -281,10 +268,12 @@ const CompetitorIntentConfiguration: React.FC<
               Classify competitor intent by confidence (0–1). Higher confidence → stronger intent.
               <ul style={{ marginBottom: 0, marginTop: 4, paddingLeft: 20 }}>
                 <li>
-                  <strong>High (≥)</strong>: Treat as full competitor comparison → uses &quot;Competitor comparison&quot; policy
+                  <strong>High (≥)</strong>: Treat as full competitor comparison → uses &quot;Competitor
+                  comparison&quot; policy
                 </li>
                 <li>
-                  <strong>Medium (≥)</strong>: Treat as possible comparison → uses &quot;Possible competitor comparison&quot; policy
+                  <strong>Medium (≥)</strong>: Treat as possible comparison → uses &quot;Possible competitor
+                  comparison&quot; policy
                 </li>
                 <li>
                   <strong>Low (≥)</strong>: Log only; allow request. Below Low → allow with no action

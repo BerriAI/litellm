@@ -43,9 +43,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
     return (
       <Card>
         <Typography.Text type="danger">
-          {error instanceof Error
-            ? error.message
-            : "Failed to load your membership info for this team."}
+          {error instanceof Error ? error.message : "Failed to load your membership info for this team."}
         </Typography.Text>
       </Card>
     );
@@ -86,9 +84,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
           <Col xs={24} sm={12} md={8}>
             <Typography.Text type="secondary">Team Role</Typography.Text>
             <div style={{ marginTop: 4 }}>
-              <Tag color={data.role === "admin" ? "blue" : "default"}>
-                {data.role || "user"}
-              </Tag>
+              <Tag color={data.role === "admin" ? "blue" : "default"}>{data.role || "user"}</Tag>
             </div>
           </Col>
         </Row>
@@ -119,10 +115,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
 
         <Col xs={24} md={12}>
           <Card>
-            {labelWithTooltip(
-              "Rate Limits",
-              "Your per-member rate limits within this team.",
-            )}
+            {labelWithTooltip("Rate Limits", "Your per-member rate limits within this team.")}
             <div style={{ marginTop: 8 }}>
               <Typography.Text>TPM: {formatRateLimit(tpmLimit)}</Typography.Text>
               <br />
@@ -133,10 +126,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
 
         <Col xs={24} md={12}>
           <Card>
-            {labelWithTooltip(
-              "Total Spend (USD)",
-              "Cumulative spend across all budget cycles within this team.",
-            )}
+            {labelWithTooltip("Total Spend (USD)", "Cumulative spend across all budget cycles within this team.")}
             <div style={{ marginTop: 8 }}>
               <Typography.Title level={4} style={{ margin: 0 }}>
                 ${formatNumber(totalSpend, 4)}
@@ -147,10 +137,7 @@ export default function MyUserTab({ teamId }: MyUserTabProps) {
 
         <Col xs={24} md={12}>
           <Card>
-            {labelWithTooltip(
-              "Model Scope",
-              "Models you can access within this team.",
-            )}
+            {labelWithTooltip("Model Scope", "Models you can access within this team.")}
             <div style={{ marginTop: 8 }}>
               {allowedModels && allowedModels.length > 0 ? (
                 <Space wrap>

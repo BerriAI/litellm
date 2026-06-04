@@ -14,9 +14,7 @@ export function ScoreChart({ data }: ScoreChartProps) {
 
   return (
     <Card className="bg-white border border-gray-200">
-      <Title className="text-base font-semibold text-gray-900 mb-4">
-        Request Outcomes Over Time
-      </Title>
+      <Title className="text-base font-semibold text-gray-900 mb-4">Request Outcomes Over Time</Title>
       <div className="h-80 min-h-[280px]">
         {chartData.length > 0 ? (
           <BarChart

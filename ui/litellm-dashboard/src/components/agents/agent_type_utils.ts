@@ -29,10 +29,7 @@ export const detectAgentType = (agent: Agent): string => {
  * Parses agent data for dynamic form fields (non-A2A agents).
  * Extracts values from litellm_params based on the agent type metadata.
  */
-export const parseDynamicAgentForForm = (
-  agent: Agent,
-  agentTypeInfo: AgentCreateInfo
-): Record<string, any> => {
+export const parseDynamicAgentForForm = (agent: Agent, agentTypeInfo: AgentCreateInfo): Record<string, any> => {
   const values: Record<string, any> = {
     agent_name: agent.agent_name,
     description: agent.agent_card_params?.description || "",
@@ -48,7 +45,7 @@ export const parseDynamicAgentForForm = (
         const model = agent.litellm_params.model;
         const templateParts = agentTypeInfo.model_template.split("/");
         const modelParts = model.split("/");
-        
+
         // Find the placeholder position and extract the value
         templateParts.forEach((part, index) => {
           if (part === `{${field.key}}` && modelParts[index]) {
@@ -66,4 +63,3 @@ export const parseDynamicAgentForForm = (
 
   return values;
 };
-

@@ -41,14 +41,15 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
   useEffect(() => {
     const fetchImages = async () => {
       for (const annotation of annotations) {
-        const isImage = annotation.filename?.toLowerCase().endsWith(".png") ||
-                       annotation.filename?.toLowerCase().endsWith(".jpg") ||
-                       annotation.filename?.toLowerCase().endsWith(".jpeg") ||
-                       annotation.filename?.toLowerCase().endsWith(".gif");
-        
+        const isImage =
+          annotation.filename?.toLowerCase().endsWith(".png") ||
+          annotation.filename?.toLowerCase().endsWith(".jpg") ||
+          annotation.filename?.toLowerCase().endsWith(".jpeg") ||
+          annotation.filename?.toLowerCase().endsWith(".gif");
+
         if (isImage && annotation.container_id && annotation.file_id) {
-          setLoadingImages(prev => ({ ...prev, [annotation.file_id]: true }));
-          
+          setLoadingImages((prev) => ({ ...prev, [annotation.file_id]: true }));
+
           try {
             // Fetch image content from container files API
             const response = await fetch(
@@ -57,18 +58,18 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
                 headers: {
                   [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
                 },
-              }
+              },
             );
-            
+
             if (response.ok) {
               const blob = await response.blob();
               const url = URL.createObjectURL(blob);
-              setImageUrls(prev => ({ ...prev, [annotation.file_id]: url }));
+              setImageUrls((prev) => ({ ...prev, [annotation.file_id]: url }));
             }
           } catch (error) {
             console.error("Error fetching image:", error);
           } finally {
-            setLoadingImages(prev => ({ ...prev, [annotation.file_id]: false }));
+            setLoadingImages((prev) => ({ ...prev, [annotation.file_id]: false }));
           }
         }
       }
@@ -80,7 +81,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
 
     // Cleanup URLs on unmount
     return () => {
-      Object.values(imageUrls).forEach(url => URL.revokeObjectURL(url));
+      Object.values(imageUrls).forEach((url) => URL.revokeObjectURL(url));
     };
   }, [annotations, accessToken, proxyBaseUrl]);
 
@@ -92,9 +93,9 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
           headers: {
             [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           },
-        }
+        },
       );
-      
+
       if (response.ok) {
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
@@ -112,18 +113,20 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
   };
 
   // Separate images and other files
-  const imageAnnotations = annotations.filter(a => 
-    a.filename?.toLowerCase().endsWith(".png") ||
-    a.filename?.toLowerCase().endsWith(".jpg") ||
-    a.filename?.toLowerCase().endsWith(".jpeg") ||
-    a.filename?.toLowerCase().endsWith(".gif")
+  const imageAnnotations = annotations.filter(
+    (a) =>
+      a.filename?.toLowerCase().endsWith(".png") ||
+      a.filename?.toLowerCase().endsWith(".jpg") ||
+      a.filename?.toLowerCase().endsWith(".jpeg") ||
+      a.filename?.toLowerCase().endsWith(".gif"),
   );
-  
-  const fileAnnotations = annotations.filter(a => 
-    !a.filename?.toLowerCase().endsWith(".png") &&
-    !a.filename?.toLowerCase().endsWith(".jpg") &&
-    !a.filename?.toLowerCase().endsWith(".jpeg") &&
-    !a.filename?.toLowerCase().endsWith(".gif")
+
+  const fileAnnotations = annotations.filter(
+    (a) =>
+      !a.filename?.toLowerCase().endsWith(".png") &&
+      !a.filename?.toLowerCase().endsWith(".jpg") &&
+      !a.filename?.toLowerCase().endsWith(".jpeg") &&
+      !a.filename?.toLowerCase().endsWith(".gif"),
   );
 
   if (!code && annotations.length === 0) {
@@ -221,4 +224,3 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
 };
 
 export default CodeInterpreterOutput;
-

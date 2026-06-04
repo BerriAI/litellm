@@ -84,12 +84,7 @@ describe("SearchToolView", () => {
       },
     };
 
-    render(
-      <SearchToolView
-        {...defaultProps}
-        searchTool={searchToolWithoutProvider}
-      />,
-    );
+    render(<SearchToolView {...defaultProps} searchTool={searchToolWithoutProvider} />);
     expect(screen.getByText("unknown-provider")).toBeInTheDocument();
   });
 
@@ -106,12 +101,7 @@ describe("SearchToolView", () => {
       },
     };
 
-    render(
-      <SearchToolView
-        {...defaultProps}
-        searchTool={searchToolWithoutApiKey}
-      />,
-    );
+    render(<SearchToolView {...defaultProps} searchTool={searchToolWithoutApiKey} />);
     expect(screen.getByText("Not set")).toBeInTheDocument();
   });
 
@@ -127,12 +117,7 @@ describe("SearchToolView", () => {
       created_at: undefined,
     };
 
-    render(
-      <SearchToolView
-        {...defaultProps}
-        searchTool={searchToolWithoutDate}
-      />,
-    );
+    render(<SearchToolView {...defaultProps} searchTool={searchToolWithoutDate} />);
     expect(screen.getByText("Unknown")).toBeInTheDocument();
   });
 
@@ -147,12 +132,7 @@ describe("SearchToolView", () => {
       search_tool_info: {},
     };
 
-    render(
-      <SearchToolView
-        {...defaultProps}
-        searchTool={searchToolWithoutDescription}
-      />,
-    );
+    render(<SearchToolView {...defaultProps} searchTool={searchToolWithoutDescription} />);
     expect(screen.queryByText("Description")).not.toBeInTheDocument();
   });
 
@@ -236,7 +216,6 @@ describe("SearchToolView", () => {
     });
   });
 
-
   it("should not show check icon when copy fails", async () => {
     const user = userEvent.setup({ delay: null });
     const { copyToClipboard } = await import("@/utils/dataUtils");
@@ -253,9 +232,12 @@ describe("SearchToolView", () => {
     expect(nameCopyButton).toBeInTheDocument();
     await user.click(nameCopyButton!);
 
-    await waitFor(() => {
-      expect(copyToClipboard).toHaveBeenCalledWith("Test Search Tool");
-    }, { timeout: 3000 });
+    await waitFor(
+      () => {
+        expect(copyToClipboard).toHaveBeenCalledWith("Test Search Tool");
+      },
+      { timeout: 3000 },
+    );
 
     expect(nameCopyButton).not.toHaveClass("text-green-600");
   });

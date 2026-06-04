@@ -128,9 +128,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                 {!disabled && tools.length > 0 && (
                   <Radio.Group
                     value={viewMode}
-                    onChange={(e) =>
-                      setViewModes((prev) => ({ ...prev, [server.server_id]: e.target.value }))
-                    }
+                    onChange={(e) => setViewModes((prev) => ({ ...prev, [server.server_id]: e.target.value }))}
                     size="small"
                     optionType="button"
                     buttonStyle="solid"
@@ -214,9 +212,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <Text className="font-medium text-gray-900">{tool.name}</Text>
-                            <Text className="text-sm text-gray-500">
-                              - {tool.description || "No description"}
-                            </Text>
+                            <Text className="text-sm text-gray-500">- {tool.description || "No description"}</Text>
                           </div>
                         </div>
                       </div>

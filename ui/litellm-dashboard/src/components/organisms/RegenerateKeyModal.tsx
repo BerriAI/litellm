@@ -87,11 +87,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     try {
       const formValues = await form.validateFields();
 
-      const response = await regenerateKeyCall(
-        accessToken,
-        selectedToken.token || selectedToken.token_id,
-        formValues,
-      );
+      const response = await regenerateKeyCall(accessToken, selectedToken.token || selectedToken.token_id, formValues);
       setRegeneratedKey(response.key);
       NotificationManager.success("Virtual Key regenerated successfully");
 
@@ -107,7 +103,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
         expires: formValues.duration
-          ? (calculateNewExpiryTime(formValues.duration) ?? selectedToken.expires)
+          ? calculateNewExpiryTime(formValues.duration) ?? selectedToken.expires
           : selectedToken.expires,
       };
 

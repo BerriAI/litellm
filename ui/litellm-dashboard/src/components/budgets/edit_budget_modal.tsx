@@ -10,11 +10,7 @@ interface EditBudgetModalProps {
   setIsModalVisible: React.Dispatch<React.SetStateAction<boolean>>;
   existingBudget: budgetItem;
 }
-const EditBudgetModal: React.FC<EditBudgetModalProps> = ({
-  isModalVisible,
-  setIsModalVisible,
-  existingBudget,
-}) => {
+const EditBudgetModal: React.FC<EditBudgetModalProps> = ({ isModalVisible, setIsModalVisible, existingBudget }) => {
   const [form] = Form.useForm();
   const updateBudget = useUpdateBudget();
 
@@ -46,14 +42,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({
   };
 
   return (
-    <Modal
-      title="Edit Budget"
-      open={isModalVisible}
-      width={800}
-      footer={null}
-      onOk={handleOk}
-      onCancel={handleCancel}
-    >
+    <Modal title="Edit Budget" open={isModalVisible} width={800} footer={null} onOk={handleOk} onCancel={handleCancel}>
       <Form
         form={form}
         onFinish={handleUpdate}
@@ -63,11 +52,7 @@ const EditBudgetModal: React.FC<EditBudgetModalProps> = ({
         initialValues={existingBudget}
       >
         <>
-          <Form.Item
-            label="Budget ID"
-            name="budget_id"
-            help="Budget ID cannot be changed after creation"
-          >
+          <Form.Item label="Budget ID" name="budget_id" help="Budget ID cannot be changed after creation">
             <TextInput placeholder="" disabled={true} />
           </Form.Item>
           <Form.Item label="Max Tokens per minute" name="tpm_limit" help="Default is model limit.">

@@ -1309,11 +1309,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
               {/* Skill Hub Tab */}
               <TabPane tab="Skill Hub" key="skills">
-                <SkillHubDashboard
-                  skills={skillHubData}
-                  isLoading={skillLoading}
-                  publicPage={true}
-                />
+                <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
               </TabPane>
             </Tabs>
           </Card>

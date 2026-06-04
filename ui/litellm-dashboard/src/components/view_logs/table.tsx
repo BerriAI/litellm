@@ -1,5 +1,14 @@
 import { Fragment, useState } from "react";
-import { ColumnDef, flexRender, getCoreRowModel, getExpandedRowModel, Row, useReactTable, getSortedRowModel, SortingState } from "@tanstack/react-table";
+import {
+  ColumnDef,
+  flexRender,
+  getCoreRowModel,
+  getExpandedRowModel,
+  Row,
+  useReactTable,
+  getSortedRowModel,
+  SortingState,
+} from "@tanstack/react-table";
 
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
 
@@ -63,11 +72,11 @@ export function DataTable<TData, TValue>({
               {headerGroup.headers.map((header) => {
                 const canSort = enableSorting && header.column.getCanSort();
                 const isSorted = header.column.getIsSorted();
-                
+
                 return (
-                  <TableHeaderCell 
-                    key={header.id} 
-                    className={`py-1 h-8 ${canSort ? 'cursor-pointer select-none hover:bg-gray-50' : ''}`}
+                  <TableHeaderCell
+                    key={header.id}
+                    className={`py-1 h-8 ${canSort ? "cursor-pointer select-none hover:bg-gray-50" : ""}`}
                     onClick={canSort ? header.column.getToggleSortingHandler() : undefined}
                   >
                     {header.isPlaceholder ? null : (
@@ -75,7 +84,7 @@ export function DataTable<TData, TValue>({
                         {flexRender(header.column.columnDef.header, header.getContext())}
                         {canSort && (
                           <span className="text-gray-400">
-                            {isSorted === 'asc' ? '↑' : isSorted === 'desc' ? '↓' : '⇅'}
+                            {isSorted === "asc" ? "↑" : isSorted === "desc" ? "↓" : "⇅"}
                           </span>
                         )}
                       </div>
@@ -110,9 +119,7 @@ export function DataTable<TData, TValue>({
                 </TableRow>
 
                 {/* Child rows rendered as real table rows (MCP children) */}
-                {supportsExpansion && row.getIsExpanded() && renderChildRows && (
-                  renderChildRows({ row })
-                )}
+                {supportsExpansion && row.getIsExpanded() && renderChildRows && renderChildRows({ row })}
 
                 {/* Legacy sub-component in colspan cell (audit logs) */}
                 {supportsExpansion && row.getIsExpanded() && renderSubComponent && !renderChildRows && (

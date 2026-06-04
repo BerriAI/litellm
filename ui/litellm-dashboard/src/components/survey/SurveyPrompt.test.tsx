@@ -34,16 +34,12 @@ vi.mock("./NudgePrompt", () => ({
 
 describe("SurveyPrompt", () => {
   it("should render with the Quick feedback title when visible", () => {
-    renderWithProviders(
-      <SurveyPrompt isVisible={true} onOpen={vi.fn()} onDismiss={vi.fn()} />
-    );
+    renderWithProviders(<SurveyPrompt isVisible={true} onOpen={vi.fn()} onDismiss={vi.fn()} />);
     expect(screen.getByText("Quick feedback")).toBeInTheDocument();
   });
 
   it("should render the correct description text", () => {
-    renderWithProviders(
-      <SurveyPrompt isVisible={true} onOpen={vi.fn()} onDismiss={vi.fn()} />
-    );
+    renderWithProviders(<SurveyPrompt isVisible={true} onOpen={vi.fn()} onDismiss={vi.fn()} />);
     expect(screen.getByText(/Help us improve LiteLLM/i)).toBeInTheDocument();
   });
 
@@ -51,9 +47,7 @@ describe("SurveyPrompt", () => {
     const onOpen = vi.fn();
     const user = userEvent.setup();
 
-    renderWithProviders(
-      <SurveyPrompt isVisible={true} onOpen={onOpen} onDismiss={vi.fn()} />
-    );
+    renderWithProviders(<SurveyPrompt isVisible={true} onOpen={onOpen} onDismiss={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: /Share feedback/i }));
 
@@ -64,9 +58,7 @@ describe("SurveyPrompt", () => {
     const onDismiss = vi.fn();
     const user = userEvent.setup();
 
-    renderWithProviders(
-      <SurveyPrompt isVisible={true} onOpen={vi.fn()} onDismiss={onDismiss} />
-    );
+    renderWithProviders(<SurveyPrompt isVisible={true} onOpen={vi.fn()} onDismiss={onDismiss} />);
 
     await user.click(screen.getByRole("button", { name: /Dismiss/i }));
 
@@ -74,9 +66,7 @@ describe("SurveyPrompt", () => {
   });
 
   it("should not render when isVisible is false", () => {
-    renderWithProviders(
-      <SurveyPrompt isVisible={false} onOpen={vi.fn()} onDismiss={vi.fn()} />
-    );
+    renderWithProviders(<SurveyPrompt isVisible={false} onOpen={vi.fn()} onDismiss={vi.fn()} />);
     expect(screen.queryByText("Quick feedback")).not.toBeInTheDocument();
   });
 });

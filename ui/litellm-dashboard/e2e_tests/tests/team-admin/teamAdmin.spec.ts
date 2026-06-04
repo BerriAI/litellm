@@ -28,13 +28,11 @@ test.describe("Team Admin", () => {
     await clickTeamId(page, E2E_TEAM_CRUD_ID);
 
     await page.getByRole("tab", { name: "Virtual Keys" }).click();
-    await expect(page.getByText(E2E_INTERNAL_USER_KEY_ALIAS).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(E2E_INTERNAL_USER_KEY_ALIAS).first()).toBeVisible({ timeout: 10_000 });
 
     // And from the global Virtual Keys page, the same key should be visible.
     await navigateToPage(page, Page.ApiKeys);
-    await expect(page.getByText(E2E_INTERNAL_USER_KEY_ALIAS).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(E2E_INTERNAL_USER_KEY_ALIAS).first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("Team admin can add a member to their team", async ({ page }) => {
@@ -60,8 +58,7 @@ test.describe("Team Admin", () => {
 
     await modal.getByRole("button", { name: /Add Member/i }).click();
 
-    await expect(page.getByText("Team member added successfully").first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Team member added successfully").first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("Team admin can remove a member from their team", async ({ page }) => {
@@ -82,8 +79,7 @@ test.describe("Team Admin", () => {
     await expect(modal).toBeVisible({ timeout: 5_000 });
     await modal.getByRole("button", { name: /^Delete$/ }).click();
 
-    await expect(page.getByText("Team member removed successfully").first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("Team member removed successfully").first()).toBeVisible({ timeout: 10_000 });
   });
 
   test("Team admin can create a team key with All Team Models", async ({ page }) => {

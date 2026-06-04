@@ -1,14 +1,8 @@
 import React, { useEffect } from "react";
 import { Modal, Form } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
-import {
-  AccessGroupBaseForm,
-  AccessGroupFormValues,
-} from "./AccessGroupBaseForm";
-import {
-  useEditAccessGroup,
-  AccessGroupUpdateParams,
-} from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
+import { AccessGroupBaseForm, AccessGroupFormValues } from "./AccessGroupBaseForm";
+import { useEditAccessGroup, AccessGroupUpdateParams } from "@/app/(dashboard)/hooks/accessGroups/useEditAccessGroup";
 import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 
 interface AccessGroupEditModalProps {
@@ -18,12 +12,7 @@ interface AccessGroupEditModalProps {
   onSuccess?: () => void;
 }
 
-export function AccessGroupEditModal({
-  visible,
-  accessGroup,
-  onCancel,
-  onSuccess,
-}: AccessGroupEditModalProps) {
+export function AccessGroupEditModal({ visible, accessGroup, onCancel, onSuccess }: AccessGroupEditModalProps) {
   const [form] = Form.useForm<AccessGroupFormValues>();
   const editMutation = useEditAccessGroup();
 

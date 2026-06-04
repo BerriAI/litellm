@@ -21,7 +21,12 @@ vi.mock("@/app/(dashboard)/hooks/budgets/useBudgets", () => ({
   useUpdateBudget: vi.fn().mockReturnValue({ mutateAsync: vi.fn() }),
 }));
 
-import { useBudgets, useDeleteBudget, useCreateBudget, useUpdateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
+import {
+  useBudgets,
+  useDeleteBudget,
+  useCreateBudget,
+  useUpdateBudget,
+} from "@/app/(dashboard)/hooks/budgets/useBudgets";
 
 const createQueryClient = () =>
   new QueryClient({

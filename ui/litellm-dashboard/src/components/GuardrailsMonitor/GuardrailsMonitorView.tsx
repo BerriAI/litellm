@@ -5,9 +5,7 @@ import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { GuardrailDetail } from "./GuardrailDetail";
 import { GuardrailsOverview } from "./GuardrailsOverview";
 
-type View =
-  | { type: "overview" }
-  | { type: "detail"; guardrailId: string };
+type View = { type: "overview" } | { type: "detail"; guardrailId: string };
 
 interface GuardrailsMonitorViewProps {
   accessToken?: string | null;
@@ -46,12 +44,7 @@ export default function GuardrailsMonitorView({ accessToken = null }: Guardrails
   return (
     <div className="p-6 w-full min-w-0 flex-1">
       <div className="flex items-center justify-end mb-4">
-        <AdvancedDatePicker
-          value={dateValue}
-          onValueChange={handleDateChange}
-          label=""
-          showTimeRange={false}
-        />
+        <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} label="" showTimeRange={false} />
       </div>
       {view.type === "overview" ? (
         <GuardrailsOverview
