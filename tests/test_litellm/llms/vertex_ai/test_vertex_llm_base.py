@@ -254,6 +254,46 @@ class TestVertexBase:
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
     @pytest.mark.asyncio
+    async def test_executable_credential_source_rejected(self, is_async):
+        """VERIA-160: the external_account ``executable`` credential source runs an
+        arbitrary local command to mint a token (RCE primitive on a multi-tenant
+        proxy). It must be refused at dispatch and never reach the pluggable sink.
+        """
+        vertex_base = VertexBase()
+
+        credentials = {
+            "type": "external_account",
+            "audience": "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/p/providers/x",
+            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+            "token_url": "https://sts.googleapis.com/v1/token",
+            "credential_source": {
+                "executable": {"command": "/tmp/attacker", "timeout_millis": 5000}
+            },
+        }
+
+        with (
+            patch.object(vertex_base, "_credentials_from_pluggable") as mock_pluggable,
+            patch.object(vertex_base, "refresh_auth"),
+        ):
+            with pytest.raises(ValueError, match="executable"):
+                if is_async:
+                    await vertex_base._ensure_access_token_async(
+                        credentials=credentials,
+                        project_id="test-project",
+                        custom_llm_provider="vertex_ai",
+                    )
+                else:
+                    vertex_base._ensure_access_token(
+                        credentials=credentials,
+                        project_id="test-project",
+                        custom_llm_provider="vertex_ai",
+                    )
+
+            # The pluggable (executable) sink must never be dispatched to.
+            mock_pluggable.assert_not_called()
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
     async def test_identity_pool_credentials(self, is_async):
         vertex_base = VertexBase()
 

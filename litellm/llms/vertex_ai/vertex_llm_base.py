@@ -163,9 +163,16 @@ class VertexBase:
                     isinstance(credential_source, dict)
                     and "executable" in credential_source
                 ):
-                    creds = self._credentials_from_pluggable(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    # The "executable" Workload Identity Federation source runs an
+                    # arbitrary local command to mint a token. On a multi-tenant
+                    # proxy that is an RCE primitive (a caller- or config-supplied
+                    # credential reaches this sink), so refuse it outright. The
+                    # other external_account sources (AWS, identity pool) are safe.
+                    raise ValueError(
+                        "Vertex AI 'executable' credential source (pluggable auth) "
+                        "is not permitted: it runs an arbitrary local command to "
+                        "mint a token. Use service-account, authorized-user, "
+                        "identity-pool, or AWS WIF credentials instead."
                     )
                 else:
                     creds = self._credentials_from_identity_pool(
