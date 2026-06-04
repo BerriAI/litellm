@@ -11528,3 +11528,47 @@ async def test_ghsa_q775_ui_session_token_personal_key_still_capped():
         msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
         assert str(code) == "400"
         assert "cannot exceed" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_ui_session_token_default_team_id_personal_key_still_capped():
+    """
+    Security regression for GHSA-q775: the session-token exemption must key off the
+    CALLER-supplied team_id, not one injected by default_key_generate_params. On an
+    install that configures default_key_generate_params.team_id, a UI/CLI session
+    token (team_id=litellm-dashboard) requesting a personal key (no explicit team_id)
+    has data.team_id auto-filled by the defaults loop. The ceiling must STILL fire:
+    if the exemption read the post-defaults data.team_id it would flip on and let a
+    leaked session token (blast radius $0.25) mint an arbitrary-budget key.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500)
+    assert data.team_id is None  # caller did not request a team key
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+        patch("litellm.default_key_generate_params", {"team_id": "team-default"}),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()
