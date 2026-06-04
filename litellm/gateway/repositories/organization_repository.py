@@ -86,9 +86,7 @@ class OrganizationRepository(BaseRepository[Organization]):
 
         return await self.update(organization_id, data, id_field="organization_id")
 
-    async def delete_organization(
-        self, organization_id: str
-    ) -> Optional[Organization]:
+    async def delete_organization(self, organization_id: str) -> Optional[Organization]:
         """Delete an organization."""
         return await self.delete(organization_id, id_field="organization_id")
 

@@ -53,9 +53,7 @@ class UserRepository(BaseRepository[User]):
 
     async def find_by_organization_id(self, organization_id: str) -> List[User]:
         """Find all users in an organization."""
-        records = await self.table.find_many(
-            where={"organization_id": organization_id}
-        )
+        records = await self.table.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
 
     async def find_by_team_id(self, team_id: str) -> List[User]:

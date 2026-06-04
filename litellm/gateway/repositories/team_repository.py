@@ -60,9 +60,7 @@ class TeamRepository(BaseRepository[Team]):
 
     async def find_by_organization_id(self, organization_id: str) -> List[Team]:
         """Find all teams belonging to an organization."""
-        records = await self.table.find_many(
-            where={"organization_id": organization_id}
-        )
+        records = await self.table.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
 
     async def find_by_member(self, user_id: str) -> List[Team]:
@@ -214,9 +212,7 @@ class TeamRepository(BaseRepository[Team]):
         members = list(team.members)
         if user_id not in members:
             members.append(user_id)
-            return await self.update(
-                team_id, {"members": members}, id_field="team_id"
-            )
+            return await self.update(team_id, {"members": members}, id_field="team_id")
         return team
 
     async def remove_member(self, team_id: str, user_id: str) -> Optional[Team]:
