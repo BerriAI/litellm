@@ -1,4 +1,37 @@
 {
+    "hunyuan/gpt-image-2": {
+        "litellm_provider": "hunyuan",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.0083,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "source": "https://cloud.tencent.com/document/product/1668"
+    },
+    "hunyuan_maas/custom-textmodel-gt": {
+        "litellm_provider": "hunyuan_maas",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.0083,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "source": "https://cloud.tencent.com/document/product/1668"
+    },
+    "hunyuan_maas/custom-imagemodel-gt": {
+        "litellm_provider": "hunyuan_maas",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.0083,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "source": "https://cloud.tencent.com/document/product/1668"
+    },
     "sample_spec": {
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
@@ -38606,27 +38639,5 @@
         "tool_use_system_prompt_tokens": 346,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
-    },
-    "hunyuan/gpt-image-2": {
-        "litellm_provider": "hunyuan",
-        "mode": "image_generation",
-        "input_cost_per_image": 0.0083,
-        "supported_endpoints": [
-            "/v1/images/generations",
-            "/v1/images/edits"
-        ],
-        "supports_vision": true,
-        "source": "https://cloud.tencent.com/document/product/1668"
-    },
-    "hunyuan_maas/custom-imagemodel-gt": {
-        "litellm_provider": "hunyuan_maas",
-        "mode": "image_generation",
-        "input_cost_per_image": 0.0083,
-        "supported_endpoints": [
-            "/v1/images/generations",
-            "/v1/images/edits"
-        ],
-        "supports_vision": true,
-        "source": "https://cloud.tencent.com/document/product/1668"
     }
 }
