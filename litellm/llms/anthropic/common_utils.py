@@ -14,6 +14,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
+    ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_OAUTH_BETA_HEADER,
     ANTHROPIC_OAUTH_TOKEN_PREFIX,
@@ -416,6 +417,29 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
         if mcp_server_used:
             betas.append("mcp-client-2025-04-04")
+
+        if optional_params:
+            context_management = optional_params.get("context_management")
+            edits: list = []
+            if isinstance(context_management, dict) and "edits" in context_management:
+                edits = context_management.get("edits", [])
+            elif isinstance(context_management, list):
+                edits = context_management
+            has_compact = any(
+                edit.get("type", "") in ("compact_20260112", "compaction")
+                for edit in edits
+            )
+            has_other_edits = any(
+                edit.get("type", "")
+                and edit.get("type", "") not in ("compact_20260112", "compaction")
+                for edit in edits
+            )
+            if has_compact:
+                betas.append(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_01_12.value)
+            elif has_other_edits:
+                betas.append(
+                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                )
 
         return list(set(betas))
 
