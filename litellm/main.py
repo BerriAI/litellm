@@ -641,6 +641,7 @@ async def acompletion(  # noqa: PLR0915
         if (
             custom_llm_provider == "text-completion-openai"
             or custom_llm_provider == "text-completion-codestral"
+            or custom_llm_provider == "text-completion-inception"
         ) and isinstance(response, TextCompletionResponse):
             response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
                 response_object=response,
@@ -3803,6 +3804,67 @@ def completion(  # type: ignore # noqa: PLR0915
             ):
                 return _model_response
             response = _model_response
+        elif custom_llm_provider == "text-completion-inception":
+            passed_api_base = (
+                api_base
+                or optional_params.pop("api_base", None)
+                or optional_params.pop("base_url", None)
+            )
+            api_base = (
+                passed_api_base
+                or get_secret_str("INCEPTION_API_BASE")
+                or "https://api.inceptionlabs.ai/v1"
+            )
+            # FIM is served at `/v1/fim/completions`; the OpenAI client appends
+            # `/completions`, so point it at the `/v1/fim` base.
+            api_base = api_base.rstrip("/")
+            if not api_base.endswith("/fim"):
+                api_base += "/fim"
+
+            # Don't forward the server-managed Inception key to a caller-supplied
+            # api_base; only resolve it for the default/server base, or when the
+            # caller passes their own key.
+            if passed_api_base is None or api_key:
+                api_key = (
+                    api_key
+                    or litellm.inception_key
+                    or get_secret_str("INCEPTION_API_KEY")
+                )
+
+            _response = openai_text_completions.completion(
+                model=model,
+                messages=messages,
+                model_response=model_response,
+                print_verbose=print_verbose,
+                api_key=api_key,  # type: ignore[arg-type]
+                custom_llm_provider="text-completion-inception",
+                api_base=api_base,
+                acompletion=acompletion,
+                client=client,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                logger_fn=logger_fn,
+                timeout=timeout,  # type: ignore
+            )
+
+            if (
+                optional_params.get("stream", False) is False
+                and acompletion is False
+                and text_completion is False
+            ):
+                _response = litellm.OpenAITextCompletionConfig().convert_to_chat_model_response_object(
+                    response_object=_response, model_response_object=model_response
+                )
+
+            if optional_params.get("stream", False) or acompletion is True:
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=_response,
+                    additional_args={"headers": headers},
+                )
+            response = _response
         elif custom_llm_provider in ("sagemaker_chat", "sagemaker_nova"):
             # boto3 reads keys from .env
             # sagemaker_chat: HF Messages API endpoints
@@ -4478,6 +4540,39 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_base,
                 api_key,
             ) = LangGraphConfig()._get_openai_compatible_provider_info(
+                api_base=api_base or litellm.api_base,
+                api_key=api_key or litellm.api_key,
+            )
+
+            headers = headers or litellm.headers
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                stream=stream,
+                messages=messages,
+                acompletion=acompletion,
+                api_base=api_base,
+                model_response=model_response,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                custom_llm_provider=custom_llm_provider,
+                timeout=timeout,
+                headers=headers,
+                encoding=_get_encoding(),
+                api_key=api_key,
+                logging_obj=logging,
+                client=client,
+            )
+
+        elif custom_llm_provider == "langflow":
+            # LangFlow - Visual AI Agent Platform
+            from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+            (
+                api_base,
+                api_key,
+            ) = LangFlowConfig()._get_openai_compatible_provider_info(
                 api_base=api_base or litellm.api_base,
                 api_key=api_key or litellm.api_key,
             )

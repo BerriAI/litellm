@@ -997,7 +997,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             excluded_keys=["thoughtSignature"],
                         ):
                             assistant_content.append(gemini_tool_call_part)
-                    last_message_with_tool_calls = assistant_msg
+                    # Only record this as the active tool-call message when it actually
+                    # carries tool calls. The `if` guard above is also entered for a
+                    # text-only assistant message (`assistant_msg.get("tool_calls", [])
+                    # is not None` is True for an empty list), so without this check a
+                    # later assistant message with no tool calls would clobber the
+                    # reference. The following tool result would then be matched against
+                    # an assistant message that has no tool_calls, raising "Missing
+                    # corresponding tool call for tool response message".
+                    if (
+                        assistant_msg.get("tool_calls")
+                        or assistant_msg.get("function_call") is not None
+                    ):
+                        last_message_with_tool_calls = assistant_msg
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
                 _psf = assistant_msg.get("provider_specific_fields")

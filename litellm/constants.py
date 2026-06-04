@@ -585,6 +585,7 @@ LITELLM_CHAT_PROVIDERS = [
     "volcengine",
     "codestral",
     "text-completion-codestral",
+    "text-completion-inception",
     "deepseek",
     "sambanova",
     "maritalk",
@@ -620,6 +621,7 @@ LITELLM_CHAT_PROVIDERS = [
     "oci",
     "morph",
     "lambda_ai",
+    "inception",
     "vercel_ai_gateway",
     "wandb",
     "ovhcloud",
@@ -771,6 +773,7 @@ openai_compatible_endpoints: List = [
     "https://api.moonshot.ai/v1",
     "https://api.publicai.co/v1",
     "https://api.synthetic.new/openai/v1",
+    "https://serverless.tensormesh.ai/v1",
     "https://api.stima.tech/v1",
     "https://nano-gpt.com/api/v1",
     "https://api.poe.com/v1",
@@ -778,6 +781,7 @@ openai_compatible_endpoints: List = [
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
+    "https://api.inceptionlabs.ai/v1",
     "https://api.hyperbolic.xyz/v1",
     "https://ai-gateway.helicone.ai/",
     "https://ai-gateway.vercel.sh/v1",
@@ -820,6 +824,7 @@ openai_compatible_providers: List = [
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
+    "tensormesh",  # Tensormesh - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
@@ -833,6 +838,7 @@ openai_compatible_providers: List = [
     "helicone",
     "morph",
     "lambda_ai",
+    "inception",
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
@@ -855,6 +861,7 @@ openai_text_completion_compatible_providers: List = (
         "moonshot",
         "publicai",
         "synthetic",
+        "tensormesh",
         "apertis",
         "nano-gpt",
         "poe",
@@ -868,6 +875,7 @@ openai_text_completion_compatible_providers: List = (
 _openai_like_providers: List = [
     "predibase",
     "databricks",
+    "lemonade",
     "watsonx",
 ]  # private helper. similar to openai but require some custom auth / endpoint handling, so can't use the openai sdk
 # well supported replicate llms
@@ -1408,6 +1416,13 @@ LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME = "litellm_internal_jobs"
 # objects so the master key (or its hash) never propagates to spend logs,
 # Prometheus metrics, audit trails, or any other downstream consumer.
 LITELLM_PROXY_MASTER_KEY_ALIAS = "litellm_proxy_master_key"
+
+# Marker placed in ``model_call_details`` on a synthetic ``Logging`` object that
+# records a proxy-gate error (auth/rate-limit rejection) for a request that never
+# reached an upstream provider. Tracing callbacks key off it to avoid fabricating
+# an LLM-call span for a call that did not happen. See
+# ``ProxyLogging._handle_logging_proxy_only_error``.
+LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL = "litellm_no_upstream_llm_call"
 
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")

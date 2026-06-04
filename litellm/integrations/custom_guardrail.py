@@ -689,6 +689,16 @@ class CustomGuardrail(CustomLogger):
             request_data["metadata"] = {}
             _append_guardrail_info(request_data["metadata"])
 
+        # Emit the otel guardrail span here, where every guardrail execution lands,
+        # rather than relying on a post-call hook that does not fire on every path
+        # (e.g. a pass-through request that passes its guardrails).
+        try:
+            from litellm.integrations.otel.logger import emit_guardrail_span
+
+            emit_guardrail_span(slg)
+        except Exception:
+            pass
+
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
