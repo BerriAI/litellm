@@ -103,3 +103,28 @@ This would allow up to 200,000 logs to be deleted in one run.
 
 ![Batch deletion of old logs](../../img/spend_log_deletion_multi_pod.jpg)  
 *Batch deletion of old logs*
+
+## Partitioning for high-volume deployments
+
+At high request volume (millions of rows per day), retention via `DELETE` becomes a problem. Deleting rows does not return disk to the operating system; it leaves dead tuples ("tombstones") that autovacuum has to reclaim later. When writes outpace autovacuum, the table keeps growing on disk even though the logical row count is bounded, and `LiteLLM_SpendLogs` can reach hundreds of GB in a month.
+
+The fix is native Postgres range partitioning on `startTime`. With a partitioned table, retention drops whole partitions with `DROP TABLE`, an instant metadata operation that frees disk immediately, with no tombstones and no vacuum. When LiteLLM detects that `LiteLLM_SpendLogs` is partitioned, the same cleanup job automatically switches from batched deletes to dropping expired partitions, and it pre-creates upcoming partitions on each run so writes always have a partition to land in.
+
+This is opt-in. The default schema is not partitioned, so existing deployments are unaffected until you convert the table.
+
+### Converting the table
+
+Partitioning a populated table cannot be done in place, so the conversion renames the existing table aside and creates a fresh partitioned table. The partition key must be part of the primary key, so the primary key becomes the composite `("request_id", "startTime")`; LiteLLM's spend-log write path uses `INSERT ... ON CONFLICT DO NOTHING`, which is compatible with this.
+
+Run the runbook in [`db_scripts/partition_spend_logs.sql`](https://github.com/BerriAI/litellm/blob/main/db_scripts/partition_spend_logs.sql) against your database (test on a staging copy and take a backup first). It creates the partitioned parent, the composite primary key, the `startTime` index, and a `DEFAULT` partition as a safety net for any out-of-range rows.
+
+After converting, set a retention period as shown above and the cleanup job manages partitions for you.
+
+### Tuning
+
+| Environment variable | Default | Description |
+| --- | --- | --- |
+| `SPEND_LOG_PARTITION_INTERVAL` | `day` | Partition granularity: `day`, `week`, or `month`. Use `day` for high-volume tables so retention is precise and individual partitions stay manageable. |
+| `SPEND_LOG_PARTITION_PRECREATE_AHEAD` | `7` | How many future partitions to pre-create on each cleanup run. |
+
+A partition is only dropped once its entire time range is older than the retention cutoff, so effective retention is rounded up to the partition granularity.
