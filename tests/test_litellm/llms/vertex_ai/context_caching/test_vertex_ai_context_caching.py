@@ -17,6 +17,7 @@ from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     MAX_PAGINATION_PAGES,
     ContextCachingEndpoints,
 )
+from litellm.types.llms.vertex_ai import FunctionCallingConfig, ToolConfig
 
 
 class TestContextCachingEndpoints:
@@ -203,7 +204,7 @@ class TestContextCachingEndpoints:
 
         # Verify cache key was generated with tools and model
         mock_cache_obj.get_cache_key.assert_called_once_with(
-            messages=cached_messages, tools=self.sample_tools, model="gemini-1.5-pro"
+            messages=cached_messages, tools=self.sample_tools, tool_choice=None, model="gemini-1.5-pro"
         )
 
     @pytest.mark.parametrize(
@@ -476,7 +477,7 @@ class TestContextCachingEndpoints:
 
         # Verify cache key was generated with tools and model
         mock_cache_obj.get_cache_key.assert_called_once_with(
-            messages=cached_messages, tools=self.sample_tools, model="gemini-1.5-pro"
+            messages=cached_messages, tools=self.sample_tools, tool_choice=None, model="gemini-1.5-pro"
         )
 
     @pytest.mark.asyncio
@@ -1371,3 +1372,364 @@ class TestVertexAIGlobalLocation:
 
         assert "generativelanguage.googleapis.com" in url
         assert "cachedContents" in url
+
+
+class TestToolChoiceInCachedContent:
+    """Regression tests for issue #29088.
+
+    tool_choice must be included in the cached content body (as toolConfig)
+    so that it survives cache hits. Previously, tool_choice was silently
+    dropped when cache_control was present because the cache creation code
+    only handled `tools`, not `tool_choice`.
+    """
+
+    def setup_method(self):
+        """Setup for each test method"""
+        self.context_caching = ContextCachingEndpoints()
+        self.mock_logging = MagicMock(spec=Logging)
+        self.mock_client = MagicMock(spec=HTTPHandler)
+        self.mock_async_client = MagicMock(spec=AsyncHTTPHandler)
+
+        # Mock is_prompt_caching_valid_prompt to return True to bypass token checks.
+        self._token_check_patcher = patch(
+            "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.is_prompt_caching_valid_prompt",
+            return_value=True,
+        )
+        self._token_check_patcher.start()
+
+        self.sample_messages = [
+            {
+                "role": "system",
+                "content": "You are a helpful assistant",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {"role": "user", "content": "Hello"},
+        ]
+
+        self.sample_tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        # tool_choice in ToolConfig format (already transformed by map_tool_choice_values)
+        self.sample_tool_choice = ToolConfig(
+            functionCallingConfig=FunctionCallingConfig(mode="ANY")
+        )
+
+    def teardown_method(self):
+        """Teardown for each test method"""
+        self._token_check_patcher.stop()
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.HTTPHandler"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj"
+    )
+    def test_tool_choice_popped_from_optional_params_on_cache_hit(
+        self, mock_cache_obj, mock_separate, mock_handler_cls, custom_llm_provider
+    ):
+        """tool_choice must be popped from optional_params so it is not passed
+        to the downstream generate request (where Vertex would 400 on duplicate toolConfig)."""
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        mock_separate.return_value = (cached_messages, non_cached_messages)
+        mock_cache_obj.get_cache_key.return_value = "test_cache_key"
+
+        with patch.object(
+            self.context_caching, "check_cache", return_value="existing_cache"
+        ):
+            optional_params = {
+                "tools": self.sample_tools.copy(),
+                "tool_choice": self.sample_tool_choice,
+            }
+            self.context_caching.check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=None,  # Pass None so the code creates a new client
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project="test_project",
+                vertex_location="test_location",
+                vertex_auth_header="test_token",
+            )
+
+        # tool_choice must be consumed from optional_params
+        assert "tool_choice" not in optional_params
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    def test_tool_choice_not_popped_when_no_cached_messages(
+        self, mock_separate, custom_llm_provider
+    ):
+        """tool_choice must NOT be popped when there are no cached messages."""
+        mock_separate.return_value = ([], self.sample_messages)
+
+        optional_params = {
+            "tools": self.sample_tools.copy(),
+            "tool_choice": self.sample_tool_choice,
+        }
+        original_tool_choice = optional_params["tool_choice"]
+
+        with patch.object(
+            self.context_caching, "check_cache", return_value=None
+        ):
+            self.context_caching.check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=self.mock_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project="test_project",
+                vertex_location="test_location",
+                vertex_auth_header="test_token",
+            )
+
+        # tool_choice must remain in optional_params when no caching happens
+        assert "tool_choice" in optional_params
+        assert optional_params["tool_choice"] == original_tool_choice
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.HTTPHandler"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj"
+    )
+    def test_tool_choice_included_in_cached_content_request_body(
+        self, mock_cache_obj, mock_separate, mock_handler_cls, custom_llm_provider
+    ):
+        """When creating a new cache, toolConfig must be set on the request body."""
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        mock_separate.return_value = (cached_messages, non_cached_messages)
+        mock_cache_obj.get_cache_key.return_value = "test_cache_key"
+
+        # Mock the HTTPHandler instance returned by the class
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"name": "newly_created_cache"}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_handler_instance = MagicMock()
+        mock_handler_instance.post.return_value = mock_response
+        mock_handler_cls.return_value = mock_handler_instance
+
+        optional_params = {
+            "tools": self.sample_tools.copy(),
+            "tool_choice": self.sample_tool_choice,
+        }
+
+        with patch.object(
+            self.context_caching, "check_cache", return_value=None
+        ):
+            self.context_caching.check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=None,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project="test_project",
+                vertex_location="test_location",
+                vertex_auth_header="test_token",
+            )
+
+        # Verify the posted body contains toolConfig
+        posted_body = mock_handler_instance.post.call_args[1]["json"]
+        assert "toolConfig" in posted_body
+        assert posted_body["toolConfig"] == self.sample_tool_choice
+
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.HTTPHandler"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj"
+    )
+    def test_tool_choice_not_in_cached_body_when_none(
+        self, mock_cache_obj, mock_separate, mock_handler_cls, custom_llm_provider
+    ):
+        """When tool_choice is not provided, toolConfig must NOT appear in the cached body."""
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        mock_separate.return_value = (cached_messages, non_cached_messages)
+        mock_cache_obj.get_cache_key.return_value = "test_cache_key"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"name": "newly_created_cache"}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_handler_instance = MagicMock()
+        mock_handler_instance.post.return_value = mock_response
+        mock_handler_cls.return_value = mock_handler_instance
+
+        optional_params = {"tools": self.sample_tools.copy()}  # no tool_choice
+
+        with patch.object(
+            self.context_caching, "check_cache", return_value=None
+        ):
+            self.context_caching.check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=None,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project="test_project",
+                vertex_location="test_location",
+                vertex_auth_header="test_token",
+            )
+
+        posted_body = mock_handler_instance.post.call_args[1]["json"]
+        assert "toolConfig" not in posted_body
+
+    # ---- Async variants ----
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.get_async_httpx_client"
+    )
+    async def test_async_tool_choice_popped_from_optional_params(
+        self, mock_get_client, mock_cache_obj, mock_separate, custom_llm_provider
+    ):
+        """Async: tool_choice must be popped from optional_params on cache hit."""
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        mock_separate.return_value = (cached_messages, non_cached_messages)
+        mock_cache_obj.get_cache_key.return_value = "test_cache_key"
+
+        mock_async_client = AsyncMock(spec=AsyncHTTPHandler)
+        mock_get_client.return_value = mock_async_client
+
+        with patch.object(
+            self.context_caching, "async_check_cache", return_value="existing_cache"
+        ):
+            optional_params = {
+                "tools": self.sample_tools.copy(),
+                "tool_choice": self.sample_tool_choice,
+            }
+            await self.context_caching.async_check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=mock_async_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project="test_project",
+                vertex_location="test_location",
+                vertex_auth_header="test_token",
+            )
+
+        assert "tool_choice" not in optional_params
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "custom_llm_provider", ["gemini", "vertex_ai", "vertex_ai_beta"]
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.local_cache_obj"
+    )
+    @patch(
+        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.get_async_httpx_client"
+    )
+    async def test_async_tool_choice_included_in_cached_content_request_body(
+        self, mock_get_client, mock_cache_obj, mock_separate, custom_llm_provider
+    ):
+        """Async: When creating a new cache, toolConfig must be set on the request body."""
+        cached_messages = [self.sample_messages[0]]
+        non_cached_messages = [self.sample_messages[1]]
+        mock_separate.return_value = (cached_messages, non_cached_messages)
+        mock_cache_obj.get_cache_key.return_value = "test_cache_key"
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"name": "newly_created_cache"}
+        mock_response.raise_for_status = MagicMock()
+
+        mock_async_client = AsyncMock(spec=AsyncHTTPHandler)
+        mock_async_client.post.return_value = mock_response
+        mock_get_client.return_value = mock_async_client
+
+        optional_params = {
+            "tools": self.sample_tools.copy(),
+            "tool_choice": self.sample_tool_choice,
+        }
+
+        with patch.object(
+            self.context_caching, "async_check_cache", return_value=None
+        ):
+            await self.context_caching.async_check_and_create_cache(
+                messages=self.sample_messages,
+                optional_params=optional_params,
+                api_key="test_key",
+                api_base=None,
+                model="gemini-1.5-pro",
+                client=mock_async_client,
+                timeout=30.0,
+                logging_obj=self.mock_logging,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project="test_project",
+                vertex_location="test_location",
+                vertex_auth_header="test_token",
+            )
+
+        posted_body = mock_async_client.post.call_args[1]["json"]
+        assert "toolConfig" in posted_body
+        assert posted_body["toolConfig"] == self.sample_tool_choice
