@@ -5684,8 +5684,17 @@ def _check_and_merge_model_level_guardrails(
         return data
 
     metadata = data.get("metadata") or {}
+    litellm_metadata = data.get("litellm_metadata") or {}
     model_info = metadata.get("model_info") or {}
     model_id = model_info.get("id") if trust_client_model_info else None
+    # route_request resolves team-scoped public model names with the
+    # server-populated team id; pre_call lookup must do the same so
+    # team-scoped guardrails are not silently skipped (greptile/veria-ai
+    # Medium on #29654).
+    team_id = (
+        metadata.get("user_api_key_team_id")
+        or litellm_metadata.get("user_api_key_team_id")
+    )
 
     model_level_guardrails: Optional[list] = None
     if model_id is not None:
@@ -5693,8 +5702,12 @@ def _check_and_merge_model_level_guardrails(
         if deployment is None:
             return data
         deployment_guardrails = deployment.litellm_params.get("guardrails")
+        # Bare-string guardrail names were truthy-accepted before; preserve
+        # that contract so post_call callers don't silently lose them.
         if isinstance(deployment_guardrails, list):
             model_level_guardrails = deployment_guardrails
+        elif deployment_guardrails:
+            model_level_guardrails = [deployment_guardrails]
     else:
         # Pre_call paths run before route_request picks a deployment, so we
         # don't know which deployment's litellm_params.guardrails will apply.
@@ -5705,13 +5718,20 @@ def _check_and_merge_model_level_guardrails(
         model_alias = data.get("model")
         if not isinstance(model_alias, str) or not model_alias:
             return data
-        deployments = llm_router.get_model_list(model_name=model_alias) or []
+        # Pass team_id so team-scoped public model names resolve the same way
+        # route_request resolves them; otherwise team-scoped deployments are
+        # invisible to this lookup and their guardrails are silently dropped.
+        deployments = (
+            llm_router.get_model_list(model_name=model_alias, team_id=team_id) or []
+        )
         seen: set = set()
         union: list = []
         for dep in deployments:
-            litellm_params = dep.get("litellm_params") or {}
-            guardrails = litellm_params.get("guardrails")
-            if not isinstance(guardrails, list):
+            litellm_params_dep = dep.get("litellm_params") or {}
+            guardrails = litellm_params_dep.get("guardrails")
+            if isinstance(guardrails, str):
+                guardrails = [guardrails]
+            elif not isinstance(guardrails, list):
                 continue
             for g in guardrails:
                 key = g if isinstance(g, str) else repr(g)

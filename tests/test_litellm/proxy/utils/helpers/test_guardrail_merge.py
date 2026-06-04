@@ -191,6 +191,76 @@ def test_check_and_merge_model_level_guardrails_trusts_client_model_info_id_by_d
     router.get_deployment.assert_called_once_with(model_id="deployment-123")
 
 
+def test_check_and_merge_model_level_guardrails_post_call_accepts_bare_string_guardrail():
+    """greptile P1 on #29654: the mypy-narrowing isinstance(list) guard must
+    not silently drop bare-string guardrail values that were truthy-accepted
+    before. Wrap a scalar into a one-element list so post_call merge keeps
+    working with single-guardrail configs."""
+    deployment = SimpleNamespace(litellm_params={"guardrails": "scalar-guardrail"})
+    router = MagicMock()
+    router.get_deployment.return_value = deployment
+    data = {"model": "any", "metadata": {"model_info": {"id": "deployment-x"}}}
+    result = _check_and_merge_model_level_guardrails(data, router)
+    assert "scalar-guardrail" in result["metadata"]["guardrails"]
+
+
+def test_check_and_merge_model_level_guardrails_alias_union_accepts_bare_string_guardrail():
+    """Same scalar-string contract on the pre_call alias-union path."""
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"guardrails": "scalar-alias-guardrail"}}
+    ]
+    data = {"model": "alias-m", "metadata": {"model_info": {}}}
+    result = _check_and_merge_model_level_guardrails(data, router)
+    assert "scalar-alias-guardrail" in result["metadata"]["guardrails"]
+
+
+def test_check_and_merge_model_level_guardrails_alias_fallback_passes_team_id():
+    """veria-ai Medium on #29654: route_request resolves team-scoped public
+    model names with metadata.user_api_key_team_id. The pre_call alias
+    lookup must pass that team_id to get_model_list, or team-scoped
+    deployments are invisible and their guardrails are silently dropped."""
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"guardrails": ["team-guardrail"]}}
+    ]
+    data = {
+        "model": "team-scoped-alias",
+        "metadata": {
+            "model_info": {},
+            "user_api_key_team_id": "team-abc",
+        },
+    }
+    result = _check_and_merge_model_level_guardrails(
+        data, router, trust_client_model_info=False
+    )
+    assert "team-guardrail" in result["metadata"]["guardrails"]
+    router.get_model_list.assert_called_once_with(
+        model_name="team-scoped-alias", team_id="team-abc"
+    )
+
+
+def test_check_and_merge_model_level_guardrails_alias_fallback_reads_team_id_from_litellm_metadata():
+    """Backstop: some call sites stash the team id on litellm_metadata
+    instead of metadata. The alias fallback should accept either."""
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = []
+    data = {
+        "model": "alias-m",
+        "metadata": {"model_info": {}},
+        "litellm_metadata": {"user_api_key_team_id": "team-xyz"},
+    }
+    _check_and_merge_model_level_guardrails(
+        data, router, trust_client_model_info=False
+    )
+    router.get_model_list.assert_called_once_with(
+        model_name="alias-m", team_id="team-xyz"
+    )
+
+
 def test_check_and_merge_model_level_guardrails_returns_data_when_deployment_none():
     router = _router_without_deployment()
     data = {"metadata": {"model_info": {"id": "x"}}, "model": "m"}
