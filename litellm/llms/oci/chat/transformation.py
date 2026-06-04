@@ -210,7 +210,12 @@ def _normalize_response_format(selected_params: Dict, vendor: OCIVendors) -> Non
         selected_params["responseFormat"] = payload
         return
 
-    if rf_type == "json_schema" and json_schema is not None:
+    if rf_type == "json_schema":
+        if json_schema is None:
+            raise OCIError(
+                status_code=400,
+                message="response_format type 'json_schema' requires a 'json_schema' object",
+            )
         # OCI's ResponseJsonSchema accepts only name/description/schema/isStrict.
         # OpenAI sends `strict` instead of `isStrict`; forwarding it (or any
         # other extra key) makes OCI reject the whole request with HTTP 400.
