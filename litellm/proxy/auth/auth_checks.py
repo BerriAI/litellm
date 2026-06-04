@@ -79,6 +79,7 @@ from litellm.utils import get_utc_datetime
 
 from .auth_checks_organization import organization_role_based_access_check
 from .auth_utils import get_model_from_request
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -2659,7 +2660,7 @@ async def get_object_permission(
 
     # else, check db
     try:
-        response = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+        response = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": object_permission_id}
         )
 
@@ -4480,10 +4481,10 @@ async def vector_store_access_check(
     #########################################################
     # Check if the key can access the vector store
     if valid_token is not None and valid_token.object_permission_id is not None:
-        key_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": valid_token.object_permission_id},
-            )
+        key_object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.find_unique(
+            where={"object_permission_id": valid_token.object_permission_id},
         )
         if key_object_permission is not None:
             _can_object_call_vector_stores(
@@ -4494,10 +4495,10 @@ async def vector_store_access_check(
 
     # Check if the team can access the vector store
     if team_object is not None and team_object.object_permission_id is not None:
-        team_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.find_unique(
-                where={"object_permission_id": team_object.object_permission_id},
-            )
+        team_object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.find_unique(
+            where={"object_permission_id": team_object.object_permission_id},
         )
         if team_object_permission is not None:
             _can_object_call_vector_stores(

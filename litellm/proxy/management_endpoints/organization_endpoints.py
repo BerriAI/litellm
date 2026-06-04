@@ -44,6 +44,7 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.utils import _update_dictionary
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 router = APIRouter()
 
@@ -439,10 +440,10 @@ async def _set_object_permission(
         return None
 
     if data.object_permission is not None:
-        created_object_permission = (
-            await prisma_client.db.litellm_objectpermissiontable.create(
-                data=data.object_permission.model_dump(exclude_none=True),
-            )
+        created_object_permission = await ObjectPermissionRepository(
+            prisma_client
+        ).table.create(
+            data=data.object_permission.model_dump(exclude_none=True),
         )
         del data.object_permission
         return created_object_permission.object_permission_id

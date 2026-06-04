@@ -15,6 +15,7 @@ from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
     ToolPolicyOverrideRow,
 )
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -244,7 +245,7 @@ async def list_overrides_for_tool(
     """
     out: List[ToolPolicyOverrideRow] = []
     try:
-        perms = await prisma_client.db.litellm_objectpermissiontable.find_many(
+        perms = await ObjectPermissionRepository(prisma_client).table.find_many(
             where={"blocked_tools": {"has": tool_name}},
             include={
                 "verification_tokens": True,
@@ -317,7 +318,7 @@ class ToolPolicyRegistry:
                 for row in tools
             }
 
-            perms = await prisma_client.db.litellm_objectpermissiontable.find_many()
+            perms = await ObjectPermissionRepository(prisma_client).table.find_many()
             self._blocked_tools_by_op_id = {}
             for row in perms:
                 op_id = getattr(row, "object_permission_id", None)
@@ -388,7 +389,7 @@ async def add_tool_to_object_permission_blocked(
     if not object_permission_id or not tool_name:
         return False
     try:
-        row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+        row = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": object_permission_id},
         )
         if row is None:
@@ -397,7 +398,7 @@ async def add_tool_to_object_permission_blocked(
         if tool_name in current:
             return True
         current.append(tool_name)
-        await prisma_client.db.litellm_objectpermissiontable.update(
+        await ObjectPermissionRepository(prisma_client).table.update(
             where={"object_permission_id": object_permission_id},
             data={"blocked_tools": current},
         )
@@ -418,7 +419,7 @@ async def remove_tool_from_object_permission_blocked(
     if not object_permission_id or not tool_name:
         return False
     try:
-        row = await prisma_client.db.litellm_objectpermissiontable.find_unique(
+        row = await ObjectPermissionRepository(prisma_client).table.find_unique(
             where={"object_permission_id": object_permission_id},
         )
         if row is None:
@@ -427,7 +428,7 @@ async def remove_tool_from_object_permission_blocked(
         if tool_name not in current:
             return False
         current = [t for t in current if t != tool_name]
-        await prisma_client.db.litellm_objectpermissiontable.update(
+        await ObjectPermissionRepository(prisma_client).table.update(
             where={"object_permission_id": object_permission_id},
             data={"blocked_tools": current},
         )
