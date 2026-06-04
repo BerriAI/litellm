@@ -28,7 +28,7 @@ const EnvVarsSection: React.FC = () => {
     <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
       <div className="flex items-center gap-2 mb-1">
         <Text strong className="text-sm">
-          Environment Variables
+          Variables
         </Text>
         <Tooltip
           title={
@@ -113,7 +113,7 @@ const EnvVarsSection: React.FC = () => {
               icon={<PlusOutlined />}
               block
             >
-              Add Environment Variable
+              Add Variable
             </Button>
           </div>
         )}
