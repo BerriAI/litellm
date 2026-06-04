@@ -41,6 +41,13 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
                 model=model,
             )
 
+        # Drop workspace_id alias keys from optional_params/litellm_params now
+        # that we've turned the value into the `anthropic-workspace-id` header.
+        # Without this they survive into `AnthropicConfig.transform_request` and
+        # ship as a top-level field in the JSON body, which Anthropic's
+        # /v1/messages rejects (#29272).
+        self._pop_workspace_id_params(optional_params, litellm_params)
+
         api_key = api_key or get_secret_str("ANTHROPIC_AWS_API_KEY")
         anthropic_headers = self.get_anthropic_headers(
             api_key=api_key,
