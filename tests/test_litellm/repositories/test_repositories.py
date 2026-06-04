@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.models.budget import Budget
-from litellm.models.credentials import Credentials
+from litellm.models.credentials import CredentialItem
 from litellm.models.model import Model
 from litellm.models.object_permission import ObjectPermission
 from litellm.models.organization import Organization
@@ -1215,90 +1215,84 @@ class TestCredentialsRepository:
         return CredentialsRepository(client)
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.credentials_repository.encrypt_value_helper",
-        side_effect=lambda v, **kw: f"encrypted_{v}",
-    )
-    @patch(
-        "litellm.repositories.credentials_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_create_credentials(self, mock_decrypt, mock_encrypt, repo):
-        cred = await repo.create_credentials(
-            credential_name="my-api-key",
-            credential_values={"api_key": "secret123"},
-            created_by="admin",
+    async def test_create(self, repo):
+        record = await repo.create(
+            data={
+                "credential_name": "my-api-key",
+                "credential_values": {"api_key": "encrypted_secret"},
+                "credential_info": {"provider": "openai"},
+                "created_by": "admin",
+                "updated_by": "admin",
+            }
         )
+        assert record.credential_name == "my-api-key"
+        cred = repo._to_model(record)
         assert cred.credential_name == "my-api-key"
-        mock_encrypt.assert_called()
+        assert cred.credential_info == {"provider": "openai"}
+        assert cred.credential_values == {"api_key": "encrypted_secret"}
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.credentials_repository.encrypt_value_helper",
-        side_effect=lambda v, **kw: f"encrypted_{v}",
-    )
-    @patch(
-        "litellm.repositories.credentials_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_create_credentials_with_info(self, mock_decrypt, mock_encrypt, repo):
-        cred = await repo.create_credentials(
-            credential_name="my-api-key",
-            credential_values={"api_key": "secret123"},
-            created_by="admin",
-            credential_info={"provider": "openai"},
-        )
-        assert cred.credential_name == "my-api-key"
+    async def test_find_by_name_returns_stored_values_without_decryption(self, repo):
+        repo._prisma_client.db.litellm_credentialstable._records["my-key"] = {
+            "credential_id": "cred-1",
+            "credential_name": "my-key",
+            "credential_values": {"api_key": "encrypted_secret"},
+            "credential_info": {"provider": "openai"},
+        }
+        cred = await repo.find_by_name("my-key")
+        assert isinstance(cred, CredentialItem)
+        assert cred.credential_values == {"api_key": "encrypted_secret"}
+        assert cred.credential_info == {"provider": "openai"}
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.credentials_repository.encrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    @patch(
-        "litellm.repositories.credentials_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_update_credentials(self, mock_decrypt, mock_encrypt, repo):
-        repo._prisma_client.db.litellm_credentialstable._records["cred-1"] = {
+    async def test_find_by_name_missing(self, repo):
+        assert await repo.find_by_name("nonexistent") is None
+
+    @pytest.mark.asyncio
+    async def test_update_by_name(self, repo):
+        repo._prisma_client.db.litellm_credentialstable._records["my-key"] = {
             "credential_id": "cred-1",
             "credential_name": "my-key",
             "credential_values": {"api_key": "old"},
+            "credential_info": {},
         }
-        updated = await repo.update_credentials(
-            credential_id="cred-1",
-            updated_by="admin",
-            credential_values={"api_key": "new"},
+        await repo.update_by_name(
+            "my-key",
+            data={"credential_values": {"api_key": "new"}, "updated_by": "admin"},
         )
-        assert updated is not None
+        cred = await repo.find_by_name("my-key")
+        assert cred.credential_values == {"api_key": "new"}
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.credentials_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_delete_credentials(self, mock_decrypt, repo):
-        repo._prisma_client.db.litellm_credentialstable._records["cred-1"] = {
-            "credential_id": "cred-1",
-            "credential_name": "my-key",
-            "credential_values": {"api_key": "secret"},
-        }
-        deleted = await repo.delete_credentials("cred-1")
-        assert deleted is not None
-
-    @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.credentials_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_find_by_name(self, mock_decrypt, repo):
+    async def test_delete_by_name(self, repo):
         repo._prisma_client.db.litellm_credentialstable._records["my-key"] = {
             "credential_id": "cred-1",
             "credential_name": "my-key",
             "credential_values": {"api_key": "secret"},
+            "credential_info": {},
         }
-        cred = await repo.find_by_name("my-key")
-        assert cred is not None
+        await repo.delete_by_name("my-key")
+        assert await repo.find_by_name("my-key") is None
+
+    @pytest.mark.asyncio
+    async def test_find_all(self, repo):
+        repo._prisma_client.db.litellm_credentialstable._records["k1"] = {
+            "credential_name": "k1",
+            "credential_values": {"api_key": "a"},
+            "credential_info": {},
+        }
+        repo._prisma_client.db.litellm_credentialstable._records["k2"] = {
+            "credential_name": "k2",
+            "credential_values": {"api_key": "b"},
+            "credential_info": {},
+        }
+        records = await repo.find_all()
+        assert len(records) == 2
+
+    def test_prisma_client_none_raises(self):
+        repo = CredentialsRepository(None)
+        with pytest.raises(RuntimeError, match="No DB Connected"):
+            _ = repo.table
 
 
 class TestConfigRepository:

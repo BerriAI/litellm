@@ -3,7 +3,11 @@ Domain models for LiteLLM backend.
 """
 
 from litellm.models.budget import Budget
-from litellm.models.credentials import Credentials
+from litellm.models.credentials import (
+    CredentialBase,
+    CredentialItem,
+    CreateCredentialItem,
+)
 from litellm.models.model import Model
 from litellm.models.object_permission import ObjectPermission
 from litellm.models.organization import Organization
@@ -14,7 +18,9 @@ from litellm.models.verification_token import VerificationToken
 
 __all__ = [
     "Budget",
-    "Credentials",
+    "CredentialBase",
+    "CredentialItem",
+    "CreateCredentialItem",
     "Model",
     "ObjectPermission",
     "Organization",

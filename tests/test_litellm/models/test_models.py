@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from litellm.models.budget import Budget
-from litellm.models.credentials import Credentials
+from litellm.models.credentials import CredentialItem
 from litellm.models.model import Model
 from litellm.models.object_permission import ObjectPermission
 from litellm.models.organization import Organization
@@ -66,15 +66,14 @@ class TestBudget:
 
 class TestCredentials:
     def test_credentials_creation(self):
-        creds = Credentials(
-            credential_id="test-cred-id",
+        creds = CredentialItem(
             credential_name="test-cred",
             credential_values={"api_key": "secret123"},
             credential_info={"provider": "openai"},
         )
-        assert creds.credential_id == "test-cred-id"
         assert creds.credential_name == "test-cred"
         assert creds.credential_values["api_key"] == "secret123"
+        assert creds.credential_info["provider"] == "openai"
 
 
 class TestModel:
