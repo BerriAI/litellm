@@ -1,7 +1,7 @@
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
-from typing_extensions import TypedDict
+from typing_extensions import Required, TypedDict
 
 from .vertex_ai import (
     GenerationConfig,
