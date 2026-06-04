@@ -4,19 +4,14 @@ Tests for gateway repository layer.
 
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from litellm.models.budget import Budget
+from litellm.models.base import DomainModel
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import CredentialItem
-from litellm.models.model import Model
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.models.organization import Organization
-from litellm.models.project import Project
 from litellm.models.team import Team
-from litellm.models.user import User
-from litellm.models.verification_token import VerificationToken
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigRepository
@@ -153,14 +148,14 @@ class TestBaseRepository:
         return MockPrismaClient()
 
     def test_prisma_client_none_raises(self):
-        class TestRepo(BaseRepository[Budget]):
+        class TestRepo(BaseRepository[LiteLLM_BudgetTable]):
             @property
             def table(self):
                 return None
 
             @property
             def model_class(self):
-                return Budget
+                return LiteLLM_BudgetTable
 
         repo = TestRepo(None)
         with pytest.raises(RuntimeError, match="No DB Connected"):
@@ -302,7 +297,10 @@ class TestModelRepository:
     async def test_create_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
         model = await repo.create_model(
             model_name="gpt-4-turbo",
-            litellm_params={"api_key": "sk-secret", "api_base": "https://api.openai.com"},
+            litellm_params={
+                "api_key": "sk-secret",
+                "api_base": "https://api.openai.com",
+            },
             created_by="admin",
             model_id="custom-model-id",
             model_info={"team_id": "team-1", "description": "GPT-4 Turbo model"},
@@ -1496,7 +1494,9 @@ class TestVerificationTokenRepositoryExtended:
 
         class MockTx:
             def __init__(self, client):
-                self.litellm_deletedverificationtoken = client.db.litellm_deletedverificationtoken
+                self.litellm_deletedverificationtoken = (
+                    client.db.litellm_deletedverificationtoken
+                )
                 self.litellm_verificationtoken = client.db.litellm_verificationtoken
 
             async def __aenter__(self):
@@ -1847,34 +1847,33 @@ class TestBaseRepositoryExtended:
         assert result == []
 
 
+class _SampleDomainModel(DomainModel):
+    budget_id: Optional[str] = None
+    max_budget: Optional[float] = None
+
+
 class TestDomainModelExtended:
     def test_from_db_record_none_raises(self):
-        from litellm.models.base import DomainModel
-
         with pytest.raises(ValueError, match="Cannot create domain model from None"):
             DomainModel.from_db_record(None)
 
     def test_from_db_record_dict(self):
-        from litellm.models.budget import Budget
-
-        budget = Budget.from_db_record({"budget_id": "b1", "max_budget": 100.0})
-        assert budget.budget_id == "b1"
+        model = _SampleDomainModel.from_db_record(
+            {"budget_id": "b1", "max_budget": 100.0}
+        )
+        assert model.budget_id == "b1"
 
     def test_from_db_record_model_dump(self):
-        from litellm.models.budget import Budget
-
         class MockRecordWithModelDump:
             def model_dump(self):
                 return {"budget_id": "b2", "max_budget": 200.0}
 
-        budget = Budget.from_db_record(MockRecordWithModelDump())
-        assert budget.budget_id == "b2"
+        model = _SampleDomainModel.from_db_record(MockRecordWithModelDump())
+        assert model.budget_id == "b2"
 
     def test_to_db_dict(self):
-        from litellm.models.budget import Budget
-
-        budget = Budget(budget_id="b3", max_budget=300.0)
-        data = budget.to_db_dict()
+        model = _SampleDomainModel(budget_id="b3", max_budget=300.0)
+        data = model.to_db_dict()
         assert data["budget_id"] == "b3"
         assert data["max_budget"] == 300.0
 
@@ -1886,7 +1885,6 @@ class TestTeamRepositoryArchiveData:
         return TeamRepository(client)
 
     def test_build_archive_data_minimal_fields(self, repo):
-        from litellm.models.team import Team
 
         team = Team(team_id="team-minimal")
         archive_data = repo._build_archive_data(team)
@@ -1914,7 +1912,6 @@ class TestTeamRepositoryArchiveData:
         assert "model_id" not in archive_data
 
     def test_build_archive_data_excludes_invalid_columns(self, repo):
-        from litellm.models.team import Team
 
         team = Team(
             team_id="team-1",
@@ -1937,7 +1934,7 @@ class TestTeamRepositoryArchiveData:
     def test_build_archive_data_with_all_valid_fields(self, repo):
         from datetime import datetime
 
-        from litellm.models.team import Team, TeamMember
+        from litellm.models.team import TeamMember
 
         team = Team(
             team_id="team-full",

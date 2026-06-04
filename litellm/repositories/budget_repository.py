@@ -4,11 +4,11 @@ Budget repository for database operations on LiteLLM_BudgetTable.
 
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.budget import Budget
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.repositories.base_repository import BaseRepository
 
 
-class BudgetRepository(BaseRepository[Budget]):
+class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):
     """Repository for budget database operations."""
 
     @property
@@ -16,12 +16,12 @@ class BudgetRepository(BaseRepository[Budget]):
         return self.prisma_client.db.litellm_budgettable
 
     @property
-    def model_class(self) -> Type[Budget]:
-        return Budget
+    def model_class(self) -> Type[LiteLLM_BudgetTable]:
+        return LiteLLM_BudgetTable
 
     async def find_by_id(
         self, budget_id: str, id_field: str = "budget_id"
-    ) -> Optional[Budget]:
+    ) -> Optional[LiteLLM_BudgetTable]:
         return await super().find_by_id(budget_id, id_field)
 
     async def create_budget(
@@ -35,7 +35,7 @@ class BudgetRepository(BaseRepository[Budget]):
         model_max_budget: Optional[Dict[str, Any]] = None,
         budget_duration: Optional[str] = None,
         allowed_models: Optional[List[str]] = None,
-    ) -> Budget:
+    ) -> LiteLLM_BudgetTable:
         """Create a new budget record."""
         data: Dict[str, Any] = {
             "created_by": created_by,
@@ -72,7 +72,7 @@ class BudgetRepository(BaseRepository[Budget]):
         model_max_budget: Optional[Dict[str, Any]] = None,
         budget_duration: Optional[str] = None,
         allowed_models: Optional[List[str]] = None,
-    ) -> Optional[Budget]:
+    ) -> Optional[LiteLLM_BudgetTable]:
         """Update an existing budget record."""
         data: Dict[str, Any] = {"updated_by": updated_by}
         if max_budget is not None:
@@ -94,6 +94,6 @@ class BudgetRepository(BaseRepository[Budget]):
 
         return await self.update(budget_id, data, id_field="budget_id")
 
-    async def delete_budget(self, budget_id: str) -> Optional[Budget]:
+    async def delete_budget(self, budget_id: str) -> Optional[LiteLLM_BudgetTable]:
         """Delete a budget record."""
         return await self.delete(budget_id, id_field="budget_id")
