@@ -15,6 +15,7 @@ export enum Providers {
   Azure_AI_Studio = "Azure AI Foundry (Studio)",
   AZURE_TEXT = "Azure Text",
   BASETEN = "Baseten",
+  BYTEPLUS = "BytePlus",
   BYTEZ = "Bytez",
   Cerebras = "Cerebras",
   CLARIFAI = "Clarifai",
@@ -123,6 +124,7 @@ export const provider_map: Record<string, string> = {
   BASETEN: "baseten",
   Bedrock: "bedrock",
   BedrockMantle: "bedrock_mantle",
+  BYTEPLUS: "byteplus",
   BYTEZ: "bytez",
   Cerebras: "cerebras",
   CLARIFAI: "clarifai",
@@ -231,6 +233,7 @@ export const providerLogoMap: Record<string, string> = {
   [Providers.Azure_AI_Studio]: `${asset_logos_folder}microsoft_azure.svg`,
   [Providers.AZURE_TEXT]: `${asset_logos_folder}microsoft_azure.svg`,
   [Providers.BASETEN]: `${asset_logos_folder}baseten.svg`,
+  [Providers.BYTEPLUS]: `${asset_logos_folder}volcengine.png`,
   [Providers.Bedrock]: `${asset_logos_folder}bedrock.svg`,
   [Providers.BedrockMantle]: `${asset_logos_folder}bedrock.svg`,
   [Providers.SageMaker]: `${asset_logos_folder}bedrock.svg`,
@@ -360,6 +363,8 @@ export const getPlaceholder = (selectedProvider: string): string => {
     return "jina_ai/";
   } else if (selectedProvider == Providers.VolcEngine) {
     return "volcengine/<any-model-on-volcengine>";
+  } else if (selectedProvider == Providers.BYTEPLUS) {
+    return "byteplus/deepseek-v4-flash-260425";
   } else if (selectedProvider == Providers.DeepInfra) {
     return "deepinfra/<any-model-on-deepinfra>";
   } else if (selectedProvider == Providers.FalAI) {
