@@ -432,8 +432,6 @@ def test_realtime_stream_combines_text_and_audio_token_details():
 
 
 def test_realtime_logging_object_allows_null_transcript_in_conversation_item_added():
-    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
-
     results: OpenAIRealtimeStreamList = [
         {
             "type": "conversation.item.added",
@@ -467,8 +465,9 @@ def test_realtime_logging_object_allows_null_transcript_in_conversation_item_add
     )
 
     assert logging_result.usage.total_tokens == 18
-    assert logging_result.results[0]["item"]["content"][0]["transcript"] is None    
-    
+    assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
+
+
 def test_custom_pricing_with_router_model_id():
     from litellm import Router
 
