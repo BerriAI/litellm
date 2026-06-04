@@ -24,17 +24,15 @@ Use this guide if you are on an **Enterprise trial** to evaluate LiteLLM as a un
 
 All gateway and budget tests share one deployment and one org/team/key. Do this section first.
 
-<Tabs>
-<TabItem value="self-hosted" label="Self-Hosted">
-
 ### Prerequisites
 
-- Docker + Docker Compose
-- **Postgres** — required for Admin UI, virtual keys, MCP/Agent registries, and budget tracking
 - An LLM provider API key (OpenAI, Azure, Anthropic, etc.)
-- Your **Enterprise license key** 
+- **Postgres** — required for Admin UI, virtual keys, MCP/Agent registries, and budget tracking
+- Your **Enterprise license key**
+- A deployment target: **Docker Compose**, **Kubernetes** (`kubectl`), or **Helm**
 
-### Deploy with Docker Compose
+<Tabs>
+<TabItem value="docker-compose" label="Docker Compose">
 
 Follow the [Docker Compose tab](/docs/proxy/docker_quick_start) in the Getting Started Tutorial. Condensed steps:
 
@@ -74,14 +72,230 @@ general_settings:
 docker compose up
 ```
 
+</TabItem>
+
+<TabItem value="kubernetes" label="Kubernetes">
+
+Deploy with raw manifests when you manage your own Postgres and want full control over the resources. You need an existing Postgres reachable from the cluster.
+
+#### Step 1. Create a ConfigMap for `config.yaml`
+
+```yaml title="litellm-config.yaml" showLineNumbers
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+data:
+  config.yaml: |
+    model_list:
+      - model_name: gpt-5.5
+        litellm_params:
+          model: openai/gpt-5.5
+          api_key: os.environ/OPENAI_API_KEY
+
+    litellm_settings:
+      callbacks: ["prometheus"]
+
+    general_settings:
+      master_key: os.environ/LITELLM_MASTER_KEY
+      store_model_in_db: true
+```
+
+```bash
+kubectl apply -f litellm-config.yaml
+```
+
+#### Step 2. Create a Secret for keys
+
+```bash
+kubectl create secret generic litellm-secrets \
+  --from-literal=LITELLM_MASTER_KEY="sk-1234" \
+  --from-literal=LITELLM_SALT_KEY="sk-salt-change-me" \
+  --from-literal=LITELLM_LICENSE="eyJ..." \
+  --from-literal=OPENAI_API_KEY="your-api-key" \
+  --from-literal=DATABASE_URL="postgresql://user:pass@host:5432/litellm"
+```
+
+#### Step 3. Create `deployment.yaml`
+
+```yaml title="deployment.yaml" showLineNumbers
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: litellm-deployment
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: litellm
+  template:
+    metadata:
+      labels:
+        app: litellm
+    spec:
+      containers:
+        - name: litellm
+          image: docker.litellm.ai/berriai/litellm-database:main-stable
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4000
+          envFrom:
+            - secretRef:
+                name: litellm-secrets
+          args:
+            - "--config"
+            - "/app/proxy_config.yaml"
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/proxy_config.yaml
+              subPath: config.yaml
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/liveliness
+              port: 4000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /health/readiness
+              port: 4000
+            initialDelaySeconds: 120
+            periodSeconds: 15
+      volumes:
+        - name: config-volume
+          configMap:
+            name: litellm-config
+```
+
+```bash
+kubectl apply -f deployment.yaml
+```
+
+#### Step 4. Create `service.yaml`
+
+```yaml title="service.yaml" showLineNumbers
+apiVersion: v1
+kind: Service
+metadata:
+  name: litellm-service
+spec:
+  selector:
+    app: litellm
+  ports:
+    - protocol: TCP
+      port: 4000
+      targetPort: 4000
+  type: NodePort
+```
+
+```bash
+kubectl apply -f service.yaml
+```
+
+#### Step 5. Start the server
+
+```bash
+kubectl port-forward service/litellm-service 4000:4000
+```
+
+Your LiteLLM Gateway is now running on `http://0.0.0.0:4000`.
+
+</TabItem>
+
+<TabItem value="helm" label="Helm">
+
+:::info
+
+[BETA] The LiteLLM Helm chart is BETA. If you run into issues or have feedback, let us know at [github.com/BerriAI/litellm/issues](https://github.com/BerriAI/litellm/issues).
+
+:::
+
+The Helm chart can provision Postgres for you (`db.deployStandalone: true`) or point at an existing database (`db.useExisting`). See the [chart README](https://github.com/BerriAI/litellm/blob/litellm_internal_staging/deploy/charts/litellm-helm/README.md) and the full [values.yaml](https://github.com/BerriAI/litellm/blob/main/deploy/charts/litellm-helm/values.yaml).
+
+#### Step 1. Clone the repository
+
+```bash
+git clone https://github.com/BerriAI/litellm.git
+```
+
+#### Step 2. Create a Secret for your license + provider keys
+
+```bash
+kubectl create secret generic litellm-env-secret \
+  --from-literal=LITELLM_LICENSE="eyJ..." \
+  --from-literal=OPENAI_API_KEY="your-api-key"
+  --from-literal=DATABASE_URL="postgres://user@password:5432"
+```
+
+#### Step 3. Create `values-enterprise.yaml`
+
+Layer your enterprise settings onto the chart. `environmentSecrets` injects the Secret above as env vars, which `proxy_config` then references with `os.environ/<NAME>`.
+
+```yaml title="values-enterprise.yaml" showLineNumbers
+masterkey: sk-1234
+
+environmentSecrets:
+  - litellm-env-secret
+
+db:
+  deployStandalone: true
+
+proxyConfigMap:
+  create: true
+
+proxy_config:
+  model_list:
+    - model_name: gpt-5.5
+      litellm_params:
+        model: openai/gpt-5.5
+        api_key: os.environ/OPENAI_API_KEY
+  litellm_settings:
+    callbacks: ["prometheus"]
+  general_settings:
+    store_model_in_db: true
+```
+
+**Bring your own database** — to point at an existing Postgres instead of letting the chart provision one, replace the `db` block:
+
+```yaml title="values-enterprise.yaml" showLineNumbers
+db:
+  useExisting: true
+  endpoint: my-postgres.default.svc.cluster.local
+  database: litellm
+  url: postgresql://user:pass@my-postgres:5432/litellm
+  secret:
+    name: litellm-db-secret
+    usePasswordSecret: true
+```
+
+#### Step 4. Deploy with Helm
+
+Run from the root of the cloned `litellm` repo:
+
+```bash
+helm install \
+  -f values-enterprise.yaml \
+  mydeploy \
+  deploy/charts/litellm-helm
+```
+
+#### Step 5. Expose the service to localhost
+
+```bash
+kubectl port-forward service/mydeploy-litellm-helm 4000:4000
+```
+
+Your LiteLLM Gateway is now running on `http://127.0.0.1:4000`.
+
+</TabItem>
+</Tabs>
+
 ### Verify Enterprise Edition
 
 Open `http://localhost:4000/` — Swagger should show **"Enterprise Edition"** in the description. See the [Enterprise license FAQ](/docs/enterprise#how-do-i-set-up-and-verify-an-enterprise-license).
 
 Open the Admin UI at `http://localhost:4000/ui` and sign in with your master key.
-
-</TabItem>
-</Tabs>
 
 ### Shared tenant setup
 
