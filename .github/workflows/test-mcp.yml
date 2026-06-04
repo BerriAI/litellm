@@ -15,12 +15,17 @@ on:
 
 permissions:
   contents: read
-  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    permissions:
+      contents: read
 
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -51,11 +56,40 @@ jobs:
         run: |
           uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov-report=xml --cov-config=pyproject.toml --durations=5
 
-      - name: Upload coverage to Codecov
-        if: success()
+      - name: Save coverage report
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: coverage-mcp-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage.xml
+          retention-days: 1
+
+  upload-coverage:
+    name: Upload coverage to Codecov
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Download coverage report
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: coverage-mcp-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage-reports
+          merge-multiple: true
+
+      - name: Upload to Codecov
         uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
         with:
           use_oidc: true
-          files: coverage.xml
+          directory: coverage-reports
+          root_dir: ${{ github.workspace }}
           flags: mcp
           fail_ci_if_error: false
