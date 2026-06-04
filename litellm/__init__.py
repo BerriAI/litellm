@@ -444,6 +444,7 @@ disable_copilot_system_to_assistant: bool = (
     False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 )
 public_mcp_servers: Optional[List[str]] = None
+public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
