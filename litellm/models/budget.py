@@ -5,6 +5,7 @@ Canonical definition for ``litellm_budgettable``. Re-exported from
 ``litellm.proxy._types`` for backwards compatibility.
 """
 
+from datetime import datetime
 from typing import List, Optional
 
 from pydantic import ConfigDict
@@ -31,5 +32,25 @@ class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
     allowed_models: Optional[List[str]] = (
         None  # per-member model scope; empty = inherit team models
     )
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
+class LiteLLM_BudgetTableFull(LiteLLM_BudgetTable):
+    """LiteLLM_BudgetTable + server-managed fields returned on API responses."""
+
+    budget_reset_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class LiteLLM_TeamMemberTable(LiteLLM_BudgetTable):
+    """
+    Used to track spend of a user_id within a team_id
+    """
+
+    spend: Optional[float] = None
+    user_id: Optional[str] = None
+    team_id: Optional[str] = None
+    budget_id: Optional[str] = None
 
     model_config = ConfigDict(protected_namespaces=())
