@@ -33,6 +33,7 @@ from litellm.types.tool_management import (
     ToolUsageLogEntry,
     ToolUsageLogsResponse,
 )
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 router = APIRouter()
 
@@ -357,7 +358,7 @@ async def _resolve_key_hash_to_object_permission_id(
     if op_id:
         return op_id
     new_id = str(uuid.uuid4())
-    await prisma_client.db.litellm_objectpermissiontable.create(
+    await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
     updated_count = await prisma_client.db.litellm_verificationtoken.update_many(
@@ -365,7 +366,7 @@ async def _resolve_key_hash_to_object_permission_id(
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await prisma_client.db.litellm_objectpermissiontable.delete(
+        await ObjectPermissionRepository(prisma_client).table.delete(
             where={"object_permission_id": new_id}
         )
         row = await prisma_client.db.litellm_verificationtoken.find_unique(
@@ -393,7 +394,7 @@ async def _resolve_team_id_to_object_permission_id(
     if op_id:
         return op_id
     new_id = str(uuid.uuid4())
-    await prisma_client.db.litellm_objectpermissiontable.create(
+    await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
     updated_count = await prisma_client.db.litellm_teamtable.update_many(
@@ -401,7 +402,7 @@ async def _resolve_team_id_to_object_permission_id(
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await prisma_client.db.litellm_objectpermissiontable.delete(
+        await ObjectPermissionRepository(prisma_client).table.delete(
             where={"object_permission_id": new_id}
         )
         row = await prisma_client.db.litellm_teamtable.find_unique(

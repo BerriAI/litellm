@@ -26,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.utils import PrismaClient
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 
 
 def _prepare_mcp_server_data(
@@ -347,16 +348,16 @@ async def get_objectpermissions_for_mcp_server(
     """
     Get all the object permissions records and the associated team and verficiationtoken records that have access to the mcp server
     """
-    object_permission_records = (
-        await prisma_client.db.litellm_objectpermissiontable.find_many(
-            where={
-                "mcp_servers": {"has": mcp_server_id},
-            },
-            include={
-                "teams": True,
-                "verification_tokens": True,
-            },
-        )
+    object_permission_records = await ObjectPermissionRepository(
+        prisma_client
+    ).table.find_many(
+        where={
+            "mcp_servers": {"has": mcp_server_id},
+        },
+        include={
+            "teams": True,
+            "verification_tokens": True,
+        },
     )
 
     return object_permission_records
