@@ -452,6 +452,35 @@ class TestTeamRepository:
         assert updated.team_alias == "Updated Team"
 
     @pytest.mark.asyncio
+    async def test_update_team_all_fields(self, repo):
+        repo._prisma_client.db.litellm_teamtable._records["team-full"] = {
+            "team_id": "team-full",
+            "team_alias": "Test",
+            "admins": [],
+            "members": [],
+            "models": [],
+        }
+        updated = await repo.update_team(
+            team_id="team-full",
+            team_alias="Fully Updated",
+            organization_id="org-new",
+            admins=["admin1"],
+            members=["member1"],
+            members_with_roles={"user1": "admin"},
+            metadata={"updated": True},
+            max_budget=500.0,
+            soft_budget=400.0,
+            models=["gpt-4", "claude-3"],
+            max_parallel_requests=20,
+            tpm_limit=100000,
+            rpm_limit=1000,
+            budget_duration="weekly",
+            blocked=False,
+            object_permission_id="perm-new",
+        )
+        assert updated.team_alias == "Fully Updated"
+
+    @pytest.mark.asyncio
     async def test_add_member(self, repo):
         repo._prisma_client.db.litellm_teamtable._records["team-1"] = {
             "team_id": "team-1",
@@ -911,6 +940,23 @@ class TestOrganizationRepository:
         assert updated.organization_alias == "New Name"
 
     @pytest.mark.asyncio
+    async def test_update_organization_all_fields(self, repo):
+        repo._prisma_client.db.litellm_organizationtable._records["org-full"] = {
+            "organization_id": "org-full",
+            "organization_alias": "Old Name",
+        }
+        updated = await repo.update_organization(
+            organization_id="org-full",
+            updated_by="admin",
+            organization_alias="Fully Updated",
+            budget_id="budget-new",
+            metadata={"updated": True},
+            models=["gpt-4", "claude-3"],
+            object_permission_id="perm-new",
+        )
+        assert updated.organization_alias == "Fully Updated"
+
+    @pytest.mark.asyncio
     async def test_delete_organization(self, repo):
         repo._prisma_client.db.litellm_organizationtable._records["org-1"] = {
             "organization_id": "org-1",
@@ -983,6 +1029,28 @@ class TestProjectRepository:
             blocked=True,
         )
         assert updated.project_alias == "New Name"
+
+    @pytest.mark.asyncio
+    async def test_update_project_all_fields(self, repo):
+        repo._prisma_client.db.litellm_projecttable._records["proj-full"] = {
+            "project_id": "proj-full",
+            "project_alias": "Old Name",
+        }
+        updated = await repo.update_project(
+            project_id="proj-full",
+            updated_by="admin",
+            project_alias="Fully Updated",
+            description="New description",
+            team_id="team-new",
+            budget_id="budget-new",
+            metadata={"updated": True},
+            models=["gpt-4", "claude-3"],
+            model_rpm_limit={"gpt-4": 200},
+            model_tpm_limit={"gpt-4": 20000},
+            blocked=False,
+            object_permission_id="perm-new",
+        )
+        assert updated.project_alias == "Fully Updated"
 
     @pytest.mark.asyncio
     async def test_delete_project(self, repo):
@@ -1062,6 +1130,27 @@ class TestObjectPermissionRepository:
             models=["gpt-4"],
         )
         assert updated.models == ["gpt-4"]
+
+    @pytest.mark.asyncio
+    async def test_update_permission_all_fields(self, repo):
+        repo._prisma_client.db.litellm_objectpermissiontable._records["perm-full"] = {
+            "object_permission_id": "perm-full",
+            "models": [],
+        }
+        updated = await repo.update_permission(
+            object_permission_id="perm-full",
+            mcp_servers=["server-new"],
+            mcp_access_groups=["group-new"],
+            mcp_tool_permissions={"tool": ["exec"]},
+            vector_stores=["store-new"],
+            agents=["agent-new"],
+            agent_access_groups=["ag-new"],
+            models=["gpt-4", "claude-3"],
+            blocked_tools=["blocked-tool"],
+            mcp_toolsets=["toolset-new"],
+            search_tools=["search-new"],
+        )
+        assert updated.mcp_servers == ["server-new"]
 
     @pytest.mark.asyncio
     async def test_delete_permission(self, repo):
