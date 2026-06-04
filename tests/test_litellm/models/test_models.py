@@ -98,6 +98,23 @@ class TestModel:
         assert model_blocked.is_blocked
         assert not model_unblocked.is_blocked
 
+    def test_parses_json_string_fields(self):
+        model = LiteLLM_ProxyModelTable(
+            model_id="m1",
+            model_name="gpt-4",
+            litellm_params='{"model": "gpt-4"}',
+            model_info='{"team_id": "t1"}',
+        )
+        assert model.litellm_params == {"model": "gpt-4"}
+        assert model.model_info == {"team_id": "t1"}
+
+    def test_team_helpers_none_when_no_model_info(self):
+        model = LiteLLM_ProxyModelTable(
+            model_id="m1", model_name="gpt-4", litellm_params={}, model_info=None
+        )
+        assert model.team_id is None
+        assert model.team_public_model_name is None
+
 
 class TestObjectPermission:
     def test_object_permission_creation(self):
