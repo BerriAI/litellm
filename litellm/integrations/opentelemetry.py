@@ -1012,6 +1012,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {}) or {}
         proxy_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # Fallback: check litellm_metadata (used by /v1/messages and other
+        # LITELLM_METADATA_ROUTES).
+        if proxy_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            proxy_span = _litellm_metadata.get("litellm_parent_otel_span", None)
+
         if (
             proxy_span is not None
             and getattr(proxy_span, "name", None) == LITELLM_PROXY_REQUEST_SPAN_NAME
@@ -2668,6 +2675,10 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             )
 
     def _to_ns(self, dt):
+        if dt is None:
+            return int(datetime.now().timestamp() * 1e9)
+        if isinstance(dt, (int, float)):
+            return int(dt * 1e9)
         return int(dt.timestamp() * 1e9)
 
     def _get_span_name(self, kwargs):
@@ -2713,6 +2724,13 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         traceparent = headers.get("traceparent", None)
         _metadata = litellm_params.get("metadata", {}) or {}
         parent_otel_span = _metadata.get("litellm_parent_otel_span", None)
+
+        # Fallback: check litellm_metadata (used by /v1/messages and other
+        # LITELLM_METADATA_ROUTES that store proxy-internal metadata
+        # separately from the provider's native "metadata" field).
+        if parent_otel_span is None:
+            _litellm_metadata = litellm_params.get("litellm_metadata", {}) or {}
+            parent_otel_span = _litellm_metadata.get("litellm_parent_otel_span", None)
 
         # Priority 1: Explicit parent span from metadata
         if parent_otel_span is not None:
@@ -3285,6 +3303,32 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             span=span,
             key=HTTP_RESPONSE_STATUS_CODE_ATTRIBUTE,
             value=int(status_code),
+        )
+
+    def record_error_attributes_on_span(
+        self,
+        span: Optional[Span],
+        exception: Optional[Exception],
+        status_code: int,
+    ) -> None:
+        """Stamp structured ``error.*`` attributes on the SERVER span from the
+        exception returned to the client, with ``error.code`` pinned to the real
+        response status. Idempotent (overwrites); emits no exception event."""
+        if span is None or exception is None:
+            return
+        from litellm.litellm_core_utils.litellm_logging import (
+            StandardLoggingPayloadSetup,
+        )
+
+        error_information = StandardLoggingPayloadSetup.get_error_information(
+            original_exception=exception
+        )
+        error_information["error_code"] = str(status_code)
+        self._record_exception_on_span(
+            span=span,
+            kwargs={
+                "standard_logging_object": {"error_information": error_information}
+            },
         )
 
     def set_preprocessing_duration_attribute(

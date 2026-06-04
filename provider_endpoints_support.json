@@ -1273,6 +1273,24 @@
         "interactions": true
       }
     },
+    "inception": {
+      "display_name": "Inception (`inception`)",
+      "url": "https://docs.litellm.ai/docs/providers/inception",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "infinity": {
       "display_name": "Infinity (`infinity`)",
       "url": "https://docs.litellm.ai/docs/providers/infinity",
@@ -2172,6 +2190,13 @@
         "search": true
       }
     },
+    "apiserpent": {
+      "display_name": "APISerpent (`apiserpent`)",
+      "url": "https://docs.litellm.ai/docs/search/apiserpent",
+      "endpoints": {
+        "search": true
+      }
+    },
     "triton": {
       "display_name": "Triton (`triton`)",
       "url": "https://docs.litellm.ai/docs/providers/triton-inference-server",
@@ -2421,6 +2446,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "langflow": {
+      "display_name": "LangFlow (`langflow`)",
+      "url": "https://docs.litellm.ai/docs/providers/langflow",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": false
       }
     },
     "vertex_ai/agent_engine": {
