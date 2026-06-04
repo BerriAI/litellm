@@ -4448,3 +4448,24 @@ def test_remove_deployment_from_wildcard_state_is_noop_for_empty_id():
 
     assert router.pattern_router.patterns == snapshot_patterns
     assert router.provider_default_deployment_ids == snapshot_ids
+
+
+def test_delete_deployment_cleans_wildcard_state_even_when_index_is_desynced():
+    """
+    Symmetric with the upsert path: delete_deployment must clean wildcard
+    state from the model_id regardless of whether the fast-mapping index
+    still knows about it. Simulates index corruption / partial-failure by
+    removing the entry from model_id_to_deployment_index_map while leaving
+    pattern_router intact, then calls delete and asserts pattern_router is
+    cleaned.
+    """
+    router, _ = _build_wildcard_router(api_key="key-A")
+    model_id = "wildcard-deployment-1"
+
+    assert router.pattern_router.patterns
+    del router.model_id_to_deployment_index_map[model_id]
+
+    router.delete_deployment(id=model_id)
+
+    assert router.pattern_router.patterns == {}
+    assert model_id not in router.provider_default_deployment_ids

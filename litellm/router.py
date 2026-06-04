@@ -8715,6 +8715,9 @@ class Router:
             deployment_idx = self.model_id_to_deployment_index_map[id]
 
         try:
+            # Idempotent and symmetric with upsert_deployment, so a desynced
+            # index_map cannot leave stale wildcard credentials behind.
+            self._remove_deployment_from_wildcard_state(model_id=id)
             if deployment_idx is not None:
                 # Pop the item from the list first
                 item = self.model_list.pop(deployment_idx)
@@ -8723,7 +8726,6 @@ class Router:
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
-                self._remove_deployment_from_wildcard_state(model_id=id)
                 _budget_limiter = self._get_router_deployment_budget_limiter()
                 if _budget_limiter is not None:
                     _budget_limiter.unregister_deployment_budget(model_id=id)
