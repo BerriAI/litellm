@@ -452,6 +452,120 @@ jobs:
             - auth_ui_unit_tests_coverage.xml
             - auth_ui_unit_tests_coverage
 
+  proxy_behavior_tests:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Seed DB schema via prisma db push
+          command: |
+            uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Run proxy management behavior tests
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_behavior \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
+  proxy_security_tests:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Seed DB schema via prisma db push
+          command: |
+            uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Run proxy security tests
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_security_tests \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
+  schema_migration_check:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      # An empty database; the test applies every committed migration itself.
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Check schema.prisma is in sync with committed migrations
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_migration_tests \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
       - *python312_image
@@ -2642,6 +2756,12 @@ workflows:
             - ui_build
           filters: *main_branches
       - auth_ui_unit_tests:
+          filters: *main_branches
+      - proxy_behavior_tests:
+          filters: *main_branches
+      - proxy_security_tests:
+          filters: *main_branches
+      - schema_migration_check:
           filters: *main_branches
       - build_docker_database_image:
           filters: *main_branches
