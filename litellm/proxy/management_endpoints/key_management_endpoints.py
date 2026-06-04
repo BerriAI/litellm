@@ -695,6 +695,11 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # params can fill it, so the ceiling check only fires when the caller
     # explicitly requested a budget.
     _requested_max_budget = data.max_budget
+    # Same rationale for team_id: capture it before the defaults loop can inject
+    # one from default_key_generate_params, so the session-token exemption below
+    # only fires when the caller actually requested a team key (not a personal
+    # key whose team_id was auto-filled by config defaults).
+    _requested_team_id = data.team_id
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
@@ -728,7 +733,7 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # at request time. Personal keys keep the ceiling; nothing else bounds them.
     is_ui_session_team_key = (
         user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
-        and data.team_id is not None
+        and _requested_team_id is not None
     )
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
