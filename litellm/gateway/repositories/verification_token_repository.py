@@ -286,7 +286,10 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
         deleted_by_api_key: Optional[str] = None,
         litellm_changed_by: Optional[str] = None,
     ) -> Optional[VerificationToken]:
-        """Delete a token and archive it to the deleted tokens table."""
+        """Delete a token and archive it to the deleted tokens table.
+
+        Uses a transaction to ensure atomicity of the archive-then-delete operation.
+        """
         token_record = await self.find_by_id(token)
         if token_record is None:
             return None
@@ -297,8 +300,11 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
         token_data["litellm_changed_by"] = litellm_changed_by
         token_data["deleted_at"] = datetime.utcnow()
 
-        await self.deleted_table.create(data=token_data)
-        return await self.delete(token, id_field="token")
+        async with self.prisma_client.db.tx() as tx:
+            await tx.litellm_deletedverificationtoken.create(data=token_data)
+            await tx.litellm_verificationtoken.delete(where={"token": token})
+
+        return token_record
 
     async def update_spend(
         self, token: str, spend: float

@@ -196,19 +196,23 @@ class UserRepository(BaseRepository[User]):
         return await self.update(user_id, {"spend": spend}, id_field="user_id")
 
     async def add_to_team(self, user_id: str, team_id: str) -> Optional[User]:
-        """Add a user to a team."""
-        user = await self.find_by_id(user_id)
-        if user is None:
+        """Add a user to a team using atomic array push operation."""
+        if not await self.exists(user_id, id_field="user_id"):
             return None
 
-        teams = list(user.teams)
-        if team_id not in teams:
-            teams.append(team_id)
-            return await self.update(user_id, {"teams": teams}, id_field="user_id")
-        return user
+        record = await self.table.update(
+            where={"user_id": user_id},
+            data={"teams": {"push": team_id}},
+        )
+        return self._to_model(record)
 
     async def remove_from_team(self, user_id: str, team_id: str) -> Optional[User]:
-        """Remove a user from a team."""
+        """Remove a user from a team.
+
+        Note: Prisma doesn't support atomic array removal, so we use a
+        read-modify-write pattern here. For high-concurrency scenarios,
+        consider using raw SQL with array_remove().
+        """
         user = await self.find_by_id(user_id)
         if user is None:
             return None
