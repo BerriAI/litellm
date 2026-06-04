@@ -1249,3 +1249,337 @@ class TestConfigRepository:
             "param_value": "{}",
         }
         await repo.prefetch_params(["general_settings"])
+
+    @pytest.mark.asyncio
+    async def test_reconcile_config_with_db_values(self, repo):
+        repo._prisma_client.db.litellm_config._records["general_settings"] = {
+            "param_name": "general_settings",
+            "param_value": '{"master_key": "db-key", "db_only": "from_db"}',
+        }
+        repo._prisma_client.db.litellm_config._records["router_settings"] = {
+            "param_name": "router_settings",
+            "param_value": '{"timeout": 60}',
+        }
+        yaml_config = {
+            "general_settings": {"master_key": "yaml-key", "yaml_only": "from_yaml"},
+        }
+        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
+        assert result["general_settings"]["master_key"] == "db-key"
+        assert result["general_settings"]["yaml_only"] == "from_yaml"
+        assert result["general_settings"]["db_only"] == "from_db"
+        assert result["router_settings"]["timeout"] == 60
+
+    @pytest.mark.asyncio
+    @patch("litellm.repositories.config_repository.decrypt_value_helper")
+    async def test_reconcile_config_with_environment_variables(
+        self, mock_decrypt, repo
+    ):
+        mock_decrypt.side_effect = lambda value, **kw: f"decrypted_{value}"
+        repo._prisma_client.db.litellm_config._records["environment_variables"] = {
+            "param_name": "environment_variables",
+            "param_value": '{"api_key": "encrypted_key", "secret": "encrypted_secret"}',
+        }
+        yaml_config = {}
+        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
+        assert "environment_variables" in result
+        assert "api_key" in result["environment_variables"]
+        assert "API_KEY" in result["environment_variables"]
+
+    @pytest.mark.asyncio
+    async def test_reconcile_config_none_values_preserved(self, repo):
+        repo._prisma_client.db.litellm_config._records["general_settings"] = {
+            "param_name": "general_settings",
+            "param_value": '{"new_key": "value", "null_key": null}',
+        }
+        yaml_config = {"general_settings": {"existing": "keep"}}
+        result = await repo.reconcile_config(yaml_config, store_model_in_db=True)
+        assert result["general_settings"]["existing"] == "keep"
+        assert result["general_settings"]["new_key"] == "value"
+
+    def test_update_config_fields_non_dict(self, repo):
+        config = {"litellm_settings": "old_value"}
+        result = repo._update_config_fields(
+            current_config=config,
+            param_name="litellm_settings",
+            db_param_value="new_value",
+        )
+        assert result["litellm_settings"] == "new_value"
+
+    def test_update_config_fields_new_param(self, repo):
+        config = {}
+        result = repo._update_config_fields(
+            current_config=config,
+            param_name="router_settings",
+            db_param_value={"timeout": 30},
+        )
+        assert result["router_settings"] == {"timeout": 30}
+
+    @patch("litellm.repositories.config_repository.decrypt_value_helper")
+    def test_decrypt_env_variables_non_string(self, mock_decrypt, repo):
+        mock_decrypt.side_effect = lambda value, **kw: value
+        env_vars = {"string_val": "encrypted", "int_val": 123, "bool_val": True}
+        result = repo._decrypt_env_variables(env_vars)
+        assert result["int_val"] == "123"
+        assert result["bool_val"] == "True"
+
+    @patch("litellm.repositories.config_repository.decrypt_value_helper")
+    def test_decrypt_env_variables_none_value(self, mock_decrypt, repo):
+        mock_decrypt.return_value = None
+        env_vars = {"key": "value"}
+        result = repo._decrypt_env_variables(env_vars)
+        assert "key" not in result
+
+
+class TestVerificationTokenRepositoryExtended:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return VerificationTokenRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_find_active_tokens(self, repo):
+        repo._prisma_client.db.litellm_verificationtoken._records["sk-active"] = {
+            "token": "sk-active",
+            "blocked": False,
+            "expires": None,
+        }
+        tokens = await repo.find_active_tokens()
+        assert len(tokens) >= 1
+
+    @pytest.mark.asyncio
+    async def test_delete_token_with_audit(self, repo):
+        repo._prisma_client.db.litellm_verificationtoken._records["sk-delete"] = {
+            "token": "sk-delete",
+            "key_name": "Delete Me",
+            "spend": 0.0,
+        }
+
+        class MockTx:
+            def __init__(self, client):
+                self.litellm_deletedverificationtoken = client.db.litellm_deletedverificationtoken
+                self.litellm_verificationtoken = client.db.litellm_verificationtoken
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        repo._prisma_client.db.tx = lambda: MockTx(repo._prisma_client)
+        deleted = await repo.delete_token(
+            "sk-delete",
+            deleted_by="admin",
+            deleted_by_api_key="sk-admin",
+            litellm_changed_by="system",
+        )
+        assert deleted is not None
+        assert deleted.token == "sk-delete"
+
+    @pytest.mark.asyncio
+    async def test_delete_token_nonexistent(self, repo):
+        result = await repo.delete_token("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_update_token_all_fields(self, repo):
+        repo._prisma_client.db.litellm_verificationtoken._records["sk-test"] = {
+            "token": "sk-test",
+        }
+        updated = await repo.update_token(
+            token="sk-test",
+            updated_by="admin",
+            key_name="Updated",
+            key_alias="new-alias",
+            max_budget=500.0,
+            expires=datetime(2025, 12, 31),
+            models=["gpt-4", "gpt-3.5-turbo"],
+            aliases={"a": "b"},
+            config={"c": "d"},
+            max_parallel_requests=10,
+            metadata={"m": "data"},
+            tpm_limit=5000,
+            rpm_limit=50,
+            budget_duration="daily",
+            allowed_cache_controls=["cache"],
+            allowed_routes=["/v1/chat"],
+            permissions={"write": True},
+            blocked=False,
+            object_permission_id="perm-2",
+            access_group_ids=["g1", "g2"],
+        )
+        assert updated.key_name == "Updated"
+
+    @pytest.mark.asyncio
+    async def test_to_model_with_json_fields(self, repo):
+        repo._prisma_client.db.litellm_verificationtoken._records["sk-json"] = {
+            "token": "sk-json",
+            "aliases": '{"alias1": "value1"}',
+            "config": '{"setting": "val"}',
+            "permissions": '{"read": true}',
+            "metadata": '{"key": "value"}',
+            "model_spend": '{"gpt-4": 10.0}',
+            "model_max_budget": '{"gpt-4": 100.0}',
+            "router_settings": '{"timeout": 30}',
+            "budget_limits": '[{"limit": 50}]',
+            "litellm_budget_table": '{"budget_id": "b1"}',
+        }
+        token = await repo.find_by_id("sk-json")
+        assert token is not None
+        assert token.aliases == {"alias1": "value1"}
+        assert token.config == {"setting": "val"}
+
+
+class TestTeamRepositoryExtended:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return TeamRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_delete_team_with_audit(self, repo):
+        repo._prisma_client.db.litellm_teamtable._records["team-delete"] = {
+            "team_id": "team-delete",
+            "team_alias": "Delete Team",
+            "members": [],
+            "admins": [],
+            "models": [],
+            "spend": 0.0,
+        }
+
+        class MockTx:
+            def __init__(self, client):
+                self.litellm_deletedteamtable = client.db.litellm_deletedteamtable
+                self.litellm_teamtable = client.db.litellm_teamtable
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        repo._prisma_client.db.tx = lambda: MockTx(repo._prisma_client)
+        deleted = await repo.delete_team(
+            "team-delete",
+            deleted_by="admin",
+            deleted_by_api_key="sk-admin",
+            litellm_changed_by="system",
+        )
+        assert deleted is not None
+        assert deleted.team_id == "team-delete"
+
+    @pytest.mark.asyncio
+    async def test_delete_team_nonexistent(self, repo):
+        result = await repo.delete_team("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_to_model_with_json_fields(self, repo):
+        repo._prisma_client.db.litellm_teamtable._records["team-json"] = {
+            "team_id": "team-json",
+            "metadata": '{"key": "value"}',
+            "model_spend": '{"gpt-4": 10.0}',
+            "model_max_budget": '{"gpt-4": 100.0}',
+            "router_settings": '{"timeout": 30}',
+            "budget_limits": '{"daily": 50}',
+            "members_with_roles": '[{"user_id": "u1", "role": "admin"}]',
+            "members": [],
+            "admins": [],
+            "models": [],
+        }
+        team = await repo.find_by_id("team-json")
+        assert team is not None
+        assert team.metadata == {"key": "value"}
+        assert len(team.members_with_roles) == 1
+        assert team.members_with_roles[0].user_id == "u1"
+
+
+class TestUserRepositoryExtended:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return UserRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_delete_user_simple(self, repo):
+        repo._prisma_client.db.litellm_usertable._records["user-delete"] = {
+            "user_id": "user-delete",
+            "user_email": "delete@example.com",
+            "teams": [],
+            "models": [],
+            "spend": 0.0,
+        }
+        deleted = await repo.delete_user("user-delete")
+        assert deleted is not None
+        assert deleted.user_id == "user-delete"
+
+    @pytest.mark.asyncio
+    async def test_delete_user_nonexistent(self, repo):
+        result = await repo.delete_user("nonexistent")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_update_user_all_fields(self, repo):
+        repo._prisma_client.db.litellm_usertable._records["user-update"] = {
+            "user_id": "user-update",
+            "teams": [],
+            "models": [],
+        }
+        updated = await repo.update_user(
+            user_id="user-update",
+            user_email="new@example.com",
+            user_alias="newalias",
+            user_role="admin",
+            organization_id="org-1",
+            max_budget=1000.0,
+            tpm_limit=10000,
+            rpm_limit=100,
+            max_parallel_requests=20,
+            models=["gpt-4"],
+            metadata={"pref": "dark"},
+            budget_duration="monthly",
+        )
+        assert updated.user_email == "new@example.com"
+
+
+class TestProjectRepositoryExtended:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return ProjectRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_delete_project_simple(self, repo):
+        repo._prisma_client.db.litellm_projecttable._records["proj-delete"] = {
+            "project_id": "proj-delete",
+            "project_alias": "Delete Project",
+            "spend": 0.0,
+        }
+        deleted = await repo.delete_project("proj-delete")
+        assert deleted is not None
+
+
+class TestBudgetRepositoryExtended:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return BudgetRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_update_budget_all_fields(self, repo):
+        repo._prisma_client.db.litellm_budgettable._records["budget-update"] = {
+            "budget_id": "budget-update",
+            "max_budget": 100.0,
+        }
+        updated = await repo.update_budget(
+            budget_id="budget-update",
+            updated_by="admin",
+            max_budget=500.0,
+            soft_budget=400.0,
+            max_parallel_requests=15,
+            tpm_limit=20000,
+            rpm_limit=200,
+            model_max_budget={"gpt-4": 200.0},
+            budget_duration="weekly",
+            allowed_models=["gpt-4", "claude-3"],
+        )
+        assert updated.max_budget == 500.0
