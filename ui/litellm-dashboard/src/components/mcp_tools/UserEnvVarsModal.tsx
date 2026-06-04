@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React from "react";
 import { Modal, Form, Input, Button, Alert, Spin, Tag, Typography } from "antd";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { MCPServer, MCPUserEnvVarsStatus } from "./types";
 import { getMCPUserEnvVars, storeMCPUserEnvVars } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -23,59 +24,41 @@ interface UserEnvVarsModalProps {
  */
 const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
   const [form] = Form.useForm();
-  const [status, setStatus] = useState<MCPUserEnvVarsStatus | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
 
-  useEffect(() => {
-    if (!open || !server || !accessToken) {
-      return;
-    }
-    let cancelled = false;
-    setIsLoading(true);
-    (async () => {
-      try {
-        const fetched = await getMCPUserEnvVars(accessToken, server.server_id);
-        if (cancelled) return;
-        setStatus(fetched);
-        form.resetFields();
-      } catch (err) {
-        if (!cancelled) {
-          NotificationsManager.fromBackend(
-            `Failed to load env vars: ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [open, server, accessToken, form]);
+  const {
+    data: status,
+    isLoading,
+    isError,
+  } = useQuery<MCPUserEnvVarsStatus>({
+    queryKey: ["mcpUserEnvVars", server?.server_id],
+    queryFn: () => getMCPUserEnvVars(accessToken!, server!.server_id),
+    enabled: open && !!server && !!accessToken,
+  });
 
-  const handleSave = async (values: Record<string, string>) => {
-    if (!server || !accessToken) return;
-    setIsSaving(true);
-    try {
-      const trimmed: Record<string, string> = {};
-      for (const [k, v] of Object.entries(values)) {
-        trimmed[k] = (v ?? "").trim();
-      }
-      const saved = await storeMCPUserEnvVars(accessToken, server.server_id, trimmed);
-      setStatus(saved);
+  const saveMutation = useMutation({
+    mutationFn: (values: Record<string, string>) => storeMCPUserEnvVars(accessToken!, server!.server_id, values),
+    onSuccess: (saved) => {
       NotificationsManager.success("Credentials saved");
-      if (onSaved) onSaved(saved);
+      onSaved?.(saved);
       onClose();
-    } catch (err) {
+    },
+    onError: (err) => {
       NotificationsManager.fromBackend(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
-    } finally {
-      setIsSaving(false);
+    },
+  });
+
+  const handleSave = (values: Record<string, string>) => {
+    if (!server || !accessToken) return;
+    const trimmed: Record<string, string> = {};
+    for (const [k, v] of Object.entries(values)) {
+      trimmed[k] = (v ?? "").trim();
     }
+    saveMutation.mutate(trimmed);
   };
 
   const displayName = server?.server_name || server?.alias || server?.server_id || "MCP Server";
   const required = status?.required ?? [];
+  const isSaving = saveMutation.isPending;
 
   return (
     <Modal
@@ -84,6 +67,9 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
       footer={null}
       width={520}
       destroyOnHidden
+      afterOpenChange={(opened) => {
+        if (opened) form.resetFields();
+      }}
       title={
         <div>
           <div className="flex items-center gap-2">
@@ -103,6 +89,8 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, acces
           <div className="flex items-center justify-center py-8">
             <Spin />
           </div>
+        ) : isError ? (
+          <Alert type="error" showIcon message="Failed to load env vars" />
         ) : required.length === 0 ? (
           <Alert type="info" showIcon message="No per-user fields configured for this server." />
         ) : (

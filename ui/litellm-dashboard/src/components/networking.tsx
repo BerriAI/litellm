@@ -10124,20 +10124,6 @@ export const storeMCPUserEnvVars = async (
   return response.json();
 };
 
-export const clearMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
-    : `/v1/mcp/server/${serverId}/user-env-vars`;
-  const response = await fetch(url, {
-    method: "DELETE",
-    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) {
-    throw new Error("Failed to clear env vars");
-  }
-  return response.json();
-};
-
 export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/user-env-vars/status` : `/v1/mcp/user-env-vars/status`;
   const response = await fetch(url, {

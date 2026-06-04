@@ -1307,11 +1307,6 @@
       "count": 1
     }
   },
-  "src/components/mcp_tools/UserEnvVarsModal.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/components/mcp_tools/create_mcp_server.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1382,7 +1377,7 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 4
+      "count": 2
     }
   },
   "src/components/mcp_tools/mcp_tool_configuration.tsx": {
@@ -1509,7 +1504,7 @@
       "count": 23
     },
     "no-restricted-syntax": {
-      "count": 274
+      "count": 273
     }
   },
   "src/components/object_permissions_view.tsx": {
