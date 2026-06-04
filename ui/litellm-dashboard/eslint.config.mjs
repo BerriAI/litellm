@@ -39,6 +39,17 @@ const eslintConfig = [
           message: "Use React Query (@tanstack/react-query) for data fetching instead of a raw fetch().",
         },
       ],
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: ["@tremor/react", "@tremor/react/*"],
+              message: "@tremor/react is being phased out; build new UI with antd instead of adding tremor imports.",
+            },
+          ],
+        },
+      ],
     },
   },
 ];
