@@ -1181,7 +1181,11 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy"
         )
 
-        return await get_mcp_submissions(prisma_client)
+        submissions = await get_mcp_submissions(prisma_client)
+        if not _user_is_full_admin(user_api_key_dict):
+            for item in submissions.items:
+                _redact_global_env_var_values(item)
+        return submissions
 
     @router.put(
         "/server/{server_id}/approve",

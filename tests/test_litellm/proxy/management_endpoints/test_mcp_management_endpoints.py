@@ -2943,6 +2943,65 @@ class TestMCPApprovalWorkflow:
         assert result.pending_review == 1
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "user_role, expected_global_value",
+        [
+            (LitellmUserRoles.PROXY_ADMIN, "super-secret"),
+            (LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, ""),
+        ],
+    )
+    async def test_get_submissions_redacts_global_env_for_view_only_admin(
+        self, user_role, expected_global_value
+    ):
+        """Read-only admins reviewing the submission queue must not receive the
+        submitter's global env var secrets; full admins still see them."""
+        from litellm.proxy._types import MCPSubmissionsSummary
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            get_mcp_server_submissions,
+        )
+
+        base = generate_mock_mcp_server_db_record(alias="Pending")
+        item = LiteLLM_MCPServerTable(
+            **{
+                **base.model_dump(),
+                "env_vars": [
+                    {
+                        "name": "ADMIN_API_KEY",
+                        "value": "super-secret",
+                        "scope": "global",
+                    },
+                    {
+                        "name": "USER_TOKEN",
+                        "value": "placeholder-hint",
+                        "scope": "user",
+                    },
+                ],
+            }
+        )
+        item.approval_status = "pending_review"
+        summary = MCPSubmissionsSummary(
+            total=1, pending_review=1, active=0, rejected=0, items=[item]
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_mcp_submissions",
+                AsyncMock(return_value=summary),
+            ),
+        ):
+            result = await get_mcp_server_submissions(
+                user_api_key_dict=generate_mock_user_api_key_auth(user_role=user_role),
+            )
+
+        by_name = {ev.name: ev for ev in result.items[0].env_vars}
+        assert by_name["ADMIN_API_KEY"].value == expected_global_value
+        assert by_name["USER_TOKEN"].value == "placeholder-hint"
+
+    @pytest.mark.asyncio
     async def test_approve_non_pending_server_raises_400(self):
         from litellm.proxy._types import MCPApprovalStatus
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
