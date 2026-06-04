@@ -25,9 +25,11 @@ jobs:
         tests/test_litellm/secret_managers
         tests/test_litellm/a2a_protocol
         tests/test_litellm/anthropic_interface
+        tests/test_litellm/backend
         tests/test_litellm/completion_extras
         tests/test_litellm/containers
         tests/test_litellm/experimental_mcp_client
+        tests/test_litellm/gateway
         tests/test_litellm/images
         tests/test_litellm/interactions
         tests/test_litellm/passthrough
