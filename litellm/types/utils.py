@@ -39,7 +39,7 @@ from pydantic import (
     PrivateAttr,
     field_validator,
 )
-from typing_extensions import Required, TypedDict
+from typing_extensions import Required, TypedDict, NotRequired
 
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
@@ -2727,24 +2727,8 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: Optional[str]
     traceback: Optional[str]
     error_message: Optional[str]
-    # error_rate_limit_category:
-    #   For 429 / rate-limit errors, the source of the rate limit. One of the
-    #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
-    #   (vendor_rate_limit, vendor_batch_rate_limit, litellm_rate_limit,
-    #   litellm_batch_rate_limit). None for non-rate-limit exceptions.
-    #   Surfaced here so custom callbacks / metrics consumers can switch on
-    #   the rate-limit source without reaching for the raw exception.
     error_rate_limit_category: Optional[str]
-    # error_rate_limit_type:
-    #   For 429 / rate-limit errors, the dimension that was exceeded. One of
-    #   the string values defined by `litellm.exceptions.RateLimitType`
-    #   (requests, tokens, concurrent_requests, budget, max_iterations).
-    #   None for non-rate-limit exceptions and for rate-limit exceptions that
-    #   did not classify the failure (e.g. legacy vendor 429 with no header
-    #   hints). Lets dashboards split rate-limit failures by cause without
-    #   parsing free-text error messages.
     error_rate_limit_type: Optional[str]
-
 
 class GuardrailMode(TypedDict, total=False):
     tags: Optional[Dict[str, Union[str, List[str]]]]
@@ -2980,7 +2964,12 @@ class StandardLoggingPayload(TypedDict):
     hidden_params: StandardLoggingHiddenParams
     guardrail_information: Optional[List[StandardLoggingGuardrailInformation]]
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams]
-
+    # Add these 5 lines for Issue #29680:
+    requested_model: NotRequired[str]
+    resolved_model: NotRequired[str]
+    response_model: NotRequired[str]
+    model_mismatch: NotRequired[Union[str, bool]]
+    usage_source: NotRequired[str]
 
 from typing import AsyncIterator, Iterator
 
