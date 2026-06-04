@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import pytest
 
 from litellm.models.budget import Budget
-from litellm.models.credentials import CredentialItem
+from litellm.models.credentials import CreateCredentialItem, CredentialItem
 from litellm.models.model import Model
 from litellm.models.object_permission import ObjectPermission
 from litellm.models.organization import Organization
@@ -74,6 +74,21 @@ class TestCredentials:
         assert creds.credential_name == "test-cred"
         assert creds.credential_values["api_key"] == "secret123"
         assert creds.credential_info["provider"] == "openai"
+
+    def test_create_credential_item_accepts_model_id(self):
+        item = CreateCredentialItem(
+            credential_name="from-model",
+            credential_info={},
+            model_id="model-123",
+        )
+        assert item.model_id == "model-123"
+        assert item.credential_values is None
+
+    def test_create_credential_item_requires_values_or_model_id(self):
+        with pytest.raises(
+            ValueError, match="Either credential_values or model_id must be set"
+        ):
+            CreateCredentialItem(credential_name="bad", credential_info={})
 
 
 class TestModel:
