@@ -1,24 +1,31 @@
 """
-Organization domain model.
+Organization table model.
+
+Canonical definition for ``litellm_organizationtable``. Re-exported from
+``litellm.proxy._types`` for backwards compatibility.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from pydantic import Field
+from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.models.user import LiteLLM_UserTable
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
-from litellm.models.base import DomainModel
 
-
-class Organization(DomainModel):
-    """Domain model for organizations."""
+class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
 
     organization_id: Optional[str] = None
-    organization_alias: str
-    budget_id: Optional[str] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    models: List[str] = Field(default_factory=list)
+    organization_alias: Optional[str] = None
+    budget_id: str
     spend: float = 0.0
-    model_spend: Dict[str, float] = Field(default_factory=dict)
+    metadata: Optional[dict] = None
+    models: List[str] = []
+    model_spend: Optional[dict] = {}
+    created_by: str
+    updated_by: str
+    users: Optional[List[LiteLLM_UserTable]] = None
+    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
+    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
     object_permission_id: Optional[str] = None
-    created_by: Optional[str] = None
-    updated_by: Optional[str] = None
