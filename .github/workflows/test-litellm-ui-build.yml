@@ -106,3 +106,9 @@ jobs:
             echo "::endgroup::"
           fi
           exit $status
+
+      - name: Check explicit-any budget
+        if: ${{ !cancelled() && steps.changed.outputs.has_files == 'true' }}
+        run: |
+          npx eslint . -f json -o "$RUNNER_TEMP/any-report.json" || true
+          node scripts/check-any-budget.mjs "$RUNNER_TEMP/any-report.json" eslint-any-budget.json
