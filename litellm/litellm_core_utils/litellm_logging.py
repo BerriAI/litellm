@@ -5606,7 +5606,7 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
-def get_standard_logging_object_payload(
+def get_standard_logging_object_payload(  # noqa: PLR0915
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,
@@ -5616,7 +5616,7 @@ def get_standard_logging_object_payload(
     error_str: Optional[str] = None,
     original_exception: Optional[Exception] = None,
     standard_built_in_tools_params: Optional[StandardBuiltInToolsParams] = None,
-) -> Optional[StandardLoggingPayload]:  # noqa: PLR0915
+) -> Optional[StandardLoggingPayload]: 
     try:
         kwargs = kwargs or {}
 
