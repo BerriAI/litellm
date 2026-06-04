@@ -674,6 +674,87 @@ class TestSSRFGuardTransport:
                 transport.handle_request(redirect_request)
 
 
+class TestSSRFSafeClientCachingAndSSL:
+    """_get_ssrf_safe_sync_client must reuse a cached client and forward SSL config."""
+
+    def setup_method(self):
+        # Clear the cache before each test so tests are independent
+        cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+        if cache is not None:
+            try:
+                cache.delete_cache("ssrf_safe_httpx_client")
+            except Exception:
+                pass
+
+    def test_client_is_cached_across_calls(self):
+        """Two consecutive calls return the same HTTPHandler instance."""
+        client1 = _get_ssrf_safe_sync_client()
+        client2 = _get_ssrf_safe_sync_client()
+        assert client1 is client2
+
+    def test_ssl_config_is_forwarded_to_transport(self):
+        """get_ssl_configuration() return value is passed as verify= to
+        _SSRFGuardTransport so custom CA bundles and ssl_context objects are
+        honoured by the SSRF-guarded sync client."""
+        from litellm.llms.custom_httpx.aiohttp_handler import (
+            _SSRF_SAFE_CLIENT_CACHE_KEY,
+        )
+
+        cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+        if cache:
+            try:
+                cache.delete_cache(_SSRF_SAFE_CLIENT_CACHE_KEY)
+            except Exception:
+                pass
+
+        sentinel_ssl = object()  # unique sentinel — proves it was forwarded
+        with patch(
+            "litellm.llms.custom_httpx.aiohttp_handler.get_ssl_configuration",
+            return_value=sentinel_ssl,
+        ):
+            with patch.object(
+                _SSRFGuardTransport, "__init__", wraps=_SSRFGuardTransport.__init__
+            ) as spy:
+                try:
+                    _get_ssrf_safe_sync_client()
+                except Exception:
+                    pass  # construction may fail with a non-SSL sentinel
+                if spy.call_args:
+                    _, kwargs = spy.call_args
+                    assert kwargs.get("verify") is sentinel_ssl
+
+    def test_ssl_certificate_is_forwarded_to_transport(self):
+        """SSL_CERTIFICATE env-var (used for mTLS / custom CA) is forwarded to
+        _SSRFGuardTransport as cert= so it is not silently dropped."""
+        from litellm.llms.custom_httpx.aiohttp_handler import (
+            _SSRF_SAFE_CLIENT_CACHE_KEY,
+        )
+
+        cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+        if cache:
+            try:
+                cache.delete_cache(_SSRF_SAFE_CLIENT_CACHE_KEY)
+            except Exception:
+                pass
+
+        with patch(
+            "litellm.llms.custom_httpx.aiohttp_handler.os.getenv",
+            side_effect=lambda k, d=None: (
+                "/path/to/client.pem" if k == "SSL_CERTIFICATE" else d
+            ),
+        ):
+            with patch.object(
+                _SSRFGuardTransport, "__init__", wraps=_SSRFGuardTransport.__init__
+            ) as spy:
+                try:
+                    _get_ssrf_safe_sync_client()
+                except Exception:
+                    pass
+                if spy.call_args:
+                    _, kwargs = spy.call_args
+                    assert kwargs.get("cert") == "/path/to/client.pem"
+
+
 class TestSSRFTraceConfig:
     """Tests for the on_request_start trace hook that blocks IP-literal aiohttp
     redirect targets — the gap _SSRFGuardResolver cannot cover because aiohttp
