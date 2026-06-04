@@ -1,5 +1,6 @@
 import base64
 import binascii
+import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
@@ -1272,11 +1273,13 @@ async def merge_user_env_vars(
     so an admin retiring a user-scoped variable also clears its stored value.
     """
     allowed = set(allowed_names)
+    lock_key = int.from_bytes(
+        hashlib.blake2b(f"{user_id}:{server_id}".encode(), digest_size=8).digest(),
+        "big",
+        signed=True,
+    )
     async with prisma_client.db.tx() as tx:
-        await tx.query_raw(
-            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
-            f"{user_id}:{server_id}",
-        )
+        await tx.query_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
         row = await tx.litellm_mcpuserenvvars.find_unique(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )
