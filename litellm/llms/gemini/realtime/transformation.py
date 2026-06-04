@@ -1399,8 +1399,8 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                     current_response_id = "resp_{}".format(uuid.uuid4())
                 if current_output_item_id is None:
                     current_output_item_id = "item_{}".format(uuid.uuid4())
-                    current_conversation_id = current_conversation_id or "conv_{}".format(
-                        uuid.uuid4()
+                    current_conversation_id = (
+                        current_conversation_id or "conv_{}".format(uuid.uuid4())
                     )
                     returned_message.extend(
                         self.return_new_content_delta_events(
