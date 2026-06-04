@@ -18,3 +18,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS "LiteLLM_MCPUserEnvVars_user_id_server_id_key"
 
 -- CreateIndex
 CREATE INDEX IF NOT EXISTS "LiteLLM_MCPUserEnvVars_user_id_idx" ON "LiteLLM_MCPUserEnvVars"("user_id");
+
+-- CreateIndex
+CREATE INDEX IF NOT EXISTS "LiteLLM_MCPUserEnvVars_server_id_idx" ON "LiteLLM_MCPUserEnvVars"("server_id");

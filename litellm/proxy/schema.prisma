@@ -381,6 +381,7 @@ model LiteLLM_MCPUserEnvVars {
 
   @@unique([user_id, server_id])
   @@index([user_id])
+  @@index([server_id])
 }
 
 // Generate Tokens for Proxy
