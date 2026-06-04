@@ -1197,12 +1197,12 @@ async def handle_sampling_create_message(
             from litellm.proxy.proxy_server import proxy_logging_obj as _plo
 
             if _plo is not None:
-                completion_kwargs = (
-                    await typing.cast("ProxyLogging", _plo).pre_call_hook(
-                        user_api_key_dict=user_api_key_auth,
-                        data=completion_kwargs,
-                        call_type="acompletion",
-                    )
+                completion_kwargs = await typing.cast(
+                    "ProxyLogging", _plo
+                ).pre_call_hook(
+                    user_api_key_dict=user_api_key_auth,
+                    data=completion_kwargs,
+                    call_type="acompletion",
                 )
         except ImportError:
             pass  # proxy_logging_obj unavailable — skip guardrails
