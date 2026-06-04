@@ -65,7 +65,7 @@ const EnvVarsSection: React.FC = () => {
               </div>
             )}
             {fields.map(({ key, name, ...restField }) => (
-              <div key={key} className="flex gap-3 items-baseline">
+              <div key={key} className="flex gap-3 items-start">
                 <Form.Item
                   {...restField}
                   name={[name, "name"]}
@@ -97,7 +97,7 @@ const EnvVarsSection: React.FC = () => {
                   <Select options={SCOPE_OPTIONS} />
                 </Form.Item>
                 <div
-                  style={{ width: 24 }}
+                  style={{ width: 24, height: 32 }}
                   className="flex items-center justify-center"
                 >
                   <MinusCircleOutlined
@@ -134,8 +134,16 @@ const ScopedValueOrDescription: React.FC<{
     return (
       <Form.Item {...restField} name={[name, "description"]} className="mb-0">
         <Input
-          placeholder="Description shown to users, e.g. Your DB username"
-          className="rounded-md"
+          addonBefore={
+            <Tooltip title="Per-user variables have no shared value. This text is only a hint shown to each user when they fill in their own value.">
+              <span className="text-xs text-gray-500 cursor-help whitespace-nowrap">
+                <InfoCircleOutlined className="mr-1" />
+                Hint
+              </span>
+            </Tooltip>
+          }
+          placeholder="e.g. Your DB username"
+          styles={{ input: { color: "#9ca3af" } }}
         />
       </Form.Item>
     );
