@@ -470,7 +470,7 @@ class GalileoObserve(CustomLogger):
         self, kwargs: Any, response_obj: Any, start_time: Any, end_time: Any
     ):
         if not self._is_configured():
-            verbose_logger.info(
+            verbose_logger.debug(
                 "Galileo Logger: skipping — GALILEO_PROJECT_ID=%s GALILEO_API_KEY=%s GALILEO_BASE_URL=%s",
                 bool(self.project_id),
                 bool(self.api_key),
@@ -480,7 +480,7 @@ class GalileoObserve(CustomLogger):
 
         slo: Optional[Dict[str, Any]] = kwargs.get("standard_logging_object")
         if slo is None:
-            verbose_logger.info(
+            verbose_logger.debug(
                 "Galileo Logger: no standard_logging_object in kwargs, skipping"
             )
             return
@@ -493,7 +493,7 @@ class GalileoObserve(CustomLogger):
             response_obj=response_obj, kwargs=kwargs
         )
         if output_text is None:
-            verbose_logger.info(
+            verbose_logger.debug(
                 "Galileo Logger: skipping %s — no text output to log", _call_type
             )
             return
@@ -501,8 +501,28 @@ class GalileoObserve(CustomLogger):
         messages = slo.get("messages") or []
         input_text = self._input_text_from_messages(messages)
 
-        start_ts = datetime.fromtimestamp(float(slo["startTime"]), tz=timezone.utc)
-        end_ts = datetime.fromtimestamp(float(slo["endTime"]), tz=timezone.utc)
+        raw_start = slo.get("startTime")
+        raw_end = slo.get("endTime")
+        if raw_start is None or raw_end is None:
+            verbose_logger.debug(
+                "Galileo Logger: standard_logging_object missing startTime/endTime, "
+                "falling back to start_time/end_time params"
+            )
+            if not isinstance(start_time, datetime) or not isinstance(
+                end_time, datetime
+            ):
+                return
+            start_ts = start_time
+            end_ts = end_time
+            if start_ts.tzinfo is None:
+                start_ts = start_ts.replace(tzinfo=GalileoObserve._local_timezone())
+            if end_ts.tzinfo is None:
+                end_ts = end_ts.replace(tzinfo=GalileoObserve._local_timezone())
+            start_ts = start_ts.astimezone(timezone.utc)
+            end_ts = end_ts.astimezone(timezone.utc)
+        else:
+            start_ts = datetime.fromtimestamp(float(raw_start), tz=timezone.utc)
+            end_ts = datetime.fromtimestamp(float(raw_end), tz=timezone.utc)
         _latency_ms = max(0, int((end_ts - start_ts).total_seconds() * 1000))
 
         request_record = LLMResponse(
@@ -523,7 +543,7 @@ class GalileoObserve(CustomLogger):
         if isinstance(messages, list) and messages:
             request_dict["messages"] = messages
         self.in_memory_records.append(request_dict)
-        verbose_logger.info(
+        verbose_logger.debug(
             "Galileo Logger: queued record, in_memory=%d", len(self.in_memory_records)
         )
 
@@ -555,13 +575,13 @@ class GalileoObserve(CustomLogger):
 
         ingest_request = self._get_ingest_request()
         if ingest_request is None:
-            verbose_logger.info(
+            verbose_logger.debug(
                 "Galileo Logger: missing GALILEO_BASE_URL or GALILEO_PROJECT_ID — skipping flush"
             )
             return
 
         if not await self._ensure_headers():
-            verbose_logger.info(
+            verbose_logger.debug(
                 "Galileo Logger: could not set request headers — skipping flush"
             )
             return
