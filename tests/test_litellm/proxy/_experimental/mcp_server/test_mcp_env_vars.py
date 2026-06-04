@@ -946,6 +946,34 @@ async def test_get_user_env_vars_returns_empty_for_missing_row():
 
 
 @pytest.mark.asyncio
+async def test_decode_user_env_vars_warns_when_undecryptable(
+    env_vars_salt_key, monkeypatch
+):
+    """A stored blob encrypted under a previous salt key must surface a warning
+    (not just a debug line) and decode to ``{}`` so a rotated ``LITELLM_SALT_KEY``
+    is diagnosable instead of silently sending the user a misleading "set up your
+    credentials" 412 for values they already stored."""
+    from unittest.mock import MagicMock
+
+    import litellm.proxy._experimental.mcp_server.db as mcp_db
+    from litellm.proxy._experimental.mcp_server.db import (
+        _decode_user_env_vars,
+        store_user_env_vars,
+    )
+
+    prisma = _mock_env_vars_prisma()
+    await store_user_env_vars(prisma, "alice", "srv-1", {"CORP_PASSWORD": "s3cret"})
+    blob = _captured_values_blob(prisma)
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "a-totally-different-salt-key-0000")
+    logger = MagicMock()
+    monkeypatch.setattr(mcp_db, "verbose_proxy_logger", logger)
+
+    assert _decode_user_env_vars(blob) == {}
+    logger.warning.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_get_user_env_vars_bulk_distributes_results(env_vars_salt_key):
     from unittest.mock import AsyncMock, MagicMock
 

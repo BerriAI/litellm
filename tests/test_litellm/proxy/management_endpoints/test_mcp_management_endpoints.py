@@ -3838,6 +3838,26 @@ class TestComputeUserEnvVarStatus:
         assert status.required == []
         assert status.setup_url is None
 
+    def test_dual_scope_var_with_global_fallback_is_not_required(self):
+        # SHARED_TOKEN is declared both global and user. The global value covers
+        # the reference (globals win in _resolve_static_headers_with_env_vars),
+        # so the tool-call path never raises a 412 for it. The status endpoint
+        # must agree and not report it as required/missing, otherwise it asks the
+        # user for a credential the request would never actually need.
+        server = _make_env_var_server(
+            env_vars=[
+                {"name": "SHARED_TOKEN", "value": "global-secret", "scope": "global"},
+                {"name": "SHARED_TOKEN", "value": "", "scope": "user"},
+            ],
+            static_headers={"Authorization": "Bearer ${SHARED_TOKEN}"},
+        )
+        status = mgmt_endpoints._compute_user_env_var_status(
+            server=server, stored_values={}
+        )
+        assert status.required == []
+        assert status.missing_count == 0
+        assert status.setup_url is None
+
 
 class TestGetMCPUserEnvVars:
     @pytest.mark.asyncio

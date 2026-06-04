@@ -2214,10 +2214,14 @@ if MCP_AVAILABLE:
         each value ``is_set`` and never echoes the decrypted secret back, so a
         leaked token can't be used to exfiltrate the raw upstream credential.
         """
-        _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
+        global_values, user_specs = parse_admin_env_vars(
+            getattr(server, "env_vars", None)
+        )
 
-        # Limit "required" to vars that are actually referenced by static_headers.
-        # If an admin defined a per-user var but never used it, it's not blocking.
+        # A var only blocks when it's referenced by static_headers and has no
+        # admin global fallback, mirroring _resolve_static_headers_with_env_vars
+        # (globals win the merge) so the status endpoint never asks the user for
+        # credentials a tool call wouldn't actually require.
         static_headers = getattr(server, "static_headers", None) or {}
         if isinstance(static_headers, str):
             try:
@@ -2226,7 +2230,9 @@ if MCP_AVAILABLE:
                 static_headers = {}
         referenced = collect_env_var_references(strings=static_headers.values())
         user_var_names = {spec["name"] for spec in user_specs}
-        blocking = referenced & user_var_names
+        blocking = {
+            name for name in (referenced & user_var_names) if name not in global_values
+        }
 
         required: List[MCPUserEnvVarSpec] = []
         missing_count = 0

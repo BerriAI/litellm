@@ -1208,6 +1208,12 @@ def _decode_user_env_vars(stored: str) -> Dict[str, str]:
         return_original_value=False,
     )
     if decrypted is None:
+        if stored:
+            verbose_proxy_logger.warning(
+                "MCP per-user env vars failed to decrypt (LITELLM_SALT_KEY "
+                "changed?); treating as unset so the user is prompted to "
+                "re-enter them rather than silently forwarding ciphertext"
+            )
         return {}
     try:
         parsed = json.loads(decrypted)
