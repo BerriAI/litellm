@@ -475,7 +475,11 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         )
         return [
             json.dumps(
-                {"setup": self._finalize_gemini_live_setup(model, follow_up_setup)}
+                {
+                    "setup": self._finalize_gemini_live_setup(
+                        model, cast(Dict[str, Any], follow_up_setup)
+                    )
+                }
             )
         ]
 
