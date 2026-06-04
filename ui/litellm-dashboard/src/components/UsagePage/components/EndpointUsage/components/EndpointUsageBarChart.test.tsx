@@ -24,9 +24,7 @@ vi.mock("@tremor/react", async () => {
 });
 
 vi.mock("@/components/common_components/chartUtils", () => ({
-  CustomLegend: ({ categories }: any) => (
-    <div data-testid="custom-legend">{categories.join(", ")}</div>
-  ),
+  CustomLegend: ({ categories }: any) => <div data-testid="custom-legend">{categories.join(", ")}</div>,
   CustomTooltip: () => <div data-testid="custom-tooltip">Tooltip</div>,
 }));
 

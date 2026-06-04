@@ -8,10 +8,7 @@ import { PluginSource, MarketplacePluginEntry } from "./types";
  * Generate install command for Claude Code CLI
  * Format: /plugin marketplace add org/repo OR /plugin marketplace add url
  */
-export const formatInstallCommand = (plugin: {
-  name: string;
-  source: PluginSource;
-}): string => {
+export const formatInstallCommand = (plugin: { name: string; source: PluginSource }): string => {
   if (plugin.source.source === "github" && plugin.source.repo) {
     return `/plugin marketplace add ${plugin.source.repo}`;
   } else if (plugin.source.source === "url" && plugin.source.url) {
@@ -25,9 +22,7 @@ export const formatInstallCommand = (plugin: {
  * Extract unique categories from plugins list
  * Returns array with "All" first, then sorted categories, then "Other"
  */
-export const extractCategories = (
-  plugins: Array<{ category?: string }>
-): string[] => {
+export const extractCategories = (plugins: Array<{ category?: string }>): string[] => {
   const categories = new Set<string>();
 
   plugins.forEach((p) => {
@@ -82,7 +77,7 @@ export const getSourceLink = (source: PluginSource): string | null => {
  * Get badge color based on category
  */
 export const getCategoryBadgeColor = (
-  category?: string
+  category?: string,
 ): "blue" | "green" | "purple" | "red" | "orange" | "yellow" | "gray" => {
   if (!category) {
     return "gray";
@@ -92,30 +87,15 @@ export const getCategoryBadgeColor = (
 
   if (categoryLower.includes("development") || categoryLower.includes("dev")) {
     return "blue";
-  } else if (
-    categoryLower.includes("productivity") ||
-    categoryLower.includes("workflow")
-  ) {
+  } else if (categoryLower.includes("productivity") || categoryLower.includes("workflow")) {
     return "green";
-  } else if (
-    categoryLower.includes("learning") ||
-    categoryLower.includes("education")
-  ) {
+  } else if (categoryLower.includes("learning") || categoryLower.includes("education")) {
     return "purple";
-  } else if (
-    categoryLower.includes("security") ||
-    categoryLower.includes("safety")
-  ) {
+  } else if (categoryLower.includes("security") || categoryLower.includes("safety")) {
     return "red";
-  } else if (
-    categoryLower.includes("data") ||
-    categoryLower.includes("analytics")
-  ) {
+  } else if (categoryLower.includes("data") || categoryLower.includes("analytics")) {
     return "orange";
-  } else if (
-    categoryLower.includes("integration") ||
-    categoryLower.includes("api")
-  ) {
+  } else if (categoryLower.includes("integration") || categoryLower.includes("api")) {
     return "yellow";
   }
 
@@ -158,7 +138,7 @@ export const truncateText = (text: string, maxLength: number): string => {
  */
 export const filterPluginsBySearch = (
   plugins: MarketplacePluginEntry[],
-  searchTerm: string
+  searchTerm: string,
 ): MarketplacePluginEntry[] => {
   if (!searchTerm || searchTerm.trim() === "") {
     return plugins;
@@ -168,12 +148,8 @@ export const filterPluginsBySearch = (
 
   return plugins.filter((plugin) => {
     const nameMatch = plugin.name.toLowerCase().includes(term);
-    const descriptionMatch =
-      plugin.description?.toLowerCase().includes(term) || false;
-    const keywordsMatch =
-      plugin.keywords?.some((keyword) =>
-        keyword.toLowerCase().includes(term)
-      ) || false;
+    const descriptionMatch = plugin.description?.toLowerCase().includes(term) || false;
+    const keywordsMatch = plugin.keywords?.some((keyword) => keyword.toLowerCase().includes(term)) || false;
 
     return nameMatch || descriptionMatch || keywordsMatch;
   });
@@ -184,7 +160,7 @@ export const filterPluginsBySearch = (
  */
 export const filterPluginsByCategory = (
   plugins: MarketplacePluginEntry[],
-  category: string
+  category: string,
 ): MarketplacePluginEntry[] => {
   if (category === "All") {
     return plugins;

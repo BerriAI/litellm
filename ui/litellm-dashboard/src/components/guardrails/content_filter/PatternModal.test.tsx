@@ -40,7 +40,7 @@ describe("PatternModal", () => {
         onActionChange={mockOnActionChange}
         onAdd={mockOnAdd}
         onCancel={mockOnCancel}
-      />
+      />,
     );
 
     // Wait for modal to be visible
@@ -59,7 +59,7 @@ describe("PatternModal", () => {
     // Verify that pattern options are available in the dropdown
     // Ant Design renders Select options in a portal, so we need to query the whole document
     await waitFor(() => {
-      const options = document.querySelectorAll('.ant-select-item-option');
+      const options = document.querySelectorAll(".ant-select-item-option");
       expect(options.length).toBeGreaterThan(0);
     });
 
@@ -77,8 +77,8 @@ describe("PatternModal", () => {
     expect(document.body).toHaveTextContent("aws_access_key");
 
     // Select a pattern by clicking on its option element
-    const ssnOption = Array.from(document.querySelectorAll('.ant-select-item-option')).find(
-      el => el.textContent === "us_ssn"
+    const ssnOption = Array.from(document.querySelectorAll(".ant-select-item-option")).find(
+      (el) => el.textContent === "us_ssn",
     ) as HTMLElement;
     await user.click(ssnOption);
 
@@ -89,4 +89,3 @@ describe("PatternModal", () => {
     expect(callArgs[0]).toBe("us_ssn");
   });
 });
-

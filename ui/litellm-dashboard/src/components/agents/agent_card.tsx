@@ -13,22 +13,11 @@ interface AgentCardProps {
   onAgentUpdated: () => void;
 }
 
-const AgentCard: React.FC<AgentCardProps> = ({
-  agent,
-  keyInfo,
-  onAgentClick,
-  onDeleteClick,
-  isAdmin,
-}) => {
-  const description =
-    agent.agent_card_params?.description || "No description";
+const AgentCard: React.FC<AgentCardProps> = ({ agent, keyInfo, onAgentClick, onDeleteClick, isAdmin }) => {
+  const description = agent.agent_card_params?.description || "No description";
   const url = agent.agent_card_params?.url;
   const hasKey = keyInfo?.has_key ?? false;
-  const statusBadge = hasKey ? (
-    <Badge status="success" text="Active" />
-  ) : (
-    <Badge status="warning" text="Needs Setup" />
-  );
+  const statusBadge = hasKey ? <Badge status="success" text="Active" /> : <Badge status="warning" text="Needs Setup" />;
 
   const copyToClipboard = (e: React.MouseEvent, text: string) => {
     e.stopPropagation();
@@ -47,9 +36,7 @@ const AgentCard: React.FC<AgentCardProps> = ({
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-medium text-gray-900 truncate">
-              {agent.agent_name}
-            </span>
+            <span className="font-medium text-gray-900 truncate">{agent.agent_name}</span>
             <Tooltip title="Copy Agent ID">
               <CopyOutlined
                 onClick={(e) => copyToClipboard(e, agent.agent_id)}
@@ -75,9 +62,7 @@ const AgentCard: React.FC<AgentCardProps> = ({
           </Tooltip>
         )}
       </div>
-      <p className="text-sm text-gray-600 line-clamp-2 flex-1 mb-3">
-        {description}
-      </p>
+      <p className="text-sm text-gray-600 line-clamp-2 flex-1 mb-3">{description}</p>
       {url && (
         <p className="text-xs text-gray-500 truncate mb-2" title={url}>
           {url}

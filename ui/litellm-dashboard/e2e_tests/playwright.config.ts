@@ -31,7 +31,7 @@ export default defineConfig({
 
     /* Slow down actions when SLOWMO=<ms> is set, useful for headed local debugging */
     launchOptions: {
-      slowMo: process.env.SLOWMO ? (parseInt(process.env.SLOWMO, 10) || 0) : 0,
+      slowMo: process.env.SLOWMO ? parseInt(process.env.SLOWMO, 10) || 0 : 0,
     },
   },
 
