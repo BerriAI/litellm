@@ -3,9 +3,11 @@ Unit tests for litellm/proxy/google_endpoints/agents_endpoints.py
 
 Focus: verify that list_gemini_agents, get_gemini_agent, delete_gemini_agent,
 and list_gemini_agent_versions correctly forward per-request credentials
-(api_key, api_base, …) supplied via the JSON-encoded litellm_params_template
-query parameter.  Flat credential query params (e.g. ?api_key=…) are no
-longer accepted — they would appear in server logs.
+(e.g. api_key) supplied via the JSON-encoded litellm_params_template query
+parameter.  Endpoint-targeting / credential-selection params (api_base,
+litellm_credential_name, vertex_project, …) are rejected by the same
+banned-param gate that guards POST bodies.  Flat credential query params
+(e.g. ?api_key=…) are not accepted — they would appear in server logs.
 """
 
 import json
@@ -22,7 +24,6 @@ sys.path.insert(0, os.path.abspath("../.."))
 from litellm.proxy.google_endpoints.agents_endpoints import (
     _merge_query_params_into_data,
 )
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -46,14 +47,18 @@ class TestMergeQueryParamsIntoData:
     def test_no_query_params_leaves_data_unchanged(self):
         data = {"custom_llm_provider": "gemini"}
         request = _make_request("")
-        result = _merge_query_params_into_data(data, request)
+        result = _merge_query_params_into_data(
+            data, request, general_settings={}, llm_router=None
+        )
         assert result == {"custom_llm_provider": "gemini"}
 
     def test_flat_api_key_is_ignored(self):
         """Flat credential params must NOT be merged (they leak into server logs)."""
         data = {"custom_llm_provider": "gemini"}
         request = _make_request("api_key=AIzaSyTest123")
-        _merge_query_params_into_data(data, request)
+        _merge_query_params_into_data(
+            data, request, general_settings={}, llm_router=None
+        )
         assert "api_key" not in data
         assert data["custom_llm_provider"] == "gemini"
 
@@ -61,23 +66,44 @@ class TestMergeQueryParamsIntoData:
         """Flat params (including name injection attempts) are ignored entirely."""
         data = {"name": "my-agent", "custom_llm_provider": "gemini"}
         request = _make_request("name=INJECTED&api_key=AIzaSyTest")
-        _merge_query_params_into_data(data, request)
+        _merge_query_params_into_data(
+            data, request, general_settings={}, llm_router=None
+        )
         assert data["name"] == "my-agent"
         assert "api_key" not in data
 
     def test_litellm_params_template_json_is_expanded(self):
-        template = json.dumps(
-            {"api_key": "AIzaFromTemplate", "api_base": "https://example.com"}
-        )
+        """An allowed field in the JSON template expands into data; the raw
+        template key itself never leaks through."""
+        template = json.dumps({"api_key": "AIzaFromTemplate"})
         from urllib.parse import quote
 
         request = _make_request(f"litellm_params_template={quote(template)}")
         data = {"custom_llm_provider": "gemini"}
-        _merge_query_params_into_data(data, request)
+        _merge_query_params_into_data(
+            data, request, general_settings={}, llm_router=None
+        )
         assert data["api_key"] == "AIzaFromTemplate"
-        assert data["api_base"] == "https://example.com"
         # The raw template key itself must NOT appear in data
         assert "litellm_params_template" not in data
+
+    def test_litellm_params_template_banned_key_is_rejected(self):
+        """An endpoint-targeting field smuggled via the query template (the
+        api_base + named-credential SSRF/exfil vector) is rejected with a 400
+        and never merged into data."""
+        from fastapi import HTTPException
+
+        template = json.dumps({"api_base": "https://attacker.example", "api_key": "x"})
+        from urllib.parse import quote
+
+        request = _make_request(f"litellm_params_template={quote(template)}")
+        data = {"custom_llm_provider": "gemini"}
+        with pytest.raises(HTTPException) as exc_info:
+            _merge_query_params_into_data(
+                data, request, general_settings={}, llm_router=None
+            )
+        assert exc_info.value.status_code == 400
+        assert "api_base" not in data
 
     def test_litellm_params_template_does_not_overwrite_existing(self):
         template = json.dumps(
@@ -87,7 +113,9 @@ class TestMergeQueryParamsIntoData:
 
         request = _make_request(f"litellm_params_template={quote(template)}")
         data = {"custom_llm_provider": "gemini"}
-        _merge_query_params_into_data(data, request)
+        _merge_query_params_into_data(
+            data, request, general_settings={}, llm_router=None
+        )
         # custom_llm_provider was already set; template must not override it
         assert data["custom_llm_provider"] == "gemini"
         assert data["api_key"] == "FromTemplate"
@@ -95,7 +123,9 @@ class TestMergeQueryParamsIntoData:
     def test_invalid_litellm_params_template_json_is_ignored(self):
         request = _make_request("litellm_params_template=NOT_VALID_JSON")
         data = {"custom_llm_provider": "gemini"}
-        _merge_query_params_into_data(data, request)
+        _merge_query_params_into_data(
+            data, request, general_settings={}, llm_router=None
+        )
         # Bad JSON is silently skipped; other data stays intact
         assert data == {"custom_llm_provider": "gemini"}
 
@@ -107,7 +137,9 @@ class TestMergeQueryParamsIntoData:
         qs = f"litellm_params_template={quote(template)}&vertex_project=my-project"
         request = _make_request(qs)
         data = {"custom_llm_provider": "gemini"}
-        _merge_query_params_into_data(data, request)
+        _merge_query_params_into_data(
+            data, request, general_settings={}, llm_router=None
+        )
         assert data["api_key"] == "FromTemplate"
         # flat vertex_project is ignored since it wasn't in litellm_params_template
         assert "vertex_project" not in data
@@ -318,11 +350,11 @@ async def test_get_gemini_agent_name_not_overwritten_by_query_param(
 
 @pytest.mark.asyncio
 async def test_list_agents_template_via_query_param(mock_srv, user_api_key_dict):
-    """litellm_params_template in query string is expanded."""
+    """litellm_params_template in query string is expanded (allowed fields)."""
     from litellm.proxy.google_endpoints.agents_endpoints import list_gemini_agents
     from urllib.parse import quote
 
-    template = json.dumps({"api_key": "TemplateKey", "vertex_project": "proj-x"})
+    template = json.dumps({"api_key": "TemplateKey"})
 
     with patch(
         "litellm.proxy.google_endpoints.agents_endpoints.ProxyBaseLLMRequestProcessing"
@@ -339,7 +371,6 @@ async def test_list_agents_template_via_query_param(mock_srv, user_api_key_dict)
 
         init_data = MockProcessor.call_args[1]["data"]
         assert init_data["api_key"] == "TemplateKey"
-        assert init_data["vertex_project"] == "proj-x"
         assert "litellm_params_template" not in init_data
 
 
