@@ -4,6 +4,7 @@ import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from
 import NewBadge from "../common_components/NewBadge";
 import { Descriptions, Empty, Input, Modal, Select, Spin, Tooltip, Typography } from "antd";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -112,63 +113,51 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
-  // Per-user env-var fill modal target + bulk status across accessible servers.
+  // Per-user env-var fill modal target + deep-link source captured once from the URL.
   const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
-  const [envVarStatusByServer, setEnvVarStatusByServer] = useState<Record<string, MCPUserEnvVarsStatus>>({});
+  const [deepLinkServerId, setDeepLinkServerId] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("fill_env_vars"),
+  );
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("created_desc");
   const isInternalUser = userRole === "Internal User";
 
   // Single bulk fetch of this user's per-server env-var status. Drives the
   // red "N user fields missing" footer on each card with no per-row request.
-  const refetchEnvVarStatus = useCallback(async () => {
-    if (!accessToken) {
-      setEnvVarStatusByServer({});
-      return;
-    }
-    try {
-      const statuses = await listMCPUserEnvVarStatus(accessToken);
-      const map: Record<string, MCPUserEnvVarsStatus> = {};
-      for (const s of statuses) {
-        map[s.server_id] = s;
-      }
-      setEnvVarStatusByServer(map);
-    } catch (err) {
-      console.warn("Failed to load MCP env-var status", err);
-    }
-  }, [accessToken]);
-
-  useEffect(() => {
-    refetchEnvVarStatus();
-  }, [refetchEnvVarStatus, mcpServers]);
+  const { data: envVarStatuses, refetch: refetchEnvVarStatus } = useQuery<MCPUserEnvVarsStatus[]>({
+    queryKey: ["mcpUserEnvVarStatus"],
+    queryFn: () => listMCPUserEnvVarStatus(accessToken!),
+    enabled: !!accessToken,
+  });
 
   // Per-server list of per-user fields this user still needs to fill in.
   const missingFieldsByServer = useMemo(() => {
     const map: Record<string, string[]> = {};
-    for (const [serverId, status] of Object.entries(envVarStatusByServer)) {
-      map[serverId] = (status.required ?? []).filter((spec) => !spec.is_set).map((spec) => spec.name);
+    for (const status of envVarStatuses ?? []) {
+      map[status.server_id] = (status.required ?? []).filter((spec) => !spec.is_set).map((spec) => spec.name);
     }
     return map;
-  }, [envVarStatusByServer]);
+  }, [envVarStatuses]);
 
   // Deep-link via ?fill_env_vars=<server_id> — the link users follow from the
-  // friendly error the proxy returns when a per-user var is missing. Opens the
-  // fill modal for the matching server, then strips the param.
+  // friendly error the proxy returns when a per-user var is missing. The id is
+  // captured into state above and resolved to a server below; here we only strip
+  // the param so a refresh doesn't reopen the modal.
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (!serversWithHealth || serversWithHealth.length === 0) return;
+    if (!deepLinkServerId || typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
-    const targetId = params.get("fill_env_vars");
-    if (!targetId) return;
-    const match = serversWithHealth.find((s) => s.server_id === targetId);
-    if (match) {
-      setEnvVarsModalServer(match);
-      params.delete("fill_env_vars");
-      const newSearch = params.toString();
-      const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : "") + window.location.hash;
-      window.history.replaceState({}, "", newUrl);
-    }
-  }, [serversWithHealth]);
+    if (!params.has("fill_env_vars")) return;
+    params.delete("fill_env_vars");
+    const newSearch = params.toString();
+    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : "") + window.location.hash;
+    window.history.replaceState({}, "", newUrl);
+  }, [deepLinkServerId]);
+
+  const deepLinkServer = useMemo(
+    () => (deepLinkServerId ? serversWithHealth.find((s) => s.server_id === deepLinkServerId) ?? null : null),
+    [deepLinkServerId, serversWithHealth],
+  );
+  const activeEnvVarsServer = envVarsModalServer ?? deepLinkServer;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -653,10 +642,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
       {/* Per-user env-var fill modal — backed by /v1/mcp/server/{id}/user-env-vars */}
       <UserEnvVarsModal
-        server={envVarsModalServer}
-        open={!!envVarsModalServer}
+        server={activeEnvVarsServer}
+        open={!!activeEnvVarsServer}
         accessToken={accessToken}
-        onClose={() => setEnvVarsModalServer(null)}
+        onClose={() => {
+          setEnvVarsModalServer(null);
+          setDeepLinkServerId(null);
+        }}
         onSaved={() => {
           // Refresh the bulk status so the red "N user fields missing" footer
           // on each card clears once the user has filled in their values.
