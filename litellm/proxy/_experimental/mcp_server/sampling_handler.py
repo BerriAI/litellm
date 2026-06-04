@@ -744,7 +744,7 @@ async def _check_model_access(  # noqa: PLR0915
         except ImportError:
             _prisma_client = None
             _user_api_key_cache = None  # type: ignore[assignment]
-            _proxy_logging_obj = None
+            _proxy_logging_obj = None  # type: ignore[assignment]
 
         if _team_id and _prisma_client and _user_api_key_cache:
             try:
