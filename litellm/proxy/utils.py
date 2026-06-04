@@ -5676,25 +5676,35 @@ def _check_and_merge_model_level_guardrails(data: dict, llm_router: Optional[Rou
     model_info = metadata.get("model_info") or {}
     model_id = model_info.get("id", None)
 
-    deployment = None
+    model_level_guardrails: Optional[list] = None
     if model_id is not None:
         deployment = llm_router.get_deployment(model_id=model_id)
+        if deployment is None:
+            return data
+        model_level_guardrails = deployment.litellm_params.get("guardrails")
     else:
         # Pre_call paths run before route_request populates model_info.id,
         # and add_litellm_data_to_request strips any client-supplied
-        # metadata.model_info as a pricing-spoofing guard. Fall back to
-        # resolving the deployment via the model alias so DB/UI-assigned
-        # model-level guardrails fire on pre_call too (#29652).
+        # metadata.model_info as a pricing-spoofing guard. The router has
+        # not yet picked the deployment, so we don't know which one's
+        # litellm_params.guardrails will apply. Take the UNION across all
+        # deployments in the group so a guardrail set on ANY eligible
+        # deployment still fires (#29652, addresses veria-ai HIGH on the
+        # single-deployment fallback that would skip non-first deployments).
         model_alias = data.get("model")
-        if isinstance(model_alias, str) and model_alias:
-            deployment = llm_router.get_deployment_by_model_group_name(
-                model_group_name=model_alias
-            )
-
-    if deployment is None:
-        return data
-
-    model_level_guardrails = deployment.litellm_params.get("guardrails")
+        if not isinstance(model_alias, str) or not model_alias:
+            return data
+        deployments = llm_router.get_model_list(model_name=model_alias) or []
+        seen: set = set()
+        union: list = []
+        for dep in deployments:
+            litellm_params = dep.get("litellm_params") or {}
+            for g in litellm_params.get("guardrails") or []:
+                key = g if isinstance(g, str) else repr(g)
+                if key not in seen:
+                    seen.add(key)
+                    union.append(g)
+        model_level_guardrails = union or None
 
     if model_level_guardrails is None:
         return data

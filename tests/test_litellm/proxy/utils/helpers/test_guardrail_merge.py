@@ -15,22 +15,37 @@ def normalize(value):
 
 def _router_with_deployment(guardrails, *, by_alias: bool = False):
     """Build a stub router whose `get_deployment(model_id=...)` returns a
-    deployment with the given guardrails. ``by_alias=True`` also stubs the
-    `get_deployment_by_model_group_name(...)` fallback used by the pre_call
-    path (#29652) where ``metadata.model_info.id`` isn't yet populated."""
+    deployment with the given guardrails. ``by_alias=True`` also stubs
+    `get_model_list(model_name=...)` to return one matching deployment so the
+    pre_call alias fallback (#29652) resolves."""
     deployment = SimpleNamespace(litellm_params={"guardrails": guardrails})
     router = MagicMock()
     router.get_deployment.return_value = deployment
-    router.get_deployment_by_model_group_name.return_value = (
-        deployment if by_alias else None
+    router.get_model_list.return_value = (
+        [{"litellm_params": {"guardrails": guardrails}}] if by_alias else []
     )
+    return router
+
+
+def _router_with_deployments(group_guardrails):
+    """Stub a router whose `get_model_list(model_name=...)` returns multiple
+    deployments — each entry of `group_guardrails` is the guardrails list for
+    one deployment in the group (use None for a deployment with no guardrails).
+    Used to pin the UNION-across-deployments fallback (veria-ai Medium on
+    #29654)."""
+    router = MagicMock()
+    router.get_deployment.return_value = None
+    router.get_model_list.return_value = [
+        {"litellm_params": {"guardrails": g} if g is not None else {}}
+        for g in group_guardrails
+    ]
     return router
 
 
 def _router_without_deployment():
     router = MagicMock()
     router.get_deployment.return_value = None
-    router.get_deployment_by_model_group_name.return_value = None
+    router.get_model_list.return_value = []
     return router
 
 
@@ -87,19 +102,49 @@ def test_check_and_merge_model_level_guardrails_returns_data_when_model_id_missi
     }
     router.get_deployment.assert_not_called()
     # Alias fallback was attempted; it just didn't find a deployment.
-    router.get_deployment_by_model_group_name.assert_called_once()
+    router.get_model_list.assert_called_once()
 
 
 def test_check_and_merge_model_level_guardrails_falls_back_to_model_alias_when_model_id_missing():
     """Pre_call path: model_info.id isn't populated yet because route_request
-    hasn't run. The helper must fall back to looking up the deployment by
-    the model alias (#29652) so DB/UI-assigned guardrails still fire."""
+    hasn't run. The helper must fall back to looking up deployments by the
+    model alias (#29652) so DB/UI-assigned guardrails still fire."""
     router = _router_with_deployment(["pii"], by_alias=True)
     data = {"metadata": {"model_info": {}}, "model": "m", "extra": "v"}
     result = _check_and_merge_model_level_guardrails(data, router)
     # Merge happened via the alias fallback.
     assert "pii" in result["metadata"]["guardrails"]
-    router.get_deployment_by_model_group_name.assert_called_once()
+    router.get_model_list.assert_called_once()
+
+
+def test_check_and_merge_model_level_guardrails_unions_guardrails_across_group_deployments():
+    """veria-ai Medium on #29654: when model_id is missing, the router has not
+    yet picked the deployment, so taking the FIRST deployment's guardrails
+    would silently drop a guardrail defined only on a non-first deployment.
+    The fix is to union the guardrails from all deployments in the group."""
+    router = _router_with_deployments([["pii"], ["secret-scan"], None])
+    data = {"metadata": {"model_info": {}}, "model": "m"}
+    result = _check_and_merge_model_level_guardrails(data, router)
+    assert sorted(result["metadata"]["guardrails"]) == ["pii", "secret-scan"]
+
+
+def test_check_and_merge_model_level_guardrails_dedups_guardrails_across_group_deployments():
+    """Two deployments with the same guardrail must not produce duplicate
+    entries in the merged guardrails list."""
+    router = _router_with_deployments([["pii"], ["pii", "secret-scan"]])
+    data = {"metadata": {"model_info": {}}, "model": "m"}
+    result = _check_and_merge_model_level_guardrails(data, router)
+    assert sorted(result["metadata"]["guardrails"]) == ["pii", "secret-scan"]
+
+
+def test_check_and_merge_model_level_guardrails_group_with_no_guardrails_returns_data():
+    """If all deployments in the group have no guardrails (or empty lists),
+    the helper returns the data unchanged."""
+    router = _router_with_deployments([None, None, []])
+    data = {"metadata": {"model_info": {}}, "model": "m"}
+    result = _check_and_merge_model_level_guardrails(data, router)
+    assert result is data
+    assert "guardrails" not in result["metadata"]
 
 
 def test_check_and_merge_model_level_guardrails_returns_data_when_deployment_none():
