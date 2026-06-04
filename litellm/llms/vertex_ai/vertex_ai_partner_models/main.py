@@ -41,11 +41,12 @@ class PartnerModelPrefixes(str, Enum):
     MINIMAX_PREFIX = "minimaxai/"
     MOONSHOT_PREFIX = "moonshotai/"
     ZAI_PREFIX = "zai-org/"
+    GEMMA_MAAS_PREFIX = "google/gemma-"
 
 
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
-        pass
+        super().__init__()
 
     @staticmethod
     def is_vertex_partner_model(model: str):
@@ -68,6 +69,7 @@ class VertexAIPartnerModels(VertexBase):
             or model.startswith(PartnerModelPrefixes.MINIMAX_PREFIX)
             or model.startswith(PartnerModelPrefixes.MOONSHOT_PREFIX)
             or model.startswith(PartnerModelPrefixes.ZAI_PREFIX)
+            or model.startswith(PartnerModelPrefixes.GEMMA_MAAS_PREFIX)
         ):
             return True
         return False
@@ -82,6 +84,7 @@ class VertexAIPartnerModels(VertexBase):
             PartnerModelPrefixes.MINIMAX_PREFIX,
             PartnerModelPrefixes.MOONSHOT_PREFIX,
             PartnerModelPrefixes.ZAI_PREFIX,
+            PartnerModelPrefixes.GEMMA_MAAS_PREFIX,
         ]
         if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True
@@ -116,9 +119,6 @@ class VertexAIPartnerModels(VertexBase):
                 CodestralTextCompletion,
             )
             from litellm.llms.openai_like.chat.handler import OpenAILikeChatHandler
-            from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-                VertexLLM,
-            )
         except Exception as e:
             raise VertexAIError(
                 status_code=400,
@@ -133,9 +133,7 @@ class VertexAIPartnerModels(VertexBase):
                 message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
             )
         try:
-            vertex_httpx_logic = VertexLLM()
-
-            access_token, project_id = vertex_httpx_logic._ensure_access_token(
+            access_token, project_id = self._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_project,
                 custom_llm_provider="vertex_ai",

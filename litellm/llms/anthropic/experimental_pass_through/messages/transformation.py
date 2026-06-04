@@ -230,6 +230,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
         Caller-provided ``output_config.effort`` is never overridden.
         """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
         if not AnthropicModelInfo._is_adaptive_thinking_model(model):
             return
         thinking = optional_params.get("thinking")
@@ -237,7 +239,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         budget = int(thinking.get("budget_tokens") or 0)
-        if budget >= 24000:
+        if budget >= 24000 and AnthropicConfig._supports_effort_level(model, "xhigh"):
             effort = "xhigh"
         elif budget >= 10000:
             effort = "high"
@@ -312,7 +314,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 )
 
         ####### get required params for all anthropic messages requests ######
-        verbose_logger.debug(f"TRANSFORMATION DEBUG - Messages: {messages}")
+        # Lazy %s: the f-string previously stringified the entire messages
+        # payload on every request regardless of log level (a full scan of the
+        # request body on the hot path). Defer it to when DEBUG is enabled.
+        verbose_logger.debug("TRANSFORMATION DEBUG - Messages: %s", messages)
 
         # Auto-strip advisor blocks from history if advisor tool is absent.
         # Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
@@ -424,8 +429,13 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
                 )
 
-        # Check for structured outputs
-        if optional_params.get("output_format") is not None:
+        # Check for structured outputs. Anthropic's newer request shape nests
+        # the schema under output_config.format; the older top-level
+        # output_format remains supported for backwards compatibility.
+        output_config = optional_params.get("output_config")
+        if optional_params.get("output_format") is not None or (
+            isinstance(output_config, dict) and output_config.get("format") is not None
+        ):
             beta_values.add(
                 ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
             )

@@ -147,6 +147,18 @@ vi.mock("@/lib/cva.config", () => ({
 }));
 
 import CreateKeyPage from "@/app/page";
+import { AuthProvider } from "@/contexts/AuthContext";
+
+// The page consumes auth state via useAuth(). Wrap it so the hook resolves
+// against a real provider — the provider's effects (cookie read, JWT decode,
+// redirect-on-expired) are what these tests exercise.
+function PageUnderTest() {
+  return (
+    <AuthProvider>
+      <CreateKeyPage />
+    </AuthProvider>
+  );
+}
 
 /** ----------------------------
  * Helpers
@@ -207,7 +219,7 @@ describe("CreateKeyPage auth behavior", () => {
     const cookieSetSpy = vi.spyOn(document, "cookie", "set");
 
     // Act
-    render(<CreateKeyPage />);
+    render(<PageUnderTest />);
 
     // Assert: we eventually redirect to SSO login with return URL (single replace, not assign/href)
     await waitFor(() => {
@@ -243,7 +255,7 @@ describe("CreateKeyPage auth behavior", () => {
     });
 
     // Act
-    render(<CreateKeyPage />);
+    render(<PageUnderTest />);
 
     // Assert: no redirect
     await waitFor(() => {
@@ -286,7 +298,7 @@ describe("CreateKeyPage auth behavior", () => {
     // Return URL has the same params in a different order
     consumeReturnUrlMock.mockReturnValue("http://localhost/ui?a=1&b=2");
 
-    render(<CreateKeyPage />);
+    render(<PageUnderTest />);
 
     await waitFor(() => {
       expect(window.location.replace).not.toHaveBeenCalled();

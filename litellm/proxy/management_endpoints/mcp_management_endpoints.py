@@ -1542,7 +1542,7 @@ if MCP_AVAILABLE:
                         master_key,
                         algorithms=["HS256"],
                         # UI session cookies may omit exp; don't require it.
-                        options={"verify_exp": False},
+                        options={"verify_exp": False, "verify_aud": False},
                     )
                     if decoded.get("login_method") in ("sso", "username_password"):
                         cookie_key = decoded.get("key", "")
@@ -1568,6 +1568,9 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
             )
+            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+                get_request_route,
+            )
 
             server_id = request.path_params.get("server_id", "")
             if server_id:
@@ -1584,7 +1587,7 @@ if MCP_AVAILABLE:
                 ):
                     # For /token, require PKCE authorization_code; refresh_token
                     # grants must NOT bypass auth (see comment above).
-                    path_lower = (request.url.path or "").rstrip("/").lower()
+                    path_lower = get_request_route(request).rstrip("/").lower()
                     if path_lower.endswith("/token"):
                         body_data = await _read_request_body(request=request)
                         grant_type = (body_data or {}).get("grant_type", "")
@@ -2132,6 +2135,8 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
+        payload_fields_set = set(payload.fields_set())
+
         # Validate and normalize payload fields
         validate_and_normalize_mcp_server_payload(payload)
 
@@ -2151,6 +2156,7 @@ if MCP_AVAILABLE:
             prisma_client,
             payload,
             touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
+            fields_set=payload_fields_set,
         )
 
         if mcp_server_record_updated is None:

@@ -995,5 +995,202 @@ async def test_token_rate_limit_headers_present_in_stored_response(rate_limiter)
     assert api_key_tokens["limit_remaining"] >= 0
 
 
+@pytest.mark.asyncio
+async def test_estimate_tokens_floor_caps_at_smallest_configured_tpm(rate_limiter):
+    """
+    Regression: with a small configured TPM cap and no max_tokens, the
+    output-budget floor must be capped at a fraction of that limit so the
+    reservation alone can't trip the limit.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"messages": [{"role": "user", "content": "hello"}]},
+        min_configured_tpm_limit=1000,
+    )
+    # input ~= 5//4 = 1 token; output floor capped at 1000//4 = 250;
+    # total ~= 251 (well under 1000).
+    assert (
+        estimate <= 1000 // 2
+    ), f"With TPM=1000, reservation must stay well under the limit; got {estimate}"
+    assert estimate >= 1, "Estimate must be at least the call-site floor of 1"
+
+
+@pytest.mark.asyncio
+async def test_estimate_tokens_floor_unchanged_for_large_tpm(rate_limiter):
+    """
+    Large TPM budgets must keep the 1024-token floor so a stream of small
+    concurrent requests can't collectively bypass the limit.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"messages": [{"role": "user", "content": "hello"}]},
+        min_configured_tpm_limit=100_000,
+    )
+    # input ~= 1; output floor = min(1024, 100_000//4=25_000) = 1024;
+    # total ~= 1025.
+    assert estimate == 1 + 1024
+
+
+@pytest.mark.asyncio
+async def test_estimate_tokens_floor_unchanged_when_kwarg_omitted(rate_limiter):
+    """
+    Callers that don't pass min_configured_tpm_limit (legacy path, tests that
+    stub the estimator) must observe the pre-fix floor.
+    """
+    handler, _cache = rate_limiter
+
+    estimate = handler._estimate_tokens_for_request(
+        data={"messages": [{"role": "user", "content": "hello"}]},
+    )
+    assert estimate == 1 + 1024
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_admits_no_max_tokens_request(rate_limiter):
+    """
+    Regression (end-to-end at the hook level): a project-level model_tpm_limit
+    of 1000 with a tiny no-max_tokens request must not 429 on the first call.
+    Pre-fix the 1024-token floor tripped OVER_LIMIT against the 1000-token cap
+    on every request.
+    """
+    handler, cache = rate_limiter
+
+    api_key = hash_token("sk-small-tpm")
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=api_key,
+        project_id="proj-small-tpm",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+            "model_rpm_limit": {"gpt-3.5-turbo": 60},
+        },
+    )
+
+    data = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    # Must not raise — pre-fix this was a 429.
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    reserved = (data.get("metadata") or {}).get(TPM_RESERVED_TOKENS_KEY)
+    assert reserved is not None, "Reservation should have been stashed"
+    assert reserved <= 1000 // 2, (
+        f"Capped floor must keep the reservation well under the 1000 TPM "
+        f"cap; got {reserved}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_injects_matching_max_tokens(rate_limiter):
+    """
+    When a small TPM cap forces the no-max_tokens floor below the baseline,
+    the hook must also write data['max_tokens'] = capped_floor so the actual
+    model output is bounded by the reservation. Without this cap, concurrent
+    no-max_tokens generations can spend past the TPM limit before post-call
+    reconciliation runs.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-small-tpm-cap"),
+        project_id="proj-small-tpm-cap",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert data.get("max_tokens") == 1000 // 4, (
+        f"Capped floor must be written to max_tokens to bound the actual "
+        f"model output; got {data.get('max_tokens')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_large_tpm_cap_does_not_inject_max_tokens(rate_limiter):
+    """
+    A TPM cap that doesn't constrain the floor must not silently inject
+    max_tokens — that would change behaviour for tenants who already have
+    plenty of budget.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-large-tpm-cap"),
+        project_id="proj-large-tpm-cap",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 100_000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert "max_tokens" not in data, (
+        f"Large TPM caps should leave max_tokens alone; got "
+        f"{data.get('max_tokens')}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_small_tpm_cap_preserves_explicit_max_tokens(rate_limiter):
+    """
+    Explicit max_tokens from the caller must never be overwritten by the
+    bypass mitigation — the user already declared their budget.
+    """
+    handler, cache = rate_limiter
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key=hash_token("sk-explicit-max-tokens"),
+        project_id="proj-explicit-max-tokens",
+        project_metadata={
+            "model_tpm_limit": {"gpt-3.5-turbo": 1000},
+        },
+    )
+
+    data: dict = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "hello"}],
+        "max_tokens": 500,
+    }
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=cache,
+        data=data,
+        call_type="",
+    )
+
+    assert data["max_tokens"] == 500
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-s"])

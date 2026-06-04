@@ -101,6 +101,73 @@ def test_get_agentic_loop_settings_defaults_and_overrides():
     assert fingerprints == ["fp-1", "fp-2"]
 
 
+def test_has_agentic_completion_hook_detection(monkeypatch):
+    """The streaming path skips the agentic wrapper only when no callback
+    overrides async_should_run_agentic_loop. Verify both directions."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    handler = BaseLLMHTTPHandler()
+    logging_obj = Mock()
+    logging_obj.dynamic_success_callbacks = []
+
+    # No callbacks at all -> no agentic hook.
+    monkeypatch.setattr(litellm, "callbacks", [])
+    assert handler._has_agentic_completion_hook(logging_obj) is False
+
+    # A plain CustomLogger that does NOT override the gate -> still no hook
+    # (so the wrapper is safely skipped).
+    class _PlainLogger(CustomLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "callbacks", [_PlainLogger()])
+    assert handler._has_agentic_completion_hook(logging_obj) is False
+
+    # A logger that overrides the gate (directly) -> hook present.
+    class _AgenticLogger(CustomLogger):
+        async def async_should_run_agentic_loop(
+            self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+        ):
+            return True, {}
+
+    monkeypatch.setattr(litellm, "callbacks", [_AgenticLogger()])
+    assert handler._has_agentic_completion_hook(logging_obj) is True
+
+    # Override inherited through an intermediate class is still detected
+    # (function-identity check, not a leaf __dict__ check).
+    class _DerivedAgenticLogger(_AgenticLogger):
+        pass
+
+    monkeypatch.setattr(litellm, "callbacks", [_DerivedAgenticLogger()])
+    assert handler._has_agentic_completion_hook(logging_obj) is True
+
+    # Hook supplied via logging_obj.dynamic_success_callbacks is detected too.
+    monkeypatch.setattr(litellm, "callbacks", [])
+    logging_obj.dynamic_success_callbacks = [_AgenticLogger()]
+    assert handler._has_agentic_completion_hook(logging_obj) is True
+
+    # String-named callback entry (e.g. "datadog") must be resolved to its
+    # CustomLogger instance via get_custom_logger_compatible_class -- the same
+    # way ProxyLogging._callback_capabilities handles them. Without that
+    # resolution a string-registered agentic callback would be silently
+    # skipped and the buffering wrapper would never fire.
+    logging_obj.dynamic_success_callbacks = []
+    agentic_via_string = _AgenticLogger()
+    monkeypatch.setattr(litellm, "callbacks", ["fake_string_callback"])
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
+        lambda name: agentic_via_string if name == "fake_string_callback" else None,
+    )
+    assert handler._has_agentic_completion_hook(logging_obj) is True
+
+    # Unresolvable string (returns None) is skipped, no false positive.
+    monkeypatch.setattr(litellm, "callbacks", ["unknown_callback"])
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.litellm_logging.get_custom_logger_compatible_class",
+        lambda name: None,
+    )
+    assert handler._has_agentic_completion_hook(logging_obj) is False
+
+
 def test_fingerprint_agentic_tools_is_deterministic():
     handler = BaseLLMHTTPHandler()
     tools_a = {"tool_calls": [{"id": "1", "input": {"q": "abc"}, "name": "web_search"}]}
@@ -268,6 +335,79 @@ async def test_async_anthropic_messages_handler_passes_litellm_metadata():
 
 
 @pytest.mark.asyncio
+async def test_async_anthropic_messages_handler_forwards_router_model_info():
+    """Ensure router deployment model_info is forwarded into litellm_params.
+
+    The Router stamps kwargs['model_info'] on every deployment dispatch via
+    _update_kwargs_with_deployment. Downstream cooldown / success callbacks
+    (router.deployment_callback_on_failure, deployment_callback_on_success)
+    look up the deployment id via kwargs['litellm_params']['model_info']['id'].
+    If async_anthropic_messages_handler builds its own litellm_params dict
+    without forwarding model_info, the id is missing and cooldown is silently
+    skipped for /v1/messages requests under the Router.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    mock_config = Mock()
+    mock_config.validate_anthropic_messages_environment = Mock(
+        return_value=({"x-api-key": "test-key"}, "https://api.anthropic.com")
+    )
+    mock_config.transform_anthropic_messages_request = Mock(
+        return_value={"model": "claude-sonnet-4-20250514", "messages": []}
+    )
+
+    mock_client = AsyncMock()
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Hello!"}],
+        "model": "claude-sonnet-4-20250514",
+        "stop_reason": "end_turn",
+    }
+    mock_client.post = AsyncMock(return_value=mock_response)
+
+    mock_logging_obj = Mock()
+    mock_logging_obj.update_from_kwargs = Mock()
+    mock_logging_obj.model_call_details = {}
+    mock_logging_obj.stream = False
+
+    deployment_model_info = {
+        "id": "deployment-123",
+        "db_model": False,
+    }
+
+    try:
+        await handler.async_anthropic_messages_handler(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_provider_config=mock_config,
+            anthropic_messages_optional_request_params={},
+            custom_llm_provider="anthropic",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=mock_logging_obj,
+            client=mock_client,
+            kwargs={"model_info": deployment_model_info},
+        )
+    except Exception:
+        pass
+
+    mock_logging_obj.update_from_kwargs.assert_called_once()
+    call_kwargs = mock_logging_obj.update_from_kwargs.call_args
+    litellm_params_arg = (
+        call_kwargs.kwargs.get(
+            "litellm_params", call_kwargs[1].get("litellm_params", {})
+        )
+        if call_kwargs.kwargs
+        else call_kwargs[1].get("litellm_params", {})
+    )
+
+    assert litellm_params_arg.get("model_info") == deployment_model_info
+
+
+@pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_header_priority():
     """
     Test that async_anthropic_messages_handler respects header priority:
@@ -422,3 +562,143 @@ def test_sync_delete_responses_omits_body_for_azure():
     assert captured["url"].endswith(
         "/openai/responses/resp_xyz?api-version=2025-03-01-preview"
     )
+
+
+# ---------------------------------------------------------------------------
+# Parity tests: request-body is serialized once and reused for the wire.
+# (_async_post_anthropic_messages_with_http_error_retry)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_anthropic_post_uses_prebuilt_body_without_redumping():
+    """When the caller passes a pre-serialized (unsigned) body, attempt 0 must
+    send exactly those bytes -- no second json.dumps of request_body."""
+    import json as _json
+
+    handler = BaseLLMHTTPHandler()
+    request_body = {"model": "claude", "messages": [{"role": "user", "content": "hi"}]}
+    prebuilt = _json.dumps(request_body)
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status = Mock(return_value=None)
+    http_client = Mock()
+    http_client.post = AsyncMock(return_value=ok_resp)
+
+    provider_config = Mock()
+    provider_config.max_retry_on_anthropic_messages_http_error = 2
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    out = await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=http_client,
+        request_url="http://x/v1/messages",
+        headers={},
+        signed_json_body=prebuilt,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        litellm_params=GenericLiteLLMParams(),
+        api_key="k",
+        model="claude",
+    )
+    assert out is ok_resp
+    http_client.post.assert_awaited_once()
+    sent = http_client.post.await_args.kwargs["data"]
+    # Byte-identical to the legacy wire serialization, and the SAME object the
+    # caller already used for the pre-call log (no re-serialization).
+    assert sent == prebuilt
+    assert sent is prebuilt
+
+
+@pytest.mark.asyncio
+async def test_anthropic_post_falls_back_to_json_dumps_when_unsigned_none():
+    """signed_json_body=None keeps the exact legacy behavior."""
+    import json as _json
+
+    handler = BaseLLMHTTPHandler()
+    request_body = {"model": "claude", "messages": [{"role": "user", "content": "yo"}]}
+
+    ok_resp = Mock()
+    ok_resp.raise_for_status = Mock(return_value=None)
+    http_client = Mock()
+    http_client.post = AsyncMock(return_value=ok_resp)
+
+    provider_config = Mock()
+    provider_config.max_retry_on_anthropic_messages_http_error = 1
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=http_client,
+        request_url="http://x/v1/messages",
+        headers={},
+        signed_json_body=None,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        litellm_params=GenericLiteLLMParams(),
+        api_key="k",
+        model="claude",
+    )
+    sent = http_client.post.await_args.kwargs["data"]
+    assert sent == _json.dumps(request_body)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_post_retry_reserializes_mutated_body():
+    """On a retryable HTTP error the body is mutated + re-signed; the prebuilt
+    body must NOT be reused -- attempt 1 sends the freshly serialized body."""
+    import json as _json
+
+    handler = BaseLLMHTTPHandler()
+    request_body = {"model": "claude", "messages": [{"role": "user", "content": "a"}]}
+    prebuilt = _json.dumps(request_body)
+
+    err_resp = Mock()
+    http_error = httpx.HTTPStatusError(
+        "bad", request=Mock(), response=Mock(status_code=400)
+    )
+    err_resp.raise_for_status = Mock(side_effect=http_error)
+    ok_resp = Mock()
+    ok_resp.raise_for_status = Mock(return_value=None)
+    http_client = Mock()
+    http_client.post = AsyncMock(side_effect=[err_resp, ok_resp])
+
+    def _mutate(e, request_data):
+        request_data["messages"][0]["content"] = "MUTATED"
+
+    provider_config = Mock()
+    provider_config.max_retry_on_anthropic_messages_http_error = 2
+    provider_config.should_retry_anthropic_messages_on_http_error = Mock(
+        return_value=True
+    )
+    provider_config.transform_anthropic_messages_request_on_http_error = _mutate
+    # Re-sign returns no signed body (native anthropic path) -> must re-dump.
+    provider_config.sign_request = Mock(return_value=({}, None))
+
+    logging_obj = Mock()
+    logging_obj.model_call_details = {}
+
+    await handler._async_post_anthropic_messages_with_http_error_retry(
+        async_httpx_client=http_client,
+        request_url="http://x/v1/messages",
+        headers={},
+        signed_json_body=prebuilt,
+        request_body=request_body,
+        stream=False,
+        logging_obj=logging_obj,
+        provider_config=provider_config,
+        litellm_params=GenericLiteLLMParams(),
+        api_key="k",
+        model="claude",
+    )
+    assert http_client.post.await_count == 2
+    first_sent = http_client.post.await_args_list[0].kwargs["data"]
+    second_sent = http_client.post.await_args_list[1].kwargs["data"]
+    assert first_sent == prebuilt  # attempt 0 used prebuilt
+    assert second_sent == _json.dumps(request_body)  # attempt 1 re-serialized
+    assert "MUTATED" in second_sent  # ... the mutated body

@@ -4,7 +4,6 @@ import litellm
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.secret_managers.main import get_secret_str
 
-
 CLAUDE_PLATFORM_SERVICE_NAME: Literal["aws-external-anthropic"] = (
     "aws-external-anthropic"
 )

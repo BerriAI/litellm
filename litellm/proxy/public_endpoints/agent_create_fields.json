@@ -8,6 +8,48 @@
     "litellm_params_template": {}
   },
   {
+    "agent_type": "langflow",
+    "agent_type_display_name": "LangFlow",
+    "description": "Connect to LangFlow AI agents via the LangFlow Platform API",
+    "logo_url": "/ui/assets/logos/langflow.svg",
+    "model_template": "langflow/{flow_id}",
+    "credential_fields": [
+      {
+        "key": "flow_id",
+        "label": "Flow ID",
+        "placeholder": "your-flow-id",
+        "tooltip": "The Flow ID from your LangFlow deployment (found in the flow URL or settings)",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": false
+      },
+      {
+        "key": "api_base",
+        "label": "LangFlow API Base",
+        "placeholder": "http://localhost:7860",
+        "tooltip": "The base URL for your LangFlow server (e.g., http://localhost:7860 or your deployed LangFlow URL)",
+        "required": true,
+        "field_type": "text",
+        "default_value": "http://localhost:7860",
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "api_key",
+        "label": "LangFlow API Key",
+        "placeholder": null,
+        "tooltip": "API key for authenticating with your LangFlow server (x-api-key header)",
+        "required": false,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "langflow"
+    }
+  },
+  {
     "agent_type": "langgraph",
     "agent_type_display_name": "LangGraph",
     "description": "Connect to LangGraph agents via the LangGraph Platform API",
@@ -188,6 +230,78 @@
     ],
     "litellm_params_template": {
       "custom_llm_provider": "vertex_ai"
+    }
+  },
+  {
+    "agent_type": "watsonx_orchestrate",
+    "agent_type_display_name": "watsonx Orchestrate",
+    "description": "Connect to IBM watsonx Orchestrate agents via CP4D or IBM Cloud IAM",
+    "logo_url": "/ui/assets/logos/watsonx.svg",
+    "credential_fields": [
+      {
+        "key": "cp4d_host",
+        "label": "CP4D Host URL",
+        "placeholder": "https://cpd-cpd.apps.example.com",
+        "tooltip": "Your CP4D cluster base URL (e.g. https://cpd-cpd.apps.example.com). For IBM Cloud WXO, use the service endpoint.",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "instance_id",
+        "label": "WXO Instance ID",
+        "placeholder": "1769134113217795",
+        "tooltip": "The numeric watsonx Orchestrate instance ID. Find it in the WXO service URL: /orchestrate/cpd/instances/<INSTANCE_ID>",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "wxo_agent_id",
+        "label": "WXO Agent ID",
+        "placeholder": "588c8cdf-60f4-454b-8468-8702b19dca46",
+        "tooltip": "UUID of the agent in watsonx Orchestrate. Find it via the WXO console or GET /v1/orchestrate/agents.",
+        "required": true,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "auth_mode",
+        "label": "Authentication Mode",
+        "placeholder": null,
+        "tooltip": "cp4d: on-prem / CloudPak for Data (requires username). ibm_cloud: IBM Cloud IAM (api_key only).",
+        "required": false,
+        "field_type": "select",
+        "options": ["cp4d", "ibm_cloud"],
+        "default_value": "cp4d",
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "username",
+        "label": "Username (CP4D only)",
+        "placeholder": "admin",
+        "tooltip": "Your CP4D username. Required when auth_mode is 'cp4d'.",
+        "required": false,
+        "field_type": "text",
+        "default_value": null,
+        "include_in_litellm_params": true
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "CP4D API key (auth_mode=cp4d) or IBM Cloud API key (auth_mode=ibm_cloud).",
+        "required": true,
+        "field_type": "password",
+        "default_value": null,
+        "include_in_litellm_params": true
+      }
+    ],
+    "litellm_params_template": {
+      "custom_llm_provider": "watsonx_orchestrate"
     }
   }
 ]

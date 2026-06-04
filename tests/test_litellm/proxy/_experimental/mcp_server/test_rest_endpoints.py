@@ -1,5 +1,6 @@
 import json
 from typing import Any, Dict, Optional
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -543,6 +544,78 @@ class TestListToolsRestAPI:
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
 
+    @pytest.mark.parametrize("upstream_status", [401, 403])
+    async def test_upstream_auth_failure_surfaces_status_and_challenge(
+        self, monkeypatch, upstream_status
+    ):
+        """A single-server pass-through request whose upstream rejects the token
+        must surface the upstream status (401 or 403) plus its WWW-Authenticate
+        challenge, not collapse into a 200 ``unexpected_error`` body."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "passthrough"
+            allowed_tools = None
+            mcp_info = {"server_name": "passthrough"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        challenge = 'Bearer resource_metadata="https://upstream/.well-known"'
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPUpstreamAuthError(
+                status_code=upstream_status,
+                www_authenticate=challenge,
+                server_name="passthrough",
+            )
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == upstream_status
+        assert exc_info.value.headers == {"www-authenticate": challenge}
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""
@@ -793,6 +866,25 @@ class TestCallToolRestAPI:
         monkeypatch.setattr(
             "litellm.proxy.proxy_server.add_litellm_data_to_request",
             fake_add_litellm_data_to_request,
+            raising=False,
+        )
+
+        mock_server = MagicMock()
+        mock_server.server_id = "server-1"
+
+        def fake_get_mcp_server_by_id(server_id):
+            return mock_server if server_id == "server-1" else None
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            fake_get_mcp_server_by_id,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_name",
+            lambda *args, **kwargs: None,
             raising=False,
         )
 

@@ -256,7 +256,10 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         from yarl import URL as YarlURL
 
         try:
-            data = request.content
+            # Coerce an empty body to None so aiohttp does not attach a
+            # `Content-Type: application/octet-stream` header for bodyless
+            # requests (e.g. DELETE /responses/{id}), which upstream APIs reject.
+            data = request.content or None
         except httpx.RequestNotRead:
             data = request.stream  # type: ignore
             request.headers.pop("transfer-encoding", None)  # handled by aiohttp

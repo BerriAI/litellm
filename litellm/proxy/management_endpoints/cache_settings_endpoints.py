@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import (
     AUDIT_ACTIONS,
     LiteLLM_AuditLogs,
@@ -33,6 +34,10 @@ from litellm.types.management_endpoints import (
 )
 
 router = APIRouter()
+
+# Cache fields holding credentials. Masked on read so plaintext Redis /
+# Sentinel passwords never leave the server in a GET response.
+_CACHE_SENSITIVE_FIELDS: set = {"password", "sentinel_password"}
 
 
 _REDACTED_VALUE = "***REDACTED***"
@@ -295,7 +300,11 @@ async def get_cache_settings(
                     else:
                         decrypted_settings["redis_type"] = "node"
 
-                current_values = decrypted_settings
+                # Mask credential fields so the GET response never carries
+                # plaintext Redis / Sentinel passwords off the server.
+                current_values = mask_sensitive_keys(
+                    decrypted_settings, _CACHE_SENSITIVE_FIELDS
+                )
 
         # Update field values with current values
         for field in cache_fields:

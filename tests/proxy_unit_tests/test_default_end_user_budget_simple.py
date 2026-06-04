@@ -134,9 +134,14 @@ async def test_explicit_budget_not_overridden_by_default():
 @pytest.mark.asyncio
 async def test_budget_enforcement_blocks_over_budget_users():
     """
-    Core scenario: Budget limits are actually enforced.
+    Core scenario: Budget limits are actually enforced via _check_end_user_budget.
     Users who exceed their budget should be blocked.
+    
+    Note: Budget enforcement happens in common_checks() via _check_end_user_budget(),
+    not in get_end_user_object(). get_end_user_object only fetches the user data.
     """
+    from litellm.proxy.auth.auth_checks import _check_end_user_budget
+    
     end_user_id = f"test_user_{uuid.uuid4().hex}"
     default_budget_id = str(uuid.uuid4())
     litellm.max_end_user_budget_id = default_budget_id
@@ -170,12 +175,23 @@ async def test_budget_enforcement_blocks_over_budget_users():
     mock_cache.async_get_cache = AsyncMock(return_value=None)
     mock_cache.async_set_cache = AsyncMock()
 
-    # Should raise BudgetExceededError
+    # First, get the end user object (this just fetches data, doesn't enforce budget)
+    result = await get_end_user_object(
+        end_user_id=end_user_id,
+        prisma_client=mock_prisma_client,
+        user_api_key_cache=mock_cache,
+        route="/chat/completions",
+    )
+    
+    # Verify user was fetched with default budget applied
+    assert result is not None
+    assert result.litellm_budget_table is not None
+    assert result.litellm_budget_table.max_budget == 10.0
+
+    # Now test budget enforcement separately via _check_end_user_budget
     with pytest.raises(litellm.BudgetExceededError) as exc_info:
-        await get_end_user_object(
-            end_user_id=end_user_id,
-            prisma_client=mock_prisma_client,
-            user_api_key_cache=mock_cache,
+        await _check_end_user_budget(
+            end_user_obj=result,
             route="/chat/completions",
         )
 

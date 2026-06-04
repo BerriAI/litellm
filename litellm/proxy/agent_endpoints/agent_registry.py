@@ -92,10 +92,19 @@ class AgentRegistry:
     ########### DB management helpers for agents ###########
     ############################################################
     async def add_agent_to_db(
-        self, agent: AgentConfig, prisma_client: PrismaClient, created_by: str
+        self,
+        agent: AgentConfig,
+        prisma_client: PrismaClient,
+        created_by: str,
+        agent_id: Optional[str] = None,
     ) -> AgentResponse:
         """
-        Add an agent to the database
+        Add an agent to the database.
+
+        If ``agent_id`` is provided, it is used as the primary key for the new
+        row (otherwise the DB generates a UUID). Callers pass an explicit ID
+        when the agent_card_params must reference the agent's own URL before
+        the row exists, e.g. the A2A merge in ``create_agent``.
         """
         try:
             agent_name = agent.get("agent_name")
@@ -145,6 +154,8 @@ class AgentRegistry:
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
+            if agent_id is not None:
+                create_data["agent_id"] = agent_id
             if static_headers_val is not None:
                 create_data["static_headers"] = static_headers_val
             if extra_headers_val is not None:

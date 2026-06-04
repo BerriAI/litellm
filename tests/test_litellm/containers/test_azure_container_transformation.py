@@ -109,6 +109,31 @@ class TestAzureContainerConfig:
 
         assert "/openai/v1/containers" in url
 
+    def test_get_complete_url_strips_responses_path_and_preserves_api_version(self):
+        """When api_base is the responses endpoint URL, get_complete_url must:
+        - strip /openai/responses (no double-path)
+        - use the api-version from api_base query string, NOT the deployment's
+          older api_version (e.g. 2024-08-01-preview → containers need 2025-04-01-preview)
+        """
+        api_base = "https://my-resource.cognitiveservices.azure.com/openai/responses?api-version=2025-04-01-preview"
+
+        url = self.config.get_complete_url(
+            api_base=api_base,
+            litellm_params={"api_version": "2024-08-01-preview"},
+        )
+
+        assert (
+            "/openai/responses/openai/containers" not in url
+        ), "path must not double /openai/responses"
+        assert "my-resource.cognitiveservices.azure.com" in url
+        assert "/openai/containers" in url or "/openai/v1/containers" in url
+        assert (
+            "2025-04-01-preview" in url
+        ), "must use version from api_base, not litellm_params"
+        assert (
+            "2024-08-01-preview" not in url
+        ), "must not fall back to older chat api_version"
+
     def test_get_complete_url_raises_without_api_base(self, monkeypatch):
         monkeypatch.delenv("AZURE_API_BASE", raising=False)
         monkeypatch.setattr(litellm, "api_base", None)
@@ -531,6 +556,92 @@ class TestAzureContainerKnownFailureRegressions:
         assert qs.get("api-version") == ["v1"]
         assert qs.get("foo") == ["bar"]
 
+    @pytest.mark.asyncio
+    async def test_regression_no_container_id_does_not_use_user_supplied_model_id(
+        self, monkeypatch
+    ):
+        """Operations without container_id (create, list) must NOT route via
+        _ageneric_api_call_with_fallbacks using a caller-supplied model_id.
+
+        Security boundary: only the path that holds a validated container_id
+        is trusted to fall back to the forwarded model_id.  A caller setting
+        model_id without container_id on POST /v1/containers must not gain
+        access to an arbitrary deployment UUID.
+        """
+        from litellm.router import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "azure-model",
+                    "litellm_params": {
+                        "model": "azure/gpt-4",
+                        "api_base": "https://my-resource.cognitiveservices.azure.com",
+                        "api_key": "test-key",
+                        "api_version": "2025-04-01-preview",
+                    },
+                    "model_info": {"id": "deployment-uuid-123"},
+                }
+            ]
+        )
+
+        fallback_called = {"called": False}
+
+        async def _mock_fallback(original_function, **kwargs):
+            fallback_called["called"] = True
+            return {}
+
+        monkeypatch.setattr(router, "_ageneric_api_call_with_fallbacks", _mock_fallback)
+
+        original_called = {"called": False}
+
+        async def _noop(**kwargs):
+            original_called["called"] = True
+            return {}
+
+        # No container_id — simulates create/list; caller injects a model_id
+        await router._init_containers_api_endpoints(
+            original_function=_noop,
+            model_id="deployment-uuid-123",
+            custom_llm_provider="azure",
+        )
+
+        assert not fallback_called["called"], (
+            "_ageneric_api_call_with_fallbacks must NOT be called when "
+            "container_id is absent, even if model_id is supplied"
+        )
+        assert original_called["called"], "original_function must be called directly"
+
+    def test_regression_httpx_empty_params_strips_query_string(self):
+        """httpx erases the URL query-string when params={} (empty dict) is passed.
+
+        Root cause of the Azure container 404s on POST/DELETE:
+          _build_query_params returns {} when the endpoint has no extra params;
+          passing that {} as params= to httpx wiped ?api-version=2025-04-01-preview.
+
+        Fix: every container httpx call now uses `params or None` so an empty
+        dict falls back to None, which tells httpx to leave the URL untouched.
+        """
+        url = (
+            "https://resource.cognitiveservices.azure.com"
+            "/openai/containers/cntr_123?api-version=2025-04-01-preview"
+        )
+        client = httpx.AsyncClient()
+
+        req_none = client.build_request("DELETE", url, params=None)
+        assert "api-version=2025-04-01-preview" in str(req_none.url)
+
+        req_empty = client.build_request("DELETE", url, params={})
+        assert "api-version" not in str(
+            req_empty.url
+        ), "Documents root cause: params={} strips the query string"
+
+        effective: dict = {}
+        req_guarded = client.build_request("DELETE", url, params=effective or None)
+        assert "api-version=2025-04-01-preview" in str(
+            req_guarded.url
+        ), "`params or None` must preserve ?api-version"
+
     def test_regression_proxy_resolves_azure_text_same_as_azure(self):
         """Router/proxy treat azure_text like azure for container config."""
         from litellm.proxy.container_endpoints.handler_factory import (
@@ -770,3 +881,143 @@ class TestAzureContainerKnownFailureRegressions:
         assert captured["data"]["container_id"] == "cntr_123"
         assert captured["data"]["custom_llm_provider"] == "azure"
         assert captured["data"]["model_id"] == "model_abc123"
+
+    @pytest.mark.asyncio
+    async def test_regression_get_container_forwarding_params_sets_model_id_for_managed_id(
+        self,
+    ):
+        """get_container_forwarding_params must extract model_id from a
+        LiteLLM-managed encoded container ID and include it in the forwarding
+        dict.  This is the proxy-side half of the native-Azure-ID routing fix:
+        the router's _init_containers_api_endpoints reads kwargs["model_id"]
+        which is set here.
+        """
+        from litellm.proxy.container_endpoints.ownership import (
+            get_container_forwarding_params,
+        )
+
+        encoded_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="deployment-uuid-123",
+            container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
+        )
+
+        params = await get_container_forwarding_params(
+            container_id=encoded_id,
+            original_container_id="cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df",
+            custom_llm_provider="azure",
+        )
+
+        assert (
+            params.get("model_id") == "deployment-uuid-123"
+        ), "model_id must be forwarded to the router for managed container IDs"
+        assert params.get("container_id") == (
+            "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+        )
+        assert params.get("custom_llm_provider") == "azure"
+
+    @pytest.mark.asyncio
+    async def test_regression_get_container_forwarding_params_recovers_model_id_for_native_id(
+        self, monkeypatch
+    ):
+        """Native Azure IDs (``cntr_<hex>``) cannot be decoded, so model_id
+        must be recovered from the ownership row's ``unified_object_id`` —
+        the encoded form captured at create time when the router selected a
+        specific deployment. Without this, the router-side fallback for
+        native IDs in ``_init_containers_api_endpoints`` is dead code.
+        """
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from litellm.proxy.container_endpoints import ownership
+        from litellm.proxy.container_endpoints.ownership import (
+            get_container_forwarding_params,
+        )
+
+        native_id = "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+        encoded_stored_id = ResponsesAPIRequestUtils._build_container_id(
+            custom_llm_provider="azure",
+            model_id="deployment-uuid-123",
+            container_id=native_id,
+        )
+
+        ownership._CONTAINER_STORED_ID_CACHE.flush_cache()
+        ownership._CONTAINER_OWNER_CACHE.flush_cache()
+
+        table = AsyncMock()
+        table.find_first.return_value = SimpleNamespace(
+            created_by="user-1",
+            file_purpose=ownership.CONTAINER_OBJECT_PURPOSE,
+            unified_object_id=encoded_stored_id,
+        )
+        prisma_client = SimpleNamespace(
+            db=SimpleNamespace(litellm_managedobjecttable=table)
+        )
+        monkeypatch.setattr(
+            ownership,
+            "_get_prisma_client",
+            AsyncMock(return_value=prisma_client),
+        )
+
+        params = await get_container_forwarding_params(
+            container_id=native_id,
+            original_container_id=native_id,
+            custom_llm_provider="azure",
+        )
+
+        assert params.get("model_id") == "deployment-uuid-123", (
+            "model_id must be recovered from the stored unified_object_id "
+            "for native upstream container IDs"
+        )
+        assert params.get("container_id") == native_id
+        assert params.get("custom_llm_provider") == "azure"
+
+    @pytest.mark.asyncio
+    async def test_regression_native_azure_container_id_uses_forwarded_model_id(
+        self, monkeypatch
+    ):
+        """Native Azure container IDs (cntr_ + hex, no LiteLLM payload) must
+        still route through _ageneric_api_call_with_fallbacks using the
+        model_id forwarded from the proxy ownership check so that deployment
+        credentials (api_base) are applied."""
+        from litellm.router import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "azure-model",
+                    "litellm_params": {
+                        "model": "azure/gpt-4",
+                        "api_base": "https://my-resource.cognitiveservices.azure.com",
+                        "api_key": "test-key",
+                        "api_version": "2025-04-01-preview",
+                    },
+                    "model_info": {"id": "deployment-uuid-123"},
+                }
+            ]
+        )
+
+        called_with: dict = {}
+
+        async def _mock_fallback(original_function, **kwargs):
+            called_with.update(kwargs)
+            return {}
+
+        monkeypatch.setattr(router, "_ageneric_api_call_with_fallbacks", _mock_fallback)
+
+        native_azure_id = "cntr_6a058b43d24c8190a226cfb1d35405b20115fb7875ff11df"
+
+        async def _noop(**kwargs):
+            return {}
+
+        await router._init_containers_api_endpoints(
+            original_function=_noop,
+            container_id=native_azure_id,
+            model_id="deployment-uuid-123",
+            custom_llm_provider="azure",
+        )
+
+        assert called_with.get("model") == "deployment-uuid-123", (
+            "_ageneric_api_call_with_fallbacks must be called with the forwarded "
+            "model_id when the container_id carries no LiteLLM routing payload"
+        )

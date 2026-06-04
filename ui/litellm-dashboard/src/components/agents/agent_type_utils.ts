@@ -10,11 +10,13 @@ export const detectAgentType = (agent: Agent): string => {
   const customProvider = agent.litellm_params?.custom_llm_provider;
 
   // Check by custom_llm_provider first
+  if (customProvider === "langflow") return "langflow";
   if (customProvider === "langgraph") return "langgraph";
   if (customProvider === "azure_ai") return "azure_ai_foundry";
   if (customProvider === "bedrock") return "bedrock_agentcore";
 
   // Check by model prefix
+  if (model.startsWith("langflow/")) return "langflow";
   if (model.startsWith("langgraph/")) return "langgraph";
   if (model.startsWith("azure_ai/agents/")) return "azure_ai_foundry";
   if (model.startsWith("bedrock/agentcore/")) return "bedrock_agentcore";

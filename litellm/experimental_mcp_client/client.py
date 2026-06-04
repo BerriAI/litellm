@@ -421,8 +421,16 @@ class MCPClient:
 
         return factory
 
-    async def list_tools(self) -> List[MCPTool]:
-        """List available tools from the server."""
+    async def list_tools(self, raise_on_error: bool = False) -> List[MCPTool]:
+        """List available tools from the server.
+
+        Args:
+            raise_on_error: When True, re-raise exceptions instead of returning
+                an empty list. Used by the proxy's pass-through MCP flow so it
+                can surface upstream HTTP 401 responses as a proper 401 to the
+                MCP client (triggering the upstream OAuth flow) rather than
+                masking them as "connected, no tools".
+        """
         verbose_logger.debug(
             f"MCP client listing tools from {self.server_url or 'stdio'}"
         )
@@ -458,6 +466,8 @@ class MCPClient:
                     "the MCP server may have crashed, disconnected, or timed out"
                 )
 
+            if raise_on_error:
+                raise
             # Return empty list instead of raising to allow graceful degradation
             return []
 

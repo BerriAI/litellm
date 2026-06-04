@@ -217,7 +217,15 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         mask_response_content=getattr(litellm_params, "mask_response_content", False),
         app_name=getattr(litellm_params, "app_name", None),
         fallback_on_error=getattr(litellm_params, "fallback_on_error", "block"),
-        timeout=float(getattr(litellm_params, "timeout", 10.0)),
+        # `timeout` is now declared on BaseLitellmParams (Optional[float] = None),
+        # so the attribute always exists. The Pydantic validator on LitellmParams
+        # coerces strings to float, but None still means "use handler default" —
+        # guard against float(None) here.
+        timeout=(
+            float(getattr(litellm_params, "timeout", None))
+            if getattr(litellm_params, "timeout", None) is not None
+            else 10.0
+        ),
         violation_message_template=litellm_params.violation_message_template,
     )
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)

@@ -93,6 +93,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
+            "include_server_side_tool_invocations",
             "service_tier",
         ]
         if supports_reasoning(model, custom_llm_provider="gemini"):
@@ -164,5 +165,8 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
                                 # If conversion fails, leave as is and let the API handle it
                                 pass
         return _gemini_convert_messages_with_history(
-            messages=messages, model=model, litellm_params=litellm_params
+            messages=messages,
+            model=model,
+            litellm_params=litellm_params,
+            custom_llm_provider="gemini",
         )

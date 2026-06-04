@@ -241,7 +241,10 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.litellm_core_utils.sensitive_data_masker import (
+    SensitiveDataMasker,
+    mask_sensitive_keys,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
@@ -414,6 +417,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -550,6 +554,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
@@ -821,6 +826,37 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
+    ## V2 OTEL: now that config (and therefore the callbacks) is loaded, publish
+    ## the chosen V2 logger's TracerProvider as the OTel global. The FastAPI
+    ## instrumentation mounted at app-creation binds to the global provider, so
+    ## this is what makes server spans and gen-ai spans share one provider and
+    ## land in the same trace. Prefer an already-registered preset logger
+    ## (arize, langfuse, …) so server spans export to that backend too; otherwise
+    ## build a generic one from OTEL_* envs. ``set_tracer_provider`` only takes
+    ## effect once, so the first configured logger wins.
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            from opentelemetry import trace as _otel_trace
+
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            _otel_v2_logger = (
+                next(
+                    (
+                        cb
+                        for cb in litellm.service_callback
+                        if isinstance(cb, OpenTelemetryV2)
+                    ),
+                    None,
+                )
+                or OpenTelemetryV2()
+            )
+            _otel_trace.set_tracer_provider(_otel_v2_logger._tracer_provider)
+    except Exception as e:
+        verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)
+
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
@@ -938,6 +974,11 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     # End of startup event
     yield
 
+    # Shutdown event - drain in-flight requests before tearing down dependencies
+    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+    GracefulShutdownManager.start_shutdown()
+    await GracefulShutdownManager.wait_for_drain()
+
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
         try:
@@ -987,6 +1028,15 @@ _OPENAPI_HTTP_METHODS = {
     "put",
     "trace",
 }
+
+
+# Credentials surfaced by `/get/config/callbacks` in the alerting block: the
+# full Slack incoming-webhook URL is itself a credential, and the SMTP
+# password is a service password. Masked on read so plaintext never reaches
+# the UI. Kept here at module scope to match the analogous
+# `_SSO_SENSITIVE_FIELDS` / `_CACHE_SENSITIVE_FIELDS` constants in the SSO
+# and cache endpoint files.
+_ALERTING_SENSITIVE_VARS: Set[str] = {"SLACK_WEBHOOK_URL", "SMTP_PASSWORD"}
 
 
 def _strip_operation_id_method_suffix(operation_id: str) -> str:
@@ -1058,7 +1108,18 @@ app = FastAPI(
     root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
     generate_unique_id_function=_generate_stable_operation_id,
+    strict_content_type=False,
 )
+
+## V2 OTEL: instrument the FastAPI app for server spans (gated by
+## LITELLM_OTEL_V2). This MUST run at app-creation time — once the lifespan runs,
+## the middleware stack is frozen and ``instrument_app`` raises "Cannot add
+## middleware after an application has started". See
+## ``litellm.integrations.otel.mount`` for the full rationale; the call is a safe
+## no-op when the gate is off or the instrumentation package is unavailable.
+from litellm.integrations.otel.mount import instrument_fastapi_app
+
+instrument_fastapi_app(app)
 
 vertex_live_passthrough_vertex_base = VertexBase()
 
@@ -1209,12 +1270,83 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     # NOTE: DO NOT MODIFY THIS, its crucial to map to Openai exceptions
     headers = exc.headers
     error_dict = exc.to_dict()
+    status_code = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
     return JSONResponse(
-        status_code=(
-            int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
-        ),
+        status_code=status_code,
         content={"error": error_dict},
         headers=headers,
+    )
+
+
+def _close_dangling_otel_server_span(
+    request: Request, status_code: int, exc: Optional[Exception] = None
+) -> None:
+    parent_otel_span = getattr(request.state, "parent_otel_span", None)
+    if parent_otel_span is None:
+        return
+    if open_telemetry_logger is None:
+        return
+    # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
+    # is that same span), and it records the error + ends it itself. Ending it here
+    # would end it early — losing the http.* attributes the instrumentor stamps on
+    # completion — and double-end it. Leave it to the instrumentor.
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            return
+    except Exception:
+        pass
+    try:
+        from opentelemetry.trace import Status, StatusCode
+
+        open_telemetry_logger.set_response_status_code_attribute(
+            parent_otel_span, status_code
+        )
+        if status_code >= 400:
+            open_telemetry_logger.record_error_attributes_on_span(
+                parent_otel_span, exc, status_code
+            )
+        parent_otel_span.set_status(
+            Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK)
+        )
+        parent_otel_span.end()
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Error closing dangling OTEL SERVER span: %s", str(e)
+        )
+    finally:
+        request.state.parent_otel_span = None
+
+
+@app.exception_handler(RequestValidationError)
+async def otel_request_validation_exception_handler(
+    request: Request, exc: RequestValidationError
+):
+    _close_dangling_otel_server_span(request, 422, exc=exc)
+    return JSONResponse(
+        status_code=422,
+        content={"detail": jsonable_encoder(exc.errors())},
+    )
+
+
+@app.exception_handler(Exception)
+async def otel_unhandled_exception_handler(request: Request, exc: Exception):
+    if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
+        raise exc
+    verbose_proxy_logger.exception(
+        "Unhandled exception in request: %s", type(exc).__name__
+    )
+    _close_dangling_otel_server_span(request, 500, exc=exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "message": "Internal server error",
+                "type": "internal_server_error",
+            }
+        },
     )
 
 
@@ -2710,11 +2842,9 @@ def run_ollama_serve():
         with open(os.devnull, "w") as devnull:
             subprocess.Popen(command, stdout=devnull, stderr=devnull)
     except Exception as e:
-        verbose_proxy_logger.debug(
-            f"""
+        verbose_proxy_logger.debug(f"""
             LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-        """
-        )
+        """)
 
 
 def _get_process_rss_mb() -> Optional[float]:
@@ -4328,6 +4458,19 @@ class ProxyConfig:
                 "health_check_concurrency", None
             )
             health_check_details = general_settings.get("health_check_details", True)
+            ### INTERACTIONS API SCHEMA ###
+            _use_legacy_interactions_schema = general_settings.get(
+                "use_legacy_interactions_schema"
+            )
+            if _use_legacy_interactions_schema is not None:
+                if isinstance(_use_legacy_interactions_schema, str):
+                    litellm.use_legacy_interactions_schema = (
+                        _use_legacy_interactions_schema.lower() == "true"
+                    )
+                else:
+                    litellm.use_legacy_interactions_schema = bool(
+                        _use_legacy_interactions_schema
+                    )
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get(
                 "enable_health_check_routing", False
@@ -6917,6 +7060,15 @@ async def async_data_generator(  # noqa: PLR0915
 
             if isinstance(chunk, BaseModel):
                 chunk = _serialize_streaming_chunk(chunk)
+            elif isinstance(chunk, bytes):
+                # Some upstream streaming iterators (e.g. AsyncGoogleGenAIGenerateContentStreamingIterator
+                # for /v1beta/.../streamGenerateContent) yield raw SSE bytes from Gemini.
+                # Decode to str so the f-string below does not emit a Python b'...' literal,
+                # and pass already-formatted SSE through unchanged to avoid double "data:" prefix.
+                chunk = chunk.decode("utf-8", errors="replace")
+                if chunk.startswith(("data:", "event:", ":")):
+                    yield chunk if chunk.endswith("\n\n") else chunk + "\n\n"
+                    continue
             elif isinstance(chunk, str) and chunk.startswith("data: "):
                 error_message = chunk
                 break
@@ -6932,11 +7084,12 @@ async def async_data_generator(  # noqa: PLR0915
             # still flush their post-stream logging.
             ProxyLogging._fire_deferred_stream_logging(request_data)
 
-        # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
             yield error_message
-        done_message = "[DONE]"
-        yield f"data: {done_message}\n\n"
+        # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
+        if not request_data.get("_litellm_skip_openai_stream_done"):
+            done_message = "[DONE]"
+            yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
@@ -14633,6 +14786,9 @@ async def get_config():  # noqa: PLR0915
                         value=env_variable, key=_var
                     )
                     _slack_env_vars[_var] = _decrypted_value
+            _slack_env_vars = mask_sensitive_keys(
+                _slack_env_vars, _ALERTING_SENSITIVE_VARS
+            )
 
             _alerting_types = proxy_logging_obj.slack_alerting_instance.alert_types
             _all_alert_types = (
@@ -14669,6 +14825,7 @@ async def get_config():  # noqa: PLR0915
                 # decode + decrypt the value
                 _decrypted_value = decrypt_value_helper(value=env_variable, key=_var)
                 _email_env_vars[_var] = _decrypted_value
+        _email_env_vars = mask_sensitive_keys(_email_env_vars, _ALERTING_SENSITIVE_VARS)
 
         alerting_data.append(
             {
@@ -15500,7 +15657,6 @@ async def get_routes():
 
 app.include_router(router)
 app.include_router(response_router)
-app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
@@ -15513,6 +15669,7 @@ app.include_router(fine_tuning_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(pass_through_router)
+app.include_router(batches_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
@@ -15700,6 +15857,8 @@ async def _mcp_forward_as_path(path_segment: str, request: Request):
     )
 
     scope = dict(request.scope)
+    # Preserve the public request path for OAuth challenge URL selection.
+    scope["_original_path"] = scope.get("path", "")
     scope["path"] = f"/mcp/{path_segment}"
     return await _stream_mcp_asgi_response(
         handle_streamable_http_mcp, scope, request.receive
@@ -15847,6 +16006,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             )
             if toolset is not None:
                 scope = dict(request.scope)
+                scope["_original_path"] = scope.get("path", "")
                 scope["path"] = "/mcp"
                 token = _mcp_active_toolset_id.set(toolset.toolset_id)
                 try:

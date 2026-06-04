@@ -5,6 +5,9 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
+from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
+    AktoConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.block_code_execution import (
     BlockCodeExecutionGuardrailConfigModel,
 )
@@ -16,9 +19,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
     IBMGuardrailsBaseConfigModel,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.akto import (
-    AktoConfigModel,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
@@ -40,6 +40,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.hiddenlayer import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.qohash import (
     QostodianNexusConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
+    VigilGuardGuardrailConfigModel,
 )
 
 """
@@ -67,6 +70,7 @@ class SupportedGuardrailIntegrations(Enum):
     HIDE_SECRETS = "hide-secrets"
     HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
+    CATO_NETWORKS = "cato_networks"
     PANGEA = "pangea"
     CROWDSTRIKE_AIDR = "crowdstrike_aidr"
     LASSO = "lasso"
@@ -93,6 +97,7 @@ class SupportedGuardrailIntegrations(Enum):
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
     QUALIFIRE = "qualifire"
     CUSTOM_CODE = "custom_code"
+    MICROSOFT_PURVIEW = "microsoft_purview"
     SEMANTIC_GUARD = "semantic_guard"
     MCP_END_USER_PERMISSION = "mcp_end_user_permission"
     BLOCK_CODE_EXECUTION = "block_code_execution"
@@ -100,6 +105,8 @@ class SupportedGuardrailIntegrations(Enum):
     MCP_JWT_SIGNER = "mcp_jwt_signer"
     LLM_AS_A_JUDGE = "llm_as_a_judge"
     QOSTODIAN_NEXUS = "qostodian_nexus"
+    RUBRIK = "rubrik"
+    VIGIL_GUARD = "vigil_guard"
 
 
 class Role(Enum):
@@ -755,6 +762,15 @@ class BaseLitellmParams(
         description="Python-like code containing the apply_guardrail function for custom guardrail logic",
     )
 
+    timeout: Optional[float] = Field(
+        default=None,
+        description=(
+            "Per-request timeout for the guardrail provider API call (seconds). "
+            "Accepts int, float, or numeric string; coerced to float on load. "
+            "Each guardrail handler chooses its own default when unset."
+        ),
+    )
+
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
 
@@ -788,6 +804,7 @@ class LitellmParams(
     BlockCodeExecutionGuardrailConfigModel,
     HiddenlayerGuardrailConfigModel,
     QostodianNexusConfigModel,
+    VigilGuardGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
@@ -810,6 +827,18 @@ class LitellmParams(
         if isinstance(v, list):
             return [x.lower() if isinstance(x, str) else x for x in v]
         return v
+
+    @field_validator("timeout", mode="before", check_fields=False)
+    @classmethod
+    def coerce_timeout(cls, v):
+        """Accept string-valued timeouts (dashboard UI sends JSON strings)
+        and coerce to float before any handler reads the value."""
+        if v is None or v == "":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError) as e:
+            raise ValueError(f"timeout must be numeric, got {v!r}") from e
 
     def __init__(self, **kwargs):
         default_on = kwargs.pop("default_on", None)

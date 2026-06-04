@@ -15,6 +15,7 @@ INTERACTIONS_API_OPTIONAL_PARAMS = {
     "stream",
     "store",
     "background",
+    "environment",
     "response_modalities",
     "response_format",
     "response_mime_type",

@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Type, cast
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
+from litellm.exceptions import ModifyResponseException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -252,6 +253,9 @@ class CustomCodeGuardrail(CustomGuardrail):
 
         except HTTPException:
             # Re-raise HTTP exceptions (from block action)
+            raise
+        except ModifyResponseException:
+            # Pre-call block uses passthrough; must not wrap as execution error (500)
             raise
         except Exception as e:
             verbose_proxy_logger.error(

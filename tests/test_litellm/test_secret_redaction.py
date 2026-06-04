@@ -215,6 +215,38 @@ def test_json_excepthook_redacts_traceback_secrets():
     assert "REDACTED" in output
 
 
+def test_xai_key_redaction_catches_proxy_log_and_config_dump():
+    """xai_key is redacted in proxy log and config dump formats."""
+    cases = [
+        ("setting litellm.xai_key=xai-test-secret-123456", "xai-test-secret-123456"),
+        ("'xai_key': 'xai-test-secret-123456'", "xai-test-secret-123456"),
+    ]
+    for secret_line, secret in cases:
+        result = redact_string(secret_line)
+        assert secret not in result
+        assert "REDACTED" in result, f"xai_key redaction missed: {secret_line!r}"
+
+
+def test_module_level_provider_key_redaction_catches_proxy_log_format():
+    """Provider module-level keys are redacted when logged by proxy startup."""
+    cases = [
+        ("setting litellm.groq_key=gsk-test-secret-123456", "gsk-test-secret-123456"),
+        (
+            "setting litellm.openai_key=openai-test-secret-123456",
+            "openai-test-secret-123456",
+        ),
+    ]
+    for secret_line, secret in cases:
+        result = redact_string(secret_line)
+        assert secret not in result
+        assert (
+            "REDACTED" in result
+        ), f"Module-level key redaction missed: {secret_line!r}"
+
+    safe = "cache_key=cache-value-123456"
+    assert redact_string(safe) == safe
+
+
 def test_key_name_redaction_catches_secrets_in_dict_repr():
     """Secrets inside dict repr strings are redacted based on key names."""
     cases = [
