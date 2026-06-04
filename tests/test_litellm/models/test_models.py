@@ -6,8 +6,13 @@ from datetime import datetime
 
 import pytest
 
+from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.models.config import LiteLLM_Config
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
+from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.models.skills import LiteLLM_SkillsTable
+from litellm.models.tag import LiteLLM_TagTable
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import LiteLLM_OrganizationTable
@@ -297,3 +302,80 @@ class TestVerificationToken:
         assert deleted.deleted_by == "admin"
         assert deleted.deleted_at is not None
         assert deleted.token == "t1"
+
+
+class TestConfigTable:
+    def test_config_creation(self):
+        cfg = LiteLLM_Config(param_name="general_settings", param_value={"k": "v"})
+        assert cfg.param_name == "general_settings"
+        assert cfg.param_value == {"k": "v"}
+
+
+class TestSkillsTable:
+    def test_skills_creation(self):
+        skill = LiteLLM_SkillsTable(
+            skill_id="s1",
+            display_title="My Skill",
+            source="custom",
+            file_content=b"zipbytes",
+            file_name="skill.zip",
+        )
+        assert skill.skill_id == "s1"
+        assert skill.display_title == "My Skill"
+        assert skill.file_content == b"zipbytes"
+
+    def test_skills_defaults(self):
+        skill = LiteLLM_SkillsTable(skill_id="s2")
+        assert skill.source == "custom"
+        assert skill.metadata is None
+
+
+class TestAccessGroupTable:
+    def test_access_group_creation(self):
+        ag = LiteLLM_AccessGroupTable(
+            access_group_id="ag1",
+            access_group_name="group-a",
+            access_model_names=["gpt-4"],
+            assigned_team_ids=["t1"],
+        )
+        assert ag.access_group_id == "ag1"
+        assert ag.access_model_names == ["gpt-4"]
+        assert ag.assigned_team_ids == ["t1"]
+        assert ag.access_agent_ids == []
+
+
+class TestTagTable:
+    def test_tag_creation(self):
+        tag = LiteLLM_TagTable(
+            tag_name="prod",
+            models=["gpt-4"],
+            spend=12.5,
+            budget_id="b1",
+        )
+        assert tag.tag_name == "prod"
+        assert tag.models == ["gpt-4"]
+        assert tag.spend == 12.5
+
+    def test_tag_set_model_info_coerces_none(self):
+        tag = LiteLLM_TagTable(tag_name="t", spend=None, models=None)
+        assert tag.spend == 0.0
+        assert tag.models == []
+
+
+class TestEndUserTable:
+    def test_end_user_creation(self):
+        eu = LiteLLM_EndUserTable(
+            user_id="eu1",
+            blocked=False,
+            spend=5.0,
+            allowed_model_region="eu",
+            default_model="gpt-4",
+        )
+        assert eu.user_id == "eu1"
+        assert eu.blocked is False
+        assert eu.allowed_model_region == "eu"
+        assert eu.default_model == "gpt-4"
+
+    def test_end_user_spend_coerced_when_none(self):
+        eu = LiteLLM_EndUserTable(user_id="eu2", blocked=True, spend=None)
+        assert eu.spend == 0.0

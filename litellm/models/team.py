@@ -91,7 +91,7 @@ class LiteLLM_TeamTable(TeamBase):
     model_id: Optional[int] = None
     model_spend: Optional[dict] = {}
     model_max_budget: Optional[dict] = {}
-    policies: List[str] = []
+    policies: Optional[List[str]] = None
     allow_team_guardrail_config: Optional[bool] = False
     litellm_model_table: Optional[LiteLLM_ModelTable] = None
     object_permission: Optional[LiteLLM_ObjectPermissionTable] = None

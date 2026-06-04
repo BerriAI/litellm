@@ -228,7 +228,7 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
             data["max_budget"] = team.max_budget
         if team.soft_budget is not None:
             data["soft_budget"] = team.soft_budget
-        data["spend"] = team.spend
+        data["spend"] = team.spend if team.spend is not None else 0.0
         data["models"] = team.models
         if team.max_parallel_requests is not None:
             data["max_parallel_requests"] = team.max_parallel_requests
@@ -247,9 +247,9 @@ class TeamRepository(BaseRepository[LiteLLM_TeamTable]):
             data["model_max_budget"] = json.dumps(team.model_max_budget)
         if team.router_settings is not None:
             data["router_settings"] = json.dumps(team.router_settings)
-        data["team_member_permissions"] = team.team_member_permissions
-        data["access_group_ids"] = team.access_group_ids
-        data["policies"] = team.policies
+        data["team_member_permissions"] = team.team_member_permissions or []
+        data["access_group_ids"] = team.access_group_ids or []
+        data["policies"] = team.policies or []
         if team.model_id is not None:
             data["model_id"] = team.model_id
         data["allow_team_guardrail_config"] = team.allow_team_guardrail_config
