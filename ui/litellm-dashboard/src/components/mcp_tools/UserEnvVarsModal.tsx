@@ -1,10 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Modal, Form, Input, Button, Alert, Spin, Tag, Typography } from "antd";
 import { MCPServer, MCPUserEnvVarsStatus } from "./types";
-import {
-  getMCPUserEnvVars,
-  storeMCPUserEnvVars,
-} from "../networking";
+import { getMCPUserEnvVars, storeMCPUserEnvVars } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const { Text, Title } = Typography;
@@ -24,13 +21,7 @@ interface UserEnvVarsModalProps {
  * the admin marked as ``scope=user`` shows up with the admin-supplied
  * description as the placeholder.
  */
-const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
-  server,
-  open,
-  accessToken,
-  onClose,
-  onSaved,
-}) => {
+const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({ server, open, accessToken, onClose, onSaved }) => {
   const [form] = Form.useForm();
   const [status, setStatus] = useState<MCPUserEnvVarsStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -77,9 +68,7 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
       if (onSaved) onSaved(saved);
       onClose();
     } catch (err) {
-      NotificationsManager.fromBackend(
-        `Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      NotificationsManager.fromBackend(`Failed to save env vars: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       setIsSaving(false);
     }
@@ -115,49 +104,31 @@ const UserEnvVarsModal: React.FC<UserEnvVarsModalProps> = ({
             <Spin />
           </div>
         ) : required.length === 0 ? (
-          <Alert
-            type="info"
-            showIcon
-            message="No per-user fields configured for this server."
-          />
+          <Alert type="info" showIcon message="No per-user fields configured for this server." />
         ) : (
           <>
             <Text className="text-sm text-gray-600 block">
-              These values are private to you. Your admin configured this MCP
-              server to require these per-user credentials. Saved values are
-              never shown back; leave an already-set field blank to keep it, or
-              enter a value to set or change it.
+              These values are private to you. Your admin configured this MCP server to require these per-user
+              credentials. Saved values are never shown back; leave an already-set field blank to keep it, or enter a
+              value to set or change it.
             </Text>
-            <Form
-              form={form}
-              layout="vertical"
-              onFinish={handleSave}
-              disabled={isSaving}
-            >
+            <Form form={form} layout="vertical" onFinish={handleSave} disabled={isSaving}>
               {required.map((spec) => (
                 <Form.Item
                   key={spec.name}
                   name={spec.name}
                   label={
                     <span className="flex items-center gap-2">
-                      <span className="font-mono text-sm font-semibold">
-                        {spec.name}
-                      </span>
+                      <span className="font-mono text-sm font-semibold">{spec.name}</span>
                       {spec.is_set && <Tag color="green">Set</Tag>}
                     </span>
                   }
                   extra={spec.description || undefined}
-                  rules={
-                    spec.is_set
-                      ? undefined
-                      : [{ required: true, message: `${spec.name} is required` }]
-                  }
+                  rules={spec.is_set ? undefined : [{ required: true, message: `${spec.name} is required` }]}
                 >
                   <Input.Password
                     placeholder={
-                      spec.is_set
-                        ? "Enter a new value to overwrite"
-                        : spec.description || `Enter your ${spec.name}`
+                      spec.is_set ? "Enter a new value to overwrite" : spec.description || `Enter your ${spec.name}`
                     }
                     visibilityToggle
                   />

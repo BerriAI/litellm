@@ -53,18 +53,14 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   // Logo is sourced exclusively from the admin-set `mcp_info.logo_url`.
   const candidateLogo = server.mcp_info?.logo_url ?? undefined;
   const [failedLogoUrl, setFailedLogoUrl] = useState<string | null>(null);
-  const logoUrl =
-    candidateLogo && failedLogoUrl !== candidateLogo ? candidateLogo : undefined;
+  const logoUrl = candidateLogo && failedLogoUrl !== candidateLogo ? candidateLogo : undefined;
   const transport = server.transport || "http";
-  const displayTransport =
-    server.spec_path && transport !== "stdio" ? "openapi" : transport;
+  const displayTransport = server.spec_path && transport !== "stdio" ? "openapi" : transport;
   const authType = server.auth_type || "none";
   const status = server.status || "unknown";
   const healthTone = HEALTH_TONE[status] ?? HEALTH_TONE.unknown;
   const isPublic = server.available_on_public_internet;
-  const accessGroups = (server.mcp_access_groups ?? []).filter(
-    (g): g is string => typeof g === "string",
-  );
+  const accessGroups = (server.mcp_access_groups ?? []).filter((g): g is string => typeof g === "string");
 
   const missing = missingUserFields ?? [];
   const needsAttention = missing.length > 0;
@@ -82,8 +78,9 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
   let subtitle = "";
   let subtitleTooltip = "";
   if (transport === "stdio") {
-    const parts = [server.command, ...(server.args ?? [])]
-      .filter((p): p is string => typeof p === "string" && p.length > 0);
+    const parts = [server.command, ...(server.args ?? [])].filter(
+      (p): p is string => typeof p === "string" && p.length > 0,
+    );
     subtitle = parts.join(" ");
     subtitleTooltip = subtitle;
   } else if (server.spec_path) {
@@ -156,28 +153,19 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <div
-            className="block w-full truncate text-left font-semibold text-gray-900"
-            title={name}
-          >
+          <div className="block w-full truncate text-left font-semibold text-gray-900" title={name}>
             {name}
           </div>
           <div className="mt-0.5 flex items-center gap-2 text-xs text-gray-500">
             {alias && <span className="truncate">{alias}</span>}
             {alias && <span className="text-gray-300">·</span>}
             <Tooltip title={server.server_id}>
-              <span className="font-mono text-blue-600">
-                {server.server_id.slice(0, 7)}
-              </span>
+              <span className="font-mono text-blue-600">{server.server_id.slice(0, 7)}</span>
             </Tooltip>
           </div>
         </div>
         {menuItems.length > 0 && (
-          <Dropdown
-            menu={{ items: menuItems }}
-            trigger={["click"]}
-            placement="bottomRight"
-          >
+          <Dropdown menu={{ items: menuItems }} trigger={["click"]} placement="bottomRight">
             <button
               type="button"
               onClick={stop}
@@ -193,10 +181,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
 
       {subtitle ? (
         <Tooltip title={subtitleTooltip}>
-          <Text
-            className="truncate font-mono text-xs text-gray-500"
-            ellipsis
-          >
+          <Text className="truncate font-mono text-xs text-gray-500" ellipsis>
             {subtitle}
           </Text>
         </Tooltip>
@@ -220,11 +205,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
         <Tag className="m-0">{authType}</Tag>
         <Tag color={isPublic ? "green" : "orange"} className="m-0">
           <span className="inline-flex items-center gap-1">
-            <span
-              className={`h-1.5 w-1.5 rounded-full ${
-                isPublic ? "bg-green-500" : "bg-orange-500"
-              }`}
-            />
+            <span className={`h-1.5 w-1.5 rounded-full ${isPublic ? "bg-green-500" : "bg-orange-500"}`} />
             {isPublic ? "Public" : "Internal"}
           </span>
         </Tag>
@@ -242,12 +223,7 @@ const MCPServerCard: FC<MCPServerCardProps> = ({
 
       {(server.is_byok || needsAttention) && (
         <div className="mt-auto flex flex-col gap-2">
-          {server.is_byok && (
-            <ByokRow
-              connected={!!server.has_user_credential}
-              onConnect={onByokConnect}
-            />
-          )}
+          {server.is_byok && <ByokRow connected={!!server.has_user_credential} onConnect={onByokConnect} />}
           {needsAttention && (
             <div className="flex items-center justify-between gap-2 text-xs">
               <Tooltip
@@ -320,20 +296,14 @@ const HealthChip: FC<HealthChipProps> = ({
   const tooltip = (
     <div className="max-w-xs">
       <div className="font-semibold mb-1">Health: {status}</div>
-      {lastCheck && (
-        <div className="text-xs mb-1">
-          Last check: {new Date(lastCheck).toLocaleString()}
-        </div>
-      )}
+      {lastCheck && <div className="text-xs mb-1">Last check: {new Date(lastCheck).toLocaleString()}</div>}
       {error && (
         <div className="text-xs">
           <div className="font-medium text-red-300 mb-1">Error</div>
           <div className="break-words">{error}</div>
         </div>
       )}
-      {!lastCheck && !error && (
-        <div className="text-xs text-gray-400">No health data</div>
-      )}
+      {!lastCheck && !error && <div className="text-xs text-gray-400">No health data</div>}
       {onRecheck && <div className="mt-1 text-xs text-gray-300">Click to recheck</div>}
     </div>
   );
