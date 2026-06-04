@@ -278,3 +278,38 @@ async def test_fetch_tools_surfaces_error_on_bare_cancellation():
         await manager._fetch_tools_with_timeout(mock_client, server.name, server=server)
     assert exc_info.value.status_code is None
     mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_reraises_genuine_outer_cancellation():
+    """A real outer cancellation (shutdown / client disconnect) must propagate,
+    not be converted into MCPUpstreamError — otherwise cooperative cancellation
+    breaks. On 3.11+ this is detected via Task.cancelling(); on 3.10 the
+    classifier is unavailable and we re-raise unconditionally, so this contract
+    holds on every supported runtime."""
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="o1",
+        name="mock_databricks",
+        url="https://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+    )
+
+    started = asyncio.Event()
+
+    async def _hang(*args, **kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    mock_client = MagicMock()
+    mock_client.list_tools = _hang
+
+    task = asyncio.create_task(
+        manager._fetch_tools_with_timeout(mock_client, server.name, server=server)
+    )
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task

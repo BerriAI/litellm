@@ -2540,16 +2540,29 @@ class MCPServerManager:
                     status_code=status_code, server_name=server_name
                 ) from e
 
-            # No recoverable HTTP status. Respect a genuine *outer* cancellation
-            # (shutdown / client disconnect) so cooperative cancellation still
-            # works; only treat an internally-originated cancel as a failure.
+            # No recoverable HTTP status. We must not launder this into an empty
+            # success, but we also must not swallow a genuine *outer*
+            # cancellation (shutdown / client disconnect) — re-raising those
+            # keeps cooperative cancellation working.
+            #
+            # On Python 3.11+ `asyncio.Task.cancelling()` lets us tell an
+            # internally-originated cancel-scope cancellation (the upstream
+            # failure we want to surface) from a real outer cancel (which we
+            # re-raise). On Python 3.10 that API does not exist, so we cannot
+            # classify the cancellation; there we conservatively re-raise to
+            # preserve cancellation semantics rather than risk converting a real
+            # shutdown cancel into a server error. (The trade-off: an
+            # upstream-induced bare cancellation on 3.10 propagates as an error
+            # instead of a clean per-server failure — still never a false
+            # success.)
             task = asyncio.current_task()
-            is_outer_cancel = bool(
-                task is not None
-                and getattr(task, "cancelling", None) is not None
-                and task.cancelling() > 0
-            )
-            if is_outer_cancel:
+            cancelling = getattr(task, "cancelling", None) if task is not None else None
+            if cancelling is None:
+                # Python 3.10 (or no running task): cannot classify — cooperate
+                # with the cancellation.
+                raise
+            if cancelling() > 0:
+                # A real outer cancellation was requested on this task.
                 raise
             verbose_logger.warning(
                 f"Tool listing from {server_name} was interrupted before "
