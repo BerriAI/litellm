@@ -1,135 +1,61 @@
 """
 Credentials repository for database operations on LiteLLM_CredentialsTable.
+
+This is the only place that talks to ``litellm_credentialstable``. Encryption of
+credential values is the caller's responsibility (see ``CredentialHelperUtils``),
+so reads return the stored values verbatim.
 """
 
-import json
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional
 
-from litellm.models.credentials import Credentials
-from litellm.repositories.base_repository import BaseRepository
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
-)
+from litellm.models.credentials import CredentialItem
 
 
-class CredentialsRepository(BaseRepository[Credentials]):
-    """Repository for credentials database operations with encryption support."""
+class CredentialsRepository:
+    """Repository for credentials database operations, keyed by credential name."""
 
-    def __init__(self, prisma_client: Any, encryption_key: Optional[str] = None):
-        super().__init__(prisma_client)
-        self._encryption_key = encryption_key
+    def __init__(self, prisma_client: Any):
+        self._prisma_client = prisma_client
+
+    @property
+    def prisma_client(self) -> Any:
+        if self._prisma_client is None:
+            raise RuntimeError(
+                "No DB Connected. See - https://docs.litellm.ai/docs/proxy/virtual_keys"
+            )
+        return self._prisma_client
 
     @property
     def table(self) -> Any:
         return self.prisma_client.db.litellm_credentialstable
 
-    @property
-    def model_class(self) -> Type[Credentials]:
-        return Credentials
-
-    def _encrypt_credential_values(
-        self, credential_values: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Encrypt all values in the credential_values dictionary."""
-        encrypted = {}
-        for key, value in credential_values.items():
-            if isinstance(value, str):
-                encrypted[key] = encrypt_value_helper(
-                    value, new_encryption_key=self._encryption_key
-                )
-            else:
-                encrypted[key] = value
-        return encrypted
-
-    def _decrypt_credential_values(
-        self, credential_values: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Decrypt all values in the credential_values dictionary."""
-        decrypted = {}
-        for key, value in credential_values.items():
-            if isinstance(value, str):
-                decrypted[key] = decrypt_value_helper(
-                    value, key=key, exception_type="debug", return_original_value=True
-                )
-            else:
-                decrypted[key] = value
-        return decrypted
-
-    def _to_model(self, record: Any) -> Optional[Credentials]:
-        """Convert a database record to a Credentials model with decryption."""
+    @staticmethod
+    def _to_model(record: Any) -> Optional[CredentialItem]:
         if record is None:
             return None
-
         data = record.dict() if hasattr(record, "dict") else dict(record)
+        return CredentialItem(
+            credential_name=data["credential_name"],
+            credential_values=data.get("credential_values") or {},
+            credential_info=data.get("credential_info") or {},
+        )
 
-        if isinstance(data.get("credential_values"), str):
-            data["credential_values"] = json.loads(data["credential_values"])
-        if isinstance(data.get("credential_info"), str):
-            data["credential_info"] = json.loads(data["credential_info"])
+    async def find_all(self) -> Any:
+        return await self.table.find_many()
 
-        if data.get("credential_values"):
-            data["credential_values"] = self._decrypt_credential_values(
-                data["credential_values"]
-            )
+    async def create(self, data: Dict[str, Any]) -> Any:
+        return await self.table.create(data=data)
 
-        return Credentials(**data)
-
-    async def find_by_id(
-        self, credential_id: str, id_field: str = "credential_id"
-    ) -> Optional[Credentials]:
-        return await super().find_by_id(credential_id, id_field)
-
-    async def find_by_name(self, credential_name: str) -> Optional[Credentials]:
-        """Find credentials by name."""
+    async def find_by_name(self, credential_name: str) -> Optional[CredentialItem]:
         record = await self.table.find_unique(
             where={"credential_name": credential_name}
         )
         return self._to_model(record)
 
-    async def create_credentials(
-        self,
-        credential_name: str,
-        credential_values: Dict[str, Any],
-        created_by: str,
-        credential_info: Optional[Dict[str, Any]] = None,
-    ) -> Credentials:
-        """Create new credentials with encryption."""
-        encrypted_values = self._encrypt_credential_values(credential_values)
-        data: Dict[str, Any] = {
-            "credential_name": credential_name,
-            "credential_values": json.dumps(encrypted_values),
-            "created_by": created_by,
-            "updated_by": created_by,
-        }
-        if credential_info is not None:
-            data["credential_info"] = json.dumps(credential_info)
-
-        record = await self.table.create(data=data)
-        model = self._to_model(record)
-        assert model is not None
-        return model
-
-    async def update_credentials(
-        self,
-        credential_id: str,
-        updated_by: str,
-        credential_values: Optional[Dict[str, Any]] = None,
-        credential_info: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Credentials]:
-        """Update credentials with encryption."""
-        data: Dict[str, Any] = {"updated_by": updated_by}
-        if credential_values is not None:
-            encrypted_values = self._encrypt_credential_values(credential_values)
-            data["credential_values"] = json.dumps(encrypted_values)
-        if credential_info is not None:
-            data["credential_info"] = json.dumps(credential_info)
-
-        record = await self.table.update(
-            where={"credential_id": credential_id}, data=data
+    async def update_by_name(self, credential_name: str, data: Dict[str, Any]) -> Any:
+        return await self.table.update(
+            where={"credential_name": credential_name}, data=data
         )
-        return self._to_model(record)
 
-    async def delete_credentials(self, credential_id: str) -> Optional[Credentials]:
-        """Delete credentials."""
-        return await self.delete(credential_id, id_field="credential_id")
+    async def delete_by_name(self, credential_name: str) -> Any:
+        return await self.table.delete(where={"credential_name": credential_name})

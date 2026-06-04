@@ -1,18 +1,31 @@
 """
-Credentials domain model.
+Credential table models.
+
+These are the canonical credential types for the proxy. They live in the model
+layer; ``litellm.types.utils`` re-exports them for backwards compatibility.
 """
 
-from typing import Any, Dict, Optional
+from typing import Optional
 
-from litellm.models.base import DomainModel
+from pydantic import BaseModel, model_validator
 
 
-class Credentials(DomainModel):
-    """Domain model for credentials storage."""
-
-    credential_id: Optional[str] = None
+class CredentialBase(BaseModel):
     credential_name: str
-    credential_values: Dict[str, Any]
-    credential_info: Optional[Dict[str, Any]] = None
-    created_by: Optional[str] = None
-    updated_by: Optional[str] = None
+    credential_info: dict
+
+
+class CredentialItem(CredentialBase):
+    credential_values: dict
+
+
+class CreateCredentialItem(CredentialBase):
+    credential_values: Optional[dict] = None
+    model_id: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def check_credential_params(cls, values):
+        if not values.get("credential_values") and not values.get("model_id"):
+            raise ValueError("Either credential_values or model_id must be set")
+        return values
