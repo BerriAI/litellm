@@ -1633,6 +1633,20 @@ class MCPServerManager:
                     name for name in referenced_user_vars if not user_values.get(name)
                 )
                 if missing:
+                    # A cached negative must never produce a 412: cache
+                    # invalidation is process-local, so a user who just stored
+                    # values on another worker would otherwise be told their
+                    # credentials are missing until the entry expires. Confirm
+                    # against the DB before raising.
+                    user_values = await self._load_user_env_vars(
+                        server, user_api_key_auth, force_refresh=True
+                    )
+                    missing = sorted(
+                        name
+                        for name in referenced_user_vars
+                        if not user_values.get(name)
+                    )
+                if missing:
                     raise MCPMissingUserEnvVarsError(
                         server_id=server.server_id,
                         server_name=server.server_name or server.name,
@@ -1655,6 +1669,8 @@ class MCPServerManager:
         self,
         server: MCPServer,
         user_api_key_auth: Optional[UserAPIKeyAuth],
+        *,
+        force_refresh: bool = False,
     ) -> Dict[str, str]:
         """Look up the calling user's env var values for ``server``.
 
@@ -1662,8 +1678,11 @@ class MCPServerManager:
         short-lived in-memory map keyed by (user_id, server_id) so the tool-call
         and tool-listing paths avoid a DB round-trip per request within the TTL
         window; the cache is invalidated when the user stores or clears values.
-        DB errors propagate so the caller can decide between failing the request
-        (tool-call path) and staying best-effort (listing path).
+        Pass ``force_refresh`` to bypass the cache read and re-fetch from the DB
+        (used before raising a "missing credentials" error so a process-local
+        stale entry cannot mask values stored on another worker). DB errors
+        propagate so the caller can decide between failing the request (tool-call
+        path) and staying best-effort (listing path).
         """
         if user_api_key_auth is None:
             return {}
@@ -1672,11 +1691,12 @@ class MCPServerManager:
             return {}
 
         cache_key = (user_id, server.server_id)
-        cached = _user_env_vars_cache.get(cache_key)
-        if cached is not None:
-            values, ts = cached
-            if time.monotonic() - ts < _USER_ENV_VARS_CACHE_TTL:
-                return values
+        if not force_refresh:
+            cached = _user_env_vars_cache.get(cache_key)
+            if cached is not None:
+                values, ts = cached
+                if time.monotonic() - ts < _USER_ENV_VARS_CACHE_TTL:
+                    return values
 
         from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
 

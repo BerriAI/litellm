@@ -312,7 +312,7 @@ model LiteLLM_MCPServerTable {
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
   // Admin-configured environment variables interpolated into static_headers
-  // (and the URL) via ${NAME} syntax. Stored as an array of
+  // via ${NAME} syntax. Stored as an array of
   // {name, value, scope, description}. scope is "global" (value used as-is)
   // or "user" (value supplied per-user via LiteLLM_MCPUserEnvVars).
   env_vars     Json?          @default("[]")

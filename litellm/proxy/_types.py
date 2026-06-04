@@ -1281,10 +1281,10 @@ class MCPEnvVarScope(str, enum.Enum):
 class MCPEnvVar(LiteLLMPydanticObjectBase):
     """One environment variable for an MCP server.
 
-    Variables can be interpolated into ``static_headers`` (and the server
-    URL) using ``${NAME}`` syntax. ``scope=global`` values are stored on
-    the server. ``scope=user`` values are stored per-user in
-    ``LiteLLM_MCPUserEnvVars`` and supplied by each user.
+    Variables can be interpolated into ``static_headers`` using ``${NAME}``
+    syntax. ``scope=global`` values are stored on the server. ``scope=user``
+    values are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by
+    each user.
     """
 
     name: str

@@ -216,7 +216,9 @@ async def test_resolve_static_headers_raises_when_user_vars_missing(
 
     manager = MCPServerManager()
 
-    async def fake_load_user_env_vars(server, user_api_key_auth):
+    async def fake_load_user_env_vars(
+        server, user_api_key_auth, *, force_refresh=False
+    ):
         # User has only filled in one of the two required vars
         return {"CORP_USERNAME": "alice"}
 
@@ -229,6 +231,48 @@ async def test_resolve_static_headers_raises_when_user_vars_missing(
     assert exc.value.missing == ["CORP_PASSWORD"]
     assert exc.value.server_id == "srv-1"
     assert "fill_env_vars=srv-1" in exc.value.setup_url
+
+
+@pytest.mark.asyncio
+async def test_resolve_static_headers_rechecks_db_before_raising_412(
+    mock_server, monkeypatch
+):
+    """A stale cached negative must not produce a 412 on the tool-call path.
+
+    Cache invalidation is process-local, so a user who stored values on another
+    worker can have a stale (incomplete) entry on this one. Before raising
+    MCPMissingUserEnvVarsError the resolver must re-read with force_refresh and
+    honor the fresh DB values.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+
+    calls = []
+
+    async def fake_load_user_env_vars(
+        server, user_api_key_auth, *, force_refresh=False
+    ):
+        calls.append(force_refresh)
+        if force_refresh:
+            # Fresh DB read sees the values the user stored on another worker.
+            return {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
+        # Stale, process-local cached entry is still missing CORP_PASSWORD.
+        return {"CORP_USERNAME": "alice"}
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+
+    headers = await manager._resolve_static_headers_with_env_vars(
+        mock_server, user_api_key_auth=object()
+    )
+    assert headers == {
+        "X-DB-URL": "postgres://alice:s3cret@db.local/db",
+        "X-Other": "literal",
+    }
+    # The cached read happened first, then exactly one forced DB re-read.
+    assert calls == [False, True]
 
 
 @pytest.mark.asyncio
@@ -493,6 +537,55 @@ async def test_load_user_env_vars_caches_within_ttl(env_vars_salt_key, monkeypat
     second = await manager._load_user_env_vars(server, fake_auth)
     assert first == {"TOKEN": "t0p"} == second
     assert prisma.db.litellm_mcpuserenvvars.find_unique.await_count == 1
+
+    mgr_mod._user_env_vars_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_load_user_env_vars_force_refresh_bypasses_cache(
+    env_vars_salt_key, monkeypatch
+):
+    """force_refresh re-reads from the DB even with a fresh cached entry, so a
+    process-local stale value cannot mask credentials stored on another worker."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as mgr_mod
+    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mgr_mod._user_env_vars_cache.clear()
+
+    blob_prisma = _mock_env_vars_prisma()
+    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "old"})
+    old_row = MagicMock()
+    old_row.values_b64 = _captured_values_blob(blob_prisma)
+    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "new"})
+    new_row = MagicMock()
+    new_row.values_b64 = _captured_values_blob(blob_prisma)
+
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(
+        side_effect=[old_row, new_row]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-1", name="s", transport="http", url="https://example.com"
+    )
+    fake_auth = MagicMock()
+    fake_auth.user_id = "alice"
+
+    assert await manager._load_user_env_vars(server, fake_auth) == {"TOKEN": "old"}
+    # A normal load is served from cache (still "old"); force_refresh re-reads.
+    assert await manager._load_user_env_vars(server, fake_auth) == {"TOKEN": "old"}
+    assert await manager._load_user_env_vars(server, fake_auth, force_refresh=True) == {
+        "TOKEN": "new"
+    }
+    assert prisma.db.litellm_mcpuserenvvars.find_unique.await_count == 2
 
     mgr_mod._user_env_vars_cache.clear()
 
