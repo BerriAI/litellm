@@ -56,19 +56,19 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          : > prettier_files.txt
-          : > eslint_files.txt
+          : > "$RUNNER_TEMP/prettier_files.txt"
+          : > "$RUNNER_TEMP/eslint_files.txt"
           while IFS= read -r f; do
             [ -f "$f" ] || continue
             case "$f" in
               *.js | *.jsx | *.ts | *.tsx | *.mjs | *.cjs)
-                printf '%s\n' "$f" >> prettier_files.txt
-                printf '%s\n' "$f" >> eslint_files.txt ;;
+                printf '%s\n' "$f" >> "$RUNNER_TEMP/prettier_files.txt"
+                printf '%s\n' "$f" >> "$RUNNER_TEMP/eslint_files.txt" ;;
               *.json | *.css | *.scss | *.md | *.mdx | *.yml | *.yaml | *.html)
-                printf '%s\n' "$f" >> prettier_files.txt ;;
+                printf '%s\n' "$f" >> "$RUNNER_TEMP/prettier_files.txt" ;;
             esac
           done < <(git diff --name-only --diff-filter=ACMR --relative "$BASE_SHA"...HEAD -- .)
-          if [ -s prettier_files.txt ] || [ -s eslint_files.txt ]; then
+          if [ -s "$RUNNER_TEMP/prettier_files.txt" ] || [ -s "$RUNNER_TEMP/eslint_files.txt" ]; then
             echo "has_files=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_files=false" >> "$GITHUB_OUTPUT"
@@ -92,8 +92,8 @@ jobs:
         run: |
           prettier_files=()
           eslint_files=()
-          while IFS= read -r f; do prettier_files+=("$f"); done < prettier_files.txt
-          while IFS= read -r f; do eslint_files+=("$f"); done < eslint_files.txt
+          while IFS= read -r f; do prettier_files+=("$f"); done < "$RUNNER_TEMP/prettier_files.txt"
+          while IFS= read -r f; do eslint_files+=("$f"); done < "$RUNNER_TEMP/eslint_files.txt"
           status=0
           if [ ${#prettier_files[@]} -gt 0 ]; then
             echo "::group::Prettier (${#prettier_files[@]} files)"
