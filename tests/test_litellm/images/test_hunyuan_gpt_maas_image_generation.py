@@ -1,4 +1,4 @@
-"""Unit tests for Tencent Hunyuan GPT-Maas image generation (text-to-image) provider."""
+"""Unit tests for Tencent Hunyuan Maas image generation (text-to-image) provider."""
 
 import os
 from unittest.mock import MagicMock, patch
@@ -6,24 +6,24 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from litellm.llms.hunyuan_gpt_maas.image_generation import (
-    HunyuanGptMaasImageGeneration,
-    HunyuanGptMaasImageGenerationConfig,
-    get_hunyuan_gpt_maas_image_generation_config,
-    hunyuan_gpt_maas_image_generation,
+from litellm.llms.hunyuan_maas.image_generation import (
+    HunyuanMaasImageGeneration,
+    HunyuanMaasImageGenerationConfig,
+    get_hunyuan_maas_image_generation_config,
+    hunyuan_maas_image_generation,
 )
 from litellm.types.utils import ImageResponse, LlmProviders
 from litellm.utils import ProviderConfigManager
 
 
 # ---------------------------------------------------------------------------
-# HunyuanGptMaasImageGenerationConfig (transformation only)
+# HunyuanMaasImageGenerationConfig (transformation only)
 # ---------------------------------------------------------------------------
 
 
-class TestHunyuanGptMaasImageGenerationConfig:
+class TestHunyuanMaasImageGenerationConfig:
     def setup_method(self):
-        self.cfg = HunyuanGptMaasImageGenerationConfig()
+        self.cfg = HunyuanMaasImageGenerationConfig()
 
     def test_get_complete_url_default(self):
         url = self.cfg.get_complete_url(None, None, "gpt-image-2", {}, {})
@@ -189,13 +189,13 @@ class TestHunyuanGptMaasImageGenerationConfig:
 
 
 # ---------------------------------------------------------------------------
-# HunyuanGptMaasImageGeneration handler (sync, mocked HTTP)
+# HunyuanMaasImageGeneration handler (sync, mocked HTTP)
 # ---------------------------------------------------------------------------
 
 
-class TestHunyuanGptMaasImageGenerationHandler:
+class TestHunyuanMaasImageGenerationHandler:
     def setup_method(self):
-        self.handler = HunyuanGptMaasImageGeneration()
+        self.handler = HunyuanMaasImageGeneration()
 
     def _make_success_response(self) -> MagicMock:
         r = MagicMock()
@@ -214,9 +214,9 @@ class TestHunyuanGptMaasImageGenerationHandler:
         mock_client.post.return_value = self._make_success_response()
         mock_logging = MagicMock()
 
-        os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
+        os.environ["HUNYUAN_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_generation.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_generation.handler._get_httpx_client",
             return_value=mock_client,
         ):
             result = self.handler.image_generation(
@@ -239,9 +239,9 @@ class TestHunyuanGptMaasImageGenerationHandler:
         mock_client.post.return_value = self._make_success_response()
         mock_logging = MagicMock()
 
-        os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
+        os.environ["HUNYUAN_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_generation.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_generation.handler._get_httpx_client",
             return_value=mock_client,
         ):
             self.handler.image_generation(
@@ -265,7 +265,7 @@ class TestHunyuanGptMaasImageGenerationHandler:
 
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_generation.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_generation.handler._get_httpx_client",
             return_value=mock_client,
         ):
             self.handler.image_generation(
@@ -284,14 +284,14 @@ class TestHunyuanGptMaasImageGenerationHandler:
         assert call_kwargs["api_key"] == "sk-test"
 
     def test_image_generation_no_polling(self):
-        """GPT-Maas API is synchronous: exactly one HTTP call should be made."""
+        """Maas API is synchronous: exactly one HTTP call should be made."""
         mock_client = MagicMock()
         mock_client.post.return_value = self._make_success_response()
         mock_logging = MagicMock()
 
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_generation.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_generation.handler._get_httpx_client",
             return_value=mock_client,
         ):
             self.handler.image_generation(
@@ -312,22 +312,22 @@ class TestHunyuanGptMaasImageGenerationHandler:
 # ---------------------------------------------------------------------------
 
 
-def test_hunyuan_gpt_maas_image_generation_singleton():
-    assert isinstance(hunyuan_gpt_maas_image_generation, HunyuanGptMaasImageGeneration)
+def test_hunyuan_maas_image_generation_singleton():
+    assert isinstance(hunyuan_maas_image_generation, HunyuanMaasImageGeneration)
 
 
-def test_provider_config_manager_returns_hunyuan_gpt_maas_config():
+def test_provider_config_manager_returns_hunyuan_maas_config():
     config = ProviderConfigManager.get_provider_image_generation_config(
-        "gpt-image-2", LlmProviders.HUNYUAN_GPT_MAAS
+        "gpt-image-2", LlmProviders.HUNYUAN_MAAS
     )
-    assert isinstance(config, HunyuanGptMaasImageGenerationConfig)
+    assert isinstance(config, HunyuanMaasImageGenerationConfig)
 
 
-def test_hunyuan_gpt_maas_in_llm_providers():
-    assert LlmProviders.HUNYUAN_GPT_MAAS == "hunyuan_gpt_maas"
-    assert LlmProviders.HUNYUAN_GPT_MAAS.value == "hunyuan_gpt_maas"
+def test_hunyuan_maas_in_llm_providers():
+    assert LlmProviders.HUNYUAN_MAAS == "hunyuan_maas"
+    assert LlmProviders.HUNYUAN_MAAS.value == "hunyuan_maas"
 
 
-def test_get_hunyuan_gpt_maas_image_generation_config_factory():
-    config = get_hunyuan_gpt_maas_image_generation_config("gpt-image-2")
-    assert isinstance(config, HunyuanGptMaasImageGenerationConfig)
+def test_get_hunyuan_maas_image_generation_config_factory():
+    config = get_hunyuan_maas_image_generation_config("gpt-image-2")
+    assert isinstance(config, HunyuanMaasImageGenerationConfig)

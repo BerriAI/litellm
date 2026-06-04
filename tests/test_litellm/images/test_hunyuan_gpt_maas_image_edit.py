@@ -1,4 +1,4 @@
-"""Unit tests for Tencent Hunyuan GPT-Maas image edit provider."""
+"""Unit tests for Tencent Hunyuan Maas image edit provider."""
 
 import io
 import os
@@ -8,13 +8,13 @@ import httpx
 import pytest
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.llms.hunyuan_gpt_maas.image_edit import (
-    HunyuanGptMaasImageEdit,
-    HunyuanGptMaasImageEditConfig,
-    get_hunyuan_gpt_maas_image_edit_config,
-    hunyuan_gpt_maas_image_edit,
+from litellm.llms.hunyuan_maas.image_edit import (
+    HunyuanMaasImageEdit,
+    HunyuanMaasImageEditConfig,
+    get_hunyuan_maas_image_edit_config,
+    hunyuan_maas_image_edit,
 )
-from litellm.llms.hunyuan_gpt_maas.image_edit.transformation import (
+from litellm.llms.hunyuan_maas.image_edit.transformation import (
     _image_to_param,
     _image_to_url,
 )
@@ -23,13 +23,13 @@ from litellm.utils import ProviderConfigManager
 
 
 # ---------------------------------------------------------------------------
-# HunyuanGptMaasImageEditConfig (transformation only)
+# HunyuanMaasImageEditConfig (transformation only)
 # ---------------------------------------------------------------------------
 
 
-class TestHunyuanGptMaasImageEditConfig:
+class TestHunyuanMaasImageEditConfig:
     def setup_method(self):
-        self.cfg = HunyuanGptMaasImageEditConfig()
+        self.cfg = HunyuanMaasImageEditConfig()
 
     def test_use_multipart_form_data_returns_false(self):
         assert self.cfg.use_multipart_form_data() is False
@@ -297,13 +297,13 @@ class TestImageToParam:
 
 
 # ---------------------------------------------------------------------------
-# HunyuanGptMaasImageEdit handler (sync, mocked HTTP)
+# HunyuanMaasImageEdit handler (sync, mocked HTTP)
 # ---------------------------------------------------------------------------
 
 
-class TestHunyuanGptMaasImageEditHandler:
+class TestHunyuanMaasImageEditHandler:
     def setup_method(self):
-        self.handler = HunyuanGptMaasImageEdit()
+        self.handler = HunyuanMaasImageEdit()
 
     def _make_success_response(self) -> MagicMock:
         r = MagicMock(spec=httpx.Response)
@@ -324,7 +324,7 @@ class TestHunyuanGptMaasImageEditHandler:
 
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_edit.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_edit.handler._get_httpx_client",
             return_value=mock_client,
         ):
             result = self.handler.image_edit(
@@ -348,7 +348,7 @@ class TestHunyuanGptMaasImageEditHandler:
 
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_edit.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_edit.handler._get_httpx_client",
             return_value=mock_client,
         ):
             self.handler.image_edit(
@@ -366,14 +366,14 @@ class TestHunyuanGptMaasImageEditHandler:
         assert call_kwargs["headers"]["Authorization"] == "Bearer sk-test"
 
     def test_image_edit_no_polling(self):
-        """GPT-Maas API is synchronous: exactly one HTTP call should be made."""
+        """Maas API is synchronous: exactly one HTTP call should be made."""
         mock_client = MagicMock()
         mock_client.post.return_value = self._make_success_response()
         mock_logging = MagicMock()
 
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_edit.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_edit.handler._get_httpx_client",
             return_value=mock_client,
         ):
             self.handler.image_edit(
@@ -395,7 +395,7 @@ class TestHunyuanGptMaasImageEditHandler:
 
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_edit.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_edit.handler._get_httpx_client",
             return_value=mock_client,
         ):
             self.handler.image_edit(
@@ -421,7 +421,7 @@ class TestHunyuanGptMaasImageEditHandler:
 
         os.environ["HUNYUAN_GPT_MAAS_API_KEY"] = "sk-test"
         with patch(
-            "litellm.llms.hunyuan_gpt_maas.image_edit.handler._get_httpx_client",
+            "litellm.llms.hunyuan_maas.image_edit.handler._get_httpx_client",
             return_value=mock_client,
         ):
             self.handler.image_edit(
@@ -443,18 +443,18 @@ class TestHunyuanGptMaasImageEditHandler:
 # ---------------------------------------------------------------------------
 
 
-def test_provider_config_manager_returns_hunyuan_gpt_maas_config():
+def test_provider_config_manager_returns_hunyuan_maas_config():
     config = ProviderConfigManager.get_provider_image_edit_config(
         model="custom-imagemodel-gt",
-        provider=LlmProviders.HUNYUAN_GPT_MAAS,
+        provider=LlmProviders.HUNYUAN_MAAS,
     )
-    assert isinstance(config, HunyuanGptMaasImageEditConfig)
+    assert isinstance(config, HunyuanMaasImageEditConfig)
 
 
-def test_get_hunyuan_gpt_maas_image_edit_config_factory():
-    config = get_hunyuan_gpt_maas_image_edit_config("custom-imagemodel-gt")
-    assert isinstance(config, HunyuanGptMaasImageEditConfig)
+def test_get_hunyuan_maas_image_edit_config_factory():
+    config = get_hunyuan_maas_image_edit_config("custom-imagemodel-gt")
+    assert isinstance(config, HunyuanMaasImageEditConfig)
 
 
-def test_hunyuan_gpt_maas_image_edit_singleton():
-    assert isinstance(hunyuan_gpt_maas_image_edit, HunyuanGptMaasImageEdit)
+def test_hunyuan_maas_image_edit_singleton():
+    assert isinstance(hunyuan_maas_image_edit, HunyuanMaasImageEdit)

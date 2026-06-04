@@ -8953,12 +8953,12 @@ class ProviderConfigManager:
             )
 
             return get_hunyuan_image_generation_config(model)
-        elif LlmProviders.HUNYUAN_GPT_MAAS == provider:
-            from litellm.llms.hunyuan_gpt_maas.image_generation import (
-                get_hunyuan_gpt_maas_image_generation_config,
+        elif LlmProviders.HUNYUAN_MAAS == provider:
+            from litellm.llms.hunyuan_maas.image_generation import (
+                get_hunyuan_maas_image_generation_config,
             )
 
-            return get_hunyuan_gpt_maas_image_generation_config(model)
+            return get_hunyuan_maas_image_generation_config(model)
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.image_generation import (
                 get_vertex_ai_image_generation_config,
@@ -9128,12 +9128,12 @@ class ProviderConfigManager:
             from litellm.llms.hunyuan.image_edit import get_hunyuan_image_edit_config
 
             return get_hunyuan_image_edit_config(model)
-        elif LlmProviders.HUNYUAN_GPT_MAAS == provider:
-            from litellm.llms.hunyuan_gpt_maas.image_edit import (
-                get_hunyuan_gpt_maas_image_edit_config,
+        elif LlmProviders.HUNYUAN_MAAS == provider:
+            from litellm.llms.hunyuan_maas.image_edit import (
+                get_hunyuan_maas_image_edit_config,
             )
 
-            return get_hunyuan_gpt_maas_image_edit_config(model)
+            return get_hunyuan_maas_image_edit_config(model)
         return None
 
     @staticmethod

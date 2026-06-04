@@ -1415,6 +1415,34 @@
     "default_model_placeholder": "hunyuan/gpt-image-2"
   },
   {
+    "provider": "HUNYUAN_MAAS",
+    "provider_display_name": "Tencent Hunyuan Maas",
+    "litellm_provider": "hunyuan_mass",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "hunyuan_mass/gpt-image-2"
+  },
+  {
     "provider": "HYPERBOLIC",
     "provider_display_name": "Hyperbolic",
     "litellm_provider": "hyperbolic",

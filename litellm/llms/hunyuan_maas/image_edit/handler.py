@@ -1,9 +1,9 @@
 """
-Tencent Hunyuan GPT-Maas Image Edit Handler
+Tencent Hunyuan Maas Image Edit Handler
 
-The GPT-Maas API is synchronous: a single POST to /v1/aiart/gtimage returns the
+The Maas API is synchronous: a single POST to /v1/aiart/gtimage returns the
 result directly, no polling required.  Data transformation is delegated to
-HunyuanGptMaasImageEditConfig.
+HunyuanMaasImageEditConfig.
 """
 
 from typing import Any, Dict, List, Optional, Union
@@ -21,18 +21,18 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageResponse
 
-from .transformation import HunyuanGptMaasImageEditConfig
+from .transformation import HunyuanMaasImageEditConfig
 
 
-class HunyuanGptMaasImageEdit:
+class HunyuanMaasImageEdit:
     """
-    Synchronous Hunyuan GPT-Maas image edit handler.
+    Synchronous Hunyuan Maas image edit handler.
 
     A single POST call returns the result; no polling is required.
     """
 
     def __init__(self) -> None:
-        self.config = HunyuanGptMaasImageEditConfig()
+        self.config = HunyuanMaasImageEditConfig()
 
     def image_edit(
         self,
@@ -148,7 +148,7 @@ class HunyuanGptMaasImageEdit:
             client
             if isinstance(client, AsyncHTTPHandler)
             else get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.HUNYUAN_GPT_MAAS
+                llm_provider=litellm.LlmProviders.HUNYUAN_MAAS
             )
         )
 
@@ -207,4 +207,4 @@ class HunyuanGptMaasImageEdit:
         )
 
 
-hunyuan_gpt_maas_image_edit = HunyuanGptMaasImageEdit()
+hunyuan_maas_image_edit = HunyuanMaasImageEdit()

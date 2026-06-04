@@ -38615,6 +38615,18 @@
             "/v1/images/generations",
             "/v1/images/edits"
         ],
+        "supports_vision": true,
+        "source": "https://cloud.tencent.com/document/product/1668"
+    },
+    "hunyuan_maas/custom-imagemodel-gt": {
+        "litellm_provider": "hunyuan_maas",
+        "mode": "image_generation",
+        "input_cost_per_image": 0.0083,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
         "source": "https://cloud.tencent.com/document/product/1668"
     }
 }

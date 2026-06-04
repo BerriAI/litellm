@@ -1,9 +1,9 @@
 """
-Tencent Hunyuan GPT-Maas Image Generation Handler (Text-to-Image)
+Tencent Hunyuan Maas Image Generation Handler (Text-to-Image)
 
-The GPT-Maas API is synchronous: a single POST returns the result directly,
+The Maas API is synchronous: a single POST returns the result directly,
 no submit+poll required.  Data transformation is delegated to
-HunyuanGptMaasImageGenerationConfig.
+HunyuanMaasImageGenerationConfig.
 """
 
 from typing import Any, Dict, Optional, Union
@@ -21,18 +21,18 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ImageResponse
 
-from .transformation import HunyuanGptMaasImageGenerationConfig
+from .transformation import HunyuanMaasImageGenerationConfig
 
 
-class HunyuanGptMaasImageGeneration:
+class HunyuanMaasImageGeneration:
     """
-    Synchronous Hunyuan GPT-Maas text-to-image handler.
+    Synchronous Hunyuan Maas text-to-image handler.
 
     A single POST call returns the result; no polling is required.
     """
 
     def __init__(self) -> None:
-        self.config = HunyuanGptMaasImageGenerationConfig()
+        self.config = HunyuanMaasImageGenerationConfig()
 
     def image_generation(
         self,
@@ -158,7 +158,7 @@ class HunyuanGptMaasImageGeneration:
             client
             if isinstance(client, AsyncHTTPHandler)
             else get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.HUNYUAN_GPT_MAAS
+                llm_provider=litellm.LlmProviders.HUNYUAN_MAAS
             )
         )
 
@@ -227,4 +227,4 @@ class HunyuanGptMaasImageGeneration:
         )
 
 
-hunyuan_gpt_maas_image_generation = HunyuanGptMaasImageGeneration()
+hunyuan_maas_image_generation = HunyuanMaasImageGeneration()

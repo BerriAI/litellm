@@ -1,5 +1,5 @@
 """
-Tencent Hunyuan GPT-Maas Image Edit Configuration
+Tencent Hunyuan Maas Image Edit Configuration
 
 API: POST https://tokenhub.tencentmaas.com/v1/aiart/gtimage
 Auth: Authorization: Bearer <API_KEY>
@@ -24,7 +24,7 @@ from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 
 from ..image_generation.transformation import (
-    HUNYUAN_GPT_MAAS_BASE_URL,
+    HUNYUAN_MAAS_BASE_URL,
 )
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-HUNYUAN_GPT_MAAS_IMAGE_ENDPOINT = "v1/aiart/gtimage"
+HUNYUAN_MAAS_IMAGE_ENDPOINT = "v1/aiart/gtimage"
 
 
 def _bytes_to_data_url(data: bytes) -> str:
@@ -57,7 +57,7 @@ def _image_to_url(image: Any) -> str:
         if image.startswith(("http://", "https://", "data:")):
             return image
         raise ValueError(
-            f"Hunyuan GPT-Maas image edit: string image must be an HTTP/HTTPS URL or "
+            f"Hunyuan Maas image edit: string image must be an HTTP/HTTPS URL or "
             f"data URL, got: {image[:80]!r}."
         )
     if isinstance(image, bytes):
@@ -79,20 +79,20 @@ def _image_to_url(image: Any) -> str:
         if isinstance(file_content, str):
             return _bytes_to_data_url(file_content.encode("utf-8"))
     raise TypeError(
-        f"Hunyuan GPT-Maas image edit: unsupported image type {type(image).__name__}. "
+        f"Hunyuan Maas image edit: unsupported image type {type(image).__name__}. "
         "Pass an HTTP/HTTPS URL string, bytes, a file-like object, or an httpx-style tuple."
     )
 
 
 def _image_to_param(image: Any) -> Dict[str, str]:
-    """Convert image to the ImageRef format expected by the GPT-Maas API."""
+    """Convert image to the ImageRef format expected by the Maas API."""
     url = _image_to_url(image)
     return {"image_url": url}
 
 
-class HunyuanGptMaasImageEditConfig(BaseImageEditConfig):
+class HunyuanMaasImageEditConfig(BaseImageEditConfig):
     """
-    Configuration for Tencent Hunyuan GPT-Maas image editing.
+    Configuration for Tencent Hunyuan Maas image editing.
 
     Uses a single synchronous POST to /v1/aiart/gtimage.
     """
@@ -131,10 +131,10 @@ class HunyuanGptMaasImageEditConfig(BaseImageEditConfig):
         litellm_params: Optional[dict] = None,
     ) -> dict:
         final_api_key: Optional[str] = api_key or get_secret_str(
-            "HUNYUAN_GPT_MAAS_API_KEY"
+            "HUNYUAN_MAAS_API_KEY"
         )
         if not final_api_key:
-            raise ValueError("HUNYUAN_GPT_MAAS_API_KEY is not set")
+            raise ValueError("HUNYUAN_MAAS_API_KEY is not set")
         headers["Authorization"] = f"Bearer {final_api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -147,11 +147,11 @@ class HunyuanGptMaasImageEditConfig(BaseImageEditConfig):
     ) -> str:
         base = (
             api_base
-            or get_secret_str("HUNYUAN_GPT_MAAS_API_BASE")
-            or HUNYUAN_GPT_MAAS_BASE_URL
+            or get_secret_str("HUNYUAN_MAAS_API_BASE")
+            or HUNYUAN_MAAS_BASE_URL
         )
         base = base.rstrip("/")
-        return f"{base}/{HUNYUAN_GPT_MAAS_IMAGE_ENDPOINT}"
+        return f"{base}/{HUNYUAN_MAAS_IMAGE_ENDPOINT}"
 
     def transform_image_edit_request(
         self,
@@ -195,14 +195,14 @@ class HunyuanGptMaasImageEditConfig(BaseImageEditConfig):
         except Exception as e:
             raise BaseLLMException(
                 status_code=raw_response.status_code,
-                message=f"Error parsing Hunyuan GPT-Maas image edit response: {e}",
+                message=f"Error parsing Hunyuan Maas image edit response: {e}",
             )
 
         status = response_data.get("status", "")
         if status == "failed":
             raise BaseLLMException(
                 status_code=raw_response.status_code,
-                message=f"Hunyuan GPT-Maas image edit failed: {response_data}",
+                message=f"Hunyuan Maas image edit failed: {response_data}",
             )
 
         image_objects = [

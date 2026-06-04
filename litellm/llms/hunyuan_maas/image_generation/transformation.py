@@ -1,5 +1,5 @@
 """
-Tencent Hunyuan GPT-Maas Image Generation Configuration (Text-to-Image)
+Tencent Hunyuan Maas Image Generation Configuration (Text-to-Image)
 
 API: POST https://tokenhub.tencentmaas.com/v1/aiart/gttext
 Auth: Authorization: Bearer <API_KEY>
@@ -32,19 +32,19 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
 
-HUNYUAN_GPT_MAAS_BASE_URL = "https://tokenhub.tencentmaas.com"
-HUNYUAN_GPT_MAAS_TEXT_ENDPOINT = "v1/aiart/gttext"
+HUNYUAN_MAAS_BASE_URL = "https://tokenhub.tencentmaas.com"
+HUNYUAN_MAAS_TEXT_ENDPOINT = "v1/aiart/gttext"
 
 
-class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
+class HunyuanMaasImageGenerationConfig(BaseImageGenerationConfig):
     """
-    Configuration for Tencent Hunyuan GPT-Maas text-to-image generation.
+    Configuration for Tencent Hunyuan Maas text-to-image generation.
 
     POST https://tokenhub.tencentmaas.com/v1/aiart/gttext
     Returns synchronously (no polling needed).
     """
 
-    DEFAULT_BASE_URL: str = HUNYUAN_GPT_MAAS_BASE_URL
+    DEFAULT_BASE_URL: str = HUNYUAN_MAAS_BASE_URL
 
     def get_complete_url(
         self,
@@ -57,11 +57,11 @@ class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
     ) -> str:
         base = (
             api_base
-            or get_secret_str("HUNYUAN_GPT_MAAS_API_BASE")
-            or HUNYUAN_GPT_MAAS_BASE_URL
+            or get_secret_str("HUNYUAN_MAAS_API_BASE")
+            or HUNYUAN_MAAS_BASE_URL
         )
         base = base.rstrip("/")
-        return f"{base}/{HUNYUAN_GPT_MAAS_TEXT_ENDPOINT}"
+        return f"{base}/{HUNYUAN_MAAS_TEXT_ENDPOINT}"
 
     def validate_environment(
         self,
@@ -74,10 +74,10 @@ class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         final_api_key: Optional[str] = api_key or get_secret_str(
-            "HUNYUAN_GPT_MAAS_API_KEY"
+            "HUNYUAN_MAAS_API_KEY"
         )
         if not final_api_key:
-            raise ValueError("HUNYUAN_GPT_MAAS_API_KEY is not set")
+            raise ValueError("HUNYUAN_MAAS_API_KEY is not set")
         headers["Authorization"] = f"Bearer {final_api_key}"
         headers["Content-Type"] = "application/json"
         return headers
@@ -147,7 +147,7 @@ class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
             response_data = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
-                error_message=f"Error parsing Hunyuan GPT-Maas response: {e}",
+                error_message=f"Error parsing Hunyuan Maas response: {e}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
@@ -155,12 +155,12 @@ class HunyuanGptMaasImageGenerationConfig(BaseImageGenerationConfig):
         status = response_data.get("status", "")
         if status == "failed":
             raise self.get_error_class(
-                error_message=f"Hunyuan GPT-Maas image generation failed: {response_data}",
+                error_message=f"Hunyuan Maas image generation failed: {response_data}",
                 status_code=raw_response.status_code,
                 headers=raw_response.headers,
             )
 
-        verbose_logger.debug(f"Hunyuan GPT-Maas response status: {status}")
+        verbose_logger.debug(f"Hunyuan Maas response status: {status}")
 
         model_response.created = response_data.get("created_at") or int(time.time())
         if not model_response.data:
