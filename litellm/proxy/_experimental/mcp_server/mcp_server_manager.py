@@ -1621,7 +1621,7 @@ class MCPServerManager:
                 # unfilled ${NAME} references untouched so tools still appear.
                 if raise_on_missing:
                     raise
-                verbose_logger.debug(
+                verbose_logger.warning(
                     "MCPServerManager: best-effort user env var load failed for "
                     "server=%s: %s",
                     server.server_id,
