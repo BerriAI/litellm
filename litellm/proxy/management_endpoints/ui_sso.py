@@ -927,17 +927,7 @@ async def google_login(
         or generic_client_id is not None
     ):
         if premium_user is not True:
-            # Check if under 'free SSO user' limit
-            if prisma_client is not None:
-                total_users = await UserRepository(prisma_client).table.count()
-                if total_users and total_users > 5:
-                    raise ProxyException(
-                        message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
-                        type=ProxyErrorTypes.auth_error,
-                        param="premium_user",
-                        code=status.HTTP_403_FORBIDDEN,
-                    )
-            else:
+            if prisma_client is None:
                 raise ProxyException(
                     message=CommonProxyErrors.db_not_connected_error.value,
                     type=ProxyErrorTypes.auth_error,
@@ -1734,6 +1724,8 @@ async def get_user_info_from_db(
         )
 
         return user_info
+    except ProxyException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             f"[Non-Blocking] Error trying to add sso user to db: {e}"
@@ -2371,6 +2363,7 @@ async def cli_poll_key(
 async def insert_sso_user(
     result_openid: Optional[Union[OpenID, dict]],
     user_defined_values: Optional[SSOUserDefinedValues] = None,
+    prisma_client: Optional[PrismaClient] = None,
 ) -> NewUserResponse:
     """
     Helper function to create a New User in LiteLLM DB after a successful SSO login
@@ -2378,6 +2371,8 @@ async def insert_sso_user(
     Args:
         result_openid (OpenID): User information in OpenID format if the login was successful.
         user_defined_values (Optional[SSOUserDefinedValues], optional): LiteLLM SSOValues / fields that were read
+        prisma_client (Optional[PrismaClient], optional): Prisma client instance. When provided,
+            uses this instance directly instead of re-importing from proxy_server.
 
     Returns:
         Tuple[str, str]: User ID and User Role
@@ -2385,6 +2380,8 @@ async def insert_sso_user(
     verbose_proxy_logger.debug(
         f"Inserting SSO user into DB. User values: {user_defined_values}"
     )
+    from litellm.proxy.proxy_server import premium_user
+
     if result_openid is None:
         raise ValueError("result_openid is None")
     if isinstance(result_openid, dict):
@@ -2393,6 +2390,16 @@ async def insert_sso_user(
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
 
+    if not premium_user and prisma_client is not None:
+        # Check if under 'free SSO user' limit
+        total_users = await prisma_client.db.litellm_usertable.count()
+        if total_users is not None and total_users >= 5:
+            raise ProxyException(
+                message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
+                type=ProxyErrorTypes.auth_error,
+                param="premium_user",
+                code=status.HTTP_403_FORBIDDEN,
+            )
     # Apply default_internal_user_params
     if litellm.default_internal_user_params:
         # Preserve the SSO-extracted role if it's a valid LiteLLM role,
@@ -2975,8 +2982,11 @@ class SSOAuthenticationHandler:
                 user_info = await insert_sso_user(
                     result_openid=result,
                     user_defined_values=user_defined_values,
+                    prisma_client=prisma_client,
                 )
             return user_info
+        except ProxyException:
+            raise
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error upserting SSO user into LiteLLM DB: {e}"
