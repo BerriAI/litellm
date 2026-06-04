@@ -5836,7 +5836,9 @@ def get_standard_logging_object_payload(  # noqa: PLR0915
         if logging_obj is not None:
             # Use typing.cast to bypass strict union mismatch errors down the line
             safe_response_obj = cast(Any, init_response_obj)
-            transparency_data = logging_obj._calculate_model_transparency(response_obj=safe_response_obj)
+            transparency_data = logging_obj._calculate_model_transparency(
+                response_obj=safe_response_obj
+            )
 
             payload["requested_model"] = transparency_data.get("requested_model", "")
             payload["resolved_model"] = transparency_data.get("resolved_model", "")
