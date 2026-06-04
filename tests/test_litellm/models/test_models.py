@@ -8,7 +8,7 @@ import pytest
 
 from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
-from litellm.models.model import Model
+from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
 from litellm.models.project import Project
@@ -77,7 +77,7 @@ class TestCredentials:
 
 class TestModel:
     def test_model_creation(self):
-        model = Model(
+        model = LiteLLM_ProxyModelTable(
             model_id="test-model-id",
             model_name="gpt-4",
             litellm_params={"model": "gpt-4", "api_key": "test"},
@@ -89,8 +89,12 @@ class TestModel:
         assert model.team_public_model_name == "my-gpt4"
 
     def test_is_blocked(self):
-        model_blocked = Model(model_name="test", litellm_params={}, blocked=True)
-        model_unblocked = Model(model_name="test", litellm_params={}, blocked=False)
+        model_blocked = LiteLLM_ProxyModelTable(
+            model_name="test", litellm_params={}, blocked=True
+        )
+        model_unblocked = LiteLLM_ProxyModelTable(
+            model_name="test", litellm_params={}, blocked=False
+        )
         assert model_blocked.is_blocked
         assert not model_unblocked.is_blocked
 
