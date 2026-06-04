@@ -32,6 +32,13 @@ const eslintConfig = [
       "max-depth": ["error", 4],
       "max-params": ["error", 4],
       "max-nested-callbacks": ["error", 4],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "CallExpression[callee.name='fetch']",
+          message: "Use React Query (@tanstack/react-query) for data fetching instead of a raw fetch().",
+        },
+      ],
     },
   },
 ];
