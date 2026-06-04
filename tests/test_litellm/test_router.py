@@ -982,6 +982,61 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                     assert router.fail_calls["gpt-3.5-turbo"] == initial_fail_count + 1
 
 
+@pytest.mark.asyncio
+async def test_ageneric_api_call_deployment_model_overrides_alias():
+    """
+    Regression: when a model alias (e.g. "not-gemini-2.5-flash") maps to a deployment
+    with model="vertex_ai/gemini-2.5-flash", the underlying litellm function must receive
+    the deployment model, not the alias. Before the fix, **kwargs overwrote data["model"].
+    """
+    from unittest.mock import patch
+
+    captured: dict = {}
+
+    async def capture_model(**kwargs):
+        captured["model"] = kwargs.get("model")
+        return {"result": "ok"}
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "not-gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "api_key": "fake-key",
+                },
+            }
+        ]
+    )
+
+    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+        # Simulate the alias leaking into kwargs (as happens when
+        # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
+        # calling the helper through async_function_with_fallbacks).
+        kwargs["model"] = "not-gemini-2.5-flash"
+
+    with patch.object(router, "async_get_available_deployment") as mock_dep, \
+         patch.object(router, "_update_kwargs_with_deployment", side_effect=inject_alias_into_kwargs), \
+         patch.object(router, "async_routing_strategy_pre_call_checks"), \
+         patch.object(router, "_get_client", return_value=None):
+        mock_dep.return_value = {
+            "model_name": "not-gemini-2.5-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "api_key": "fake-key",
+            },
+        }
+
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="not-gemini-2.5-flash",
+            original_generic_function=capture_model,
+        )
+
+    assert captured["model"] == "vertex_ai/gemini-2.5-flash", (
+        f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
+    )
+
+
 def test_router_get_model_access_groups_team_only_models():
     """
     Test that Router.get_model_access_groups returns the correct response for team-only models

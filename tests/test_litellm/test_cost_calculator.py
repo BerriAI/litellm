@@ -12,6 +12,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.cost_calculator import (
+    RealtimeAPITokenUsageProcessor,
     completion_cost,
     cost_per_token,
     handle_realtime_stream_cost_calculation,
@@ -384,7 +385,7 @@ def test_handle_realtime_stream_cost_calculation():
     )
     assert cost == 0.0  # No usage, no cost
 
-
+    
 def test_realtime_stream_combines_text_and_audio_token_details():
     """Realtime response.done usage with input_token_details / output_token_details."""
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
@@ -422,14 +423,52 @@ def test_realtime_stream_combines_text_and_audio_token_details():
     )
 
     assert combined.prompt_tokens_details is not None
-    assert combined.prompt_tokens_details.text_tokens == 11  
-    assert combined.prompt_tokens_details.audio_tokens == 4 
+    assert combined.prompt_tokens_details.text_tokens == 11
+    assert combined.prompt_tokens_details.audio_tokens == 4
 
     assert combined.completion_tokens_details is not None
-    assert combined.completion_tokens_details.text_tokens == 17  
+    assert combined.completion_tokens_details.text_tokens == 17
     assert combined.completion_tokens_details.audio_tokens == 18
 
 
+def test_realtime_logging_object_allows_null_transcript_in_conversation_item_added():
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    results: OpenAIRealtimeStreamList = [
+        {
+            "type": "conversation.item.added",
+            "event_id": "event_added",
+            "item": {
+                "id": "item_123",
+                "type": "message",
+                "role": "assistant",
+                "status": "in_progress",
+                "content": [{"type": "audio", "transcript": None}],
+            },
+        },
+        {
+            "type": "response.done",
+            "event_id": "event_done",
+            "response": {
+                "id": "resp_123",
+                "object": "realtime.response",
+                "status": "completed",
+                "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+            },
+        },
+    ]
+
+    usage = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results
+    )
+    logging_result = RealtimeAPITokenUsageProcessor.create_logging_realtime_object(
+        usage=usage,
+        results=results,
+    )
+
+    assert logging_result.usage.total_tokens == 18
+    assert logging_result.results[0]["item"]["content"][0]["transcript"] is None    
+    
 def test_custom_pricing_with_router_model_id():
     from litellm import Router
 

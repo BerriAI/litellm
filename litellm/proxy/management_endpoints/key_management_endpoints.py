@@ -691,10 +691,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             prisma_client=prisma_client,
         )
 
-    # Capture the caller-supplied max_budget before any defaults or upperbound
-    # params can fill it, so the ceiling check only fires when the caller
-    # explicitly requested a budget.
+    # Capture caller-supplied max_budget and team_id before any defaults or
+    # upperbound params can fill them, so the ceiling check and its team-key
+    # exemption key off what the caller explicitly requested, not a value that
+    # default_key_generate_params injected.
     _requested_max_budget = data.max_budget
+    _requested_team_id = data.team_id
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
@@ -722,8 +724,17 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # with an explicit budget cannot grant a key a higher budget than their own.
     # Callers with max_budget=None (unlimited) can delegate any budget.
+    # A UI/CLI session token's max_budget is a per-session chat spend cap
+    # (max_ui_session_budget), not a delegation authority, so it is exempt only
+    # when creating a team key - that key's spend is bounded by the team budget
+    # at request time. Personal keys keep the ceiling; nothing else bounds them.
+    is_ui_session_team_key = (
+        user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+        and _requested_team_id is not None
+    )
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not is_ui_session_team_key
         and _requested_max_budget is not None
         and user_api_key_dict.max_budget is not None
         and _requested_max_budget > user_api_key_dict.max_budget

@@ -1147,6 +1147,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return cast(dict, speech_config)
 
+    @staticmethod
+    def _apply_include_server_side_tool_invocations(
+        non_default_params: Dict,
+        optional_params: Dict,
+    ) -> None:
+        """
+        Set include_server_side_tool_invocations before tools are mapped.
+
+        map_openai_params iterates non_default_params in request order; if tools
+        appear before this flag, _resolve_search_tool_conflict would drop search
+        tools before the flag is applied.
+        """
+        for key in (
+            "include_server_side_tool_invocations",
+            "includeServerSideToolInvocations",
+        ):
+            if non_default_params.get(key) is True or optional_params.get(key) is True:
+                optional_params["include_server_side_tool_invocations"] = True
+                return
+
     def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: Dict,
@@ -1154,6 +1174,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        self._apply_include_server_side_tool_invocations(
+            non_default_params, optional_params
+        )
         gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
