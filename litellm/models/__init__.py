@@ -14,7 +14,7 @@ from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import Team
 from litellm.models.user import LiteLLM_UserTable
-from litellm.models.verification_token import VerificationToken
+from litellm.models.verification_token import LiteLLM_VerificationToken
 
 __all__ = [
     "LiteLLM_BudgetTable",
@@ -27,5 +27,5 @@ __all__ = [
     "LiteLLM_ProjectTable",
     "Team",
     "LiteLLM_UserTable",
-    "VerificationToken",
+    "LiteLLM_VerificationToken",
 ]

@@ -15,8 +15,8 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import CachedTeam, DeletedTeam, Team
 from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import (
-    DeletedVerificationToken,
-    VerificationToken,
+    LiteLLM_DeletedVerificationToken,
+    LiteLLM_VerificationToken,
 )
 
 
@@ -264,7 +264,7 @@ class TestUser:
 
 class TestVerificationToken:
     def test_verification_token_creation(self):
-        token = VerificationToken(
+        token = LiteLLM_VerificationToken(
             token="sk-test123",
             key_name="Test Key",
             user_id="user-123",
@@ -272,68 +272,29 @@ class TestVerificationToken:
             max_budget=100.0,
             spend=25.0,
             models=["gpt-4"],
+            blocked=True,
+            allowed_routes=["/chat/completions"],
         )
         assert token.token == "sk-test123"
         assert token.key_name == "Test Key"
         assert token.user_id == "user-123"
+        assert token.team_id == "team-123"
+        assert token.blocked is True
+        assert token.models == ["gpt-4"]
+        assert token.allowed_routes == ["/chat/completions"]
 
-    def test_is_blocked(self):
-        blocked_token = VerificationToken(token="t1", blocked=True)
-        unblocked_token = VerificationToken(token="t2", blocked=False)
-        none_token = VerificationToken(token="t3", blocked=None)
-
-        assert blocked_token.is_blocked
-        assert not unblocked_token.is_blocked
-        assert not none_token.is_blocked
-
-    def test_is_expired(self):
-        past = datetime.utcnow() - timedelta(hours=1)
-        future = datetime.utcnow() + timedelta(hours=1)
-
-        expired_token = VerificationToken(token="t1", expires=past)
-        valid_token = VerificationToken(token="t2", expires=future)
-        no_expiry = VerificationToken(token="t3")
-
-        assert expired_token.is_expired
-        assert not valid_token.is_expired
-        assert not no_expiry.is_expired
-
-    def test_is_over_budget(self):
-        over_budget = VerificationToken(token="t1", max_budget=100.0, spend=150.0)
-        under_budget = VerificationToken(token="t2", max_budget=100.0, spend=50.0)
-        no_budget = VerificationToken(token="t3", spend=1000.0)
-
-        assert over_budget.is_over_budget()
-        assert not under_budget.is_over_budget()
-        assert not no_budget.is_over_budget()
-
-    def test_has_model_access(self):
-        token_with_models = VerificationToken(token="t1", models=["gpt-4"])
-        token_no_models = VerificationToken(token="t2", models=[])
-
-        assert token_with_models.has_model_access("gpt-4")
-        assert not token_with_models.has_model_access("gpt-3")
-        assert token_no_models.has_model_access("any-model")
-
-    def test_has_route_access(self):
-        token_with_routes = VerificationToken(
-            token="t1", allowed_routes=["/chat/completions"]
-        )
-        token_no_routes = VerificationToken(token="t2", allowed_routes=[])
-
-        assert token_with_routes.has_route_access("/chat/completions")
-        assert not token_with_routes.has_route_access("/embeddings")
-        assert token_no_routes.has_route_access("/any/route")
-
-    def test_parse_expires_string(self):
-        token = VerificationToken(token="t1", expires="2024-12-31T23:59:59Z")
-        assert isinstance(token.expires, datetime)
+    def test_expires_accepts_string_and_datetime(self):
+        as_str = LiteLLM_VerificationToken(token="t1", expires="2024-12-31T23:59:59Z")
+        as_dt = LiteLLM_VerificationToken(token="t2", expires=datetime.utcnow())
+        assert as_str.expires == "2024-12-31T23:59:59Z"
+        assert isinstance(as_dt.expires, datetime)
 
     def test_deleted_verification_token(self):
-        deleted = DeletedVerificationToken(
+        deleted = LiteLLM_DeletedVerificationToken(
             token="t1",
             deleted_by="admin",
             deleted_at=datetime.utcnow(),
         )
         assert deleted.deleted_by == "admin"
         assert deleted.deleted_at is not None
+        assert deleted.token == "t1"

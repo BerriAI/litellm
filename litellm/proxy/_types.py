@@ -2579,66 +2579,12 @@ class ConfigYAML(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
-    token: Optional[str] = None
-    key_name: Optional[str] = None
-    key_alias: Optional[str] = None
-    spend: float = 0.0
-    max_budget: Optional[float] = None
-    expires: Optional[Union[str, datetime]] = None
-    models: List = []
-    aliases: Dict = {}
-    config: Dict = {}
-    user_id: Optional[str] = None
-    team_id: Optional[str] = None
-    agent_id: Optional[str] = None
-    project_id: Optional[str] = None
-    max_parallel_requests: Optional[int] = None
-    metadata: Dict = {}
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    allowed_cache_controls: Optional[list] = []
-    allowed_routes: Optional[list] = []
-    permissions: Dict = {}
-    model_spend: Dict = {}
-    model_max_budget: Dict = {}
-    soft_budget_cooldown: bool = False
-    blocked: Optional[bool] = None
-    litellm_budget_table: Optional[dict] = None
-    org_id: Optional[str] = None  # org id for a given key
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
-    last_active: Optional[datetime] = None
-    object_permission_id: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-    access_group_ids: Optional[List[str]] = None
-    rotation_count: Optional[int] = 0  # Number of times key has been rotated
-    auto_rotate: Optional[bool] = False  # Whether this key should be auto-rotated
-    rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
-    last_rotation_at: Optional[datetime] = None  # When this key was last rotated
-    key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
-    router_settings: Optional[dict] = None
-    budget_limits: Optional[List[dict]] = None  # multiple concurrent budget windows
-    model_config = ConfigDict(protected_namespaces=())
-
-
-class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
-    """
-    Recording of deleted keys for audit purposes. Mirrors LiteLLM_VerificationToken
-    plus metadata captured at deletion time.
-    """
-
-    id: Optional[str] = None
-    deleted_at: Optional[datetime] = None
-    deleted_by: Optional[str] = None
-    deleted_by_api_key: Optional[str] = None
-    litellm_changed_by: Optional[str] = None
-
-    model_config = ConfigDict(protected_namespaces=())
+from litellm.models.verification_token import (  # noqa: E402
+    LiteLLM_VerificationToken as LiteLLM_VerificationToken,
+)
+from litellm.models.verification_token import (  # noqa: E402
+    LiteLLM_DeletedVerificationToken as LiteLLM_DeletedVerificationToken,
+)
 
 
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
