@@ -266,6 +266,24 @@ curl -X POST http://localhost:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+## Task APIs (`tasks/get`, `tasks/list`, …)
+
+Agents that return a `submitted` task from `message/send` expect clients to poll with `tasks/get`. Call the same LiteLLM base URL with JSON-RPC:
+
+```bash showLineNumbers title="tasks_get.sh"
+curl -X POST "http://localhost:4000/a2a/${AGENT_ID}" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "req-2",
+    "method": "tasks/get",
+    "params": {"id": "TASK_ID_FROM_SEND_RESPONSE"}
+  }'
+```
+
+LiteLLM forwards `tasks/get`, `tasks/list`, `tasks/cancel`, push-notification methods, and `agent/getAuthenticatedExtendedCard` to the upstream agent URL. See the full method list in [Supported A2A methods](./a2a_agent_card#supported-a2a-methods).
+
 ## Key Differences
 
 | Method | Use Case | Advantages |

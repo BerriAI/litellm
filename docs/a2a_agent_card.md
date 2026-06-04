@@ -105,23 +105,80 @@ When you register an A2A agent in LiteLLM:
     POST /a2a/{agent_id}
     ```
 
-    using standard A2A JSON-RPC (`message/send`, `message/stream`).
+    using A2A JSON-RPC 2.0 (see [Supported A2A methods](#supported-a2a-methods) below).
 
 ## Supported A2A methods
 
-| Method | Supported |
+All methods below are accepted on `POST /a2a/{agent_id}` (and `POST /a2a/{agent_id}/message/send` for `message/send`). LiteLLM also accepts the PascalCase aliases from the A2A SDK (for example `GetTask` → `tasks/get`).
+
+| Method | Supported | How LiteLLM handles it |
+|---|---|---|
+| `message/send` | ✅ | Routed through LiteLLM A2A SDK (`asend_message`) — logging, guardrails, cost tracking |
+| `message/stream` | ✅ | Routed through LiteLLM streaming handler — NDJSON/SSE response |
+| `tasks/get` | ✅ | JSON-RPC forwarded to the agent's `agent_card_params.url` |
+| `tasks/list` | ✅ | JSON-RPC forwarded to upstream |
+| `tasks/cancel` | ✅ | JSON-RPC forwarded to upstream |
+| `tasks/resubscribe` | ✅ | JSON-RPC forwarded to upstream (streaming/SSE) |
+| `tasks/pushNotificationConfig/set` | ✅ | JSON-RPC forwarded to upstream |
+| `tasks/pushNotificationConfig/get` | ✅ | JSON-RPC forwarded to upstream |
+| `tasks/pushNotificationConfig/list` | ✅ | JSON-RPC forwarded to upstream |
+| `tasks/pushNotificationConfig/delete` | ✅ | JSON-RPC forwarded to upstream |
+| `agent/getAuthenticatedExtendedCard` | ✅ | JSON-RPC forwarded to upstream; `result.url` rewritten to the proxy |
+
+### PascalCase aliases (SDK)
+
+| SDK / alias name | Wire method |
 |---|---|
-| `message/send` | ✅ |
-| `message/stream` | ✅ |
-| `tasks/get` | ❌ |
-| `tasks/cancel` | ❌ |
-| `tasks/list` | ❌ |
-| `tasks/resubscribe` | ❌ |
-| `tasks/pushNotificationConfig/set` | ❌ |
-| `tasks/pushNotificationConfig/get` | ❌ |
-| `tasks/pushNotificationConfig/list` | ❌ |
-| `tasks/pushNotificationConfig/delete` | ❌ |
-| `agent/getAuthenticatedExtendedCard` | ❌ |
+| `GetTask` | `tasks/get` |
+| `ListTasks` | `tasks/list` |
+| `CancelTask` | `tasks/cancel` |
+| `SubscribeToTask` | `tasks/resubscribe` |
+| `CreateTaskPushNotificationConfig` | `tasks/pushNotificationConfig/set` |
+| `GetTaskPushNotificationConfig` | `tasks/pushNotificationConfig/get` |
+| `ListTaskPushNotificationConfigs` | `tasks/pushNotificationConfig/list` |
+| `DeleteTaskPushNotificationConfig` | `tasks/pushNotificationConfig/delete` |
+| `GetExtendedAgentCard` | `agent/getAuthenticatedExtendedCard` |
+
+### Requirements
+
+- **Task and push-notification methods** require `agent_card_params.url` pointing at a real A2A JSON-RPC server. LiteLLM forwards the request body unchanged (aside from auth headers).
+- **Completion-bridge-only agents** (for example LangGraph/Bedrock AgentCore with `custom_llm_provider` and no `url`) support `message/send` and `message/stream` only. Task APIs return an error if no upstream URL is configured.
+- **`message/send` / `message/stream` only:** LiteLLM may strip LiteLLM-specific keys from `params` (for example `guardrails`). Task method `params` are forwarded as-is so A2A fields like `id` are preserved.
+
+### Example: two-step task flow
+
+```bash title="1. Send a message"
+curl -X POST "http://localhost:4000/a2a/my-agent" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "r1",
+    "method": "message/send",
+    "params": {
+      "message": {
+        "kind": "message",
+        "role": "user",
+        "messageId": "m1",
+        "parts": [{"kind": "text", "text": "Hello"}]
+      }
+    }
+  }'
+```
+
+Use `result.id` from the response as the task id:
+
+```bash title="2. Poll task status"
+curl -X POST "http://localhost:4000/a2a/my-agent" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "r2",
+    "method": "tasks/get",
+    "params": {"id": "<task-id-from-step-1>"}
+  }'
+```
 
 ---
 

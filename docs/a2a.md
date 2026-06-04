@@ -203,11 +203,41 @@ With header forwarding enabled, you'll see:
 
 ## API Reference
 
-### Endpoint
+### Endpoints
 
-```
-POST /a2a/{agent_name}/message/send
-```
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `POST /a2a/{agent_id}` | JSON-RPC 2.0 | **Primary** — all A2A methods (see table below) |
+| `POST /a2a/{agent_id}/message/send` | JSON-RPC | Alias for `message/send` only |
+| `POST /v1/a2a/{agent_id}/message/send` | JSON-RPC | Alias for `message/send` only |
+| `GET /a2a/{agent_id}/.well-known/agent.json` | Agent card | Discovery (proxy URL in `url` field) |
+| `GET /a2a/{agent_id}/.well-known/agent-card.json` | Agent card | Discovery (standard path) |
+
+`{agent_id}` may be the agent UUID or the registered agent name.
+
+### Supported JSON-RPC methods
+
+Send any of these in the `method` field of `POST /a2a/{agent_id}`:
+
+| Method | Description |
+|--------|-------------|
+| `message/send` | Send a message; returns a `task` or `message` (LiteLLM-integrated path) |
+| `message/stream` | Streaming variant (NDJSON/SSE) |
+| `tasks/get` | Get task status by `params.id` |
+| `tasks/list` | List tasks (optional `params.contextId`) |
+| `tasks/cancel` | Cancel task by `params.id` |
+| `tasks/resubscribe` | Subscribe to task updates (streaming) |
+| `tasks/pushNotificationConfig/set` | Register push notification config |
+| `tasks/pushNotificationConfig/get` | Get push config |
+| `tasks/pushNotificationConfig/list` | List push configs for a task |
+| `tasks/pushNotificationConfig/delete` | Delete push config |
+| `agent/getAuthenticatedExtendedCard` | Extended agent card |
+
+PascalCase SDK names (`GetTask`, `ListTasks`, …) are normalized to the slash form automatically.
+
+**Routing:** `message/send` and `message/stream` go through LiteLLM's A2A client (logging, guardrails, spend). All other methods are forwarded to the upstream URL in `agent_card_params.url`. Task APIs require that URL; completion-bridge-only agents support messaging methods only.
+
+See [Supported A2A methods](./a2a_agent_card#supported-a2a-methods) for examples, aliases, and limitations.
 
 ### Authentication
 
@@ -290,6 +320,22 @@ LiteLLM follows the [A2A JSON-RPC 2.0 specification](https://github.com/google/A
     ]
   }
 }
+```
+
+Agent JSON-RPC errors are returned in the `error` field with the same `id` as the request when possible. Poll long-running work with `tasks/get` after `message/send` returns a `submitted` task.
+
+### Example: `tasks/get`
+
+```bash title="Poll task after message/send"
+curl -X POST "http://localhost:4000/a2a/my-agent" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "req-2",
+    "method": "tasks/get",
+    "params": {"id": "task-id-from-send-response"}
+  }'
 ```
 
 ## Agent Registry
