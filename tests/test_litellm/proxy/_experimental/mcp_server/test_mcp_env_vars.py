@@ -484,8 +484,11 @@ async def test_load_user_env_vars_returns_empty_without_user_id():
 
 
 @pytest.mark.asyncio
-async def test_load_user_env_vars_returns_empty_when_db_unavailable(monkeypatch):
-    """If prisma_client is None, the lookup short-circuits rather than crashing."""
+async def test_load_user_env_vars_raises_when_db_unavailable(monkeypatch):
+    """A missing DB connection must raise, not return ``{}``. Returning ``{}``
+    would be indistinguishable from "user has no values" and would mislead the
+    tool-call path into a "set up your credentials" 412 the user can never
+    satisfy (per-user env vars are unusable without a DB)."""
     from unittest.mock import MagicMock
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -500,7 +503,33 @@ async def test_load_user_env_vars_returns_empty_when_db_unavailable(monkeypatch)
     fake_auth = MagicMock()
     fake_auth.user_id = "alice"
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
-    assert await manager._load_user_env_vars(server, fake_auth) == {}
+    with pytest.raises(RuntimeError, match="database connection"):
+        await manager._load_user_env_vars(server, fake_auth)
+
+
+@pytest.mark.asyncio
+async def test_resolve_static_headers_db_unavailable_is_not_missing_412(
+    mock_server, monkeypatch
+):
+    """On the tool-call path, an unavailable DB must surface as a real error
+    rather than a misleading MCPMissingUserEnvVarsError (412). This guards the
+    regression where ``_load_user_env_vars`` returned ``{}`` when prisma_client
+    was None, making a DB outage look like "user has no credentials"."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    fake_auth = MagicMock()
+    fake_auth.user_id = "alice"
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    with pytest.raises(RuntimeError, match="database connection"):
+        await manager._resolve_static_headers_with_env_vars(
+            mock_server, user_api_key_auth=fake_auth
+        )
 
 
 @pytest.mark.asyncio

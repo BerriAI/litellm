@@ -1697,9 +1697,11 @@ class MCPServerManager:
         window; the cache is invalidated when the user stores or clears values.
         Pass ``force_refresh`` to bypass the cache read and re-fetch from the DB
         (used before raising a "missing credentials" error so a process-local
-        stale entry cannot mask values stored on another worker). DB errors
-        propagate so the caller can decide between failing the request (tool-call
-        path) and staying best-effort (listing path).
+        stale entry cannot mask values stored on another worker). A missing DB
+        connection and any other DB error propagate so the caller can decide
+        between failing the request (tool-call path) and staying best-effort
+        (listing path); they must never be mistaken for "user has no values",
+        which would send the user a misleading "set up your credentials" 412.
         """
         if user_api_key_auth is None:
             return {}
@@ -1718,7 +1720,11 @@ class MCPServerManager:
         from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
 
         if prisma_client is None:
-            return {}
+            raise RuntimeError(
+                "MCP per-user env vars require a database connection, but none "
+                "is configured. Connect a database to your proxy to use per-user "
+                "MCP env vars."
+            )
         from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
             get_user_env_vars,
         )
