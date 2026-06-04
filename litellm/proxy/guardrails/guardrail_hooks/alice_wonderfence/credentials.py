@@ -9,6 +9,11 @@ so a caller cannot bypass their assigned WonderFence app.
 ``allow_request_metadata_override`` defaults to False; enable only for
 trusted-gateway deployments that need request-level overrides.
 
+The two metadata buckets (``metadata`` and ``litellm_metadata``) are merged
+with the proxy-injected ``litellm_metadata`` winning on key collision, so admin
+pins cannot be shadowed by a caller-supplied ``metadata`` body — see
+``get_metadata``.
+
 The stash bridges pre_call resolution into post_call where request metadata is
 gone — see ``stash_resolved`` for the full rationale.
 """
@@ -34,7 +39,19 @@ _LOGGING_OBJ_STASH_KEY = "alice_wonderfence_resolved"
 
 
 def get_metadata(request_data: dict) -> dict:
-    return request_data.get("metadata") or request_data.get("litellm_metadata") or {}
+    """Merge caller metadata with proxy-injected litellm_metadata.
+
+    Proxy-injected values win on key collision so admin-pinned
+    user_api_key_metadata / user_api_key_team_metadata can never be shadowed
+    by a caller-supplied `metadata` body. On routes in LITELLM_METADATA_ROUTES
+    (e.g. /v1/responses) the admin pins live in `litellm_metadata` while the
+    caller bucket is `metadata`; on /chat/completions they coincide.
+    """
+    caller = request_data.get("metadata")
+    litellm_md = request_data.get("litellm_metadata")
+    if isinstance(caller, dict) and isinstance(litellm_md, dict):
+        return {**caller, **litellm_md}
+    return caller or litellm_md or {}
 
 
 def resolve_api_key(

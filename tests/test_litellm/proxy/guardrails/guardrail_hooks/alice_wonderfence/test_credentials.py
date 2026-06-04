@@ -207,13 +207,58 @@ def test_resolve_reads_litellm_metadata_when_metadata_absent():
     )
 
 
-def test_get_metadata_prefers_metadata_over_litellm_metadata():
+def test_get_metadata_merges_with_litellm_metadata_winning():
+    """When both buckets are present, merge them with proxy-injected
+    ``litellm_metadata`` winning on key collision; caller-only keys survive."""
     data = {
-        "metadata": {"alice_wonderfence_app_id": "main"},
-        "litellm_metadata": {"alice_wonderfence_app_id": "shadow"},
+        "metadata": {
+            "alice_wonderfence_app_id": "caller-only",
+            "shared_key": "from-caller",
+        },
+        "litellm_metadata": {
+            "shared_key": "from-litellm",
+            "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"},
+        },
     }
-    assert get_metadata(data) == {"alice_wonderfence_app_id": "main"}
+    assert get_metadata(data) == {
+        "alice_wonderfence_app_id": "caller-only",
+        "shared_key": "from-litellm",
+        "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"},
+    }
 
 
 def test_get_metadata_returns_empty_when_both_absent():
     assert get_metadata({}) == {}
+
+
+def test_responses_route_admin_pin_beats_caller_metadata():
+    """Mirror the /v1/responses shape: caller `metadata` carries a
+    request-override app_id while the admin pin lives in
+    `litellm_metadata.user_api_key_metadata`. The admin pin must win even with
+    the override flag enabled — the caller bucket must not shadow it."""
+    data = {
+        "model": "gpt-4",
+        "metadata": {"alice_wonderfence_app_id": "caller-override"},
+        "litellm_metadata": {
+            "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}
+        },
+    }
+    assert resolve_app_id(data, allow_request_metadata_override=True) == "admin-pinned"
+
+
+def test_responses_route_admin_pin_beats_caller_metadata_api_key():
+    """api_key variant of the /v1/responses regression: admin-pinned key
+    metadata wins over a caller-supplied request-override api_key."""
+    data = {
+        "model": "gpt-4",
+        "metadata": {"alice_wonderfence_api_key": "caller-override"},
+        "litellm_metadata": {
+            "user_api_key_metadata": {"alice_wonderfence_api_key": "admin-pinned"}
+        },
+    }
+    assert (
+        resolve_api_key(
+            data, default_api_key="default", allow_request_metadata_override=True
+        )
+        == "admin-pinned"
+    )
