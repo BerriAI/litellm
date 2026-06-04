@@ -23,6 +23,7 @@ from litellm.interactions.streaming_iterator import (
     SyncInteractionsAPIStreamingIterator,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_request_utils import safe_merge_extra_body
 from litellm.llms.base_llm.interactions.transformation import BaseInteractionsAPIConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -79,6 +80,13 @@ class _BaseHTTPHandler:
             llm_provider=litellm.LlmProviders(custom_llm_provider),
             params={"ssl_verify": litellm_params.get("ssl_verify", None)},
         )
+
+
+# Mutually-exclusive routing keys the transform sets (only one at a time). They
+# must be dropped from client extra_body unconditionally: safe_merge_extra_body
+# protects whichever one the transform set, but the *unset* one would otherwise
+# be injectable (e.g. add ``agent`` to a model-routed request).
+_INTERACTIONS_PROTECTED_BODY_KEYS = ("model", "agent")
 
 
 class InteractionsHTTPHandler(_BaseHTTPHandler):
@@ -173,8 +181,16 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             headers=headers,
         )
 
-        if extra_body:
-            data.update(extra_body)
+        # Drop the mutually-exclusive routing keys outright, then merge the rest
+        # without overwriting any other validated field (e.g. input).
+        data = safe_merge_extra_body(
+            data,
+            {
+                k: v
+                for k, v in (extra_body or {}).items()
+                if k not in _INTERACTIONS_PROTECTED_BODY_KEYS
+            },
+        )
 
         # Logging
         logging_obj.pre_call(
@@ -270,8 +286,16 @@ class InteractionsHTTPHandler(_BaseHTTPHandler):
             headers=headers,
         )
 
-        if extra_body:
-            data.update(extra_body)
+        # Drop the mutually-exclusive routing keys outright, then merge the rest
+        # without overwriting any other validated field (e.g. input).
+        data = safe_merge_extra_body(
+            data,
+            {
+                k: v
+                for k, v in (extra_body or {}).items()
+                if k not in _INTERACTIONS_PROTECTED_BODY_KEYS
+            },
+        )
 
         # Logging
         logging_obj.pre_call(

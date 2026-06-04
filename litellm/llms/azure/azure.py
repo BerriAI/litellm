@@ -15,6 +15,9 @@ from openai import (
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_request_utils import (
+    strip_validated_keys_from_extra_body,
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
@@ -220,6 +223,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if max_retries is None:
                 max_retries = DEFAULT_MAX_RETRIES
             json_mode: Optional[bool] = optional_params.pop("json_mode", False)
+
+            # The Azure SDK deep-merges extra_body over the request body, so a
+            # client must not use it to override the validated model/messages.
+            optional_params = strip_validated_keys_from_extra_body(optional_params)
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url

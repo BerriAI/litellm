@@ -9,6 +9,7 @@ from typing import Optional, Union, List
 
 import httpx
 from litellm.utils import ModelResponseStream
+from litellm.litellm_core_utils.llm_request_utils import safe_merge_extra_body
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.ovhcloud.utils import OVHCloudException
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -72,8 +73,8 @@ class OVHCloudChatConfig(OpenAIGPTConfig):
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
-        response.update(extra_body)
-        return response
+        # extra_body must not overwrite the validated model the base transform set.
+        return safe_merge_extra_body(response, extra_body)
 
 
 class OVHCloudChatCompletionStreamingHandler(BaseModelResponseIterator):

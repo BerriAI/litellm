@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union
 
 import httpx
 
+from litellm.litellm_core_utils.llm_request_utils import safe_merge_extra_body
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -85,8 +86,8 @@ class CometAPIConfig(OpenAIGPTConfig):
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
-        response.update(extra_body)
-        return response
+        # extra_body must not overwrite the validated model the base transform set.
+        return safe_merge_extra_body(response, extra_body)
 
     def get_complete_url(
         self,

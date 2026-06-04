@@ -12,6 +12,7 @@ from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union, c
 import httpx
 import litellm
 
+from litellm.litellm_core_utils.llm_request_utils import safe_merge_extra_body
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -166,7 +167,8 @@ class OpenrouterConfig(OpenAIGPTConfig):
         response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
-        response.update(extra_body)
+        # extra_body must not overwrite the validated model the base transform set.
+        response = safe_merge_extra_body(response, extra_body)
 
         # ALWAYS add usage parameter to get cost data from OpenRouter
         # This ensures cost tracking works for all OpenRouter models

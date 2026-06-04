@@ -34,6 +34,9 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_request_utils import (
+    strip_validated_keys_from_extra_body,
+)
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -637,6 +640,9 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         try:
             fake_stream: bool = False
             inference_params = optional_params.copy()
+            # The OpenAI SDK deep-merges extra_body over the request body, so a
+            # client must not use it to override the validated model/messages.
+            inference_params = strip_validated_keys_from_extra_body(inference_params)
             stream_options: Optional[dict] = inference_params.pop(
                 "stream_options", None
             )

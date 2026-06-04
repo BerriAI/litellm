@@ -278,10 +278,12 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         if tool_choice:
             optional_params["tool_choice"] = self._transform_tool_choice(tool_choice)
 
+        # Validated routing fields go last so a client-supplied extra_body cannot
+        # overwrite the authorized model/messages/stream.
         return {
+            **optional_params,
+            **extra_body,
             "model": model,
             "messages": messages,
             "stream": stream,
-            **optional_params,
-            **extra_body,
         }

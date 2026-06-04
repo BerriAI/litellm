@@ -7,6 +7,7 @@ from httpx import Response
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.llm_request_utils import safe_merge_extra_body
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _audio_or_image_in_message_content,
     convert_content_list_to_str,
@@ -233,12 +234,16 @@ class AzureAIStudioConfig(OpenAIConfig):
         headers: dict,
     ) -> dict:
         extra_body = optional_params.pop("extra_body", {})
-        if extra_body and isinstance(extra_body, dict):
-            optional_params.update(extra_body)
         optional_params.pop("max_retries", None)
-        return super().transform_request(
+        response = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
+        # Merge extra_body AFTER the base transform so it cannot overwrite the
+        # validated model/messages — pre-merging it into optional_params let the
+        # base transform's ``**optional_params`` spread clobber the model.
+        if extra_body and isinstance(extra_body, dict):
+            response = safe_merge_extra_body(response, extra_body)
+        return response
 
     def transform_response(
         self,

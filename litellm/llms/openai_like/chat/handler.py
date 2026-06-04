@@ -271,11 +271,13 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                     messages=messages, model=model
                 )
 
+        # Validated routing fields go last so a client-supplied extra_body cannot
+        # overwrite the authorized model/messages (post-auth tier escalation).
         data = {
-            "model": model,
-            "messages": messages,
             **optional_params,
             **extra_body,
+            "model": model,
+            "messages": messages,
         }
 
         ## LOGGING

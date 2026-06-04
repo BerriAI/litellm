@@ -25,6 +25,7 @@ import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.llm_request_utils import safe_merge_extra_body
 from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
 from litellm.litellm_core_utils.url_utils import encode_url_path_segment
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -446,7 +447,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_body is not None:
-            data = {**data, **extra_body}
+            data = safe_merge_extra_body(data, extra_body)
 
         headers, signed_json_body = provider_config.sign_request(
             headers=headers,
@@ -2301,7 +2302,7 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data = safe_merge_extra_body(data, extra_body)
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
@@ -2447,7 +2448,7 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data = safe_merge_extra_body(data, extra_body)
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
         # hooks/metadata; the streaming iterator now consumes this to run deployment hooks
@@ -9441,7 +9442,7 @@ class BaseLLMHTTPHandler:
             request_body["metadata"] = add_openai_metadata(request_body["metadata"])
 
         if extra_body:
-            request_body.update(extra_body)
+            request_body = safe_merge_extra_body(request_body, extra_body)
 
         logging_obj.pre_call(
             input="",
@@ -9527,7 +9528,7 @@ class BaseLLMHTTPHandler:
             request_body["metadata"] = add_openai_metadata(request_body["metadata"])
 
         if extra_body:
-            request_body.update(extra_body)
+            request_body = safe_merge_extra_body(request_body, extra_body)
 
         logging_obj.pre_call(
             input="",
@@ -9711,7 +9712,7 @@ class BaseLLMHTTPHandler:
 
         request_dict = dict(create_request)
         if extra_body:
-            request_dict.update(extra_body)
+            request_dict = safe_merge_extra_body(request_dict, extra_body)
 
         (
             url,
@@ -9796,7 +9797,7 @@ class BaseLLMHTTPHandler:
 
         request_dict = dict(create_request)
         if extra_body:
-            request_dict.update(extra_body)
+            request_dict = safe_merge_extra_body(request_dict, extra_body)
 
         (
             url,
@@ -10312,7 +10313,7 @@ class BaseLLMHTTPHandler:
 
         request_dict = dict(update_request)
         if extra_body:
-            request_dict.update(extra_body)
+            request_dict = safe_merge_extra_body(request_dict, extra_body)
 
         (
             url,
@@ -10399,7 +10400,7 @@ class BaseLLMHTTPHandler:
 
         request_dict = dict(update_request)
         if extra_body:
-            request_dict.update(extra_body)
+            request_dict = safe_merge_extra_body(request_dict, extra_body)
 
         (
             url,
@@ -10660,7 +10661,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_body:
-            data.update(extra_body)
+            data = safe_merge_extra_body(data, extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
@@ -10775,7 +10776,7 @@ class BaseLLMHTTPHandler:
         )
 
         if extra_body:
-            data.update(extra_body)
+            data = safe_merge_extra_body(data, extra_body)
 
         ## LOGGING
         logging_obj.pre_call(
