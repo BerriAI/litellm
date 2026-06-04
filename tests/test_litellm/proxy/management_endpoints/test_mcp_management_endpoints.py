@@ -23,8 +23,6 @@ sys.path.insert(
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
-    MCPEnvVar,
-    MCPEnvVarScope,
     MCPTransport,
     NewMCPServerRequest,
     UpdateMCPServerRequest,
@@ -1108,13 +1106,14 @@ class TestListMCPServers:
             mock_manager.get_allowed_mcp_servers.assert_called_once_with(mock_user_auth)
 
     @pytest.mark.asyncio
-    async def test_fetch_single_mcp_server_redacts_global_env_vars_for_non_admin(self):
+    async def test_fetch_single_mcp_server_drops_env_vars_for_non_admin(self):
         """A non-admin GET /v1/mcp/server/{id} for a server with env_vars must
-        not 500. ``db.get_mcp_server`` returns the raw Prisma model whose JSONB
-        ``env_vars`` deserialize to plain dicts; the non-admin sanitizer reads
-        ``env_var.scope`` as an attribute, so the model must be wrapped in
-        ``LiteLLM_MCPServerTable`` (parsing the dicts into ``MCPEnvVar``) before
-        sanitization. Global secrets are blanked; per-user placeholders survive.
+        not 500 and must not leak env var config. ``db.get_mcp_server`` returns
+        the raw Prisma model whose JSONB ``env_vars`` deserialize to plain
+        dicts; it is wrapped in ``LiteLLM_MCPServerTable`` (parsing the dicts
+        into ``MCPEnvVar``) before sanitization. The non-admin sanitizer then
+        drops ``env_vars`` entirely, since even the names (e.g. GLOBAL_KEY)
+        reveal which secrets the admin configured.
         """
 
         # Mirror what Prisma returns: a model whose JSONB ``env_vars`` are
@@ -1195,14 +1194,8 @@ class TestListMCPServers:
             )
 
         assert result.server_id == "env-server"
-        env_by_name = {e.name: e for e in result.env_vars}
-        assert isinstance(env_by_name["GLOBAL_KEY"], MCPEnvVar)
-        assert env_by_name["GLOBAL_KEY"].scope == MCPEnvVarScope.global_
-        # Global admin secret must be blanked for non-admin viewers.
-        assert env_by_name["GLOBAL_KEY"].value == ""
-        # Per-user placeholder carries no secret, so it is left intact.
-        assert env_by_name["USER_KEY"].scope == MCPEnvVarScope.user
-        assert env_by_name["USER_KEY"].value == ""
+        # Non-admin viewers get no env var config at all (not even names).
+        assert result.env_vars is None
 
 
 class TestTeamScopedMCPServerAccess:
@@ -3593,18 +3586,17 @@ def _server_with_global_and_user_env_vars():
     )
 
 
-def test_sanitize_non_admin_masks_global_env_var_secrets():
-    """The non-admin view blanks the admin-supplied global env var secret but
-    keeps per-user placeholders so users still know which vars to fill in."""
+def test_sanitize_non_admin_drops_all_env_vars():
+    """The non-admin view drops env vars entirely; even the names are admin
+    config metadata (e.g. DB_PASSWORD) that must not leak. Non-admins get the
+    per-user vars they need from the /user-env-vars/status endpoint."""
     import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
 
     server = _server_with_global_and_user_env_vars()
 
     sanitized = mgmt._sanitize_mcp_server_for_non_admin(server)
 
-    by_name = {ev.name: ev for ev in sanitized.env_vars}
-    assert by_name["ADMIN_API_KEY"].value == ""
-    assert by_name["USER_TOKEN"].value == "placeholder-hint"
+    assert sanitized.env_vars is None
 
     # The original object must not be mutated.
     original_by_name = {ev.name: ev for ev in server.env_vars}
