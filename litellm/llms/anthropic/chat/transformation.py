@@ -245,6 +245,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
     metadata: Optional[dict] = None
     system: Optional[str] = None
 
+    # Bedrock rejects `x-anthropic-billing-header:` text blocks in the system
+    # array as reserved-keyword (see #20951), so its subclasses set this to True
+    # to drop them on the wire. Anthropic-direct (this base class) must leave
+    # them in place: Claude Code uses them as the recognition signal for
+    # Max/Pro OAuth tokens, and stripping them causes 429s on Anthropic (#29572).
+    _strips_x_anthropic_billing_header: bool = False
+
     def __init__(
         self,
         max_tokens: Optional[int] = None,
@@ -1622,10 +1629,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
                         continue
-                    # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
-                    ):
+                    # Skip system messages containing x-anthropic-billing-header
+                    # metadata only for targets that reject it (e.g. Bedrock).
+                    # Anthropic-direct keeps the header so Claude Code's
+                    # Max/Pro OAuth recognition signal isn't dropped (#29572).
+                    if self._strips_x_anthropic_billing_header and system_message_block[
+                        "content"
+                    ].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -1644,9 +1654,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
                             continue
-                        # Skip system messages containing x-anthropic-billing-header metadata
+                        # Skip x-anthropic-billing-header text blocks only for
+                        # targets that reject the header (#29572).
                         if (
-                            _content.get("type") == "text"
+                            self._strips_x_anthropic_billing_header
+                            and _content.get("type") == "text"
                             and text_value
                             and text_value.startswith("x-anthropic-billing-header:")
                         ):
@@ -2429,11 +2441,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             tool_calls,
         )
 
-        json_mode_message, tool_calls_for_message, json_extra_content = (
-            self._resolve_json_mode_non_streaming(
-                json_mode=json_mode,
-                tool_calls=tool_calls,
-            )
+        (
+            json_mode_message,
+            tool_calls_for_message,
+            json_extra_content,
+        ) = self._resolve_json_mode_non_streaming(
+            json_mode=json_mode,
+            tool_calls=tool_calls,
         )
         merged_text = text_content or ""
         if json_extra_content:

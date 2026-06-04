@@ -4864,3 +4864,86 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+def test_translate_system_message_preserves_x_anthropic_billing_header_on_anthropic_direct():
+    """Regression for #29572.
+
+    Anthropic-direct must preserve `x-anthropic-billing-header:` text blocks
+    in the system array: Claude Code uses them as the recognition signal for
+    Max/Pro OAuth tokens, and stripping them causes 429s on Anthropic.
+    Only Bedrock subclasses strip the header.
+    """
+    config = AnthropicConfig()
+
+    # String content path
+    messages_str = [
+        {"role": "system", "content": "x-anthropic-billing-header: claude-code"},
+        {"role": "user", "content": "hi"},
+    ]
+    result = config.translate_system_message(messages_str)
+    assert len(result) == 1
+    assert result[0]["text"] == "x-anthropic-billing-header: claude-code"
+
+    # List content path
+    messages_list = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "x-anthropic-billing-header: claude-code"},
+                {
+                    "type": "text",
+                    "text": "You are a security monitor for autonomous AI coding agents.",
+                },
+            ],
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    result = config.translate_system_message(messages_list)
+    assert [block["text"] for block in result] == [
+        "x-anthropic-billing-header: claude-code",
+        "You are a security monitor for autonomous AI coding agents.",
+    ]
+
+
+def test_translate_system_message_strips_x_anthropic_billing_header_on_bedrock_invoke():
+    """Bedrock (AmazonAnthropicClaudeConfig) must strip `x-anthropic-billing-header:`
+    blocks because Bedrock rejects them as a reserved keyword (#20951).
+    Verifies the per-subclass `_strips_x_anthropic_billing_header` flag wired
+    up for #29572 doesn't regress that behavior.
+    """
+    from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeConfig,
+    )
+
+    config = AmazonAnthropicClaudeConfig()
+
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "x-anthropic-billing-header: claude-code"},
+                {"type": "text", "text": "You are a helpful assistant."},
+            ],
+        },
+        {"role": "user", "content": "hi"},
+    ]
+    result = config.translate_system_message(messages)
+    assert [block["text"] for block in result] == ["You are a helpful assistant."]
+
+
+def test_translate_system_message_strips_x_anthropic_billing_header_on_bedrock_claude_platform():
+    """Same as above for BedrockClaudePlatformConfig."""
+    from litellm.llms.bedrock.claude_platform.transformation import (
+        BedrockClaudePlatformConfig,
+    )
+
+    config = BedrockClaudePlatformConfig()
+
+    messages = [
+        {"role": "system", "content": "x-anthropic-billing-header: claude-code"},
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "hi"},
+    ]
+    result = config.translate_system_message(messages)
+    assert [block["text"] for block in result] == ["You are a helpful assistant."]

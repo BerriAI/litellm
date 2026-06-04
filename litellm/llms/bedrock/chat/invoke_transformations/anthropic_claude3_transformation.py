@@ -53,6 +53,10 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
     anthropic_version: str = "bedrock-2023-05-31"
 
+    # Bedrock rejects `x-anthropic-billing-header:` text blocks in the system
+    # array as a reserved keyword (#20951), so strip them on the wire.
+    _strips_x_anthropic_billing_header: bool = True
+
     @property
     def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
