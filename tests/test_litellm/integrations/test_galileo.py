@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -46,14 +47,82 @@ async def test_galileo_v2_ingest_url_and_headers(galileo_v2_env):
     url, payload = logger._get_ingest_request()
     assert (
         url
-        == "https://api.galileo.ai/v2/projects/86ff8ebe-a297-4134-b167-748bdd8d2c20/spans"
+        == "https://api.galileo.ai/ingest/traces/86ff8ebe-a297-4134-b167-748bdd8d2c20"
     )
     assert payload["log_stream_id"] == "76c4ea50-8aa3-4771-a0d7-8567b112210f"
-    assert payload["spans"][0]["type"] == "llm"
-    assert payload["spans"][0]["output"]["content"] == "hello"
+    assert payload["is_complete"] is True
+    assert payload["traces"][0]["type"] == "trace"
+    assert payload["traces"][0]["spans"][0]["type"] == "llm"
+    assert payload["traces"][0]["spans"][0]["output"]["content"] == "hello"
+    assert payload["traces"][0]["spans"][0]["metrics"]["num_total_tokens"] == 3
+    assert payload["traces"][0]["metrics"]["num_input_tokens"] == 1
+    assert payload["traces"][0]["metrics"]["num_output_tokens"] == 2
+    assert payload["traces"][0]["metrics"]["num_total_tokens"] == 3
+    assert payload["traces"][0]["spans"][0]["trace_id"] == payload["traces"][0]["id"]
 
     assert await logger._ensure_headers() is True
     assert logger.headers["Galileo-API-Key"] == "test-api-key"
+
+
+def test_galileo_token_metrics_from_record_falls_back_to_sum():
+    metrics = GalileoObserve._token_metrics_from_record(
+        {"num_input_tokens": 5, "num_output_tokens": 7}
+    )
+    assert metrics == {
+        "num_input_tokens": 5,
+        "num_output_tokens": 7,
+        "num_total_tokens": 12,
+    }
+
+
+def test_galileo_token_metrics_from_record_includes_cost():
+    metrics = GalileoObserve._token_metrics_from_record(
+        {
+            "num_input_tokens": 1,
+            "num_output_tokens": 2,
+            "num_total_tokens": 3,
+            "cost": 0.000855,
+        }
+    )
+    assert metrics["cost"] == 0.000855
+
+
+def test_galileo_input_text_from_messages():
+    assert GalileoObserve._input_text_from_messages("hello") == "hello"
+    assert (
+        GalileoObserve._input_text_from_messages(
+            [{"role": "user", "content": "test responses api 1"}]
+        )
+        == "test responses api 1"
+    )
+
+
+def test_galileo_get_output_str_responses_api(galileo_v2_env):
+    from litellm.types.llms.openai import ResponsesAPIResponse
+
+    logger = GalileoObserve()
+    resp_dict = {
+        "id": "resp_123",
+        "created_at": 1,
+        "output": [
+            {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Hi! How can I help?",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    }
+    response = ResponsesAPIResponse(**resp_dict)
+    result = logger.get_output_str_from_response(response, {"call_type": "aresponses"})
+    assert result == "Hi! How can I help?"
 
 
 def test_galileo_v2_span_preserves_message_roles(galileo_v2_env):
@@ -72,7 +141,9 @@ def test_galileo_v2_span_preserves_message_roles(galileo_v2_env):
             {"role": "user", "content": "hello"},
         ],
     }
-    span = GalileoObserve._record_to_v2_span(record)
+    span = GalileoObserve._record_to_v2_span(
+        record, trace_id="trace-id", span_id="span-id"
+    )
     assert span["input"] == [
         {"role": "system", "content": "be helpful"},
         {"role": "user", "content": "hello"},
@@ -199,6 +270,19 @@ def test_galileo_input_messages_fallbacks():
     ) == [{"role": "user", "content": "fallback"}]
 
 
+def test_galileo_format_created_at_converts_local_naive_to_utc():
+    from datetime import timedelta
+
+    ist = timezone(timedelta(hours=5, minutes=30))
+
+    with patch.object(GalileoObserve, "_local_timezone", return_value=ist):
+        local_naive = datetime(2026, 6, 4, 9, 44, 49)
+        assert GalileoObserve._format_created_at(local_naive) == "2026-06-04T04:14:49Z"
+
+    aware_utc = datetime(2026, 6, 4, 4, 14, 49, tzinfo=timezone.utc)
+    assert GalileoObserve._format_created_at(aware_utc) == "2026-06-04T04:14:49Z"
+
+
 def test_galileo_record_to_v2_span_with_tags_and_offset():
     span = GalileoObserve._record_to_v2_span(
         {
@@ -212,13 +296,17 @@ def test_galileo_record_to_v2_span_with_tags_and_offset():
             "num_output_tokens": 2,
             "created_at": "2026-05-25T12:00:00",
             "tags": ["t1"],
-        }
+        },
+        trace_id="trace-id",
+        span_id="span-id",
     )
     assert span["tags"] == ["t1"]
     assert span["created_at"].endswith("Z")
 
     offset = GalileoObserve._record_to_v2_span(
-        {"created_at": "2026-05-25T12:00:00-05:00"}
+        {"created_at": "2026-05-25T12:00:00-05:00"},
+        trace_id="trace-id",
+        span_id="span-id",
     )
     assert offset["created_at"] == "2026-05-25T12:00:00-05:00"
 
@@ -387,11 +475,26 @@ async def test_galileo_async_log_success_appends_and_flushes(galileo_v2_env):
                 "call_type": "acompletion",
                 "model": "gpt",
                 "messages": [{"role": "user", "content": "hi"}],
+                "standard_logging_object": {
+                    "call_type": "acompletion",
+                    "model": "gpt",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "prompt_tokens": 1,
+                    "completion_tokens": 2,
+                    "total_tokens": 3,
+                    "response_cost": 0.001,
+                    "startTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "endTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                },
             },
             response_obj=response,
             start_time=datetime.datetime(2026, 5, 25, 12, 0, 0),
             end_time=datetime.datetime(2026, 5, 25, 12, 0, 1),
         )
 
-    assert "/v2/projects/" in flushed_url["url"]
+    assert "/ingest/traces/" in flushed_url["url"]
     assert logger.in_memory_records == []
