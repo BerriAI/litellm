@@ -233,10 +233,11 @@ class GeminiImageGenerationResponse(TypedDict):
 
 
 # Video Generation Types
-class GeminiVideoGenerationInstance(TypedDict):
+class GeminiVideoGenerationInstance(TypedDict, total=False):
     """Instance data for Gemini video generation request"""
 
-    prompt: str
+    prompt: Required[str]
+    image: Dict[str, Any]
 
 
 class GeminiVideoGenerationParameters(BaseModel):
@@ -263,11 +264,6 @@ class GeminiVideoGenerationParameters(BaseModel):
 
     negativePrompt: Optional[str] = None
     """Text describing what not to include in the video."""
-
-    image: Optional[Any] = None
-    """
-    An initial image to animate (Image object).
-    """
 
     lastFrame: Optional[Any] = None
     """
