@@ -1130,7 +1130,6 @@ const sidebars = {
         "sdk_custom_pricing",
         "migration",
         "data_security",
-        "data_retention",
         "proxy/security_encryption_faq",
         "migration_policy",
         "load_test_advanced",

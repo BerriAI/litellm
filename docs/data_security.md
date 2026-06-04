@@ -2,35 +2,7 @@
 
 At LiteLLM, **safeguarding your data privacy and security** is our top priority. We recognize the critical importance of the data you share with us and handle it with the highest level of diligence.
 
-With LiteLLM Cloud, we handle:
-
-- Deployment
-- Scaling
-- Upgrades and security patches
-- Ensuring high availability
-
-  <iframe
-    src="https://status.litellm.ai/badge?theme=light"
-    width="250"
-    height="30"
-    className="inline-block dark:hidden"
-    style={{
-      colorScheme: "light",
-      marginTop: "5px",
-    }}
-  ></iframe>
-
 ## Security Measures
-
-### LiteLLM Cloud
-
-- We encrypt all data stored using your `LITELLM_MASTER_KEY` and in transit using TLS.
-- Our database and application run on GCP, AWS infrastructure, partly managed by NeonDB.
-    - US data region: Northern California (AWS/GCP `us-west-1`) & Virginia (AWS `us-east-1`)
-    - EU data region Germany/Frankfurt (AWS/GCP `eu-central-1`)
-- All users have access to SSO (Single Sign-On) through OAuth 2.0 with Google, Okta, Microsoft, KeyCloak. 
-- Audit Logs with retention policy
-- Control Allowed IP Addresses that can access your Cloud LiteLLM Instance
 
 ### Self-hosted Instances LiteLLM
 
@@ -49,46 +21,16 @@ For security inquiries, please contact us at support@berri.ai
 | ISO 27001          | Certified. Report available upon request on Enterprise                              |
 
 
-## Supported Data Regions for LiteLLM Cloud
-
-LiteLLM supports the following data regions:
-
-- US, Northern California (AWS/GCP `us-west-1`)
-- Europe, Frankfurt, Germany (AWS/GCP `eu-central-1`)
-
-All data, user accounts, and infrastructure are completely separated between these two regions
-
 ## Collection of Personal Data
 
 ### For Self-hosted LiteLLM Users:
 - No personal data is collected or transmitted to LiteLLM servers when you self-host our software.
 - Any data generated or processed remains entirely within your own infrastructure.
 
-### For LiteLLM Cloud Users:
-- LiteLLM Cloud tracks LLM usage data - We do not access or store the message / response content of your API requests or responses. You can see the [fields tracked here](https://github.com/BerriAI/litellm/blob/main/schema.prisma#L174)
-
-**How to Use and Share the Personal Data**
-- Only proxy admins can view their usage data, and they can only see the usage data of their organization.
-- Proxy admins have the ability to invite other users / admins to their server to view their own usage data
-- LiteLLM Cloud does not sell or share any usage data with any third parties.
-
-
 ## Cookies Information, Security, and Privacy
 
 ### For Self-hosted LiteLLM Users:
 - Cookie data remains within your own infrastructure.
-- LiteLLM uses minimal cookies, solely for the purpose of allowing Proxy users to access the LiteLLM Admin UI.
-- These cookies are stored in your web browser after you log in.
-- We do not use cookies for advertising, tracking, or any purpose beyond maintaining your login session.
-- The only cookies used are essential for maintaining user authentication and session management for the app UI.
-- Session cookies expire when you close your browser, logout or after 24 hours.
-- LiteLLM does not use any third-party cookies.
-- The Admin UI accesses the cookie to authenticate your login session.
-- The cookie is stored as JWT and is not accessible to any other part of the system.
-- We (LiteLLM) do not access or share this cookie data for any other purpose.
-
-
-### For LiteLLM Cloud Users:
 - LiteLLM uses minimal cookies, solely for the purpose of allowing Proxy users to access the LiteLLM Admin UI.
 - These cookies are stored in your web browser after you log in.
 - We do not use cookies for advertising, tracking, or any purpose beyond maintaining your login session.

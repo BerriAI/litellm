@@ -100,15 +100,6 @@ LITELLM_LICENSE="eyJ..."
 
 Pricing depends on your deployment size — [get in touch](https://enterprise.litellm.ai/demo) to scope it.
 
-### Hosted LiteLLM Cloud
-
-We run the proxy; you focus on your product.
-
-- **Status**: GA — [live reliability](https://status.litellm.ai/)
-- **Scale**: Tested at 1k requests/second
-- **Compliance**: SOC 2 Type 2 and ISO 27001 certified
-- **Regions**: [Supported data regions](../docs/data_security#supported-data-regions-for-litellm-cloud)
-
 ---
 
 ## Professional Support
