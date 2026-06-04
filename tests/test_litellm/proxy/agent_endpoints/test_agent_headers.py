@@ -378,6 +378,25 @@ async def test_databricks_oauth_overrides_static_authorization():
     assert headers.get("Authorization") == "Bearer oauth-wins"
 
 
+@pytest.mark.asyncio
+async def test_non_databricks_agent_skips_oauth_resolution():
+    """Agents without a databricks_oauth block never enter the OAuth path."""
+    mock_agent = _make_mock_agent(static_headers={"x-custom": "v"})
+    mock_agent.litellm_params = {"require_trace_id_on_calls_to_agent": False}
+    mock_request = _make_mock_request()
+
+    with patch(
+        "litellm.proxy.agent_endpoints.a2a_endpoints.resolve_databricks_app_auth_header",
+        new_callable=AsyncMock,
+    ) as mock_resolve:
+        mock_asend = await _invoke(mock_agent, mock_request, None)
+
+    mock_resolve.assert_not_called()
+    headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
+    assert headers == {"x-custom": "v"}
+    assert "Authorization" not in headers
+
+
 # ---------------------------------------------------------------------------
 # Direct unit test for the merge utility
 # ---------------------------------------------------------------------------
