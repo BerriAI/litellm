@@ -8,7 +8,7 @@ from litellm.models.credentials import (
     CredentialItem,
     CreateCredentialItem,
 )
-from litellm.models.model import Model
+from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
 from litellm.models.project import Project
@@ -21,7 +21,7 @@ __all__ = [
     "CredentialBase",
     "CredentialItem",
     "CreateCredentialItem",
-    "Model",
+    "LiteLLM_ProxyModelTable",
     "LiteLLM_ObjectPermissionTable",
     "Organization",
     "Project",
