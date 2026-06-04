@@ -577,7 +577,7 @@ if MCP_AVAILABLE:
         sanitized.allowed_tools = []
         sanitized.mcp_access_groups = []
         sanitized.teams = []
-        _redact_global_env_var_values(sanitized)
+        sanitized.env_vars = None
 
         sanitized.authorization_url = None
         sanitized.token_url = None
@@ -2162,32 +2162,42 @@ if MCP_AVAILABLE:
 
     # ── Per-user MCP env var endpoints ────────────────────────────────────────
 
-    async def _authorize_mcp_server_access(
+    async def _authorize_and_fetch_mcp_server(
         prisma_client,
         user_api_key_dict: UserAPIKeyAuth,
         server_id: str,
-    ) -> None:
-        """Raise 403 if a non-admin caller cannot access this MCP server.
+    ) -> LiteLLM_MCPServerTable:
+        """Return the MCP server the caller may manage env vars for.
 
-        Mirrors the access gate in ``fetch_mcp_server`` so the per-user env-var
-        endpoints can't be used to read or mutate state for servers outside the
-        caller's allowed set.
+        Admins look the server up directly. Non-admins reuse the access-scoped
+        listing that already loads every server they can see, so we don't issue
+        a second per-server query just to re-fetch a record the authorization
+        check produced. A non-admin who can't see the server gets 403 (never
+        404) so server ids can't be enumerated.
         """
         if _user_has_admin_view(user_api_key_dict):
-            return
+            server = await get_mcp_server(prisma_client, server_id)
+            if server is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": f"MCP Server {server_id} not found"},
+                )
+            return server
         accessible = await get_all_mcp_servers_for_user(
             prisma_client, user_api_key_dict
         )
-        if not does_mcp_server_exist(accessible, server_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": (
-                        f"User does not have permission to access mcp server with id {server_id}. "
-                        "You can only manage env vars for mcp servers that you have access to."
-                    )
-                },
-            )
+        for server in accessible:
+            if server.server_id == server_id:
+                return server
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"User does not have permission to access mcp server with id {server_id}. "
+                    "You can only manage env vars for mcp servers that you have access to."
+                )
+            },
+        )
 
     def _compute_user_env_var_status(
         *,
@@ -2261,13 +2271,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
-        server = await get_mcp_server(prisma_client, server_id)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
+        server = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         stored = await get_user_env_vars(prisma_client, user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values=stored)
 
@@ -2298,13 +2304,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
-        server = await get_mcp_server(prisma_client, server_id)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
+        server = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         # Only known per-user var names declared by the admin are accepted —
         # never persist arbitrary keys the user invents. Submitted values are
         # merged over the existing set so a user updating one credential does
@@ -2347,13 +2349,9 @@ if MCP_AVAILABLE:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": "User ID not found in token"},
             )
-        await _authorize_mcp_server_access(prisma_client, user_api_key_dict, server_id)
-        server = await get_mcp_server(prisma_client, server_id)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server {server_id} not found"},
-            )
+        server = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
         await delete_user_env_vars(prisma_client, user_id, server_id)
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             invalidate_user_env_vars_cache,

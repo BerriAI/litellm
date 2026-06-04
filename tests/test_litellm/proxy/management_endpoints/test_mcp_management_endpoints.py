@@ -3580,19 +3580,9 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     assert sanitized.alias == server.alias
 
 
-@pytest.mark.parametrize(
-    "sanitizer_name",
-    ["_sanitize_mcp_server_for_non_admin", "_sanitize_mcp_server_for_virtual_key"],
-)
-def test_sanitize_masks_global_env_var_secrets(sanitizer_name):
-    """Non-admin and virtual-key views must never expose the admin-supplied
-    global env var secret, while per-user placeholders are left intact."""
-    import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
-
-    sanitizer = getattr(mgmt, sanitizer_name)
-
+def _server_with_global_and_user_env_vars():
     base = generate_mock_mcp_server_db_record()
-    server = LiteLLM_MCPServerTable(
+    return LiteLLM_MCPServerTable(
         **{
             **base.model_dump(),
             "env_vars": [
@@ -3602,7 +3592,15 @@ def test_sanitize_masks_global_env_var_secrets(sanitizer_name):
         }
     )
 
-    sanitized = sanitizer(server)
+
+def test_sanitize_non_admin_masks_global_env_var_secrets():
+    """The non-admin view blanks the admin-supplied global env var secret but
+    keeps per-user placeholders so users still know which vars to fill in."""
+    import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
+
+    server = _server_with_global_and_user_env_vars()
+
+    sanitized = mgmt._sanitize_mcp_server_for_non_admin(server)
 
     by_name = {ev.name: ev for ev in sanitized.env_vars}
     assert by_name["ADMIN_API_KEY"].value == ""
@@ -3611,6 +3609,22 @@ def test_sanitize_masks_global_env_var_secrets(sanitizer_name):
     # The original object must not be mutated.
     original_by_name = {ev.name: ev for ev in server.env_vars}
     assert original_by_name["ADMIN_API_KEY"].value == "super-secret"
+
+
+def test_sanitize_virtual_key_drops_all_env_vars():
+    """Virtual-key callers get a discovery-only view; env var entries (even the
+    names, which are admin config metadata) must be dropped entirely, not just
+    have their global values blanked."""
+    import litellm.proxy.management_endpoints.mcp_management_endpoints as mgmt
+
+    server = _server_with_global_and_user_env_vars()
+
+    sanitized = mgmt._sanitize_mcp_server_for_virtual_key(server)
+
+    assert sanitized.env_vars is None
+
+    # The original object must not be mutated.
+    assert server.env_vars[0].value == "super-secret"
 
 
 def _server_with_env_vars(server_id: str = "srv-env"):
