@@ -1378,3 +1378,55 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
+
+
+class TestClaudeOpus48AdaptiveThinking:
+    """Opus 4.8 requires adaptive thinking (``thinking.type='adaptive'`` +
+    ``output_config.effort``). The Bedrock/Vertex/Azure cost-map entries do not
+    carry ``supports_adaptive_thinking``, so detection has to fall back to the
+    name matcher; before this fix that matcher only knew 4.6/4.7, so a
+    ``bedrock/us.anthropic.claude-opus-4-8`` call sent the legacy
+    ``thinking.type='enabled'`` shape and Bedrock rejected it (issue #29188)."""
+
+    def test_is_claude_4_8_model_matches_name_variants(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        for model in (
+            "claude-opus-4-8",
+            "claude-opus-4-8-20260601",
+            "claude-opus_4_8",
+            "claude-opus-4.8",
+            "claude-opus_4.8",
+            "anthropic/claude-opus-4-8",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "vertex_ai/claude-opus-4-8",
+            "azure_ai/claude-opus-4-8",
+        ):
+            assert AnthropicModelInfo._is_claude_4_8_model(model) is True, model
+
+    def test_is_claude_4_8_model_rejects_other_models(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        for model in (
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-opus-4-5",
+            "claude-3-7-sonnet",
+            "gpt-4.8",
+        ):
+            assert AnthropicModelInfo._is_claude_4_8_model(model) is False, model
+
+    def test_adaptive_thinking_detected_without_cost_map_flag(self):
+        """The decisive regression: these names are absent from the cost map (or
+        their entry lacks ``supports_adaptive_thinking``), so a True result can
+        only come from the 4.8 name matcher, not ``_supports_factory``."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        for model in (
+            "claude-opus-4.8",
+            "claude-opus-4-8-20260601",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "bedrock/invoke/us.anthropic.claude-opus-4-8",
+        ):
+            assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True, model

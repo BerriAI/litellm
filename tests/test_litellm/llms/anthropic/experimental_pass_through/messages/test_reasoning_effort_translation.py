@@ -299,6 +299,38 @@ def test_legacy_thinking_high_budget_keeps_xhigh_when_supported():
 
 
 @pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-8",
+        "bedrock/us.anthropic.claude-opus-4-8",
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+    ],
+)
+def test_legacy_thinking_translates_to_adaptive_for_opus_48(model):
+    """Regression for issue #29188: Opus 4.8 requires adaptive thinking, but the
+    legacy ``thinking.type='enabled'`` shape was passed through unchanged for
+    Bedrock 4.8 (its cost-map entry lacks ``supports_adaptive_thinking`` and the
+    name matcher didn't know 4.8), so Bedrock rejected the request. The reporter's
+    reproducer used ``budget_tokens=24000``, which lands in the ``xhigh`` bucket."""
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 100,
+        "thinking": {"type": "enabled", "budget_tokens": 24000},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "ping"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "xhigh"}
+
+
+@pytest.mark.parametrize(
     "budget_tokens,expected_effort",
     [
         (31999, "high"),
