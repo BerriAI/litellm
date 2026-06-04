@@ -739,14 +739,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 rpm_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, "requests"
                 )
-                rpm_window_key = f"{{{descriptor_key}:{descriptor_value}}}:window:requests"
+                rpm_window_key = (
+                    f"{{{descriptor_key}:{descriptor_value}}}:window:requests"
+                )
                 keys_to_fetch.extend([rpm_window_key, rpm_key])
                 rate_limit_set = True
             if tokens_limit is not None:
                 tpm_key = self.create_rate_limit_keys(
                     descriptor_key, descriptor_value, "tokens"
                 )
-                tpm_window_key = f"{{{descriptor_key}:{descriptor_value}}}:window:tokens"
+                tpm_window_key = (
+                    f"{{{descriptor_key}:{descriptor_value}}}:window:tokens"
+                )
                 keys_to_fetch.extend([tpm_window_key, tpm_key])
                 rate_limit_set = True
             if max_parallel_requests_limit is not None:
@@ -797,7 +801,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         {
                             "requests_limit": None,
                             "tokens_limit": None,
-                            "max_parallel_requests_limit": int(max_parallel_requests_limit),
+                            "max_parallel_requests_limit": int(
+                                max_parallel_requests_limit
+                            ),
                             "window_size": int(window_size),
                             "descriptor_key": descriptor_key,
                         },
@@ -833,7 +839,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if cache_values is None:
                 cache_values = []
                 for _ in keys_to_fetch:
-                    cache_values.append(str(now_int) if _.endswith(":window") else 0)
+                    cache_values.append(str(now_int) if ":window:" in _ else 0)
         elif self.batch_rate_limiter_script is not None:
             # NORMAL MODE: Increment counters in Redis
             # Group keys by hash tag for Redis cluster compatibility

@@ -1471,12 +1471,12 @@ def test_group_keys_by_hash_tag_regular_redis():
 
     # Test keys with different hash tags
     test_keys = [
-        "{api_key:sk-123}:window",
+        "{api_key:sk-123}:window:requests",
         "{api_key:sk-123}:requests",
         "{api_key:sk-123}:tokens",
-        "{user:user-456}:window",
+        "{user:user-456}:window:requests",
         "{user:user-456}:requests",
-        "{team:team-789}:window",
+        "{team:team-789}:window:requests",
         "{team:team-789}:tokens",
         "no_hash_tag_key",
     ]
@@ -1509,9 +1509,9 @@ def test_group_keys_by_hash_tag_redis_cluster():
     with patch.object(handler, "_is_redis_cluster", return_value=True):
         # Test keys with different hash tags
         test_keys = [
-            "{api_key:sk-123}:window",
+            "{api_key:sk-123}:window:requests",
             "{api_key:sk-123}:requests",
-            "{user:user-456}:window",
+            "{user:user-456}:window:requests",
             "{user:user-456}:requests",
         ]
 
@@ -1556,7 +1556,7 @@ def test_keyslot_for_redis_cluster():
 
     # Test keys with same hash tag should have same slot
     slot4 = handler.keyslot_for_redis_cluster("{api_key:sk-123}:requests")
-    slot5 = handler.keyslot_for_redis_cluster("{api_key:sk-123}:window")
+    slot5 = handler.keyslot_for_redis_cluster("{api_key:sk-123}:window:requests")
     assert slot4 == slot5, "Keys with same hash tag should have same slot"
 
 
@@ -1592,9 +1592,9 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
 
         # Test keys from different hash tags (would fail in cluster without grouping)
         test_keys = [
-            "{api_key:sk-123}:window",
+            "{api_key:sk-123}:window:requests",
             "{api_key:sk-123}:requests",
-            "{user:user-456}:window",
+            "{user:user-456}:window:requests",
             "{user:user-456}:requests",
         ]
 
