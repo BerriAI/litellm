@@ -4,7 +4,6 @@ Call Hook for LiteLLM Proxy which allows Langfuse prompt management.
 
 import os
 from functools import lru_cache
-
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union, cast
 
 from packaging.version import Version
@@ -20,7 +19,6 @@ from litellm.types.utils import StandardCallbackDynamicParams, StandardLoggingPa
 from ...litellm_core_utils.specialty_caches.dynamic_logging_cache import (
     DynamicLoggingCache,
 )
-from ...llms.custom_httpx.http_handler import _get_httpx_client
 from ..prompt_management_base import PromptManagementBase
 from .langfuse import LangFuseLogger, resolve_langfuse_credentials
 from .langfuse_handler import LangFuseHandler
@@ -103,6 +101,8 @@ def langfuse_client_init(
 
     if Version(langfuse.version.__version__) >= Version("2.6.0"):
         parameters["sdk_integration"] = "litellm"
+
+    from ...llms.custom_httpx.http_handler import _get_httpx_client
 
     http_client = _get_httpx_client()
     parameters["httpx_client"] = http_client.client
