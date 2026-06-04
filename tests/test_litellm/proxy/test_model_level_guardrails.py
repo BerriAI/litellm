@@ -599,18 +599,17 @@ async def test_pre_call_merges_model_level_guardrails_before_pre_call_hook():
     """
     from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
-    # Stub router that reports a deployment with one model-level guardrail.
-    # Mirrors the real proxy: at pre_call_hook time model_info has been
-    # stripped by add_litellm_data_to_request (see veria-ai review on PR
-    # #29654) and route_request hasn't yet populated model_info.id — so
-    # the resolver has to fall back to the model alias.
+    # Stub router that reports one deployment in the group with one
+    # model-level guardrail. Mirrors the real proxy: at pre_call_hook time
+    # model_info has been stripped by add_litellm_data_to_request (see
+    # veria-ai review on PR #29654) and route_request hasn't yet populated
+    # model_info.id — so the resolver has to fall back to the model alias
+    # and union guardrails across all deployments in the group.
     mock_router = MagicMock()
-    mock_deployment = MagicMock()
-    mock_deployment.litellm_params.get.return_value = ["my-pre-call-guardrail"]
-    # get_deployment(model_id=...) returns None (no model_info.id yet).
     mock_router.get_deployment.return_value = None
-    # get_deployment_by_model_group_name(model_alias) resolves the alias.
-    mock_router.get_deployment_by_model_group_name.return_value = mock_deployment
+    mock_router.get_model_list.return_value = [
+        {"litellm_params": {"guardrails": ["my-pre-call-guardrail"]}}
+    ]
 
     processing = ProxyBaseLLMRequestProcessing(
         data={
