@@ -12,10 +12,10 @@ spec:
       {{- include "litellm.backend.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- if or .Values.backend.config.create .Values.backend.podAnnotations }}
+      {{- if or .Values.gateway.config.create .Values.backend.podAnnotations }}
       annotations:
-        {{- if .Values.backend.config.create }}
-        checksum/config: {{ include (print $.Template.BasePath "/backend/configmap.yaml") . | sha256sum }}
+        {{- if .Values.gateway.config.create }}
+        checksum/config: {{ include (print $.Template.BasePath "/gateway/configmap.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.backend.podAnnotations }}
         {{- toYaml . | nindent 8 }}
@@ -40,14 +40,14 @@ spec:
               protocol: TCP
           env:
             {{- include "litellm.serverEnv" (dict "root" $ "component" .Values.backend) | nindent 12 }}
-            {{- if .Values.backend.config.create }}
+            {{- if .Values.gateway.config.create }}
             - name: CONFIG_FILE_PATH
               value: /app/config/config.yaml
             {{- end }}
           {{- include "litellm.envFrom" .Values.backend | nindent 10 }}
-          {{- if .Values.backend.config.create }}
+          {{- if .Values.gateway.config.create }}
           volumeMounts:
-            - name: backend-config
+            - name: gateway-config
               mountPath: /app/config/config.yaml
               subPath: config.yaml
           {{- end }}
@@ -61,11 +61,11 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.backend.resources | nindent 12 }}
-      {{- if .Values.backend.config.create }}
+      {{- if .Values.gateway.config.create }}
       volumes:
-        - name: backend-config
+        - name: gateway-config
           configMap:
-            name: {{ include "litellm.backend.fullname" . }}-config
+            name: {{ include "litellm.gateway.fullname" . }}-config
       {{- end }}
       {{- with .Values.backend.nodeSelector }}
       nodeSelector:
