@@ -7,6 +7,7 @@ None values and empty lists.
 """
 
 import asyncio
+import copy
 import json
 import os
 from typing import Any, Dict, List, Literal, Optional, cast
@@ -203,7 +204,7 @@ class ConfigRepository:
         tasks = [self.get_param(k) for k in self.CONFIG_PARAMS]
         responses = await asyncio.gather(*tasks)
 
-        config = yaml_config.copy()
+        config = copy.deepcopy(yaml_config)
         for response in responses:
             if response is None:
                 continue

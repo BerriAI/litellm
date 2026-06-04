@@ -193,17 +193,65 @@ class TeamRepository(BaseRepository[Team]):
         if team is None:
             return None
 
-        team_data = team.to_db_dict()
-        team_data["deleted_by"] = deleted_by
-        team_data["deleted_by_api_key"] = deleted_by_api_key
-        team_data["litellm_changed_by"] = litellm_changed_by
-        team_data["deleted_at"] = datetime.utcnow()
+        archive_data = self._build_archive_data(team)
+        archive_data["deleted_by"] = deleted_by
+        archive_data["deleted_by_api_key"] = deleted_by_api_key
+        archive_data["litellm_changed_by"] = litellm_changed_by
+        archive_data["deleted_at"] = datetime.utcnow()
 
         async with self.prisma_client.db.tx() as tx:
-            await tx.litellm_deletedteamtable.create(data=team_data)
+            await tx.litellm_deletedteamtable.create(data=archive_data)
             await tx.litellm_teamtable.delete(where={"team_id": team_id})
 
         return team
+
+    def _build_archive_data(self, team: Team) -> Dict[str, Any]:
+        """Build archive data dict with only columns that exist in LiteLLM_DeletedTeamTable."""
+        data: Dict[str, Any] = {"team_id": team.team_id}
+        if team.team_alias is not None:
+            data["team_alias"] = team.team_alias
+        if team.organization_id is not None:
+            data["organization_id"] = team.organization_id
+        if team.object_permission_id is not None:
+            data["object_permission_id"] = team.object_permission_id
+        data["admins"] = team.admins
+        data["members"] = team.members
+        if team.members_with_roles:
+            data["members_with_roles"] = json.dumps(
+                [m.model_dump() for m in team.members_with_roles]
+            )
+        if team.metadata:
+            data["metadata"] = json.dumps(team.metadata)
+        if team.max_budget is not None:
+            data["max_budget"] = team.max_budget
+        if team.soft_budget is not None:
+            data["soft_budget"] = team.soft_budget
+        data["spend"] = team.spend
+        data["models"] = team.models
+        if team.max_parallel_requests is not None:
+            data["max_parallel_requests"] = team.max_parallel_requests
+        if team.tpm_limit is not None:
+            data["tpm_limit"] = team.tpm_limit
+        if team.rpm_limit is not None:
+            data["rpm_limit"] = team.rpm_limit
+        if team.budget_duration is not None:
+            data["budget_duration"] = team.budget_duration
+        if team.budget_reset_at is not None:
+            data["budget_reset_at"] = team.budget_reset_at
+        data["blocked"] = team.blocked
+        if team.model_spend:
+            data["model_spend"] = json.dumps(team.model_spend)
+        if team.model_max_budget:
+            data["model_max_budget"] = json.dumps(team.model_max_budget)
+        if team.router_settings is not None:
+            data["router_settings"] = json.dumps(team.router_settings)
+        data["team_member_permissions"] = team.team_member_permissions
+        data["access_group_ids"] = team.access_group_ids
+        data["policies"] = team.policies
+        if team.model_id is not None:
+            data["model_id"] = team.model_id
+        data["allow_team_guardrail_config"] = team.allow_team_guardrail_config
+        return data
 
     async def update_spend(self, team_id: str, spend: float) -> Optional[Team]:
         """Update team spend."""
