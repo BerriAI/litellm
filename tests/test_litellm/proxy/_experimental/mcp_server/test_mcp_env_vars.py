@@ -366,6 +366,42 @@ async def test_resolve_static_headers_unreferenced_user_var_is_not_blocking(
     assert headers == {"X-Static": "ok"}
 
 
+@pytest.mark.asyncio
+async def test_resolve_static_headers_stale_user_value_cannot_override_global(
+    monkeypatch,
+):
+    """A var that used to be user-scoped (so the user has a stored value) but is
+    now global must resolve to the admin's global value, not the stale per-user
+    row. Otherwise a user could override admin-configured headers indefinitely."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-4",
+        name="srv4",
+        transport="http",
+        url="https://example.com",
+        static_headers={"X-DB-URL": "${DB_HOST}/${CORP_USERNAME}"},
+        env_vars=[
+            # DB_HOST is now global; it used to be user-scoped.
+            {"name": "DB_HOST", "value": "admin-db", "scope": "global"},
+            {"name": "CORP_USERNAME", "value": "", "scope": "user"},
+        ],
+    )
+
+    async def fake_load_user_env_vars(server, user_api_key_auth):
+        # Stale DB_HOST row left over from when it was user-scoped.
+        return {"DB_HOST": "evil-db", "CORP_USERNAME": "alice"}
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+
+    headers = await manager._resolve_static_headers_with_env_vars(server, object())
+    assert headers == {"X-DB-URL": "admin-db/alice"}
+
+
 # ── _load_user_env_vars guard paths ────────────────────────────────────────
 
 

@@ -1591,7 +1591,13 @@ class MCPServerManager:
                         setup_url=build_env_var_setup_url(server.server_id),
                     )
 
-        merged_vars: Dict[str, str] = {**global_values, **user_values}
+        # Only honor stored user values for currently user-scoped vars, and let
+        # admin globals win, so a stale row from when a var was user-scoped can
+        # never override the global value the admin set after switching it.
+        scoped_user_values = {
+            name: value for name, value in user_values.items() if name in user_var_names
+        }
+        merged_vars: Dict[str, str] = {**scoped_user_values, **global_values}
         if not static_headers:
             return static_headers
         return interpolate_headers(static_headers, merged_vars)
