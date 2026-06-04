@@ -348,11 +348,27 @@ def test_galileo_get_ingest_request_legacy(monkeypatch):
     monkeypatch.setenv("GALILEO_PASSWORD", "pw")
     monkeypatch.setenv("GALILEO_BASE_URL", "https://galileo.example/")
     monkeypatch.setenv("GALILEO_PROJECT_ID", "proj")
+    monkeypatch.setenv("GALILEO_LOG_STREAM_ID", "stream-id")
     logger = GalileoObserve()
-    logger.in_memory_records = [{"foo": "bar"}]
+    logger.in_memory_records = [
+        {
+            "latency_ms": 1,
+            "status_code": 200,
+            "input_text": "hi",
+            "output_text": "ok",
+            "node_type": "acompletion",
+            "model": "gpt",
+            "num_input_tokens": 1,
+            "num_output_tokens": 1,
+            "num_total_tokens": 2,
+            "created_at": "2026-05-25T12:00:00",
+        }
+    ]
     url, payload = logger._get_ingest_request()
-    assert url == "https://galileo.example/projects/proj/observe/ingest"
-    assert payload == {"records": [{"foo": "bar"}]}
+    assert url == "https://galileo.example/v2/projects/proj/traces"
+    assert "traces" in payload
+    assert payload["log_stream_id"] == "stream-id"
+    assert payload["traces"][0]["input"] == "hi"
 
 
 @pytest.mark.asyncio

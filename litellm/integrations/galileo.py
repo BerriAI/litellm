@@ -253,6 +253,17 @@ class GalileoObserve(CustomLogger):
             ],
         }
 
+    def _build_traces_payload(self, records: List[dict]) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {
+            "traces": [self._record_to_v2_trace(record) for record in records],
+            "logging_method": "api_direct",
+            "reliable": False,
+            "is_complete": True,
+        }
+        if self.log_stream_id:
+            payload["log_stream_id"] = self.log_stream_id
+        return payload
+
     def _get_ingest_request(self) -> Optional[Tuple[str, Dict[str, Any]]]:
         if not self.base_url or not self.project_id:
             return None
@@ -262,24 +273,18 @@ class GalileoObserve(CustomLogger):
         # flush_in_memory_records) aren't silently dropped when we later clear
         # the in-memory buffer.
         records = list(self.in_memory_records)
+        payload = self._build_traces_payload(records)
 
         if self.use_v2_api:
-            payload: Dict[str, Any] = {
-                "traces": [self._record_to_v2_trace(record) for record in records],
-                "logging_method": "api_direct",
-                "reliable": False,
-                "is_complete": True,
-            }
-            if self.log_stream_id:
-                payload["log_stream_id"] = self.log_stream_id
             return (
                 f"{self.base_url}/ingest/traces/{self.project_id}",
                 payload,
             )
 
+        # Username/password auth logs in for a JWT and uses the standard v2 traces API.
         return (
-            f"{self.base_url}/projects/{self.project_id}/observe/ingest",
-            {"records": records},
+            f"{self.base_url}/v2/projects/{self.project_id}/traces",
+            payload,
         )
 
     @staticmethod
