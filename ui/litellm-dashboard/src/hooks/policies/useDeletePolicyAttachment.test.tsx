@@ -40,7 +40,7 @@ describe("useDeletePolicyAttachment", () => {
           accessToken: "test-token",
           onSuccess: mockOnSuccess,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     result.current.mutate("attachment-1");
@@ -65,7 +65,7 @@ describe("useDeletePolicyAttachment", () => {
           accessToken: "test-token",
           onError: mockOnError,
         }),
-      { wrapper }
+      { wrapper },
     );
 
     result.current.mutate("attachment-1");
