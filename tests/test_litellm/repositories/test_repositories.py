@@ -1583,3 +1583,96 @@ class TestBudgetRepositoryExtended:
             allowed_models=["gpt-4", "claude-3"],
         )
         assert updated.max_budget == 500.0
+
+
+class TestModelRepositoryExtended:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return ModelRepository(client)
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.repositories.model_repository.decrypt_value_helper",
+        side_effect=lambda value, **kw: value,
+    )
+    async def test_find_by_team_id(self, mock_decrypt, repo):
+        repo._prisma_client.db.litellm_proxymodeltable._records["model-1"] = {
+            "model_id": "model-1",
+            "model_name": "gpt-4",
+            "litellm_params": '{"api_key": "sk-test"}',
+            "model_info": '{"team_id": "team-1"}',
+            "blocked": False,
+        }
+        repo._prisma_client.db.litellm_proxymodeltable._records["model-2"] = {
+            "model_id": "model-2",
+            "model_name": "claude-3",
+            "litellm_params": '{"api_key": "sk-other"}',
+            "model_info": '{"team_id": "team-2"}',
+            "blocked": False,
+        }
+        models = await repo.find_by_team_id("team-1")
+        assert len(models) == 1
+        assert models[0].model_name == "gpt-4"
+
+
+class TestBaseRepositoryExtended:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return BudgetRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_find_many_with_pagination(self, repo):
+        repo._prisma_client.db.litellm_budgettable._records = {
+            "b1": {"budget_id": "b1", "max_budget": 100.0},
+            "b2": {"budget_id": "b2", "max_budget": 200.0},
+            "b3": {"budget_id": "b3", "max_budget": 300.0},
+        }
+        budgets = await repo.find_many(skip=0, take=2, order={"budget_id": "asc"})
+        assert len(budgets) >= 2
+
+    @pytest.mark.asyncio
+    async def test_find_many_with_where(self, repo):
+        repo._prisma_client.db.litellm_budgettable._records = {
+            "b1": {"budget_id": "b1", "max_budget": 100.0},
+        }
+        budgets = await repo.find_many(where={"budget_id": "b1"})
+        assert len(budgets) >= 1
+
+    @pytest.mark.asyncio
+    async def test_to_model_list_with_none(self, repo):
+        result = repo._to_model_list([None, None])
+        assert result == []
+
+
+class TestDomainModelExtended:
+    def test_from_db_record_none_raises(self):
+        from litellm.models.base import DomainModel
+
+        with pytest.raises(ValueError, match="Cannot create domain model from None"):
+            DomainModel.from_db_record(None)
+
+    def test_from_db_record_dict(self):
+        from litellm.models.budget import Budget
+
+        budget = Budget.from_db_record({"budget_id": "b1", "max_budget": 100.0})
+        assert budget.budget_id == "b1"
+
+    def test_from_db_record_model_dump(self):
+        from litellm.models.budget import Budget
+
+        class MockRecordWithModelDump:
+            def model_dump(self):
+                return {"budget_id": "b2", "max_budget": 200.0}
+
+        budget = Budget.from_db_record(MockRecordWithModelDump())
+        assert budget.budget_id == "b2"
+
+    def test_to_db_dict(self):
+        from litellm.models.budget import Budget
+
+        budget = Budget(budget_id="b3", max_budget=300.0)
+        data = budget.to_db_dict()
+        assert data["budget_id"] == "b3"
+        assert data["max_budget"] == 300.0
