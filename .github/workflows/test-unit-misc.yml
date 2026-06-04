@@ -1,6 +1,11 @@
 name: "Unit Tests: MCP, Secrets, Containers & Misc"
 
 on:
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
   pull_request:
     branches:
       - main

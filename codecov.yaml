@@ -17,7 +17,9 @@ component_management:
   individual_components:
     - component_id: "Router"
       paths:
-        - "router"
+        - "*/router.py"
+        - "*/router_strategy/*"
+        - "*/router_utils/*"
     - component_id: "LLMs"
       paths:
         - "*/llms/*"

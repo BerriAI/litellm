@@ -1,6 +1,11 @@
 name: LiteLLM MCP Tests (folder - tests/mcp_tests)
 
 on:
+  push:
+    branches:
+      - main
+      - litellm_internal_staging
+      - litellm_oss_branch
   pull_request:
     branches:
       - main
@@ -10,6 +15,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   test:
@@ -43,4 +49,13 @@ jobs:
 
       - name: Run MCP tests
         run: |
-          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov-report=xml --durations=5
+          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov-report=xml --cov-config=pyproject.toml --durations=5
+
+      - name: Upload coverage to Codecov
+        if: success()
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5.5.4
+        with:
+          use_oidc: true
+          files: coverage.xml
+          flags: mcp
+          fail_ci_if_error: false

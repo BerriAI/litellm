@@ -323,3 +323,12 @@ pytest_add_cli_args = [
 source = ["litellm"]
 relative_files = true
 
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "@(abc\\.)?abstractmethod",
+    "@(typing\\.)?overload",
+]
+
