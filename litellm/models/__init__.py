@@ -10,7 +10,7 @@ from litellm.models.credentials import (
 )
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.models.organization import Organization
+from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import Team
 from litellm.models.user import LiteLLM_UserTable
@@ -23,7 +23,7 @@ __all__ = [
     "CreateCredentialItem",
     "LiteLLM_ProxyModelTable",
     "LiteLLM_ObjectPermissionTable",
-    "Organization",
+    "LiteLLM_OrganizationTable",
     "LiteLLM_ProjectTable",
     "Team",
     "LiteLLM_UserTable",

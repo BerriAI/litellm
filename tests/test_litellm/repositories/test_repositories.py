@@ -1016,6 +1016,9 @@ class TestOrganizationRepository:
         repo._prisma_client.db.litellm_organizationtable._records["org-1"] = {
             "organization_id": "org-1",
             "organization_alias": "Old Name",
+            "budget_id": "b1",
+            "created_by": "admin",
+            "updated_by": "admin",
         }
         updated = await repo.update_organization(
             organization_id="org-1",
@@ -1029,6 +1032,9 @@ class TestOrganizationRepository:
         repo._prisma_client.db.litellm_organizationtable._records["org-full"] = {
             "organization_id": "org-full",
             "organization_alias": "Old Name",
+            "budget_id": "b1",
+            "created_by": "admin",
+            "updated_by": "admin",
         }
         updated = await repo.update_organization(
             organization_id="org-full",
@@ -1046,6 +1052,9 @@ class TestOrganizationRepository:
         repo._prisma_client.db.litellm_organizationtable._records["org-1"] = {
             "organization_id": "org-1",
             "organization_alias": "Acme",
+            "budget_id": "b1",
+            "created_by": "admin",
+            "updated_by": "admin",
         }
         deleted = await repo.delete_organization("org-1")
         assert deleted is not None
@@ -1056,6 +1065,9 @@ class TestOrganizationRepository:
             "organization_id": "org-1",
             "organization_alias": "Acme",
             "spend": 0.0,
+            "budget_id": "b1",
+            "created_by": "admin",
+            "updated_by": "admin",
         }
         org = await repo.update_spend("org-1", 100.0)
         assert org.spend == 100.0
@@ -1065,6 +1077,9 @@ class TestOrganizationRepository:
         repo._prisma_client.db.litellm_organizationtable._records["org-1"] = {
             "organization_id": "org-1",
             "organization_alias": "Acme",
+            "budget_id": "b1",
+            "created_by": "admin",
+            "updated_by": "admin",
         }
         org = await repo.find_by_alias("Acme")
         assert org is not None

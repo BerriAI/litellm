@@ -2854,25 +2854,9 @@ from litellm.models.user import (  # noqa: E402
 )
 
 
-class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
-    """Represents user-controllable params for a LiteLLM_OrganizationTable record"""
-
-    organization_id: Optional[str] = None
-    organization_alias: Optional[str] = None
-    budget_id: str
-    spend: float = 0.0
-    metadata: Optional[dict] = None
-    models: List[str]
-    created_by: str
-    updated_by: str
-    users: Optional[List[LiteLLM_UserTable]] = None
-    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
-
-    #########################################################
-    # Object Permission - MCP, Vector Stores etc.
-    #########################################################
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-    object_permission_id: Optional[str] = None
+from litellm.models.organization import (  # noqa: E402
+    LiteLLM_OrganizationTable as LiteLLM_OrganizationTable,
+)
 
 
 class LiteLLM_OrganizationTableWithMembers(LiteLLM_OrganizationTable):

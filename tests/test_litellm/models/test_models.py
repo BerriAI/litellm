@@ -10,7 +10,7 @@ from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.models.organization import Organization
+from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import CachedTeam, DeletedTeam, Team
 from litellm.models.user import LiteLLM_UserTable
@@ -143,12 +143,14 @@ class TestObjectPermission:
 
 class TestOrganization:
     def test_organization_creation(self):
-        org = Organization(
+        org = LiteLLM_OrganizationTable(
             organization_id="org-123",
             organization_alias="My Org",
             budget_id="budget-123",
             models=["gpt-4", "claude-3"],
             spend=50.0,
+            created_by="admin",
+            updated_by="admin",
         )
         assert org.organization_id == "org-123"
         assert org.organization_alias == "My Org"
