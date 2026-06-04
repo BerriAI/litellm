@@ -1250,6 +1250,47 @@ async def get_user_env_vars_bulk(
     return {row.server_id: _decode_user_env_vars(row.values_b64) for row in rows}
 
 
+async def merge_user_env_vars(
+    prisma_client: PrismaClient,
+    user_id: str,
+    server_id: str,
+    updates: Dict[str, str],
+    allowed_names: Iterable[str],
+) -> Dict[str, str]:
+    """Merge ``updates`` into the user's stored env vars for ``server_id`` and
+    return the resulting set.
+
+    The read-modify-write runs inside a transaction guarded by a
+    ``(user_id, server_id)`` advisory lock so two concurrent writes from the
+    same user can't drop one update. Names outside ``allowed_names`` are pruned,
+    so an admin retiring a user-scoped variable also clears its stored value.
+    """
+    allowed = set(allowed_names)
+    async with prisma_client.db.tx() as tx:
+        await tx.query_raw(
+            "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+            f"{user_id}:{server_id}",
+        )
+        row = await tx.litellm_mcpuserenvvars.find_unique(
+            where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
+        )
+        existing = _decode_user_env_vars(row.values_b64) if row is not None else {}
+        merged = {k: v for k, v in {**existing, **updates}.items() if k in allowed}
+        encoded = encrypt_value_helper(json.dumps(merged))
+        await tx.litellm_mcpuserenvvars.upsert(
+            where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
+            data={
+                "create": {
+                    "user_id": user_id,
+                    "server_id": server_id,
+                    "values_b64": encoded,
+                },
+                "update": {"values_b64": encoded},
+            },
+        )
+    return merged
+
+
 async def delete_user_env_vars(
     prisma_client: PrismaClient,
     user_id: str,

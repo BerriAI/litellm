@@ -3908,7 +3908,7 @@ class TestStoreMCPUserEnvVars:
         server = _make_env_var_server(
             env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
-        store_mock = AsyncMock()
+        merge_mock = AsyncMock(return_value={"CORP_USERNAME": "alice"})
         with (
             patch.object(
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
@@ -3916,10 +3916,7 @@ class TestStoreMCPUserEnvVars:
             patch.object(
                 mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
             ),
-            patch.object(
-                mgmt_endpoints, "get_user_env_vars", AsyncMock(return_value={})
-            ),
-            patch.object(mgmt_endpoints, "store_user_env_vars", store_mock),
+            patch.object(mgmt_endpoints, "merge_user_env_vars", merge_mock),
         ):
             result = await mgmt_endpoints.store_mcp_user_env_vars(
                 server_id="srv-1",
@@ -3932,25 +3929,30 @@ class TestStoreMCPUserEnvVars:
                 ),
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
-        # Only the declared, non-empty value is persisted.
-        store_mock.assert_awaited_once()
-        _, _, _, persisted = store_mock.await_args.args
-        assert persisted == {"CORP_USERNAME": "alice"}
+        # Only the declared, non-empty value reaches the atomic merge, scoped to
+        # the admin-declared user vars.
+        merge_mock.assert_awaited_once()
+        _, _, _, updates, allowed_names = merge_mock.await_args.args
+        assert updates == {"CORP_USERNAME": "alice"}
+        assert set(allowed_names) == {
+            "CORP_USERNAME",
+            "CORP_PASSWORD",
+            "UNUSED_USER_VAR",
+        }
         # CORP_PASSWORD remains unset in the returned status.
         assert result.missing_count == 1
 
     @pytest.mark.asyncio
-    async def test_merges_over_existing_values(self):
-        """Updating one credential must not wipe other already-stored values.
-
-        The user updates only CORP_PASSWORD; their previously-stored
-        CORP_USERNAME (write-only, never shown back in the form) must be
-        preserved instead of being cleared.
-        """
+    async def test_forwards_only_submitted_updates_and_returns_merged_status(self):
+        """The endpoint forwards only the user's submitted (allowed, non-empty)
+        update to the atomic merge and reports status from the merged result, so
+        a one-field edit never sends the other stored values back through."""
         server = _make_env_var_server(
             env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
-        store_mock = AsyncMock()
+        merge_mock = AsyncMock(
+            return_value={"CORP_USERNAME": "alice", "CORP_PASSWORD": "new"}
+        )
         with (
             patch.object(
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
@@ -3958,14 +3960,7 @@ class TestStoreMCPUserEnvVars:
             patch.object(
                 mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)
             ),
-            patch.object(
-                mgmt_endpoints,
-                "get_user_env_vars",
-                AsyncMock(
-                    return_value={"CORP_USERNAME": "alice", "CORP_PASSWORD": "old"}
-                ),
-            ),
-            patch.object(mgmt_endpoints, "store_user_env_vars", store_mock),
+            patch.object(mgmt_endpoints, "merge_user_env_vars", merge_mock),
         ):
             result = await mgmt_endpoints.store_mcp_user_env_vars(
                 server_id="srv-1",
@@ -3974,10 +3969,10 @@ class TestStoreMCPUserEnvVars:
                 ),
                 user_api_key_dict=generate_mock_user_api_key_auth(user_id="alice"),
             )
-        store_mock.assert_awaited_once()
-        _, _, _, persisted = store_mock.await_args.args
-        assert persisted == {"CORP_USERNAME": "alice", "CORP_PASSWORD": "new"}
-        # Both credentials report as set in the returned status.
+        merge_mock.assert_awaited_once()
+        _, _, _, updates, _ = merge_mock.await_args.args
+        assert updates == {"CORP_PASSWORD": "new"}
+        # Status reflects the merged set returned by the atomic merge.
         assert result.missing_count == 0
 
     @pytest.mark.asyncio
@@ -4228,7 +4223,7 @@ class TestMCPUserEnvVarsAccessControl:
         server = _make_env_var_server(
             env_vars=_ENV_VARS_MIXED, static_headers=_STATIC_HEADERS_MIXED
         )
-        store_mock = AsyncMock()
+        merge_mock = AsyncMock()
         with (
             patch.object(
                 mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
@@ -4241,7 +4236,7 @@ class TestMCPUserEnvVarsAccessControl:
                 "get_all_mcp_servers_for_user",
                 AsyncMock(return_value=[]),
             ),
-            patch.object(mgmt_endpoints, "store_user_env_vars", store_mock),
+            patch.object(mgmt_endpoints, "merge_user_env_vars", merge_mock),
         ):
             with pytest.raises(HTTPException) as exc:
                 await mgmt_endpoints.store_mcp_user_env_vars(
@@ -4255,7 +4250,7 @@ class TestMCPUserEnvVarsAccessControl:
                     ),
                 )
         assert exc.value.status_code == 403
-        store_mock.assert_not_awaited()
+        merge_mock.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_clear_forbidden_for_non_admin_without_access(self):

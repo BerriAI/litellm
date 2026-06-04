@@ -818,6 +818,88 @@ def _captured_values_blob(prisma) -> str:
     return create_value
 
 
+def _transactional_env_vars_prisma(read_delay: float = 0.0):
+    """A prisma stand-in backed by an in-memory store that honours
+    ``db.tx()`` and the ``pg_advisory_xact_lock`` advisory lock.
+
+    ``read_delay`` inserts an ``await`` point inside ``find_unique`` so two
+    concurrent merges interleave between their read and write; the advisory lock
+    is what keeps them from clobbering each other. Drop the lock and the second
+    write wins, losing the first update.
+    """
+    import asyncio
+    from unittest.mock import MagicMock
+
+    class _Store:
+        def __init__(self):
+            self.rows = {}
+            self.locks = {}
+
+    class _Table:
+        def __init__(self, store, delay=0.0):
+            self._store = store
+            self._delay = delay
+
+        async def find_unique(self, where):
+            ident = where["user_id_server_id"]
+            key = (ident["user_id"], ident["server_id"])
+            blob = self._store.rows.get(key)
+            # Yield after capturing the read so an unserialised concurrent merge
+            # would race on this stale snapshot.
+            if self._delay:
+                await asyncio.sleep(self._delay)
+            if blob is None:
+                return None
+            row = MagicMock()
+            row.values_b64 = blob
+            return row
+
+        async def upsert(self, where, data):
+            ident = where["user_id_server_id"]
+            key = (ident["user_id"], ident["server_id"])
+            self._store.rows[key] = data["update"]["values_b64"]
+
+        async def delete_many(self, where):
+            self._store.rows.pop((where["user_id"], where["server_id"]), None)
+
+    class _Tx:
+        def __init__(self, store, delay):
+            self._store = store
+            self._held = None
+            self.litellm_mcpuserenvvars = _Table(store, delay=delay)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            if self._held is not None:
+                self._held.release()
+                self._held = None
+            return False
+
+        async def query_raw(self, query, *args):
+            lock_key = args[0]
+            lock = self._store.locks.setdefault(lock_key, asyncio.Lock())
+            await lock.acquire()
+            self._held = lock
+            return [{"pg_advisory_xact_lock": None}]
+
+    class _DB:
+        def __init__(self, store, delay):
+            self._store = store
+            self._delay = delay
+            self.litellm_mcpuserenvvars = _Table(store)
+
+        def tx(self):
+            return _Tx(self._store, self._delay)
+
+    class _Prisma:
+        def __init__(self, delay):
+            self.db = _DB(_Store(), delay)
+
+    return _Prisma(read_delay)
+
+
 @pytest.mark.asyncio
 async def test_store_user_env_vars_does_not_persist_plaintext(env_vars_salt_key):
     from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
@@ -913,6 +995,62 @@ async def test_delete_user_env_vars_is_idempotent_delete_many():
     prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
     call = prisma.db.litellm_mcpuserenvvars.delete_many.call_args
     assert call.kwargs["where"] == {"user_id": "alice", "server_id": "srv-1"}
+
+
+@pytest.mark.asyncio
+async def test_merge_user_env_vars_preserves_existing_and_prunes_disallowed(
+    env_vars_salt_key,
+):
+    """Merging one update keeps the user's other stored values and drops any
+    name the admin no longer declares as user-scoped."""
+    from litellm.proxy._experimental.mcp_server.db import (
+        merge_user_env_vars,
+        store_user_env_vars,
+    )
+
+    prisma = _transactional_env_vars_prisma()
+    await store_user_env_vars(
+        prisma,
+        "alice",
+        "srv-1",
+        {"CORP_USERNAME": "alice", "CORP_PASSWORD": "old", "RETIRED": "x"},
+    )
+
+    merged = await merge_user_env_vars(
+        prisma,
+        "alice",
+        "srv-1",
+        {"CORP_PASSWORD": "new"},
+        {"CORP_USERNAME", "CORP_PASSWORD"},
+    )
+
+    # CORP_USERNAME survives, CORP_PASSWORD updates, RETIRED (no longer declared)
+    # is pruned.
+    assert merged == {"CORP_USERNAME": "alice", "CORP_PASSWORD": "new"}
+
+
+@pytest.mark.asyncio
+async def test_merge_user_env_vars_serializes_concurrent_writes(env_vars_salt_key):
+    """Two simultaneous merges for the same (user, server) must not lose an
+    update: the advisory-locked transaction serialises the read-modify-write so
+    both distinct values survive."""
+    import asyncio
+
+    from litellm.proxy._experimental.mcp_server.db import (
+        get_user_env_vars,
+        merge_user_env_vars,
+    )
+
+    allowed = {"TOKEN_A", "TOKEN_B"}
+    prisma = _transactional_env_vars_prisma(read_delay=0.02)
+
+    await asyncio.gather(
+        merge_user_env_vars(prisma, "alice", "srv-1", {"TOKEN_A": "a"}, allowed),
+        merge_user_env_vars(prisma, "alice", "srv-1", {"TOKEN_B": "b"}, allowed),
+    )
+
+    stored = await get_user_env_vars(prisma, "alice", "srv-1")
+    assert stored == {"TOKEN_A": "a", "TOKEN_B": "b"}
 
 
 @pytest.mark.asyncio

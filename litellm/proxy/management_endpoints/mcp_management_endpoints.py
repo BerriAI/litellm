@@ -123,9 +123,9 @@ if MCP_AVAILABLE:
         get_user_env_vars_bulk,
         get_user_oauth_credential,
         list_user_oauth_credentials,
+        merge_user_env_vars,
         reject_mcp_server,
         store_user_credential,
-        store_user_env_vars,
         store_user_oauth_credential,
         update_mcp_server,
     )
@@ -2321,11 +2321,9 @@ if MCP_AVAILABLE:
         updates = {
             k: v for k, v in payload.values.items() if k in allowed_names and v != ""
         }
-        existing = await get_user_env_vars(prisma_client, user_id, server_id)
-        merged = {
-            k: v for k, v in {**existing, **updates}.items() if k in allowed_names
-        }
-        await store_user_env_vars(prisma_client, user_id, server_id, merged)
+        merged = await merge_user_env_vars(
+            prisma_client, user_id, server_id, updates, allowed_names
+        )
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             invalidate_user_env_vars_cache,
         )
