@@ -160,14 +160,13 @@ def _prepare_mcp_server_data(
     if data_dict.get("static_headers") is not None:
         data_dict["static_headers"] = safe_dumps(data_dict["static_headers"])
 
-    # Handle env_vars serialization. Pydantic models are dumped to a list of
-    # plain dicts so the JSON column receives ``[{name, value, scope, ...}]``.
-    # Global values are encrypted at rest before serialization.
-    env_vars = getattr(data, "env_vars", None)
+    # env_vars is read from ``data_dict`` (not ``data``) like every other JSON
+    # column so the exclude_unset filter is respected: a partial update that
+    # omits env_vars never overwrites the stored value. Global values are
+    # encrypted at rest before serialization.
+    env_vars = data_dict.get("env_vars")
     if env_vars is not None:
-        serialized_env_vars = [
-            v.model_dump() if hasattr(v, "model_dump") else dict(v) for v in env_vars
-        ]
+        serialized_env_vars = [dict(v) for v in env_vars]
         _encrypt_global_env_var_values(serialized_env_vars)
         data_dict["env_vars"] = safe_dumps(serialized_env_vars)
 

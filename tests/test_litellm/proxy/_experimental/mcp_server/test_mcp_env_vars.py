@@ -854,6 +854,48 @@ def test_prepare_mcp_server_data_encrypts_global_env_var_values(env_vars_salt_ke
     assert entries["CORP_USER"]["value"] == "placeholder-hint"
 
 
+def test_prepare_mcp_server_data_skips_unset_env_vars_on_partial_update():
+    """On a partial update, env_vars must follow the same exclude_unset filter as
+    every other JSON column: if the caller never set env_vars, the field must not
+    be written, even when the request object carries a non-None env_vars that was
+    never marked as set. Otherwise a partial update could silently overwrite the
+    stored values."""
+    from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+    from litellm.proxy._types import MCPEnvVar, UpdateMCPServerRequest
+
+    data = UpdateMCPServerRequest.model_construct(
+        _fields_set={"server_id"},
+        server_id="srv-1",
+        env_vars=[MCPEnvVar(name="DB_PASSWORD", value="s3cr3t", scope="global")],
+    )
+
+    prepared = _prepare_mcp_server_data(data, exclude_unset=True)
+
+    assert "env_vars" not in prepared
+
+
+def test_prepare_mcp_server_data_writes_env_vars_when_set_on_partial_update(
+    env_vars_salt_key,
+):
+    """A partial update that does set env_vars must serialize and encrypt them."""
+    import json
+
+    from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+    from litellm.proxy._types import MCPEnvVar, UpdateMCPServerRequest
+
+    data = UpdateMCPServerRequest(
+        server_id="srv-1",
+        env_vars=[MCPEnvVar(name="DB_PASSWORD", value="s3cr3t", scope="global")],
+    )
+
+    prepared = _prepare_mcp_server_data(data, exclude_unset=True)
+
+    assert "env_vars" in prepared
+    entries = json.loads(prepared["env_vars"])
+    assert entries[0]["name"] == "DB_PASSWORD"
+    assert entries[0]["value"] != "s3cr3t"
+
+
 @pytest.mark.asyncio
 async def test_build_mcp_server_from_table_decrypts_global_env_vars(env_vars_salt_key):
     """End-to-end: an encrypted global value persisted in the DB must be

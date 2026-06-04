@@ -3691,7 +3691,13 @@ class MCPServerManager:
                 verbose_logger.debug(
                     f"Building server from DB: {server.server_id} ({server.server_name})"
                 )
-                new_server = await self.build_mcp_server_from_table(server)
+                # raw_rows come straight from the DB, so their global env var
+                # values (like credentials) are still encrypted here, unlike the
+                # already-decrypted records add_server/update_server are handed.
+                # Decrypt them while building the registry entry.
+                new_server = await self.build_mcp_server_from_table(
+                    server, env_vars_are_encrypted=True
+                )
                 # Carry the cached short_prefix from the previous registry entry
                 # (if any) so the prefix is stable across reloads.
                 if existing_server is not None and existing_server.short_prefix:
