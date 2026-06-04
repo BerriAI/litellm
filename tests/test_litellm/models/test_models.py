@@ -13,7 +13,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import CachedTeam, DeletedTeam, Team
-from litellm.models.user import User
+from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import (
     DeletedVerificationToken,
     VerificationToken,
@@ -233,7 +233,7 @@ class TestTeam:
 
 class TestUser:
     def test_user_creation(self):
-        user = User(
+        user = LiteLLM_UserTable(
             user_id="user-123",
             user_email="test@example.com",
             teams=["team1", "team2"],
@@ -245,15 +245,15 @@ class TestUser:
         assert len(user.teams) == 2
 
     def test_is_over_budget(self):
-        user = User(user_id="u1", max_budget=100.0, spend=150.0)
-        user_no_budget = User(user_id="u2", spend=1000.0)
+        user = LiteLLM_UserTable(user_id="u1", max_budget=100.0, spend=150.0)
+        user_no_budget = LiteLLM_UserTable(user_id="u2", spend=1000.0)
 
         assert user.is_over_budget()
         assert not user_no_budget.is_over_budget()
 
     def test_has_model_access(self):
-        user_with_models = User(user_id="u1", models=["gpt-4"])
-        user_no_models = User(user_id="u2", models=[])
+        user_with_models = LiteLLM_UserTable(user_id="u1", models=["gpt-4"])
+        user_no_models = LiteLLM_UserTable(user_id="u2", models=[])
 
         assert user_with_models.has_model_access("gpt-4")
         assert not user_with_models.has_model_access("gpt-3")

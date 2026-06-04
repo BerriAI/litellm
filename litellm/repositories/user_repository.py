@@ -5,11 +5,11 @@ User repository for database operations on LiteLLM_UserTable.
 import json
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.user import User
+from litellm.models.user import LiteLLM_UserTable
 from litellm.repositories.base_repository import BaseRepository
 
 
-class UserRepository(BaseRepository[User]):
+class UserRepository(BaseRepository[LiteLLM_UserTable]):
     """Repository for user database operations."""
 
     @property
@@ -17,10 +17,10 @@ class UserRepository(BaseRepository[User]):
         return self.prisma_client.db.litellm_usertable
 
     @property
-    def model_class(self) -> Type[User]:
-        return User
+    def model_class(self) -> Type[LiteLLM_UserTable]:
+        return LiteLLM_UserTable
 
-    def _to_model(self, record: Any) -> Optional[User]:
+    def _to_model(self, record: Any) -> Optional[LiteLLM_UserTable]:
         """Convert a database record to a User model."""
         if record is None:
             return None
@@ -32,31 +32,33 @@ class UserRepository(BaseRepository[User]):
             if isinstance(data.get(field), str):
                 data[field] = json.loads(data[field])
 
-        return User(**data)
+        return LiteLLM_UserTable(**data)
 
     async def find_by_id(
         self, user_id: str, id_field: str = "user_id"
-    ) -> Optional[User]:
+    ) -> Optional[LiteLLM_UserTable]:
         return await super().find_by_id(user_id, id_field)
 
-    async def find_by_email(self, user_email: str) -> Optional[User]:
+    async def find_by_email(self, user_email: str) -> Optional[LiteLLM_UserTable]:
         """Find a user by email."""
         records = await self.table.find_many(where={"user_email": user_email})
         if records:
             return self._to_model(records[0])
         return None
 
-    async def find_by_sso_id(self, sso_user_id: str) -> Optional[User]:
+    async def find_by_sso_id(self, sso_user_id: str) -> Optional[LiteLLM_UserTable]:
         """Find a user by SSO ID."""
         record = await self.table.find_unique(where={"sso_user_id": sso_user_id})
         return self._to_model(record)
 
-    async def find_by_organization_id(self, organization_id: str) -> List[User]:
+    async def find_by_organization_id(
+        self, organization_id: str
+    ) -> List[LiteLLM_UserTable]:
         """Find all users in an organization."""
         records = await self.table.find_many(where={"organization_id": organization_id})
         return self._to_model_list(records)
 
-    async def find_by_team_id(self, team_id: str) -> List[User]:
+    async def find_by_team_id(self, team_id: str) -> List[LiteLLM_UserTable]:
         """Find all users in a team."""
         records = await self.table.find_many(where={"teams": {"has": team_id}})
         return self._to_model_list(records)
@@ -82,7 +84,7 @@ class UserRepository(BaseRepository[User]):
         allowed_cache_controls: Optional[List[str]] = None,
         policies: Optional[List[str]] = None,
         object_permission_id: Optional[str] = None,
-    ) -> User:
+    ) -> LiteLLM_UserTable:
         """Create a new user."""
         data: Dict[str, Any] = {"user_id": user_id}
         if user_alias is not None:
@@ -145,7 +147,7 @@ class UserRepository(BaseRepository[User]):
         allowed_cache_controls: Optional[List[str]] = None,
         policies: Optional[List[str]] = None,
         object_permission_id: Optional[str] = None,
-    ) -> Optional[User]:
+    ) -> Optional[LiteLLM_UserTable]:
         """Update a user."""
         data: Dict[str, Any] = {}
         if user_alias is not None:
@@ -187,15 +189,19 @@ class UserRepository(BaseRepository[User]):
 
         return await self.update(user_id, data, id_field="user_id")
 
-    async def delete_user(self, user_id: str) -> Optional[User]:
+    async def delete_user(self, user_id: str) -> Optional[LiteLLM_UserTable]:
         """Delete a user."""
         return await self.delete(user_id, id_field="user_id")
 
-    async def update_spend(self, user_id: str, spend: float) -> Optional[User]:
+    async def update_spend(
+        self, user_id: str, spend: float
+    ) -> Optional[LiteLLM_UserTable]:
         """Update user spend."""
         return await self.update(user_id, {"spend": spend}, id_field="user_id")
 
-    async def add_to_team(self, user_id: str, team_id: str) -> Optional[User]:
+    async def add_to_team(
+        self, user_id: str, team_id: str
+    ) -> Optional[LiteLLM_UserTable]:
         """Add a user to a team using atomic array push operation."""
         if not await self.exists(user_id, id_field="user_id"):
             return None
@@ -206,7 +212,9 @@ class UserRepository(BaseRepository[User]):
         )
         return self._to_model(record)
 
-    async def remove_from_team(self, user_id: str, team_id: str) -> Optional[User]:
+    async def remove_from_team(
+        self, user_id: str, team_id: str
+    ) -> Optional[LiteLLM_UserTable]:
         """Remove a user from a team.
 
         Note: Prisma doesn't support atomic array removal, so we use a

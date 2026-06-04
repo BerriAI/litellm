@@ -2817,34 +2817,9 @@ class LiteLLM_Config(LiteLLMPydanticObjectBase):
     param_value: Dict
 
 
-class LiteLLM_OrganizationMembershipTable(LiteLLMPydanticObjectBase):
-    """
-    This is the table that track what organizations a user belongs to and users spend within the organization
-    """
-
-    user_id: str
-    organization_id: str
-    user_role: Optional[str] = None
-    spend: float = 0.0
-    budget_id: Optional[str] = None
-    created_at: datetime
-    updated_at: datetime
-    user: Optional[Any] = (
-        None  # You might want to replace 'Any' with a more specific type if available
-    )
-    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
-    user_email: Optional[str] = None
-
-    model_config = ConfigDict(protected_namespaces=())
-
-    @model_validator(mode="after")
-    def populate_user_email(self) -> "LiteLLM_OrganizationMembershipTable":
-        if self.user_email is None and self.user is not None:
-            if isinstance(self.user, dict):
-                self.user_email = self.user.get("user_email")
-            else:
-                self.user_email = getattr(self.user, "user_email", None)
-        return self
+from litellm.models.organization_membership import (  # noqa: E402
+    LiteLLM_OrganizationMembershipTable as LiteLLM_OrganizationMembershipTable,
+)
 
 
 class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
@@ -2874,40 +2849,9 @@ class LiteLLM_OrganizationTableUpdate(LiteLLM_BudgetTable):
         return values
 
 
-class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
-    user_id: str
-    max_budget: Optional[float] = None
-    spend: float = 0.0
-    model_max_budget: Optional[Dict] = {}
-    model_spend: Optional[Dict] = {}
-    user_email: Optional[str] = None
-    user_alias: Optional[str] = None
-    models: list = []
-    tpm_limit: Optional[int] = None
-    rpm_limit: Optional[int] = None
-    user_role: Optional[str] = None
-    organization_memberships: Optional[List[LiteLLM_OrganizationMembershipTable]] = None
-    teams: List[str] = []
-    sso_user_id: Optional[str] = None
-    budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    metadata: Optional[dict] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def set_model_info(cls, values):
-        if values.get("spend") is None:
-            values.update({"spend": 0.0})
-        if values.get("models") is None:
-            values.update({"models": []})
-        if values.get("teams") is None:
-            values.update({"teams": []})
-        return values
-
-    model_config = ConfigDict(protected_namespaces=())
+from litellm.models.user import (  # noqa: E402
+    LiteLLM_UserTable as LiteLLM_UserTable,
+)
 
 
 class LiteLLM_OrganizationTable(LiteLLMPydanticObjectBase):
