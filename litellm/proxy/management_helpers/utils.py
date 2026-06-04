@@ -436,6 +436,33 @@ async def send_management_endpoint_alert(
             )
 
 
+def _redact_env_var_values(response: dict) -> None:
+    """Blank ``env_vars[].value`` in a management response before telemetry.
+
+    MCP create/update endpoints return decrypted ``scope="global"`` env var
+    values so the admin UI can pre-fill the edit form; those values are
+    upstream credentials and must not be serialized verbatim into OTEL spans,
+    where an observability user could read them. Names, scopes, and
+    descriptions are kept so traces stay useful.
+    """
+    env_vars = response.get("env_vars")
+    if not isinstance(env_vars, list):
+        return
+
+    def _redacted(entry: Any) -> dict:
+        get = (
+            entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
+        )
+        return {
+            "name": get("name"),
+            "scope": get("scope"),
+            "description": get("description"),
+            "value": "",
+        }
+
+    response["env_vars"] = [_redacted(entry) for entry in env_vars]
+
+
 async def _emit_management_endpoint_otel_span(
     func: Callable,
     kwargs: dict,
@@ -497,6 +524,7 @@ async def _emit_management_endpoint_otel_span(
         try:
             raw = dict(result)
             _response = {k: v for k, v in raw.items() if k not in _CREDENTIAL_FIELDS}
+            _redact_env_var_values(_response)
         except Exception:
             _response = None
 
