@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import os
 import socket
 from typing import TYPE_CHECKING, Any, Callable, Optional, Tuple, Union, cast
 from urllib.parse import urlparse
@@ -17,9 +18,11 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.llms.base_llm.image_variations.transformation import (
     BaseImageVariationConfig,
 )
+from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
+    get_ssl_configuration,
 )
 from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.types.llms.openai import FileTypes
@@ -272,16 +275,43 @@ def _make_ssrf_trace_config() -> aiohttp.TraceConfig:
     return cfg
 
 
-def _get_ssrf_safe_sync_client() -> HTTPHandler:
-    """Return an HTTPHandler whose transport validates and pins IPs at connect time.
+_SSRF_SAFE_CLIENT_CACHE_KEY = "ssrf_safe_httpx_client"
 
-    Uses ``_SSRFGuardTransport`` to mirror the TOCTOU-free guarantee that
-    ``_SSRFGuardResolver`` provides on the async/aiohttp path.  All standard
-    HTTPHandler configuration (SSL, certs, default headers, timeout) is applied
-    because we inject the transport via the ``transport=`` parameter rather than
-    bypassing ``HTTPHandler.__init__``.
+
+def _get_ssrf_safe_sync_client() -> HTTPHandler:
+    """Return a cached HTTPHandler whose transport validates and pins IPs at connect time.
+
+    Mirrors the caching behaviour of ``_get_httpx_client`` (1-hour TTL via
+    ``in_memory_llm_clients_cache``) so that persistent TCP/TLS connections are
+    reused across requests — fixing the per-call pool regression that a naive
+    ``HTTPHandler(transport=_SSRFGuardTransport())`` would introduce.
+
+    SSL settings (``litellm.ssl_verify``, ``SSL_CERTIFICATE`` env-var) are
+    forwarded to ``_SSRFGuardTransport`` so that callers using self-signed certs
+    or mTLS are not silently broken.
     """
-    return HTTPHandler(transport=_SSRFGuardTransport())
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is None:
+        from litellm.caching.llm_caching_handler import LLMClientCache
+
+        cache = LLMClientCache()
+        setattr(litellm, "in_memory_llm_clients_cache", cache)
+
+    _cached_client = cache.get_cache(_SSRF_SAFE_CLIENT_CACHE_KEY)
+    if _cached_client:
+        return _cached_client
+
+    ssl_config = get_ssl_configuration(None)
+    cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
+    _new_client = HTTPHandler(
+        transport=_SSRFGuardTransport(verify=ssl_config, cert=cert)
+    )
+    cache.set_cache(
+        key=_SSRF_SAFE_CLIENT_CACHE_KEY,
+        value=_new_client,
+        ttl=_DEFAULT_TTL_FOR_HTTPX_CLIENTS,
+    )
+    return _new_client
 
 
 class BaseLLMAIOHTTPHandler:
