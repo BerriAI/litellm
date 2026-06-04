@@ -107,8 +107,8 @@ jobs:
           fi
           exit $status
 
-      - name: Check explicit-any budget
+      - name: Check lint budgets
         if: ${{ !cancelled() && steps.changed.outputs.has_files == 'true' }}
         run: |
-          npx eslint . -f json -o "$RUNNER_TEMP/any-report.json" || true
-          node scripts/check-any-budget.mjs "$RUNNER_TEMP/any-report.json" eslint-any-budget.json
+          npx eslint . -f json -o "$RUNNER_TEMP/lint-report.json" || true
+          node scripts/check-lint-budgets.mjs "$RUNNER_TEMP/lint-report.json" eslint-budgets.json
