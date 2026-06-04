@@ -13,7 +13,7 @@ from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
 from litellm.models.project import LiteLLM_ProjectTable
 from litellm.models.team import Team
-from litellm.models.user import User
+from litellm.models.user import LiteLLM_UserTable
 from litellm.models.verification_token import VerificationToken
 
 __all__ = [
@@ -26,6 +26,6 @@ __all__ = [
     "Organization",
     "LiteLLM_ProjectTable",
     "Team",
-    "User",
+    "LiteLLM_UserTable",
     "VerificationToken",
 ]
