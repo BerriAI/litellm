@@ -588,6 +588,95 @@ async def test_delete_user_env_vars_is_idempotent_delete_many():
     assert call.kwargs["where"] == {"user_id": "alice", "server_id": "srv-1"}
 
 
+# ── DB helpers: global env vars encrypted at rest ─────────────────────────
+
+
+def _global_env_var_server_request(env_vars):
+    from litellm.proxy._types import NewMCPServerRequest
+
+    return NewMCPServerRequest(
+        alias="echo",
+        url="https://upstream.example.com/mcp",
+        transport="http",
+        auth_type="none",
+        static_headers={"X-Db": "${DB_PASSWORD}"},
+        env_vars=env_vars,
+    )
+
+
+def test_prepare_mcp_server_data_encrypts_global_env_var_values(env_vars_salt_key):
+    """``scope="global"`` secrets must be encrypted before they reach the JSON
+    column, while ``scope="user"`` placeholders (not secrets) stay verbatim."""
+    import json
+
+    from litellm.proxy._experimental.mcp_server.db import (
+        _prepare_mcp_server_data,
+        decrypt_global_env_var_values,
+    )
+    from litellm.proxy._types import MCPEnvVar
+
+    req = _global_env_var_server_request(
+        [
+            MCPEnvVar(name="DB_PASSWORD", value="s3cr3t-p@ss", scope="global"),
+            MCPEnvVar(
+                name="CORP_USER",
+                value="placeholder-hint",
+                scope="user",
+                description="your db user",
+            ),
+        ]
+    )
+
+    stored = _prepare_mcp_server_data(req)["env_vars"]
+    entries = {e["name"]: e for e in json.loads(stored)}
+
+    # The global secret is unrecoverable from the stored JSON ...
+    assert "s3cr3t-p@ss" not in stored
+    assert entries["DB_PASSWORD"]["value"] != "s3cr3t-p@ss"
+    # ... but the per-user placeholder is stored as-is.
+    assert entries["CORP_USER"]["value"] == "placeholder-hint"
+
+    # And the encrypted global decrypts back to the original secret.
+    decrypt_global_env_var_values(list(entries.values()))
+    assert entries["DB_PASSWORD"]["value"] == "s3cr3t-p@ss"
+    assert entries["CORP_USER"]["value"] == "placeholder-hint"
+
+
+@pytest.mark.asyncio
+async def test_build_mcp_server_from_table_decrypts_global_env_vars(env_vars_salt_key):
+    """End-to-end: an encrypted global value persisted in the DB must be
+    decrypted when the server is built into the runtime registry, so ``${NAME}``
+    headers interpolate to the real secret instead of forwarding ciphertext."""
+    import json
+
+    from litellm.proxy._experimental.mcp_server.db import _prepare_mcp_server_data
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.proxy._types import LiteLLM_MCPServerTable, MCPEnvVar
+
+    req = _global_env_var_server_request(
+        [MCPEnvVar(name="DB_PASSWORD", value="s3cr3t-p@ss", scope="global")]
+    )
+    prepared = _prepare_mcp_server_data(req)
+
+    table = LiteLLM_MCPServerTable(
+        server_id="srv-global",
+        alias="echo",
+        url="https://upstream.example.com/mcp",
+        transport="http",
+        auth_type="none",
+        static_headers={"X-Db": "${DB_PASSWORD}"},
+        env_vars=json.loads(prepared["env_vars"]),
+    )
+
+    manager = MCPServerManager()
+    server = await manager.build_mcp_server_from_table(table)
+
+    headers = await manager._resolve_static_headers_with_env_vars(server, None)
+    assert headers == {"X-Db": "s3cr3t-p@ss"}
+
+
 # ── REST exception handling ───────────────────────────────────────────────
 
 

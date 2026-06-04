@@ -880,6 +880,12 @@ class MCPServerManager:
             getattr(mcp_server, "static_headers", None)
         )
         env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
+        if credentials_are_encrypted:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                decrypt_global_env_var_values,
+            )
+
+            decrypt_global_env_var_values(env_vars_list)
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
         )

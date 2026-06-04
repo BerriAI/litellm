@@ -11,6 +11,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     MCPApprovalStatus,
+    MCPEnvVarScope,
     MCPSubmissionsSummary,
     NewMCPServerRequest,
     SpecialMCPServerName,
@@ -26,6 +27,57 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy.utils import PrismaClient
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPCredentials
+
+
+def _is_global_env_var_scope(scope: Any) -> bool:
+    """``scope="user"`` entries are placeholders the user fills in; everything
+    else (including a missing scope) is an admin-supplied global value."""
+    return scope != MCPEnvVarScope.user and scope != "user"
+
+
+def _encrypt_global_env_var_values(env_vars: Iterable[Dict[str, Any]]) -> None:
+    """Encrypt ``scope="global"`` env var values in place before persisting.
+
+    Global values hold admin-supplied secrets (API keys, passwords) that get
+    interpolated into headers, so they are encrypted at rest like credentials
+    and the per-user ``values_b64`` column. Per-user placeholders are not
+    secrets and are stored verbatim.
+    """
+    for entry in env_vars:
+        if not _is_global_env_var_scope(entry.get("scope")):
+            continue
+        value = entry.get("value")
+        if value:
+            entry["value"] = encrypt_value_helper(value)
+
+
+def decrypt_global_env_var_values(env_vars: Optional[Iterable[Any]]) -> None:
+    """Decrypt ``scope="global"`` env var values in place after reading the DB.
+
+    Accepts ``MCPEnvVar`` models (``LiteLLM_MCPServerTable``) or plain dicts
+    (raw rows / deserialized JSON). Decryption is best-effort: a value that no
+    longer decrypts (e.g. after a salt-key change) is left untouched.
+    """
+    if not env_vars:
+        return
+    for entry in env_vars:
+        is_dict = isinstance(entry, dict)
+        scope = entry.get("scope") if is_dict else getattr(entry, "scope", None)
+        if not _is_global_env_var_scope(scope):
+            continue
+        value = entry.get("value") if is_dict else getattr(entry, "value", None)
+        if not value:
+            continue
+        decrypted = decrypt_value_helper(
+            value=value,
+            key="mcp_global_env_var",
+            exception_type="debug",
+            return_original_value=True,
+        )
+        if is_dict:
+            entry["value"] = decrypted
+        else:
+            entry.value = decrypted
 
 
 def _prepare_mcp_server_data(
@@ -100,11 +152,14 @@ def _prepare_mcp_server_data(
 
     # Handle env_vars serialization. Pydantic models are dumped to a list of
     # plain dicts so the JSON column receives ``[{name, value, scope, ...}]``.
+    # Global values are encrypted at rest before serialization.
     env_vars = getattr(data, "env_vars", None)
     if env_vars is not None:
-        data_dict["env_vars"] = safe_dumps(
-            [v.model_dump() if hasattr(v, "model_dump") else dict(v) for v in env_vars]
-        )
+        serialized_env_vars = [
+            v.model_dump() if hasattr(v, "model_dump") else dict(v) for v in env_vars
+        ]
+        _encrypt_global_env_var_values(serialized_env_vars)
+        data_dict["env_vars"] = safe_dumps(serialized_env_vars)
 
     if data_dict.get("mcp_info") is not None:
         data_dict["mcp_info"] = safe_dumps(data_dict["mcp_info"])
@@ -215,10 +270,13 @@ async def get_all_mcp_servers(
             where=where if where else {}
         )
 
-        return [
+        tables = [
             LiteLLM_MCPServerTable(**mcp_server.model_dump())
             for mcp_server in mcp_servers
         ]
+        for table in tables:
+            decrypt_global_env_var_values(table.env_vars)
+        return tables
     except Exception as e:
         verbose_proxy_logger.debug(
             "litellm.proxy._experimental.mcp_server.db.py::get_all_mcp_servers - {}".format(
@@ -241,7 +299,9 @@ async def get_mcp_server(
     )
     if mcp_server is None:
         return None
-    return LiteLLM_MCPServerTable(**mcp_server.model_dump())
+    table = LiteLLM_MCPServerTable(**mcp_server.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
 
 
 async def get_mcp_servers(
@@ -259,7 +319,9 @@ async def get_mcp_servers(
     )
     final_mcp_servers: List[LiteLLM_MCPServerTable] = []
     for _mcp_server in _mcp_servers:
-        final_mcp_servers.append(LiteLLM_MCPServerTable(**_mcp_server.model_dump()))
+        table = LiteLLM_MCPServerTable(**_mcp_server.model_dump())
+        decrypt_global_env_var_values(table.env_vars)
+        final_mcp_servers.append(table)
 
     return final_mcp_servers
 
@@ -437,6 +499,7 @@ async def create_mcp_server(
         data=data_dict  # type: ignore
     )
 
+    decrypt_global_env_var_values(getattr(new_mcp_server, "env_vars", None))
     return new_mcp_server
 
 
@@ -514,6 +577,7 @@ async def update_mcp_server(
         where={"server_id": data.server_id}, data=data_dict  # type: ignore
     )
 
+    decrypt_global_env_var_values(getattr(updated_mcp_server, "env_vars", None))
     return updated_mcp_server
 
 
@@ -935,7 +999,9 @@ async def approve_mcp_server(
             "updated_by": touched_by,
         },
     )
-    return LiteLLM_MCPServerTable(**updated.model_dump())
+    table = LiteLLM_MCPServerTable(**updated.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
 
 
 async def reject_mcp_server(
@@ -957,7 +1023,9 @@ async def reject_mcp_server(
         where={"server_id": server_id},
         data=data,
     )
-    return LiteLLM_MCPServerTable(**updated.model_dump())
+    table = LiteLLM_MCPServerTable(**updated.model_dump())
+    decrypt_global_env_var_values(table.env_vars)
+    return table
 
 
 async def get_mcp_submissions(
@@ -974,6 +1042,8 @@ async def get_mcp_submissions(
         take=500,  # safety cap; paginate if needed in a future iteration
     )
     items = [LiteLLM_MCPServerTable(**r.model_dump()) for r in rows]
+    for item in items:
+        decrypt_global_env_var_values(item.env_vars)
 
     pending = sum(
         1 for i in items if i.approval_status == MCPApprovalStatus.pending_review
