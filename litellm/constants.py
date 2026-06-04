@@ -615,6 +615,7 @@ LITELLM_CHAT_PROVIDERS = [
     "dashscope",
     "moonshot",
     "publicai",
+    "byteplus",
     "v0",
     "heroku",
     "oci",
@@ -821,6 +822,7 @@ openai_compatible_providers: List = [
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
+    "byteplus",  # BytePlus (ByteDance Ark, OpenAI-compatible) - JSON-configured provider
     "synthetic",  # Synthetic - JSON-configured provider
     "apertis",  # Apertis - JSON-configured provider
     "nano-gpt",  # Nano-GPT - JSON-configured provider

@@ -624,6 +624,7 @@ elevenlabs_models: Set = set()
 dashscope_models: Set = set()
 moonshot_models: Set = set()
 publicai_models: Set = set()
+byteplus_models: Set = set()
 v0_models: Set = set()
 morph_models: Set = set()
 lambda_ai_models: Set = set()
@@ -872,6 +873,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             moonshot_models.add(key)
         elif value.get("litellm_provider") == "publicai":
             publicai_models.add(key)
+        elif value.get("litellm_provider") == "byteplus":
+            byteplus_models.add(key)
         elif value.get("litellm_provider") == "v0":
             v0_models.add(key)
         elif value.get("litellm_provider") == "morph":
@@ -1017,6 +1020,7 @@ model_list = list(
     | dashscope_models
     | moonshot_models
     | publicai_models
+    | byteplus_models
     | v0_models
     | morph_models
     | lambda_ai_models
@@ -1118,6 +1122,7 @@ models_by_provider: dict = {
     "dashscope": dashscope_models,
     "moonshot": moonshot_models,
     "publicai": publicai_models,
+    "byteplus": byteplus_models,
     "v0": v0_models,
     "morph": morph_models,
     "lambda_ai": lambda_ai_models,

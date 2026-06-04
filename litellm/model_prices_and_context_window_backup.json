@@ -29285,6 +29285,19 @@
         "mode": "chat",
         "output_cost_per_token": 2.8e-07
     },
+    "byteplus/deepseek-v4-flash-260425": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "byteplus",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "output_cost_per_token": 0.0,
+        "source": "https://docs.byteplus.com/en/docs/ModelArk",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "publicai/swiss-ai/apertus-8b-instruct": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "publicai",
