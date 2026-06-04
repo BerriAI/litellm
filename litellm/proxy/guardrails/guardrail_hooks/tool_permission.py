@@ -89,51 +89,56 @@ class ToolPermissionGuardrail(CustomGuardrail):
         single source of truth, so an in-place update (PUT /guardrails, immediate
         sync) reflects rule changes instead of keeping the construction-time maps.
         """
-        self.rules = []
-        self._compiled_rule_patterns = {}
-        self._compiled_rule_targets = {}
-        if not rules:
-            return
+        parsed_rules: List[ToolPermissionRule] = []
+        compiled_targets: Dict[str, Dict[str, Optional[re.Pattern]]] = {}
+        compiled_patterns: Dict[str, Dict[str, re.Pattern]] = {}
 
-        for rule_item in rules:
+        for rule_item in rules or []:
             rule = (
                 rule_item
                 if isinstance(rule_item, ToolPermissionRule)
                 else ToolPermissionRule(**rule_item)
             )
-            self.rules.append(rule)
 
-            compiled_target_patterns: Dict[str, Optional[re.Pattern]] = {
+            target_patterns: Dict[str, Optional[re.Pattern]] = {
                 "tool_name": None,
                 "tool_type": None,
             }
             if rule.tool_name is not None:
                 try:
-                    compiled_target_patterns["tool_name"] = re.compile(rule.tool_name)
+                    target_patterns["tool_name"] = re.compile(rule.tool_name)
                 except re.error as exc:
                     raise ValueError(
                         f"Invalid regex for tool_name in rule '{rule.id}': {exc}"
                     ) from exc
             if rule.tool_type is not None:
                 try:
-                    compiled_target_patterns["tool_type"] = re.compile(rule.tool_type)
+                    target_patterns["tool_type"] = re.compile(rule.tool_type)
                 except re.error as exc:
                     raise ValueError(
                         f"Invalid regex for tool_type in rule '{rule.id}': {exc}"
                     ) from exc
-            self._compiled_rule_targets[rule.id] = compiled_target_patterns
 
-            if rule.allowed_param_patterns:
-                compiled_patterns: Dict[str, re.Pattern] = {}
-                for path, pattern in rule.allowed_param_patterns.items():
-                    try:
-                        compiled_patterns[path] = re.compile(pattern)
-                    except re.error as exc:
-                        raise ValueError(
-                            f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}"
-                        ) from exc
-                if compiled_patterns:
-                    self._compiled_rule_patterns[rule.id] = compiled_patterns
+            rule_patterns: Dict[str, re.Pattern] = {}
+            for path, pattern in (rule.allowed_param_patterns or {}).items():
+                try:
+                    rule_patterns[path] = re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}"
+                    ) from exc
+
+            parsed_rules.append(rule)
+            compiled_targets[rule.id] = target_patterns
+            if rule_patterns:
+                compiled_patterns[rule.id] = rule_patterns
+
+        # Swap in the fully-built maps only after every rule compiles, so an
+        # invalid regex raises without leaving a partially-built ruleset (a
+        # missing compiled target is read as a match-all wildcard).
+        self.rules = parsed_rules
+        self._compiled_rule_targets = compiled_targets
+        self._compiled_rule_patterns = compiled_patterns
 
     def update_in_memory_litellm_params(
         self, litellm_params: Union[LitellmParams, dict]
@@ -166,7 +171,15 @@ class ToolPermissionGuardrail(CustomGuardrail):
         # explicit empty list still clears the rules.
         rules = params.get("rules")
         if rules is not None:
-            self._load_rules(rules)
+            try:
+                self._load_rules(rules)
+            except Exception:
+                # The generic update above may have overwritten self.rules with
+                # the raw payload; restore the prior consistent ruleset so a
+                # rejected update can't leave the live guardrail enforcing a
+                # broken policy.
+                self.rules = previous_rules
+                raise
         else:
             self.rules = previous_rules
         default_action = params.get("default_action")

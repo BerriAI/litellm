@@ -1007,3 +1007,41 @@ class TestToolPermissionGuardrailInMemoryUpdate:
             guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
             is False
         )
+
+    def test_update_in_memory_rejects_invalid_regex_and_keeps_previous_rules(self):
+        """Regression: a live update whose rules contain an invalid regex must be
+        rejected atomically. The bad rule must not leak in as a compiled-target
+        wildcard (match-all), and the previously enforced ruleset must survive."""
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tp",
+            rules=[{"id": "deny-secret", "tool_name": r"^Secret$", "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="block",
+        )
+        # Baseline: only "Secret" is denied; any other tool is allowed.
+        assert guardrail._check_tool_permission("Secret")[0] is False
+        assert guardrail._check_tool_permission("Other")[0] is True
+
+        with pytest.raises(ValueError):
+            guardrail.update_in_memory_litellm_params(
+                LitellmParams(
+                    guardrail="tool_permission",
+                    mode=["pre_call", "post_call"],
+                    default_action="allow",
+                    on_disallowed_action="block",
+                    rules=[
+                        {
+                            "id": "deny-secret",
+                            "tool_name": r"^Secret$",
+                            "decision": "deny",
+                        },
+                        {"id": "bad", "tool_name": "[unclosed", "decision": "deny"},
+                    ],
+                )
+            )
+
+        # The bad rule must not have leaked in, and the prior ruleset must hold.
+        assert "bad" not in guardrail._compiled_rule_targets
+        assert all(rule.id != "bad" for rule in guardrail.rules)
+        assert guardrail._check_tool_permission("Other")[0] is True
+        assert guardrail._check_tool_permission("Secret")[0] is False
