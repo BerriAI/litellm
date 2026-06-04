@@ -45,6 +45,7 @@ interface ChatPageProps {
 const SUGGESTIONS = ["Write", "Learn", "Code", "Brainstorm"];
 const MAX_COMPARISON_MODELS = 3;
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_models";
+const SINGLE_CHAT_CONTENT_MAX_WIDTH = 1120;
 
 function getGreeting(): string {
   const h = new Date().getHours();
@@ -815,6 +816,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
       overflow: "hidden",
     }}>
+      <style>{`
+        .chat-scroll-area {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+        }
+        .chat-scroll-area::-webkit-scrollbar {
+          display: none;
+        }
+      `}</style>
 
       {/* ===== LEFT SIDEBAR ===== */}
       <div style={{
@@ -1071,10 +1081,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             /* ---- Active conversation (single-model or comparison) ---- */
             <div style={{
               flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
-              maxWidth: isComparisonMode ? (selectedModels.length >= 3 ? 1200 : 960) : 760,
-              margin: "0 auto", width: "100%", padding: "0 24px", position: "relative",
+              maxWidth: isComparisonMode ? (selectedModels.length >= 3 ? 1320 : 1180) : "100%",
+              margin: 0,
+              width: "100%",
+              padding: isComparisonMode ? "0 20px" : "0 28px",
+              position: "relative",
             }}>
-              <div ref={messagesScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", paddingTop: 24, overflowAnchor: "none" }}>
+              <div
+                ref={messagesScrollRef}
+                className="chat-scroll-area"
+                style={{ flex: 1, minHeight: 0, overflow: "auto", paddingTop: 24, overflowAnchor: "none" }}
+              >
                 {isComparisonMode ? (
                   /* Comparison: multi-turn exchanges, each with user bubble + side-by-side response cards */
                   <div style={{ paddingBottom: 8 }}>
@@ -1187,11 +1204,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                     })}
                   </div>
                 ) : (
-                  <ChatMessages
-                    messages={activeConversation!.messages}
-                    isStreaming={isStreaming}
-                    onEditMessage={handleEditAndResend}
-                  />
+                  <div style={{ width: "100%", maxWidth: SINGLE_CHAT_CONTENT_MAX_WIDTH, margin: "0 auto" }}>
+                    <ChatMessages
+                      messages={activeConversation!.messages}
+                      isStreaming={isStreaming}
+                      onEditMessage={handleEditAndResend}
+                    />
+                  </div>
                 )}
               </div>
               {showScrollButton && (
@@ -1235,7 +1254,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               )}
 
               {/* Input bar (in conversation) */}
-              <div style={{ padding: "12px 0 24px" }}>
+              <div style={{ padding: "12px 0 24px", width: "100%", maxWidth: SINGLE_CHAT_CONTENT_MAX_WIDTH, margin: "0 auto" }}>
                 {inputBar(true)}
               </div>
             </div>
