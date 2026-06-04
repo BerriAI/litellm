@@ -1101,6 +1101,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     ) -> str:
         from litellm.llms.azure_ai.image_generation import (
             AzureFoundryFluxImageGenerationConfig,
+            AzureFoundryMAIImageGenerationConfig,
         )
 
         api_base: str = azure_client_params.get(
@@ -1111,6 +1112,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
+
+        # MAI image models: /mai/v1/images/generations (serverless Azure AI)
+        if AzureFoundryMAIImageGenerationConfig.is_mai_model(model):
+            return AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
+                api_base=api_base,
+                api_version=api_version,
+            )
 
         # Handle FLUX 2 models on Azure AI which use a different URL pattern
         # e.g., /providers/blackforestlabs/v1/flux-2-pro instead of /openai/deployments/{model}/images/generations
