@@ -4038,5 +4038,65 @@ class TestApprovalStatusGate:
         assert "never-seen" not in manager.registry
 
 
+class TestRegistryTableConversionPreservesEnvVars:
+    """The registry ``MCPServer`` -> ``LiteLLM_MCPServerTable`` conversions back
+    the GET /v1/mcp/server list and health responses, which populate the admin
+    edit form. When they dropped ``env_vars`` the form loaded an empty list and
+    saving any edit silently wiped the stored vars, so ``${VAR}`` static headers
+    were forwarded upstream un-interpolated.
+    """
+
+    @staticmethod
+    def _server_with_env_vars() -> MCPServer:
+        return MCPServer(
+            server_id="env-vars-server",
+            name="env_vars_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            static_headers={"X-Db-Url": "${DB_PROTOCOL}://${CORP_USER}@${DB_HOST}"},
+            env_vars=[
+                {
+                    "name": "DB_PROTOCOL",
+                    "value": "postgresql",
+                    "scope": "global",
+                    "description": None,
+                },
+                {
+                    "name": "CORP_USER",
+                    "value": "",
+                    "scope": "user",
+                    "description": "Your DB username",
+                },
+            ],
+        )
+
+    @staticmethod
+    def _assert_env_vars_round_tripped(table: LiteLLM_MCPServerTable) -> None:
+        assert table.env_vars is not None
+        by_name = {entry.name: entry for entry in table.env_vars}
+        assert set(by_name) == {"DB_PROTOCOL", "CORP_USER"}
+        assert by_name["DB_PROTOCOL"].scope == MCPEnvVarScope.global_
+        assert by_name["DB_PROTOCOL"].value == "postgresql"
+        assert by_name["CORP_USER"].scope == MCPEnvVarScope.user
+        assert by_name["CORP_USER"].description == "Your DB username"
+
+    def test_build_mcp_server_table_preserves_env_vars(self):
+        manager = MCPServerManager()
+        table = manager._build_mcp_server_table(self._server_with_env_vars())
+        self._assert_env_vars_round_tripped(table)
+
+    async def test_health_check_server_preserves_env_vars(self):
+        # OAuth2 without client credentials needs a per-user token, so the
+        # health check is skipped (no network) and we exercise the table
+        # construction path directly.
+        manager = MCPServerManager()
+        server = self._server_with_env_vars()
+        assert server.requires_per_user_auth is True
+        manager.registry[server.server_id] = server
+        table = await manager.health_check_server(server.server_id)
+        self._assert_env_vars_round_tripped(table)
+
+
 if __name__ == "__main__":
     pytest.main([__file__])

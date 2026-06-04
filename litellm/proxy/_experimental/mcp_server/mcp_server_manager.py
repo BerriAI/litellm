@@ -3957,6 +3957,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
+            env_vars=server.env_vars,
             status=status,
             last_health_check=datetime.now(),
             health_check_error=health_check_error,
@@ -4049,6 +4050,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
+            env_vars=server.env_vars,
             status=None,  # No health check performed
             last_health_check=None,  # No health check performed
             health_check_error=None,
