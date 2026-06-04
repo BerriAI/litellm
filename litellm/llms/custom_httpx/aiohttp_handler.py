@@ -249,6 +249,29 @@ class _SSRFGuardTransport(httpx.HTTPTransport):
         return super().handle_request(request)
 
 
+async def _on_ssrf_request_start(
+    session: Any,
+    trace_config_ctx: Any,
+    params: Any,
+) -> None:
+    """Block IP-literal redirect targets before aiohttp makes the connection.
+
+    _SSRFGuardResolver handles all hostname-based requests (including redirect
+    hops) at DNS-resolution time.  This hook closes the gap where a server
+    returns a Location header containing a bare IP literal — aiohttp skips DNS
+    for those, so the resolver never fires.  Hostname-based URLs pass through
+    untouched here.
+    """
+    _assert_not_private_ip_literal(str(params.url))
+
+
+def _make_ssrf_trace_config() -> aiohttp.TraceConfig:
+    """Return a TraceConfig that blocks IP-literal redirect targets."""
+    cfg = aiohttp.TraceConfig()
+    cfg.on_request_start.append(_on_ssrf_request_start)
+    return cfg
+
+
 def _get_ssrf_safe_sync_client() -> HTTPHandler:
     """Return an HTTPHandler whose transport validates and pins IPs at connect time.
 
@@ -327,8 +350,11 @@ class BaseLLMAIOHTTPHandler:
             # Default session creation — attach SSRF guard resolver so every
             # TCP connection (including redirect targets) is validated at the
             # network layer, eliminating the DNS-rebinding TOCTOU window.
+            # The trace config adds a second layer: it blocks IP-literal
+            # redirect targets that bypass the resolver (no DNS lookup needed).
             session = aiohttp.ClientSession(
-                connector=aiohttp.TCPConnector(resolver=_SSRFGuardResolver())
+                connector=aiohttp.TCPConnector(resolver=_SSRFGuardResolver()),
+                trace_configs=[_make_ssrf_trace_config()],
             )
             return session
 
