@@ -7,12 +7,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
 
 from litellm.models.verification_token import (
-    VerificationToken,
+    LiteLLM_VerificationToken,
 )
 from litellm.repositories.base_repository import BaseRepository
 
 
-class VerificationTokenRepository(BaseRepository[VerificationToken]):
+class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
     """Repository for verification token (API key) database operations."""
 
     @property
@@ -24,10 +24,10 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
         return self.prisma_client.db.litellm_deletedverificationtoken
 
     @property
-    def model_class(self) -> Type[VerificationToken]:
-        return VerificationToken
+    def model_class(self) -> Type[LiteLLM_VerificationToken]:
+        return LiteLLM_VerificationToken
 
-    def _to_model(self, record: Any) -> Optional[VerificationToken]:
+    def _to_model(self, record: Any) -> Optional[LiteLLM_VerificationToken]:
         """Convert a database record to a VerificationToken model."""
         if record is None:
             return None
@@ -49,36 +49,40 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
             if isinstance(data.get(field), str):
                 data[field] = json.loads(data[field])
 
-        return VerificationToken(**data)
+        return LiteLLM_VerificationToken(**data)
 
     async def find_by_id(
         self, token: str, id_field: str = "token"
-    ) -> Optional[VerificationToken]:
+    ) -> Optional[LiteLLM_VerificationToken]:
         return await super().find_by_id(token, id_field)
 
-    async def find_by_alias(self, key_alias: str) -> Optional[VerificationToken]:
+    async def find_by_alias(
+        self, key_alias: str
+    ) -> Optional[LiteLLM_VerificationToken]:
         """Find a token by key alias."""
         records = await self.table.find_many(where={"key_alias": key_alias})
         if records:
             return self._to_model(records[0])
         return None
 
-    async def find_by_user_id(self, user_id: str) -> List[VerificationToken]:
+    async def find_by_user_id(self, user_id: str) -> List[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a user."""
         records = await self.table.find_many(where={"user_id": user_id})
         return self._to_model_list(records)
 
-    async def find_by_team_id(self, team_id: str) -> List[VerificationToken]:
+    async def find_by_team_id(self, team_id: str) -> List[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a team."""
         records = await self.table.find_many(where={"team_id": team_id})
         return self._to_model_list(records)
 
-    async def find_by_project_id(self, project_id: str) -> List[VerificationToken]:
+    async def find_by_project_id(
+        self, project_id: str
+    ) -> List[LiteLLM_VerificationToken]:
         """Find all tokens belonging to a project."""
         records = await self.table.find_many(where={"project_id": project_id})
         return self._to_model_list(records)
 
-    async def find_active_tokens(self) -> List[VerificationToken]:
+    async def find_active_tokens(self) -> List[LiteLLM_VerificationToken]:
         """Find all active (non-expired, non-blocked) tokens."""
         records = await self.table.find_many(
             where={
@@ -182,7 +186,7 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
         object_permission_id: Optional[str] = None,
         access_group_ids: Optional[List[str]] = None,
         budget_id: Optional[str] = None,
-    ) -> VerificationToken:
+    ) -> LiteLLM_VerificationToken:
         """Create a new verification token."""
         data = self._build_token_data(
             token=token,
@@ -235,7 +239,7 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
         blocked: Optional[bool] = None,
         object_permission_id: Optional[str] = None,
         access_group_ids: Optional[List[str]] = None,
-    ) -> Optional[VerificationToken]:
+    ) -> Optional[LiteLLM_VerificationToken]:
         """Update a verification token."""
         data: Dict[str, Any] = {}
         if updated_by is not None:
@@ -285,7 +289,7 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
         deleted_by: Optional[str] = None,
         deleted_by_api_key: Optional[str] = None,
         litellm_changed_by: Optional[str] = None,
-    ) -> Optional[VerificationToken]:
+    ) -> Optional[LiteLLM_VerificationToken]:
         """Delete a token and archive it to the deleted tokens table.
 
         Uses a transaction to ensure atomicity of the archive-then-delete operation.
@@ -294,7 +298,8 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
         if token_record is None:
             return None
 
-        token_data = token_record.to_db_dict()
+        token_data = token_record.model_dump(exclude_none=True)
+        token_data.pop("object_permission", None)
         token_data["deleted_by"] = deleted_by
         token_data["deleted_by_api_key"] = deleted_by_api_key
         token_data["litellm_changed_by"] = litellm_changed_by
@@ -308,11 +313,13 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
 
     async def update_spend(
         self, token: str, spend: float
-    ) -> Optional[VerificationToken]:
+    ) -> Optional[LiteLLM_VerificationToken]:
         """Update token spend."""
         return await self.update(token, {"spend": spend}, id_field="token")
 
-    async def update_last_active(self, token: str) -> Optional[VerificationToken]:
+    async def update_last_active(
+        self, token: str
+    ) -> Optional[LiteLLM_VerificationToken]:
         """Update the last_active timestamp."""
         return await self.update(
             token, {"last_active": datetime.utcnow()}, id_field="token"
@@ -320,7 +327,7 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
 
     async def block_token(
         self, token: str, updated_by: Optional[str] = None
-    ) -> Optional[VerificationToken]:
+    ) -> Optional[LiteLLM_VerificationToken]:
         """Block a token."""
         data: Dict[str, Any] = {"blocked": True}
         if updated_by is not None:
@@ -329,7 +336,7 @@ class VerificationTokenRepository(BaseRepository[VerificationToken]):
 
     async def unblock_token(
         self, token: str, updated_by: Optional[str] = None
-    ) -> Optional[VerificationToken]:
+    ) -> Optional[LiteLLM_VerificationToken]:
         """Unblock a token."""
         data: Dict[str, Any] = {"blocked": False}
         if updated_by is not None:
