@@ -1819,3 +1819,122 @@ class TestDomainModelExtended:
         data = budget.to_db_dict()
         assert data["budget_id"] == "b3"
         assert data["max_budget"] == 300.0
+
+
+class TestTeamRepositoryArchiveData:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return TeamRepository(client)
+
+    def test_build_archive_data_excludes_invalid_columns(self, repo):
+        from litellm.models.team import Team
+
+        team = Team(
+            team_id="team-1",
+            team_alias="My Team",
+            admins=["admin1"],
+            members=["member1"],
+            models=["gpt-4"],
+            default_team_member_models=["gpt-3.5-turbo"],
+            budget_limits={"daily": 100},
+        )
+        archive_data = repo._build_archive_data(team)
+        assert "default_team_member_models" not in archive_data
+        assert "budget_limits" not in archive_data
+        assert archive_data["team_id"] == "team-1"
+        assert archive_data["team_alias"] == "My Team"
+        assert archive_data["admins"] == ["admin1"]
+        assert archive_data["members"] == ["member1"]
+        assert archive_data["models"] == ["gpt-4"]
+
+    def test_build_archive_data_with_all_valid_fields(self, repo):
+        from datetime import datetime
+
+        from litellm.models.team import Team, TeamMember
+
+        team = Team(
+            team_id="team-full",
+            team_alias="Full Team",
+            organization_id="org-1",
+            object_permission_id="perm-1",
+            admins=["admin1", "admin2"],
+            members=["m1", "m2"],
+            members_with_roles=[TeamMember(user_id="u1", role="admin")],
+            metadata={"key": "value"},
+            max_budget=1000.0,
+            soft_budget=800.0,
+            spend=150.0,
+            models=["gpt-4", "claude-3"],
+            max_parallel_requests=10,
+            tpm_limit=5000,
+            rpm_limit=50,
+            budget_duration="monthly",
+            budget_reset_at=datetime(2025, 1, 1),
+            blocked=True,
+            model_spend={"gpt-4": 100.0},
+            model_max_budget={"gpt-4": 500.0},
+            router_settings={"timeout": 30},
+            team_member_permissions=["read"],
+            access_group_ids=["group-1"],
+            policies=["policy-1"],
+            model_id=42,
+            allow_team_guardrail_config=True,
+        )
+        archive_data = repo._build_archive_data(team)
+        assert archive_data["team_id"] == "team-full"
+        assert archive_data["organization_id"] == "org-1"
+        assert archive_data["object_permission_id"] == "perm-1"
+        assert archive_data["max_budget"] == 1000.0
+        assert archive_data["soft_budget"] == 800.0
+        assert archive_data["spend"] == 150.0
+        assert archive_data["blocked"] is True
+        assert archive_data["model_id"] == 42
+        assert archive_data["allow_team_guardrail_config"] is True
+        assert "members_with_roles" in archive_data
+        assert "metadata" in archive_data
+        assert "model_spend" in archive_data
+        assert "model_max_budget" in archive_data
+        assert "router_settings" in archive_data
+
+
+class TestConfigRepositoryDeepCopy:
+    @pytest.fixture
+    def repo(self):
+        client = MockPrismaClient()
+        return ConfigRepository(client)
+
+    @pytest.mark.asyncio
+    async def test_reconcile_config_does_not_mutate_original(self, repo):
+        import copy
+
+        repo._prisma_client.db.litellm_config._records["general_settings"] = {
+            "param_name": "general_settings",
+            "param_value": '{"db_key": "db_value", "nested": {"db_nested": "from_db"}}',
+        }
+        original_config = {
+            "general_settings": {
+                "yaml_key": "yaml_value",
+                "nested": {"yaml_nested": "from_yaml"},
+            }
+        }
+        original_copy = copy.deepcopy(original_config)
+        result = await repo.reconcile_config(original_config, store_model_in_db=True)
+        assert original_config == original_copy
+        assert result["general_settings"]["db_key"] == "db_value"
+        assert result["general_settings"]["yaml_key"] == "yaml_value"
+        assert result["general_settings"]["nested"]["db_nested"] == "from_db"
+        assert result["general_settings"]["nested"]["yaml_nested"] == "from_yaml"
+
+    @pytest.mark.asyncio
+    async def test_reconcile_config_repeated_calls_independent(self, repo):
+        repo._prisma_client.db.litellm_config._records["general_settings"] = {
+            "param_name": "general_settings",
+            "param_value": '{"db_key": "db_value"}',
+        }
+        yaml_config = {"general_settings": {"yaml_key": "yaml_value"}}
+        result1 = await repo.reconcile_config(yaml_config, store_model_in_db=True)
+        result1["general_settings"]["modified"] = "in_result1"
+        result2 = await repo.reconcile_config(yaml_config, store_model_in_db=True)
+        assert "modified" not in yaml_config.get("general_settings", {})
+        assert "modified" not in result2.get("general_settings", {})
