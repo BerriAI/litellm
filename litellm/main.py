@@ -1552,9 +1552,11 @@ def completion(  # type: ignore # noqa: PLR0915
             "reasoning_effort": reasoning_effort,
             "thinking": thinking,
             "web_search_options": web_search_options,
-            "include_server_side_tool_invocations": include_server_side_tool_invocations
-            if include_server_side_tool_invocations is not None
-            else kwargs.get("include_server_side_tool_invocations"),
+            "include_server_side_tool_invocations": (
+                include_server_side_tool_invocations
+                if include_server_side_tool_invocations is not None
+                else kwargs.get("include_server_side_tool_invocations")
+            ),
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),
