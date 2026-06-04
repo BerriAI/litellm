@@ -1154,6 +1154,16 @@ def _rewrite_mime_type_to_response_format(generation_config: GenerationConfig) -
     generation_config["responseFormat"] = response_format  # type: ignore[typeddict-unknown-key]
 
 
+def _rewrite_google_maps_response_format(data: RequestBody) -> None:
+    generation_config = cast(Optional[GenerationConfig], data.get("generationConfig"))
+    if (
+        isinstance(generation_config, dict)
+        and _has_google_maps_tool(data.get("tools"))
+        and generation_config.get("response_mime_type") == "application/json"
+    ):
+        _rewrite_mime_type_to_response_format(generation_config)
+
+
 def _transform_request_body(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
@@ -1262,13 +1272,6 @@ def _transform_request_body(  # noqa: PLR0915
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
         if generation_config is not None and len(generation_config) > 0:
-            # Gemini rejects googleMaps + response_mime_type: 'application/json'.
-            # Rewrite to the newer responseFormat field which supports this combination.
-            if (
-                _has_google_maps_tool(tools)
-                and generation_config.get("response_mime_type") == "application/json"
-            ):
-                _rewrite_mime_type_to_response_format(generation_config)
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
@@ -1286,6 +1289,7 @@ def _transform_request_body(  # noqa: PLR0915
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
         _pop_and_merge_extra_body(data, optional_params)
+        _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
 
