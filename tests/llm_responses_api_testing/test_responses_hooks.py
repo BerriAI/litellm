@@ -342,6 +342,86 @@ def test_process_chunk_wraps_encrypted_content_with_model_id():
     assert event.item.encrypted_content.endswith(";ciphertext")
 
 
+def test_process_chunk_recovers_output_from_stream_events_before_logging(monkeypatch):
+    openai_types = streaming_module._get_openai_response_types()
+
+    class _RecoveringConfig:
+        def transform_streaming_response(self, **kwargs):
+            parsed_chunk = kwargs["parsed_chunk"]
+            event_type = parsed_chunk.get("type")
+            if event_type == openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+                return openai_types.OutputTextDoneEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+                    item_id="msg_1",
+                    output_index=0,
+                    content_index=0,
+                    text="bridge-ok",
+                )
+            return openai_types.ResponseCompletedEvent(
+                type=openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                response=ResponsesAPIResponse(
+                    id="resp_live",
+                    created_at=int(datetime.now().timestamp()),
+                    status="completed",
+                    model="test-model",
+                    object="response",
+                    output=[],
+                    usage=openai_types.ResponseAPIUsage(
+                        input_tokens=10,
+                        output_tokens=3,
+                        total_tokens=13,
+                    ),
+                ),
+            )
+
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_RecoveringConfig(),
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    completion_handler = MagicMock()
+    monkeypatch.setattr(
+        iterator, "_handle_logging_completed_response", completion_handler
+    )
+
+    iterator._process_chunk(
+        json.dumps(
+            {
+                "type": "response.output_text.done",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "bridge-ok",
+            }
+        )
+    )
+    event = iterator._process_chunk(
+        json.dumps(
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_live",
+                    "output": [],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 3,
+                        "total_tokens": 13,
+                    },
+                },
+            }
+        )
+    )
+
+    assert event.response.output != []
+    output_item = event.response.output[0]
+    assert output_item["content"][0]["text"] == "bridge-ok"
+    assert iterator.completed_response is event
+    completion_handler.assert_called_once()
+
+
 def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch):
     original_include_cost = litellm.include_cost_in_streaming_usage
     litellm.include_cost_in_streaming_usage = True
@@ -387,9 +467,7 @@ def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch)
         # Chunk must include a top-level "response" key so BaseResponsesAPIStreamingIterator
         # runs _update_responses_api_response_id_with_model_id (see streaming_iterator.py).
         event = iterator._process_chunk(
-            json.dumps(
-                {"type": "response.completed", "response": {"id": "resp_live"}}
-            )
+            json.dumps({"type": "response.completed", "response": {"id": "resp_live"}})
         )
     finally:
         litellm.include_cost_in_streaming_usage = original_include_cost
