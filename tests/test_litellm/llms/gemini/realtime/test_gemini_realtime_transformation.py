@@ -235,10 +235,71 @@ def test_gemini_realtime_transformation_audio_delta():
 
     contains_audio_delta = False
     for response in responses:
-        if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DELTA.value:
+        if (
+            response["type"]
+            == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DELTA.value
+        ):
             contains_audio_delta = True
             break
     assert contains_audio_delta, "Expected audio delta event"
+
+
+def test_gemini_output_audio_transcript_delta_uses_active_response_ids():
+    config = GeminiRealtimeConfig()
+
+    session_configuration_request = {
+        "setup": {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+        }
+    }
+    session_configuration_request_str = json.dumps(session_configuration_request)
+    event = {
+        "serverContent": {
+            "outputTranscription": {"text": "Hello from Gemini."},
+            "modelTurn": {
+                "parts": [
+                    {"inlineData": {"mimeType": "audio/pcm", "data": "my-audio-data"}}
+                ]
+            },
+        }
+    }
+
+    result = config.transform_realtime_response(
+        json.dumps(event),
+        "gemini-1.5-flash",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    responses = result["response"]
+    response_created = next(
+        response for response in responses if response["type"] == "response.created"
+    )
+    transcript_delta = next(
+        response
+        for response in responses
+        if response["type"] == "response.output_audio_transcript.delta"
+    )
+    audio_delta = next(
+        response
+        for response in responses
+        if response["type"] == "response.output_audio.delta"
+    )
+
+    assert transcript_delta["response_id"] == response_created["response"]["id"]
+    assert transcript_delta["response_id"] == audio_delta["response_id"]
+    assert transcript_delta["item_id"] == audio_delta["item_id"]
+    assert result["current_response_id"] == transcript_delta["response_id"]
+    assert result["current_output_item_id"] == transcript_delta["item_id"]
 
 
 def test_gemini_realtime_transformation_generation_complete():
@@ -278,7 +339,10 @@ def test_gemini_realtime_transformation_generation_complete():
 
     contains_audio_done_event = False
     for response in responses:
-        if response["type"] == OpenAIRealtimeEventTypes.RESPONSE_AUDIO_DONE.value:
+        if (
+            response["type"]
+            == OpenAIRealtimeEventTypes.RESPONSE_OUTPUT_AUDIO_DONE.value
+        ):
             contains_audio_done_event = True
             break
     assert contains_audio_done_event, "Expected audio done event"
@@ -735,7 +799,14 @@ def test_gemini_tool_call_emits_response_created_preamble():
     )
 
     responses = result["response"]
-    # Should have: response.created, output_item.added, function_call_arguments.delta, function_call_arguments.done, output_item.done, conversation.item.created, response.done
+    # Expected sequence:
+    #   0: response.created
+    #   1: response.output_item.added  (item status=in_progress)
+    #   2: conversation.item.added     (registers call_id in Pipecat's _pending_function_calls)
+    #   3: response.function_call_arguments.delta
+    #   4: response.function_call_arguments.done
+    #   5: response.output_item.done
+    #   6: response.done
     assert len(responses) >= 7
     assert responses[0]["type"] == "response.created"
     assert "response" in responses[0]
@@ -749,14 +820,14 @@ def test_gemini_tool_call_emits_response_created_preamble():
     assert responses[1]["type"] == "response.output_item.added"
     assert responses[1]["item"]["type"] == "function_call"
     assert responses[1]["item"]["status"] == "in_progress"
-    assert responses[2]["type"] == "response.function_call_arguments.delta"
-    assert responses[2]["call_id"] == "call_123"
-    assert responses[2]["delta"] == responses[3]["arguments"]
-    assert responses[3]["type"] == "response.function_call_arguments.done"
-    assert responses[4]["type"] == "response.output_item.done"
-    assert responses[4]["item"]["type"] == "function_call"
-    assert responses[4]["item"]["status"] == "completed"
-    assert responses[5]["type"] == "conversation.item.created"
+    assert responses[2]["type"] == "conversation.item.added"
+    assert responses[2]["item"]["type"] == "function_call"
+    assert responses[2]["item"]["call_id"] == "call_123"
+    assert responses[3]["type"] == "response.function_call_arguments.delta"
+    assert responses[3]["call_id"] == "call_123"
+    assert responses[3]["delta"] == responses[4]["arguments"]
+    assert responses[4]["type"] == "response.function_call_arguments.done"
+    assert responses[5]["type"] == "response.output_item.done"
     assert responses[5]["item"]["type"] == "function_call"
     assert responses[5]["item"]["status"] == "completed"
     assert responses[6]["type"] == "response.done"
@@ -930,6 +1001,12 @@ def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
                     "promptTokenCount": 17,
                     "responseTokenCount": 4,
                     "totalTokenCount": 21,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 17},
+                    ],
+                    "responseTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 4},
+                    ],
                 },
             }
         ),
@@ -953,6 +1030,8 @@ def test_gemini_tool_call_response_done_includes_usage_from_sibling_metadata():
     assert usage["input_tokens"] == 17
     assert usage["output_tokens"] == 4
     assert usage["total_tokens"] == 21
+    assert usage["input_token_details"]["text_tokens"] == 17
+    assert usage["output_token_details"]["text_tokens"] == 4
 
 
 def test_gemini_tool_call_response_done_falls_back_to_empty_usage():
@@ -1118,6 +1197,90 @@ def test_gemini_subsequent_session_update_forwards_tools_merged_with_original_se
     assert follow_up["generationConfig"]["responseModalities"] == ["AUDIO"]
     assert follow_up["model"] == "models/gemini-2.5-flash-native-audio"
     assert follow_up["inputAudioTranscription"] == {}
+
+
+def test_gemini_realtime_pipecat_ga_session_voice_and_tools():
+    """Pipecat OpenAIRealtimeSessionProperties: output_modalities, nested tools,
+    and audio.output.voice (e.g. Kore) must map into Gemini setup."""
+    config = GeminiRealtimeConfig()
+
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "output_modalities": ["audio"],
+            "instructions": "Follow system instructions.",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "terminate_call",
+                        "description": "End the call.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "turn_detection": {"type": "server_vad"},
+                },
+                "output": {
+                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "voice": "Kore",
+                },
+            },
+            "temperature": 0,
+        },
+    }
+
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+
+    assert len(messages) == 1
+    setup = json.loads(messages[0])["setup"]
+    assert setup["generationConfig"]["responseModalities"] == ["AUDIO"]
+    # Native-audio Live rejects speechConfig on setup (see _finalize_gemini_live_setup).
+    assert "speechConfig" not in setup.get("generationConfig", {})
+    assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
+    assert (
+        setup["realtimeInputConfig"]["automaticActivityDetection"]["disabled"] is False
+    )
+
+
+def test_gemini_realtime_pipecat_semantic_vad_omits_realtime_input_config():
+    """Pipecat SemanticTurnDetection (semantic_vad) must not map to disabled VAD."""
+    config = GeminiRealtimeConfig()
+    session_update = {
+        "type": "session.update",
+        "session": {
+            "output_modalities": ["audio"],
+            "instructions": "test",
+            "audio": {
+                "input": {"turn_detection": {"type": "semantic_vad"}},
+            },
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "terminate_call",
+                        "description": "End call.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        },
+    }
+    messages = config.transform_realtime_request(
+        json.dumps(session_update),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    setup = json.loads(messages[0])["setup"]
+    assert "realtimeInputConfig" not in setup
+    assert setup["tools"][0]["function_declarations"][0]["name"] == "terminate_call"
 
 
 def test_gemini_subsequent_session_update_with_turn_detection_only_preserves_original_tools():
@@ -1407,6 +1570,12 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
                     "promptTokenCount": 5,
                     "responseTokenCount": 11,
                     "totalTokenCount": 16,
+                    "promptTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 5},
+                    ],
+                    "responseTokensDetails": [
+                        {"modality": "TEXT", "tokenCount": 11},
+                    ],
                 }
             }
         ),
@@ -1447,6 +1616,8 @@ def test_gemini_standalone_usage_metadata_is_attributed_to_next_response_done():
     assert usage["input_tokens"] == 5
     assert usage["output_tokens"] == 11
     assert usage["total_tokens"] == 16
+    assert usage["input_token_details"]["text_tokens"] == 5
+    assert usage["output_token_details"]["text_tokens"] == 11
     assert config._pending_usage_metadata is None
 
 
