@@ -45,6 +45,15 @@ class NewBenchRunRequest(LiteLLMPydanticObjectBase):
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     max_concurrency: Optional[int] = None
+    # Server-launch config (vLLM serve flags, manually entered)
+    max_num_batched_tokens: Optional[int] = None
+    tensor_parallel_size: Optional[int] = None
+    pipeline_parallel_size: Optional[int] = None
+    data_parallel_size: Optional[int] = None
+    kv_cache_dtype: Optional[str] = None  # "auto" | "fp8" | "fp8_e4m3" | "fp8_e5m2" | ...
+    # Speculative decoding
+    speculative_draft_model: Optional[str] = None  # litellm model name of the draft model
+    num_speculative_tokens: Optional[int] = None
     raw_command: Optional[str] = None
     raw_results: Optional[str] = None
     # Set by grid to the acting user's email so the row is attributed to the
@@ -64,6 +73,13 @@ class BenchRunResponse(LiteLLMPydanticObjectBase):
     input_tokens: Optional[int] = None
     output_tokens: Optional[int] = None
     max_concurrency: Optional[int] = None
+    max_num_batched_tokens: Optional[int] = None
+    tensor_parallel_size: Optional[int] = None
+    pipeline_parallel_size: Optional[int] = None
+    data_parallel_size: Optional[int] = None
+    kv_cache_dtype: Optional[str] = None
+    speculative_draft_model: Optional[str] = None
+    num_speculative_tokens: Optional[int] = None
     raw_command: Optional[str] = None
     raw_results: Optional[str] = None
     created_at: datetime

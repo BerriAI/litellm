@@ -1428,6 +1428,15 @@ model LiteLLM_BenchRun {
   input_tokens      Int?
   output_tokens     Int?
   max_concurrency   Int?
+  // Server-launch config (vLLM serve flags, manually entered)
+  max_num_batched_tokens  Int?
+  tensor_parallel_size    Int?
+  pipeline_parallel_size  Int?
+  data_parallel_size      Int?
+  kv_cache_dtype          String?  // "auto" | "fp8" | "fp8_e4m3" | "fp8_e5m2" | ...
+  // Speculative decoding
+  speculative_draft_model String?  // litellm model name of the draft model
+  num_speculative_tokens  Int?
   raw_command       String?  // raw `vllm bench serve ...` command text
   raw_results       String?  // raw "Serving Benchmark Result" stdout block
   created_at        DateTime @default(now()) @map("created_at")
