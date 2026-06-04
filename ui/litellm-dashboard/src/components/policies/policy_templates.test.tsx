@@ -9,11 +9,21 @@ import PolicyTemplates from "./policy_templates";
 vi.mock("../networking");
 
 vi.mock("@heroicons/react/outline", () => ({
-  ShieldCheckIcon: function ShieldCheckIcon() { return null; },
-  ShieldExclamationIcon: function ShieldExclamationIcon() { return null; },
-  BeakerIcon: function BeakerIcon() { return null; },
-  CurrencyDollarIcon: function CurrencyDollarIcon() { return null; },
-  CheckCircleIcon: function CheckCircleIcon() { return null; },
+  ShieldCheckIcon: function ShieldCheckIcon() {
+    return null;
+  },
+  ShieldExclamationIcon: function ShieldExclamationIcon() {
+    return null;
+  },
+  BeakerIcon: function BeakerIcon() {
+    return null;
+  },
+  CurrencyDollarIcon: function CurrencyDollarIcon() {
+    return null;
+  },
+  CheckCircleIcon: function CheckCircleIcon() {
+    return null;
+  },
 }));
 
 const makeTemplate = (overrides: any = {}) => ({

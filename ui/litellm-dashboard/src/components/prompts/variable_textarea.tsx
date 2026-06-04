@@ -12,13 +12,7 @@ interface VariableTextAreaProps {
   className?: string;
 }
 
-const VariableTextArea: React.FC<VariableTextAreaProps> = ({
-  value,
-  onChange,
-  placeholder,
-  rows = 4,
-  className,
-}) => {
+const VariableTextArea: React.FC<VariableTextAreaProps> = ({ value, onChange, placeholder, rows = 4, className }) => {
   const [editingVariable, setEditingVariable] = useState<{
     oldName: string;
     start: number;
@@ -47,9 +41,7 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
     if (!newVariableName.trim() || !editingVariable) return;
 
     const newValue =
-      value.substring(0, editingVariable.start) +
-      `{{${newVariableName}}}` +
-      value.substring(editingVariable.end);
+      value.substring(0, editingVariable.start) + `{{${newVariableName}}}` + value.substring(editingVariable.end);
 
     onChange(newValue);
     setEditingVariable(null);
@@ -62,7 +54,7 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
   // This is much harder to get right with React, so for now, let's stick to the reliable
   // "Tags Below" approach which is robust and functional.
   // If user insists on inline coloring, we can revisit the overlay approach but it's very fragile.
-  
+
   // BUT, to satisfy "variables in text box", we can try a simple trick:
   // Render the text as HTML with colored spans inside a contentEditable div
   // and sync it back. This is the "wysiwyg" approach.
@@ -81,7 +73,7 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
           }
         `}
       </style>
-      
+
       {/* Using standard TextArea for reliability */}
       <TextArea
         value={value}
@@ -90,7 +82,7 @@ const VariableTextArea: React.FC<VariableTextAreaProps> = ({
         rows={rows}
         className="font-sans"
       />
-      
+
       {/* Variable Management - Clear and Functional */}
       {variables.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-2 items-center">

@@ -32,7 +32,7 @@ describe("CustomPatternModal", () => {
         onActionChange={mockOnActionChange}
         onAdd={mockOnAdd}
         onCancel={mockOnCancel}
-      />
+      />,
     );
 
     // Wait for modal to be visible
@@ -61,4 +61,3 @@ describe("CustomPatternModal", () => {
     expect(mockOnAdd).toHaveBeenCalledTimes(1);
   });
 });
-

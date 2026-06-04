@@ -15,6 +15,7 @@ from .grid_spec import (
     all_cells,
 )
 
+
 _PROMPT_MESSAGES: List[Dict[str, str]] = [
     {"role": "user", "content": "Step by step, calculate 47 * 53. Show your work."}
 ]
@@ -132,6 +133,12 @@ def _classify_status(exc: Exception) -> int:
     return 500
 
 
+def _model_unavailable(model: ModelEntry, exc: Optional[Exception]) -> bool:
+    if not model.unavailable_error or exc is None:
+        return False
+    return model.unavailable_error in str(exc)
+
+
 async def _call_chat(model: ModelEntry, effort: str) -> Tuple[int, Optional[Exception]]:
     kwargs = _build_completion_kwargs(model, effort)
     try:
@@ -175,6 +182,9 @@ async def test_reasoning_effort_grid(
     else:
         status, exc = await _call_chat(model, effort)
 
+    if _model_unavailable(model, exc):
+        pytest.skip(f"{model.alias}: {model.unavailable_error}")
+
     record = wire_capture.latest()
     body = record["body"] if record else None
     if route_name == "bedrock_converse" and isinstance(body, str):
@@ -191,8 +201,8 @@ async def test_reasoning_effort_grid(
 
 
 def test_grid_cell_count() -> None:
-    assert len(_PARAMS) == 21 * 11, (
-        f"expected 231 cells (21 provider x model combos x 11 efforts), "
+    assert len(_PARAMS) == 25 * 11, (
+        f"expected 275 cells (25 provider x model combos x 11 efforts), "
         f"got {len(_PARAMS)}"
     )
 
@@ -207,3 +217,30 @@ def test_grid_route_coverage() -> None:
         "bedrock_invoke_chat",
         "bedrock_invoke_messages",
     }
+
+
+def test_model_unavailable_tolerates_only_the_declared_error() -> None:
+    gated = ModelEntry(
+        alias="bedrock-claude-opus-4-7",
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        mode="adaptive",
+        unavailable_error="is not available for this account",
+    )
+    entitlement_error = Exception(
+        "litellm.APIConnectionError: BedrockException - "
+        '{"message":"anthropic.claude-opus-4-7 is not available for this account."}'
+    )
+
+    assert _model_unavailable(gated, entitlement_error) is True
+    assert (
+        _model_unavailable(gated, Exception("ThrottlingException: rate exceeded"))
+        is False
+    )
+    assert _model_unavailable(gated, None) is False
+
+    ungated = ModelEntry(
+        alias="bedrock-claude-opus-4-6",
+        model="bedrock/converse/us.anthropic.claude-opus-4-6-v1",
+        mode="adaptive",
+    )
+    assert _model_unavailable(ungated, entitlement_error) is False

@@ -491,6 +491,20 @@ async def check_tools_allowlist(
         )
 
 
+# Read-only discovery routes that incur no spend. Kept narrower than info_routes so an exhausted
+# budget cannot reach side-effectful routes like /health/services (Slack/email/webhook). See #27923.
+MODEL_DISCOVERY_ROUTES = frozenset(
+    {
+        "/v1/models",
+        "/models",
+        "/model/info",
+        "/v1/model/info",
+        "/v2/model/info",
+        "/model_group/info",
+    }
+)
+
+
 async def common_checks(  # noqa: PLR0915
     request_body: dict,
     team_object: Optional[LiteLLM_TeamTable],
@@ -532,7 +546,11 @@ async def common_checks(  # noqa: PLR0915
         route=route,
         request_headers=_safe_get_request_headers(request=request),
         request_query_params=_safe_get_request_query_params(request=request),
+        llm_router=llm_router,
     )
+
+    if route in MODEL_DISCOVERY_ROUTES:
+        skip_budget_checks = True
 
     # 1. If team is blocked
     if team_object is not None and team_object.blocked is True:
@@ -619,6 +637,9 @@ async def common_checks(  # noqa: PLR0915
             proxy_logging_obj=proxy_logging_obj,
         )
 
+    # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
+    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
+
     # If this is a free model, skip all budget checks
     if not skip_budget_checks:
         # 3. If team is in budget
@@ -658,6 +679,14 @@ async def common_checks(  # noqa: PLR0915
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+            )
+
+        if valid_token is not None:
+            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+            LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+                request_data=request_body,
+                user_api_key_dict=valid_token,
             )
 
         with tracer.trace("litellm.proxy.auth.common_checks.tag_max_budget_check"):
@@ -709,7 +738,6 @@ async def common_checks(  # noqa: PLR0915
             await _check_end_user_budget(end_user_obj=end_user_object, route=route)
 
     _enforce_user_param_check(general_settings, request, request_body, route)
-    _reject_clientside_metadata_tags_check(general_settings, request_body, route)
     _global_proxy_budget_check(global_proxy_spend, skip_budget_checks, route)
     _guardrail_modification_check(request_body, team_object)
 
@@ -1099,7 +1127,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: UserApiKeyCache,
-    route: str,
+    route: Optional[str] = "",
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
@@ -1143,9 +1171,6 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # Check budget limits
-        await _check_end_user_budget(end_user_obj=return_obj, route=route)
-
         return return_obj
 
     # Fetch from database
@@ -1176,14 +1201,9 @@ async def get_end_user_object(
             model_type=LiteLLM_EndUserTable,
         )
 
-        # Check budget limits
-        await _check_end_user_budget(end_user_obj=_response, route=route)
-
         return _response
 
-    except Exception as e:
-        if isinstance(e, litellm.BudgetExceededError):
-            raise e
+    except Exception:
         return None
 
 
@@ -1280,8 +1300,6 @@ async def _end_user_id_exists_in_db(
         )
         if end_user_obj is not None:
             return True
-    except litellm.BudgetExceededError:
-        raise
     except Exception as e:
         verbose_proxy_logger.debug(
             f"end_user validation: get_end_user_object lookup failed: {e}"
@@ -3399,6 +3417,29 @@ async def can_team_call_search_tool(
         ),
         object_type="team",
     )
+
+
+async def can_user_view_search_tool(
+    search_tool_name: str,
+    valid_token: UserAPIKeyAuth,
+    team_object: Optional[LiteLLM_TeamTable],
+) -> bool:
+    """
+    Boolean variant of the key + team authorization enforced on /search, used to
+    scope /search_tools/list so a non-admin caller only sees tools it may invoke.
+    """
+    try:
+        await can_key_call_search_tool(
+            search_tool_name=search_tool_name,
+            valid_token=valid_token,
+        )
+        await can_team_call_search_tool(
+            search_tool_name=search_tool_name,
+            team_object=team_object,
+        )
+    except ProxyException:
+        return False
+    return True
 
 
 async def is_valid_fallback_model(

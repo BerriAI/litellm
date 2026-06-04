@@ -15,8 +15,7 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 }));
 
 vi.mock("./ProjectModals/EditProjectModal", () => ({
-  EditProjectModal: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <div data-testid="edit-modal" /> : null,
+  EditProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="edit-modal" /> : null),
 }));
 
 vi.mock("@/components/common_components/DefaultProxyAdminTag", () => ({

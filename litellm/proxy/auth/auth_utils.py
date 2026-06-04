@@ -522,14 +522,20 @@ def get_request_route(request: Request) -> str:
         if not isinstance(scope, dict):
             return str(request.url.path)
         raw_path: str = str(scope.get("path", request.url.path))
-        root_path: str = str(scope.get("app_root_path", scope.get("root_path", "")))
+        root_path: str = str(
+            scope.get("app_root_path", scope.get("root_path", ""))
+        ).rstrip("/")
         if not isinstance(raw_path, str):
             return str(request.url.path)
-        # Only strip root_path when it is a meaningful prefix (not bare "/").
-        # Stripping bare "/" would remove the leading slash from every path
-        # e.g. "/team/new" → "team/new", breaking route matching.
-        if root_path and root_path != "/" and raw_path.startswith(root_path):
-            return raw_path[len(root_path) :]
+        # Strip root_path only when it matches whole path segments — guarding
+        # against sibling paths like "/apifoo" being truncated under
+        # root_path="/api". Trailing slashes on root_path are stripped above,
+        # so bare "/" or "/prefix/" still leave the leading "/" intact.
+        if root_path and (
+            raw_path == root_path or raw_path.startswith(root_path + "/")
+        ):
+            stripped = raw_path[len(root_path) :]
+            return stripped or "/"
         return raw_path
     except Exception as e:
         verbose_proxy_logger.debug(
@@ -934,6 +940,40 @@ def get_team_model_tpm_limit(
     return None
 
 
+def get_key_mcp_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    """
+    Get the per-MCP-server rpm limit for a given api key.
+
+    Priority order (returns first found):
+    1. Key metadata (mcp_rpm_limit)
+    2. Team metadata (mcp_rpm_limit)
+
+    The returned dict is keyed by MCP server name (alias if set, else the
+    configured server name).
+    """
+    if user_api_key_dict.metadata:
+        result = user_api_key_dict.metadata.get("mcp_rpm_limit")
+        if result is not None:
+            return result
+
+    if user_api_key_dict.team_metadata:
+        team_limit = user_api_key_dict.team_metadata.get("mcp_rpm_limit")
+        if team_limit is not None:
+            return team_limit
+
+    return None
+
+
+def get_team_mcp_rpm_limit(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> Optional[Dict[str, int]]:
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("mcp_rpm_limit")
+    return None
+
+
 def get_project_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
@@ -1244,7 +1284,9 @@ def _route_uses_model_routing_sources(route: str) -> bool:
 
 
 def _extract_models_from_managed_resource_id(
-    resource_id: Any, resource_id_field: Optional[str] = None
+    resource_id: Any,
+    resource_id_field: Optional[str] = None,
+    llm_router: Optional[Router] = None,
 ) -> List[str]:
     if not isinstance(resource_id, str) or not resource_id:
         return []
@@ -1301,16 +1343,18 @@ def _extract_models_from_managed_resource_id(
             )
 
             if resource_id_field == "video_id":
+                model_id = decode_video_id_with_provider(resource_id).get("model_id")
                 _append_model_candidates(
                     candidates=candidates,
-                    value=decode_video_id_with_provider(resource_id).get("model_id"),
+                    value=_resolve_model_id_with_router(model_id, llm_router),
                 )
             else:
+                model_id = decode_character_id_with_provider(resource_id).get(
+                    "model_id"
+                )
                 _append_model_candidates(
                     candidates=candidates,
-                    value=decode_character_id_with_provider(resource_id).get(
-                        "model_id"
-                    ),
+                    value=_resolve_model_id_with_router(model_id, llm_router),
                 )
         except Exception as e:
             verbose_proxy_logger.debug(
@@ -1320,11 +1364,26 @@ def _extract_models_from_managed_resource_id(
     return _dedupe_model_candidates(candidates)
 
 
+def _resolve_model_id_with_router(
+    model_id: Optional[str], llm_router: Optional[Router]
+) -> Optional[str]:
+    if model_id is None or llm_router is None:
+        return model_id
+    try:
+        return llm_router.resolve_model_name_from_model_id(model_id) or model_id
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Unable to resolve model_id from managed resource ID: %s", str(e)
+        )
+        return model_id
+
+
 def _extract_model_candidates_from_request(
     request_data: dict,
     route: str,
     request_headers: Optional[Mapping[str, Any]] = None,
     request_query_params: Optional[Mapping[str, Any]] = None,
+    llm_router: Optional[Router] = None,
 ) -> List[str]:
     candidates: List[str] = []
     uses_model_routing_sources = _route_uses_model_routing_sources(route=route)
@@ -1374,7 +1433,9 @@ def _extract_model_candidates_from_request(
             _append_model_candidates(
                 candidates,
                 _extract_models_from_managed_resource_id(
-                    request_data.get(field), resource_id_field=field
+                    request_data.get(field),
+                    resource_id_field=field,
+                    llm_router=llm_router,
                 ),
             )
 
@@ -1396,12 +1457,14 @@ def get_model_from_request(
     route: str,
     request_headers: Optional[Mapping[str, Any]] = None,
     request_query_params: Optional[Mapping[str, Any]] = None,
+    llm_router: Optional[Router] = None,
 ) -> Optional[Union[str, List[str]]]:
     candidates = _extract_model_candidates_from_request(
         request_data=request_data,
         route=route,
         request_headers=request_headers,
         request_query_params=request_query_params,
+        llm_router=llm_router,
     )
     model = _format_model_candidates(candidates)
 
