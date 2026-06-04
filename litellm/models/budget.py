@@ -1,45 +1,35 @@
 """
-Budget domain model.
+Budget table model.
+
+Canonical definition for ``litellm_budgettable``. Re-exported from
+``litellm.proxy._types`` for backwards compatibility.
 """
 
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from pydantic import Field
+from pydantic import ConfigDict
 
-from litellm.models.base import DomainModel
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 
-class Budget(DomainModel):
-    """Domain model for budget configuration."""
+class LiteLLM_BudgetTable(LiteLLMPydanticObjectBase):
+    """Represents user-controllable params for a LiteLLM_BudgetTable record.
+
+    Budget-write paths use `model_fields.keys()` on this class as an allowlist
+    for user input. Keep server-managed fields (e.g. `budget_reset_at`) on
+    `LiteLLM_BudgetTableFull` so they aren't user-settable.
+    """
 
     budget_id: Optional[str] = None
-    max_budget: Optional[float] = None
     soft_budget: Optional[float] = None
+    max_budget: Optional[float] = None
     max_parallel_requests: Optional[int] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
-    model_max_budget: Optional[Dict[str, Any]] = None
+    model_max_budget: Optional[dict] = None
     budget_duration: Optional[str] = None
-    budget_reset_at: Optional[datetime] = None
-    allowed_models: List[str] = Field(default_factory=list)
-    created_by: Optional[str] = None
-    updated_by: Optional[str] = None
+    allowed_models: Optional[List[str]] = (
+        None  # per-member model scope; empty = inherit team models
+    )
 
-    def is_over_budget(self, current_spend: float) -> bool:
-        """Check if current spend exceeds the max budget."""
-        if self.max_budget is None:
-            return False
-        return current_spend >= self.max_budget
-
-    def is_approaching_soft_budget(self, current_spend: float) -> bool:
-        """Check if current spend is approaching soft budget threshold."""
-        if self.soft_budget is None:
-            return False
-        return current_spend >= self.soft_budget
-
-    def should_reset_budget(self) -> bool:
-        """Check if budget should be reset based on budget_reset_at."""
-        if self.budget_reset_at is None:
-            return False
-        return datetime.utcnow() >= self.budget_reset_at
+    model_config = ConfigDict(protected_namespaces=())

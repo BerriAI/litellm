@@ -2,7 +2,7 @@
 Domain models for LiteLLM backend.
 """
 
-from litellm.models.budget import Budget
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import (
     CredentialBase,
     CredentialItem,
@@ -17,7 +17,7 @@ from litellm.models.user import User
 from litellm.models.verification_token import VerificationToken
 
 __all__ = [
-    "Budget",
+    "LiteLLM_BudgetTable",
     "CredentialBase",
     "CredentialItem",
     "CreateCredentialItem",

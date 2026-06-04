@@ -6,13 +6,13 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from litellm.models.budget import Budget
+from litellm.models.budget import LiteLLM_BudgetTable
 from litellm.models.credentials import CreateCredentialItem, CredentialItem
 from litellm.models.model import Model
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization import Organization
 from litellm.models.project import Project
-from litellm.models.team import CachedTeam, DeletedTeam, Team, TeamMember
+from litellm.models.team import CachedTeam, DeletedTeam, Team
 from litellm.models.user import User
 from litellm.models.verification_token import (
     DeletedVerificationToken,
@@ -22,46 +22,30 @@ from litellm.models.verification_token import (
 
 class TestBudget:
     def test_budget_creation(self):
-        budget = Budget(
+        budget = LiteLLM_BudgetTable(
             budget_id="test-budget-id",
             max_budget=100.0,
             soft_budget=80.0,
             tpm_limit=1000,
             rpm_limit=100,
+            model_max_budget={"gpt-4": 50.0},
+            budget_duration="monthly",
+            allowed_models=["gpt-4"],
         )
         assert budget.budget_id == "test-budget-id"
         assert budget.max_budget == 100.0
         assert budget.soft_budget == 80.0
         assert budget.tpm_limit == 1000
         assert budget.rpm_limit == 100
+        assert budget.model_max_budget == {"gpt-4": 50.0}
+        assert budget.budget_duration == "monthly"
+        assert budget.allowed_models == ["gpt-4"]
 
-    def test_is_over_budget(self):
-        budget = Budget(max_budget=100.0)
-        assert not budget.is_over_budget(50.0)
-        assert budget.is_over_budget(100.0)
-        assert budget.is_over_budget(150.0)
-
-    def test_is_over_budget_no_limit(self):
-        budget = Budget()
-        assert not budget.is_over_budget(1000000.0)
-
-    def test_is_approaching_soft_budget(self):
-        budget = Budget(soft_budget=80.0)
-        assert not budget.is_approaching_soft_budget(50.0)
-        assert budget.is_approaching_soft_budget(80.0)
-        assert budget.is_approaching_soft_budget(100.0)
-
-    def test_should_reset_budget(self):
-        past_time = datetime.utcnow() - timedelta(hours=1)
-        future_time = datetime.utcnow() + timedelta(hours=1)
-
-        budget_past = Budget(budget_reset_at=past_time)
-        budget_future = Budget(budget_reset_at=future_time)
-        budget_none = Budget()
-
-        assert budget_past.should_reset_budget()
-        assert not budget_future.should_reset_budget()
-        assert not budget_none.should_reset_budget()
+    def test_budget_defaults(self):
+        budget = LiteLLM_BudgetTable()
+        assert budget.budget_id is None
+        assert budget.max_budget is None
+        assert budget.allowed_models is None
 
 
 class TestCredentials:
@@ -105,12 +89,8 @@ class TestModel:
         assert model.team_public_model_name == "my-gpt4"
 
     def test_is_blocked(self):
-        model_blocked = Model(
-            model_name="test", litellm_params={}, blocked=True
-        )
-        model_unblocked = Model(
-            model_name="test", litellm_params={}, blocked=False
-        )
+        model_blocked = Model(model_name="test", litellm_params={}, blocked=True)
+        model_unblocked = Model(model_name="test", litellm_params={}, blocked=False)
         assert model_blocked.is_blocked
         assert not model_unblocked.is_blocked
 
@@ -217,9 +197,7 @@ class TestTeam:
         assert len(team_list.members_with_roles) == 2
 
     def test_cached_team(self):
-        cached = CachedTeam(
-            team_id="t1", last_refreshed_at=1234567890.0
-        )
+        cached = CachedTeam(team_id="t1", last_refreshed_at=1234567890.0)
         assert cached.last_refreshed_at == 1234567890.0
 
     def test_deleted_team(self):
@@ -325,9 +303,7 @@ class TestVerificationToken:
         assert token_no_routes.has_route_access("/any/route")
 
     def test_parse_expires_string(self):
-        token = VerificationToken(
-            token="t1", expires="2024-12-31T23:59:59Z"
-        )
+        token = VerificationToken(token="t1", expires="2024-12-31T23:59:59Z")
         assert isinstance(token.expires, datetime)
 
     def test_deleted_verification_token(self):
