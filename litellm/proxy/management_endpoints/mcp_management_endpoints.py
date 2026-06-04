@@ -2307,6 +2307,11 @@ if MCP_AVAILABLE:
             k: v for k, v in payload.values.items() if k in allowed_names and v != ""
         }
         await store_user_env_vars(prisma_client, user_id, server_id, filtered)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            invalidate_user_env_vars_cache,
+        )
+
+        invalidate_user_env_vars_cache(user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values=filtered)
 
     @router.delete(
@@ -2337,6 +2342,11 @@ if MCP_AVAILABLE:
                 detail={"error": f"MCP Server {server_id} not found"},
             )
         await delete_user_env_vars(prisma_client, user_id, server_id)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            invalidate_user_env_vars_cache,
+        )
+
+        invalidate_user_env_vars_cache(user_id, server_id)
         return _compute_user_env_var_status(server=server, stored_values={})
 
     @router.get(

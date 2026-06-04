@@ -459,6 +459,91 @@ async def test_load_user_env_vars_returns_empty_when_db_unavailable(monkeypatch)
     assert await manager._load_user_env_vars(server, fake_auth) == {}
 
 
+@pytest.mark.asyncio
+async def test_load_user_env_vars_caches_within_ttl(env_vars_salt_key, monkeypatch):
+    """A second load within the TTL window is served from the in-memory cache,
+    keeping the hot tool-call/tool-listing path off the DB."""
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as mgr_mod
+    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mgr_mod._user_env_vars_cache.clear()
+
+    blob_prisma = _mock_env_vars_prisma()
+    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "t0p"})
+    row = MagicMock()
+    row.values_b64 = _captured_values_blob(blob_prisma)
+
+    prisma = _mock_env_vars_prisma(row=row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-1", name="s", transport="http", url="https://example.com"
+    )
+    fake_auth = MagicMock()
+    fake_auth.user_id = "alice"
+
+    first = await manager._load_user_env_vars(server, fake_auth)
+    second = await manager._load_user_env_vars(server, fake_auth)
+    assert first == {"TOKEN": "t0p"} == second
+    assert prisma.db.litellm_mcpuserenvvars.find_unique.await_count == 1
+
+    mgr_mod._user_env_vars_cache.clear()
+
+
+@pytest.mark.asyncio
+async def test_load_user_env_vars_invalidation_forces_refetch(
+    env_vars_salt_key, monkeypatch
+):
+    """After invalidation (store/clear) the next load reads fresh from the DB
+    instead of serving the stale cached value."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager as mgr_mod
+    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+        invalidate_user_env_vars_cache,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    mgr_mod._user_env_vars_cache.clear()
+
+    blob_prisma = _mock_env_vars_prisma()
+    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "old"})
+    old_row = MagicMock()
+    old_row.values_b64 = _captured_values_blob(blob_prisma)
+    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "new"})
+    new_row = MagicMock()
+    new_row.values_b64 = _captured_values_blob(blob_prisma)
+
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(
+        side_effect=[old_row, new_row]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-1", name="s", transport="http", url="https://example.com"
+    )
+    fake_auth = MagicMock()
+    fake_auth.user_id = "alice"
+
+    assert await manager._load_user_env_vars(server, fake_auth) == {"TOKEN": "old"}
+    invalidate_user_env_vars_cache("alice", "srv-1")
+    assert await manager._load_user_env_vars(server, fake_auth) == {"TOKEN": "new"}
+    assert prisma.db.litellm_mcpuserenvvars.find_unique.await_count == 2
+
+    mgr_mod._user_env_vars_cache.clear()
+
+
 # ── DB helpers: per-user env vars ─────────────────────────────────────────
 
 _SALT_KEY = "test-salt-key-for-env-vars-tests-1234"

@@ -124,6 +124,28 @@ _AZURE_ENTRA_HOSTS = {
     "login.chinacloudapi.cn",  # China
 }
 
+# Short-lived in-memory cache for per-user MCP env var values, mirroring the
+# BYOK credential cache. Keyed by (user_id, server_id); value is
+# (values_dict, monotonic_timestamp). Keeps the tool-call and tool-listing
+# paths off the DB on every request within the TTL window.
+_user_env_vars_cache: Dict[Tuple[str, str], Tuple[Dict[str, str], float]] = {}
+_USER_ENV_VARS_CACHE_TTL = 60  # seconds
+_USER_ENV_VARS_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+
+
+def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
+    """Drop a cached entry after the user stores or clears their env var values
+    so the next request reads the fresh value instead of a stale one."""
+    _user_env_vars_cache.pop((user_id, server_id), None)
+
+
+def _write_user_env_vars_cache(
+    user_id: str, server_id: str, values: Dict[str, str]
+) -> None:
+    if len(_user_env_vars_cache) >= _USER_ENV_VARS_CACHE_MAX_SIZE:
+        _user_env_vars_cache.clear()
+    _user_env_vars_cache[(user_id, server_id)] = (values, time.monotonic())
+
 
 def _should_strip_caller_authorization(
     mcp_server: MCPServer,
@@ -1626,15 +1648,26 @@ class MCPServerManager:
     ) -> Dict[str, str]:
         """Look up the calling user's env var values for ``server``.
 
-        Returns an empty dict when no user is available. DB errors propagate
-        so the caller can decide between failing the request (tool-call path)
-        and staying best-effort (listing path).
+        Returns an empty dict when no user is available. Results are cached in a
+        short-lived in-memory map keyed by (user_id, server_id) so the tool-call
+        and tool-listing paths avoid a DB round-trip per request within the TTL
+        window; the cache is invalidated when the user stores or clears values.
+        DB errors propagate so the caller can decide between failing the request
+        (tool-call path) and staying best-effort (listing path).
         """
         if user_api_key_auth is None:
             return {}
         user_id = getattr(user_api_key_auth, "user_id", None)
         if not user_id:
             return {}
+
+        cache_key = (user_id, server.server_id)
+        cached = _user_env_vars_cache.get(cache_key)
+        if cached is not None:
+            values, ts = cached
+            if time.monotonic() - ts < _USER_ENV_VARS_CACHE_TTL:
+                return values
+
         from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
 
         if prisma_client is None:
@@ -1643,7 +1676,9 @@ class MCPServerManager:
             get_user_env_vars,
         )
 
-        return await get_user_env_vars(prisma_client, user_id, server.server_id)
+        values = await get_user_env_vars(prisma_client, user_id, server.server_id)
+        _write_user_env_vars_cache(user_id, server.server_id, values)
+        return values
 
     async def _create_mcp_client(
         self,
