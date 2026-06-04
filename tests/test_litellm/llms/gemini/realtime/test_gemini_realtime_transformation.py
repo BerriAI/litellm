@@ -244,6 +244,64 @@ def test_gemini_realtime_transformation_audio_delta():
     assert contains_audio_delta, "Expected audio delta event"
 
 
+def test_gemini_output_audio_transcript_delta_uses_active_response_ids():
+    config = GeminiRealtimeConfig()
+
+    session_configuration_request = {
+        "setup": {
+            "model": "gemini-1.5-flash",
+            "generationConfig": {"responseModalities": ["AUDIO"]},
+        }
+    }
+    session_configuration_request_str = json.dumps(session_configuration_request)
+    event = {
+        "serverContent": {
+            "outputTranscription": {"text": "Hello from Gemini."},
+            "modelTurn": {
+                "parts": [
+                    {"inlineData": {"mimeType": "audio/pcm", "data": "my-audio-data"}}
+                ]
+            },
+        }
+    }
+
+    result = config.transform_realtime_response(
+        json.dumps(event),
+        "gemini-1.5-flash",
+        MagicMock(),
+        realtime_response_transform_input={
+            "session_configuration_request": session_configuration_request_str,
+            "current_output_item_id": None,
+            "current_response_id": None,
+            "current_conversation_id": None,
+            "current_delta_chunks": [],
+            "current_item_chunks": [],
+            "current_delta_type": None,
+        },
+    )
+
+    responses = result["response"]
+    response_created = next(
+        response for response in responses if response["type"] == "response.created"
+    )
+    transcript_delta = next(
+        response
+        for response in responses
+        if response["type"] == "response.output_audio_transcript.delta"
+    )
+    audio_delta = next(
+        response
+        for response in responses
+        if response["type"] == "response.output_audio.delta"
+    )
+
+    assert transcript_delta["response_id"] == response_created["response"]["id"]
+    assert transcript_delta["response_id"] == audio_delta["response_id"]
+    assert transcript_delta["item_id"] == audio_delta["item_id"]
+    assert result["current_response_id"] == transcript_delta["response_id"]
+    assert result["current_output_item_id"] == transcript_delta["item_id"]
+
+
 def test_gemini_realtime_transformation_generation_complete():
     from litellm.types.llms.openai import OpenAIRealtimeEventTypes
 

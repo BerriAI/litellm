@@ -1395,6 +1395,22 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
 
             output_tx = server_content.get("outputTranscription")
             if isinstance(output_tx, dict) and output_tx.get("text"):
+                if current_response_id is None:
+                    current_response_id = "resp_{}".format(uuid.uuid4())
+                if current_output_item_id is None:
+                    current_output_item_id = "item_{}".format(uuid.uuid4())
+                    current_conversation_id = current_conversation_id or "conv_{}".format(
+                        uuid.uuid4()
+                    )
+                    returned_message.extend(
+                        self.return_new_content_delta_events(
+                            session_configuration_request=session_configuration_request,
+                            response_id=current_response_id,
+                            output_item_id=current_output_item_id,
+                            conversation_id=current_conversation_id,
+                            delta_type="audio",
+                        )
+                    )
                 # Emit as the GA event name; _GA_TO_BETA_EVENT_TYPES translates
                 # this back to response.audio_transcript.delta for beta clients.
                 returned_message.append(
@@ -1404,10 +1420,10 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                             "type": "response.output_audio_transcript.delta",
                             "event_id": "event_{}".format(uuid.uuid4()),
                             "transcript": output_tx["text"],
-                            "item_id": "item_{}".format(uuid.uuid4()),
+                            "item_id": current_output_item_id,
                             "content_index": 0,
                             "output_index": 0,
-                            "response_id": current_response_id or "",
+                            "response_id": current_response_id,
                             "delta": output_tx["text"],
                         },
                     )
