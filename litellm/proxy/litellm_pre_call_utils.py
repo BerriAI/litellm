@@ -13,6 +13,7 @@ from starlette.datastructures import Headers
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.constants import X_LITELLM_DISABLE_CALLBACKS
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
@@ -199,9 +200,16 @@ _UNTRUSTED_METADATA_CONTROL_FIELDS = (
     *_LITELLM_STASH_KEYS,
 )
 
+_CLIENT_MESSAGE_REDACTION_HEADER = "litellm-disable-message-redaction"
+# ``x-litellm-disable-callbacks`` lets the caller switch off operator-configured
+# audit/observability callbacks for its own request (honored by default whenever
+# ``litellm.allow_dynamic_callback_disabling`` is set). The legitimate way to
+# disable callbacks is key/team metadata (``litellm_disabled_callbacks``); the
+# client-supplied header is an observability-bypass and is always stripped.
 _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS = frozenset(
     {
-        "litellm-disable-message-redaction",
+        _CLIENT_MESSAGE_REDACTION_HEADER,
+        X_LITELLM_DISABLE_CALLBACKS,
     }
 )
 _CLIENT_MOCK_CONTROL_FIELDS = frozenset({"mock_response", "mock_tool_calls"})
@@ -288,13 +296,16 @@ def _strip_untrusted_request_header_controls(
         return
 
     for header_name in list(headers.keys()):
-        if (
-            isinstance(header_name, str)
-            and header_name.lower() in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
+        if not isinstance(header_name, str):
+            continue
+        lowered = header_name.lower()
+        if lowered not in _UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS:
+            continue
+        if allow_client_message_redaction_opt_out and (
+            lowered == _CLIENT_MESSAGE_REDACTION_HEADER
         ):
-            if allow_client_message_redaction_opt_out:
-                continue
-            headers.pop(header_name, None)
+            continue
+        headers.pop(header_name, None)
 
 
 def _is_false_like(value: Any) -> bool:

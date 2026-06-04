@@ -1041,6 +1041,56 @@ async def test_add_litellm_data_to_request_allows_redaction_opt_out_with_admin_o
     }
 
 
+@pytest.mark.parametrize(
+    "auth_kwargs,redaction_kept",
+    [
+        ({}, False),
+        ({"metadata": {"allow_client_message_redaction_opt_out": True}}, True),
+        ({"team_metadata": {"allow_client_message_redaction_opt_out": True}}, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_disable_callbacks_header(
+    auth_kwargs, redaction_kept
+):
+    """The client-supplied ``x-litellm-disable-callbacks`` header silences
+    operator-configured audit/observability callbacks for the caller's own
+    request. It is always stripped at the boundary, even when the key is allowed
+    to opt out of message redaction; the redaction opt-out must not double as a
+    license to disable callbacks."""
+    request_mock = MagicMock(spec=Request)
+    request_mock.url.path = "/v1/chat/completions"
+    request_mock.url = MagicMock()
+    request_mock.url.__str__.return_value = "http://localhost/v1/chat/completions"
+    request_mock.method = "POST"
+    request_mock.query_params = {}
+    request_mock.headers = {
+        "Content-Type": "application/json",
+        "litellm-disable-message-redaction": "true",
+        "x-litellm-disable-callbacks": "datadog,langfuse",
+    }
+    request_mock.client = MagicMock()
+    request_mock.client.host = "127.0.0.1"
+
+    updated = await add_litellm_data_to_request(
+        data={
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "hello"}],
+        },
+        request=request_mock,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", **auth_kwargs),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    proxy_headers = {
+        header.lower() for header in updated["proxy_server_request"]["headers"]
+    }
+    assert "x-litellm-disable-callbacks" not in proxy_headers
+    assert ("litellm-disable-message-redaction" in proxy_headers) is redaction_kept
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_honors_header_tags():
     """Header-supplied tags flow through to request metadata."""
