@@ -757,6 +757,45 @@ curl -X PATCH "http://localhost:4000/v1/agents/{agent_id}" \
 </Tabs>
 
 
+## Rate Limiting per MCP Server
+
+Cap how many tool calls a key or team can make to a specific MCP server per minute with `mcp_rpm_limit`. This is a `Dict[str, int]` keyed by MCP server name, where the name is the server's alias if one is set, otherwise the configured server name. Each entry sets the requests-per-minute limit for that one server, so a limit on `github` does not affect calls to `slack`. Servers without an entry are uncapped.
+
+Once the limit is exceeded within the window, further tool calls to that server return `429 Too Many Requests` until the window rolls over. The cap only applies to actual MCP tool calls; it has no effect on regular LLM requests.
+
+<Tabs>
+<TabItem value="key" label="On a Key">
+
+```bash title="Cap a key at 100 github + 200 slack calls per minute" showLineNumbers
+curl -X POST "http://localhost:4000/key/generate" \
+  -H "Authorization: Bearer sk-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "mcp_rpm_limit": {"github": 100, "slack": 200},
+    "object_permission": {"mcp_servers": ["github", "slack"]}
+  }'
+```
+
+</TabItem>
+<TabItem value="team" label="On a Team">
+
+```bash title="Cap a team at 500 github calls per minute (all keys share the counter)" showLineNumbers
+curl -X POST "http://localhost:4000/team/new" \
+  -H "Authorization: Bearer sk-master-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "team_alias": "engineering",
+    "mcp_rpm_limit": {"github": 500},
+    "object_permission": {"mcp_servers": ["github"]}
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+`mcp_rpm_limit` is also accepted on `/key/update`, `/team/update`, `/user/new`, and `/user/update`. A key-level limit takes precedence over a team-level limit for the same server; the team limit otherwise applies to every key on the team as a shared counter.
+
+
 ## Dashboard View Modes
 
 Proxy admins can also control what non-admins see inside the MCP dashboard via `general_settings.user_mcp_management_mode`:
