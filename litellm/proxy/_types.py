@@ -1017,6 +1017,8 @@ class LiteLLM_ObjectPermissionBase(LiteLLMPydanticObjectBase):
 from litellm.models.team import (  # noqa: E402
     BudgetLimitEntry as BudgetLimitEntry,
 )
+
+
 class GenerateRequestBase(LiteLLMPydanticObjectBase):
     """
     Overlapping schema between key and user generate/update requests
@@ -1524,23 +1526,9 @@ class UpdateSkillRequest(LiteLLMPydanticObjectBase):
     metadata: Optional[Dict[str, Any]] = None
 
 
-class LiteLLM_SkillsTable(LiteLLMPydanticObjectBase):
-    """Represents a LiteLLM_SkillsTable record"""
-
-    skill_id: str
-    display_title: Optional[str] = None
-    description: Optional[str] = None
-    instructions: Optional[str] = None
-    source: str = "custom"
-    latest_version: Optional[str] = None
-    file_content: Optional[bytes] = None  # Binary content of skill files (zip)
-    file_name: Optional[str] = None  # Original filename
-    file_type: Optional[str] = None  # MIME type
-    metadata: Optional[Dict[str, Any]] = None
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
+from litellm.models.skills import (  # noqa: E402
+    LiteLLM_SkillsTable as LiteLLM_SkillsTable,
+)
 
 
 class ListSkillsRequest(LiteLLMPydanticObjectBase):
@@ -2634,9 +2622,9 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     teams: List[str] = []  # Just team IDs, not full team objects
 
 
-class LiteLLM_Config(LiteLLMPydanticObjectBase):
-    param_name: str
-    param_value: Dict
+from litellm.models.config import (  # noqa: E402
+    LiteLLM_Config as LiteLLM_Config,
+)
 
 
 from litellm.models.organization_membership import (  # noqa: E402
@@ -2815,64 +2803,19 @@ class LiteLLM_UserTableWithKeyCount(LiteLLM_UserTable):
     key_count: int = 0
 
 
-class LiteLLM_EndUserTable(LiteLLMPydanticObjectBase):
-    user_id: str
-    blocked: bool
-    alias: Optional[str] = None
-    spend: float = 0.0
-    allowed_model_region: Optional[AllowedModelRegion] = None
-    default_model: Optional[str] = None
-    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
-    object_permission_id: Optional[str] = None
-    object_permission: Optional[LiteLLM_ObjectPermissionTable] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def set_model_info(cls, values):
-        if values.get("spend") is None:
-            values.update({"spend": 0.0})
-        return values
-
-    model_config = ConfigDict(protected_namespaces=())
+from litellm.models.end_user import (  # noqa: E402
+    LiteLLM_EndUserTable as LiteLLM_EndUserTable,
+)
 
 
-class LiteLLM_TagTable(LiteLLMPydanticObjectBase):
-    tag_name: str
-    description: Optional[str] = None
-    models: List[str] = []
-    model_info: Optional[dict] = None
-    spend: float = 0.0
-    budget_id: Optional[str] = None
-    litellm_budget_table: Optional[LiteLLM_BudgetTable] = None
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def set_model_info(cls, values):
-        if values.get("spend") is None:
-            values.update({"spend": 0.0})
-        if values.get("models") is None:
-            values.update({"models": []})
-        return values
-
-    model_config = ConfigDict(protected_namespaces=())
+from litellm.models.tag import (  # noqa: E402
+    LiteLLM_TagTable as LiteLLM_TagTable,
+)
 
 
-class LiteLLM_AccessGroupTable(LiteLLMPydanticObjectBase):
-    access_group_id: str
-    access_group_name: str
-    description: Optional[str] = None
-    access_model_names: List[str] = []
-    access_mcp_server_ids: List[str] = []
-    access_agent_ids: List[str] = []
-    assigned_team_ids: List[str] = []
-    assigned_key_ids: List[str] = []
-    created_at: Optional[datetime] = None
-    created_by: Optional[str] = None
-    updated_at: Optional[datetime] = None
-    updated_by: Optional[str] = None
+from litellm.models.access_group import (  # noqa: E402
+    LiteLLM_AccessGroupTable as LiteLLM_AccessGroupTable,
+)
 
 
 class LiteLLM_SpendLogs(LiteLLMPydanticObjectBase):
