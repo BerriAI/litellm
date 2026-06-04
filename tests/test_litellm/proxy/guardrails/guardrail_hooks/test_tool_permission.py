@@ -929,3 +929,37 @@ class TestToolPermissionGuardrailInMemoryUpdate:
         # A newly added deny rule (new id) must match -> its compiled target was rebuilt.
         assert "deny-bash" in guardrail._compiled_rule_targets
         assert guardrail._get_permission_for_tool_call(self._bash("echo x"))[0] is False
+
+    def test_update_in_memory_preserves_rules_when_rules_absent(self):
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="tp",
+            rules=[
+                {
+                    "id": "native-bash",
+                    "tool_name": r"^Bash$",
+                    "decision": "allow",
+                    "allowed_param_patterns": {"command": r"^(?!(echo blockme)$).*$"},
+                }
+            ],
+            default_action="deny",
+            on_disallowed_action="block",
+        )
+        assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
+
+        # A partial update that does not carry `rules` must NOT wipe the existing
+        # ruleset / compiled maps.
+        guardrail.update_in_memory_litellm_params(
+            LitellmParams(
+                guardrail="tool_permission",
+                mode=["pre_call", "post_call"],
+                default_action="deny",
+                on_disallowed_action="block",
+            )
+        )
+
+        assert len(guardrail.rules) == 1
+        assert "command" in guardrail._compiled_rule_patterns.get("native-bash", {})
+        assert (
+            guardrail._get_permission_for_tool_call(self._bash("echo blockme"))[0]
+            is False
+        )

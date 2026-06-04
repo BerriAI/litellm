@@ -150,6 +150,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         # ``litellm_params`` may arrive as the raw DB dict (the proxy ``cast()``s
         # it to ``LitellmParams`` without converting), so handle both shapes. The
         # base ``setattr`` loop is model-only, so apply the dict case here.
+        previous_rules = self.rules
         if isinstance(litellm_params, dict):
             params = litellm_params
             for key, value in params.items():
@@ -158,7 +159,16 @@ class ToolPermissionGuardrail(CustomGuardrail):
             super().update_in_memory_litellm_params(litellm_params)
             params = vars(litellm_params)
 
-        self._load_rules(params.get("rules"))
+        # The generic update above sets ``self.rules`` from the incoming value
+        # (None on a partial update that omits rules), but never rebuilds the
+        # compiled maps. Rebuild them when rules are provided; otherwise restore
+        # the previous ruleset so a partial update doesn't silently wipe it. An
+        # explicit empty list still clears the rules.
+        rules = params.get("rules")
+        if rules is not None:
+            self._load_rules(rules)
+        else:
+            self.rules = previous_rules
         default_action = params.get("default_action")
         if isinstance(default_action, str):
             self.default_action = default_action.lower()
