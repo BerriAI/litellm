@@ -37,7 +37,7 @@ docker_litellm:
   #     artifacts: true
   rules:
     - if: $CI_COMMIT_TAG =~ /^v/
-      when: manual
+      # when: manual
       variables:
         HELM_IMAGE_TAG: ${CI_COMMIT_TAG}
   before_script:
