@@ -15844,10 +15844,10 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error handling toolset MCP route for {toolset_name}: {str(e)}"
+        verbose_proxy_logger.exception(
+            "Error handling toolset MCP route for %s: %s", toolset_name, str(e)
         )
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def _mcp_forward_as_path(path_segment: str, request: Request):
@@ -16028,7 +16028,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"
+        verbose_proxy_logger.exception(
+            "Error handling dynamic MCP route for %s: %s", mcp_server_name, str(e)
         )
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
