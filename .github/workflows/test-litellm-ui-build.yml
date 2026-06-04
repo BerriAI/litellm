@@ -102,7 +102,7 @@ jobs:
           fi
           if [ ${#eslint_files[@]} -gt 0 ]; then
             echo "::group::ESLint (${#eslint_files[@]} files)"
-            npx eslint --no-warn-ignored "${eslint_files[@]}" || status=1
+            npx eslint --no-warn-ignored --pass-on-unpruned-suppressions "${eslint_files[@]}" || status=1
             echo "::endgroup::"
           fi
           exit $status
