@@ -282,6 +282,53 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
+        "litellm.repositories.model_repository.encrypt_value_helper",
+        side_effect=lambda v, **kw: f"encrypted_{v}",
+    )
+    @patch(
+        "litellm.repositories.model_repository.decrypt_value_helper",
+        side_effect=lambda v, **kw: v,
+    )
+    async def test_create_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
+        model = await repo.create_model(
+            model_name="gpt-4-turbo",
+            litellm_params={"api_key": "sk-secret", "api_base": "https://api.openai.com"},
+            created_by="admin",
+            model_id="custom-model-id",
+            model_info={"team_id": "team-1", "description": "GPT-4 Turbo model"},
+            blocked=True,
+        )
+        assert model is not None
+        assert model.model_name == "gpt-4-turbo"
+
+    @pytest.mark.asyncio
+    @patch(
+        "litellm.repositories.model_repository.encrypt_value_helper",
+        side_effect=lambda v, **kw: f"encrypted_{v}",
+    )
+    @patch(
+        "litellm.repositories.model_repository.decrypt_value_helper",
+        side_effect=lambda v, **kw: v,
+    )
+    async def test_update_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
+        repo._prisma_client.db.litellm_proxymodeltable._records["model-full"] = {
+            "model_id": "model-full",
+            "model_name": "old-name",
+            "litellm_params": '{"api_key": "old"}',
+            "blocked": False,
+        }
+        updated = await repo.update_model(
+            model_id="model-full",
+            updated_by="admin",
+            model_name="new-name",
+            litellm_params={"api_key": "new-key"},
+            model_info={"updated": True},
+            blocked=True,
+        )
+        assert updated.model_name == "new-name"
+
+    @pytest.mark.asyncio
+    @patch(
         "litellm.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
@@ -1615,17 +1662,24 @@ class TestUserRepositoryExtended:
         }
         updated = await repo.update_user(
             user_id="user-update",
-            user_email="new@example.com",
             user_alias="newalias",
-            user_role="admin",
+            team_id="team-new",
+            sso_user_id="sso-new",
             organization_id="org-1",
+            password="new-hashed-pw",
+            teams=["team-1", "team-2"],
+            user_role="admin",
             max_budget=1000.0,
-            tpm_limit=10000,
-            rpm_limit=100,
-            max_parallel_requests=20,
+            user_email="new@example.com",
             models=["gpt-4"],
             metadata={"pref": "dark"},
+            max_parallel_requests=20,
+            tpm_limit=10000,
+            rpm_limit=100,
             budget_duration="monthly",
+            allowed_cache_controls=["no-cache"],
+            policies=["policy-1"],
+            object_permission_id="perm-new",
         )
         assert updated.user_email == "new@example.com"
 
