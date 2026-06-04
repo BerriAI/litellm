@@ -422,6 +422,213 @@ def test_process_chunk_recovers_output_from_stream_events_before_logging(monkeyp
     completion_handler.assert_called_once()
 
 
+def test_record_recoverable_output_chunk_handles_output_item_done(monkeypatch):
+    """OUTPUT_ITEM_DONE chunks populate _recovered_output_items (takes precedence
+    over any synthetic text-only recovery at the same output_index)."""
+
+    class _NoopConfig:
+        def transform_streaming_response(self, **kwargs):
+            return None
+
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_NoopConfig(),
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+
+    real_item = {
+        "type": "message",
+        "id": "msg_real",
+        "role": "assistant",
+        "status": "completed",
+        "content": [
+            {
+                "type": "output_text",
+                "text": "real-item-text",
+                "annotations": [],
+            }
+        ],
+    }
+    iterator._process_chunk(
+        json.dumps(
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": real_item,
+            }
+        )
+    )
+
+    assert iterator._recovered_output_items[0] == real_item
+    # Pre-seed a synthetic text-only item at the same index to verify the
+    # OUTPUT_ITEM_DONE branch overwrites it on the next pass.
+    iterator._recovered_text_only_items[0] = {
+        "type": "message",
+        "id": "msg_synthetic",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "synthetic", "annotations": []}],
+    }
+    iterator._process_chunk(
+        json.dumps(
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": real_item,
+            }
+        )
+    )
+    assert iterator._recovered_output_items[0] == real_item
+
+
+def test_recover_output_on_completed_response_skips_when_existing_output_present():
+    """If the terminal response already carries output, recovery is a no-op."""
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    # Seed the recovery buffers — these should be ignored when the response
+    # object already has output.
+    iterator._recovered_output_items[0] = {
+        "type": "message",
+        "id": "msg_real",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": "real", "annotations": []}],
+    }
+
+    response_obj = ResponsesAPIResponse(
+        id="resp_skip",
+        created_at=int(datetime.now().timestamp()),
+        status="completed",
+        model="test-model",
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_provider",
+                "role": "assistant",
+                "status": "completed",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "provider-supplied",
+                        "annotations": [],
+                    }
+                ],
+            }
+        ],
+    )
+
+    iterator._recover_output_on_completed_response(response_obj)
+
+    # Existing output is untouched.
+    assert len(response_obj.output) == 1
+    assert response_obj.output[0].id == "msg_provider"
+
+
+def test_recover_output_on_completed_response_noop_when_buffers_empty():
+    """No recoverable items + empty response.output → no mutation, no crash."""
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=SimpleNamespace(),
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+
+    response_obj = ResponsesAPIResponse(
+        id="resp_empty",
+        created_at=int(datetime.now().timestamp()),
+        status="completed",
+        model="test-model",
+        object="response",
+        output=[],
+    )
+
+    iterator._recover_output_on_completed_response(response_obj)
+
+    assert response_obj.output == []
+
+
+def test_process_chunk_recovers_output_for_incomplete_terminal_event(monkeypatch):
+    """RESPONSE_INCOMPLETE with empty output should also trigger recovery
+    (the iterator recovery path runs before logging for incomplete/failed
+    terminal events, not just RESPONSE_COMPLETED)."""
+    openai_types = streaming_module._get_openai_response_types()
+
+    class _IncompleteConfig:
+        def transform_streaming_response(self, **kwargs):
+            parsed_chunk = kwargs["parsed_chunk"]
+            event_type = parsed_chunk.get("type")
+            if event_type == openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+                return openai_types.OutputTextDoneEvent(
+                    type=openai_types.ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+                    item_id="msg_inc",
+                    output_index=0,
+                    content_index=0,
+                    text="partial",
+                )
+            return openai_types.ResponseIncompleteEvent(
+                type=openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                response=ResponsesAPIResponse(
+                    id="resp_inc",
+                    created_at=int(datetime.now().timestamp()),
+                    status="incomplete",
+                    model="test-model",
+                    object="response",
+                    output=[],
+                    incomplete_details={"reason": "max_output_tokens"},
+                ),
+            )
+
+    iterator = ResponsesAPIStreamingIterator(
+        response=httpx.Response(200),
+        model="test-model",
+        responses_api_provider_config=_IncompleteConfig(),
+        logging_obj=_FakeLoggingObj(),
+        request_data={"foo": "bar"},
+        call_type=CallTypes.responses.value,
+    )
+    completion_handler = MagicMock()
+    monkeypatch.setattr(
+        iterator, "_handle_logging_completed_response", completion_handler
+    )
+
+    iterator._process_chunk(
+        json.dumps(
+            {
+                "type": "response.output_text.done",
+                "item_id": "msg_inc",
+                "output_index": 0,
+                "content_index": 0,
+                "text": "partial",
+            }
+        )
+    )
+    event = iterator._process_chunk(
+        json.dumps(
+            {
+                "type": "response.incomplete",
+                "response": {"id": "resp_inc", "output": []},
+            }
+        )
+    )
+
+    assert event.response.output != []
+    assert event.response.output[0]["content"][0]["text"] == "partial"
+    assert iterator.completed_response is event
+    completion_handler.assert_called_once()
+
+
 def test_process_chunk_completed_response_updates_id_and_usage_cost(monkeypatch):
     original_include_cost = litellm.include_cost_in_streaming_usage
     litellm.include_cost_in_streaming_usage = True
