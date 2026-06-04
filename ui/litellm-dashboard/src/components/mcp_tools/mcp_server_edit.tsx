@@ -10,7 +10,7 @@ import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
@@ -431,28 +431,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
           }, {})
         : ({} as Record<string, string>);
 
-      const envVars = Array.isArray(envVarsList)
-        ? envVarsList.reduce(
-            (acc: Array<{ name: string; value: string; scope: "global" | "user"; description?: string }>, entry: Record<string, unknown>) => {
-              const name = String(entry?.name ?? "").trim();
-              if (!name || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-                return acc;
-              }
-              if (acc.some((existing) => existing.name === name)) {
-                return acc;
-              }
-              const scope = entry?.scope === "user" ? "user" : "global";
-              acc.push({
-                name,
-                value: scope === "user" ? "" : String(entry?.value ?? ""),
-                scope,
-                description: (entry?.description as string | undefined) || undefined,
-              });
-              return acc;
-            },
-            [],
-          )
-        : [];
+      const envVars = normalizeEnvVars(envVarsList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"

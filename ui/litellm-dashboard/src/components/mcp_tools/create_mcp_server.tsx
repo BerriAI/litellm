@@ -15,7 +15,7 @@ import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
 import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -47,31 +47,6 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
     if (header) acc[header] = entry?.value ?? "";
     return acc;
   }, {});
-};
-
-type EnvVarEntry = { name: string; value: string; scope: "global" | "user"; description?: string };
-
-/** Normalize the env_vars form list into the payload shape the backend expects.
- * Drops empty rows and any with invalid identifiers. */
-const normalizeEnvVars = (list: unknown): EnvVarEntry[] => {
-  if (!Array.isArray(list)) return [];
-  const seen = new Set<string>();
-  const out: EnvVarEntry[] = [];
-  for (const entry of list) {
-    if (!entry || typeof entry !== "object") continue;
-    const name = String((entry as Record<string, unknown>).name ?? "").trim();
-    if (!name || seen.has(name)) continue;
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
-    const scope = (entry as Record<string, unknown>).scope === "user" ? "user" : "global";
-    out.push({
-      name,
-      value: scope === "user" ? "" : String((entry as Record<string, unknown>).value ?? ""),
-      scope,
-      description: ((entry as Record<string, unknown>).description as string | undefined) || undefined,
-    });
-    seen.add(name);
-  }
-  return out;
 };
 
 const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
