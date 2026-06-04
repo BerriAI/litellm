@@ -25067,6 +25067,7 @@
     },
     "moonshot/kimi-k2-0711-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25081,6 +25082,7 @@
     },
     "moonshot/kimi-k2-0905-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25095,6 +25097,7 @@
     },
     "moonshot/kimi-k2-turbo-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 1.15e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25141,6 +25144,7 @@
     },
     "moonshot/kimi-latest": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25155,6 +25159,7 @@
     },
     "moonshot/kimi-latest-128k": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25169,6 +25174,7 @@
     },
     "moonshot/kimi-latest-32k": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 32768,
@@ -25183,6 +25189,7 @@
     },
     "moonshot/kimi-latest-8k": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 8192,
@@ -25197,6 +25204,7 @@
     },
     "moonshot/kimi-thinking-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2025-11-11",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25209,6 +25217,7 @@
     },
     "moonshot/kimi-k2-thinking": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25224,6 +25233,7 @@
     },
     "moonshot/kimi-k2-thinking-turbo": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 1.15e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25250,6 +25260,7 @@
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-128k-0430": {
+        "deprecation_date": "2024-04-30",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25287,6 +25298,7 @@
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-32k-0430": {
+        "deprecation_date": "2024-04-30",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 32768,
@@ -25324,6 +25336,7 @@
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-8k-0430": {
+        "deprecation_date": "2024-04-30",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 8192,
