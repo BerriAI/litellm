@@ -25,7 +25,9 @@ const eslintConfig = [
       "no-prototype-builtins": "off",
       "no-useless-catch": "off",
       "no-useless-escape": "off",
-      "no-self-assign": "off",
+      "no-self-assign": "error",
+      "no-var": "error",
+      "react/no-danger": "error",
     },
   },
 ];
