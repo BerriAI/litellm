@@ -11623,3 +11623,48 @@ async def test_ghsa_q775_ui_session_token_personal_key_still_capped():
         msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
         assert str(code) == "400"
         assert "cannot exceed" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption():
+    """
+    Security regression for GHSA-q775: the team-key exemption must key off the
+    team_id the CALLER supplied, not one injected by default_key_generate_params.
+    With default_key_generate_params.team_id set, a UI session token's personal-key
+    request (no team_id) would otherwise have team_id auto-filled before the ceiling
+    check, flipping is_ui_session_team_key to True and bypassing the ceiling. The
+    request must still be rejected. Mirrors how _requested_max_budget is captured
+    before defaults run.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500)
+    assert data.team_id is None
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+        patch("litellm.default_key_generate_params", {"team_id": "injected-team"}),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await _common_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                team_table=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()
