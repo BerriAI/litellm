@@ -8,6 +8,8 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.integrations.galileo import GalileoObserve
+from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
+from litellm.types.rerank import RerankResponse
 from litellm.types.utils import (
     Choices,
     EmbeddingResponse,
@@ -16,6 +18,7 @@ from litellm.types.utils import (
     Message,
     ModelResponse,
     TextCompletionResponse,
+    TranscriptionResponse,
 )
 
 
@@ -122,7 +125,9 @@ def test_galileo_get_output_str_responses_api(galileo_v2_env):
     }
     response = ResponsesAPIResponse(**resp_dict)
     result = logger.get_output_str_from_response(response, {"call_type": "aresponses"})
-    assert result == "Hi! How can I help?"
+    assert result is not None
+    assert '"Hi! How can I help?"' in result
+    assert '"type": "message"' in result
 
 
 def test_galileo_v2_span_preserves_message_roles(galileo_v2_env):
@@ -165,7 +170,8 @@ def test_galileo_output_text_from_model_response(galileo_v2_env):
     )
 
     output = logger.get_output_str_from_response(response, {"call_type": "acompletion"})
-    assert output == "assistant reply"
+    assert output is not None
+    assert '"assistant reply"' in output
 
 
 @pytest.mark.asyncio
@@ -331,7 +337,117 @@ def test_galileo_get_output_str_variants(galileo_v2_env):
     image_resp = ImageResponse(data=[ImageObject(url="https://x/y.png")])
     assert "y.png" in logger.get_output_str_from_response(image_resp, {})
 
+    speech_resp = HttpxBinaryResponseContent(response=MagicMock())
+    assert (
+        logger.get_output_str_from_response(speech_resp, {"call_type": "aspeech"})
+        == "speech-output"
+    )
+
+    transcription_resp = TranscriptionResponse(text="hello world")
+    assert (
+        logger.get_output_str_from_response(
+            transcription_resp, {"call_type": "atranscription"}
+        )
+        == "hello world"
+    )
+
+    realtime_output = [{"type": "response", "text": "hi"}]
+    assert (
+        logger.get_output_str_from_response(
+            realtime_output,
+            {"call_type": "_arealtime", "input": {"session": "abc"}},
+        )
+        == '[{"type": "response", "text": "hi"}]'
+    )
+
+    pass_through_output = {"response": "passthrough-body", "status": 200}
+    assert (
+        logger.get_output_str_from_response(
+            pass_through_output, {"call_type": "pass_through_endpoint"}
+        )
+        == "passthrough-body"
+    )
+
+    model_resp = ModelResponse(
+        choices=[Choices(message=Message(content="chat reply", role="assistant"))]
+    )
+    assert '"chat reply"' in logger.get_output_str_from_response(
+        model_resp, {"call_type": "acompletion", "messages": [{"role": "user", "content": "hi"}]}
+    )
+
     assert logger.get_output_str_from_response("not-a-supported-type", {}) is None
+
+
+def test_galileo_get_input_output_error_status_message(galileo_v2_env):
+    logger = GalileoObserve()
+    input_text, output_text, _ = logger._get_galileo_input_output_content(
+        kwargs={"messages": [{"role": "user", "content": "fail me"}]},
+        response_obj=None,
+        level="ERROR",
+        status_message="provider timeout",
+    )
+    assert input_text == "fail me"
+    assert output_text == "provider timeout"
+
+
+def test_galileo_get_output_str_rerank_response(galileo_v2_env):
+    logger = GalileoObserve()
+    rerank_response = RerankResponse(
+        results=[
+            {"index": 2, "relevance_score": 0.98},
+            {"index": 0, "relevance_score": 0.12},
+        ]
+    )
+    output = logger.get_output_str_from_response(
+        rerank_response, {"call_type": "arerank"}
+    )
+    assert output is not None
+    assert '"index": 2' in output
+    assert '"relevance_score": 0.98' in output
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_log_success_rerank(galileo_v2_env):
+    import datetime
+
+    logger = GalileoObserve()
+    rerank_response = RerankResponse(
+        results=[{"index": 1, "relevance_score": 0.95}]
+    )
+
+    mock_response = MagicMock()
+    mock_response.is_success = True
+    mock_response.status_code = 201
+
+    with patch.object(logger.async_httpx_handler, "post", return_value=mock_response):
+        await logger.async_log_success_event(
+            kwargs={
+                "call_type": "arerank",
+                "model": "cohere/rerank-english-v3.0",
+                "query": "What is the capital of the United States?",
+                "documents": ["doc-a", "doc-b"],
+                "standard_logging_object": {
+                    "call_type": "arerank",
+                    "model": "cohere/rerank-english-v3.0",
+                    "messages": "What is the capital of the United States?",
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                    "response_cost": 0.0,
+                    "startTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "endTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                },
+            },
+            response_obj=rerank_response,
+            start_time=datetime.datetime(2026, 5, 25, 12, 0, 0),
+            end_time=datetime.datetime(2026, 5, 25, 12, 0, 1),
+        )
+
+    assert logger.in_memory_records == []
 
 
 def test_galileo_get_ingest_request_unconfigured(monkeypatch):
