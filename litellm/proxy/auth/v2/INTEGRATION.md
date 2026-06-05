@@ -72,21 +72,25 @@ limit silently over- or under-enforces a customer's spend.
 
 ## 3. Single budget authority
 
-**State.** A few budget caps (team / org / global proxy spend) still execute
-inside the auth gate's `common_checks` (`auth_checks.py:508+`); v2 does not call
-`common_checks`, so those caps are not enforced under v2.
+**Done.** Team, organization, and global proxy-spend caps live in v1's
+`common_checks`, which v2 does not run. Rather than move them (which would risk
+v1's path), `budgets.py` (`enforce_hierarchy_budgets`) calls the *same* functions
+v1 uses — `_team_max_budget_check`, `_organization_max_budget_check`, and
+`get_global_proxy_spend` + `_global_proxy_budget_check` — from v2's inference
+path. One implementation, two callers: single authority, correct counter keys, no
+edit to v1. A breach surfaces as the same 429 `ProxyException` v1 raises.
+Unit-tested in `test_budgets.py` (team over/under budget, no-team no-op).
 
-**Change.** Move those checks into the budget pre-call hook so one path enforces
-them for both v1 and v2, then delete them from `common_checks`.
-
-**Verify (live).** Set `litellm.max_budget` (global) below current spend and
-confirm requests are blocked under `auth_version: v2`, matching v1.
+**What remains (live).** Cross-pod spend-counter accuracy. Set a team `max_budget`
+(and `litellm.max_budget` for the global cap) below current spend and confirm
+requests are blocked under `auth_version: v2`, matching v1.
 
 ---
 
-## Order
+## Status
 
-Do (2) first — it is the gap that makes v2 unusable for JWT/master deployments —
-then (1), then (3). After all three, run a full real-traffic pass with
-`auth_version: v2` and compare budget/limit/telemetry behavior against v1 before
+All three are implemented and unit-tested; what remains is purely live
+verification against a running proxy with real spend counters and an OTel
+collector — confirm budgets block (429), limits block, and spans carry identity
+under `auth_version: v2`, matching v1. Run that full real-traffic pass before
 considering the feature production-eligible.
