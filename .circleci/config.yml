@@ -1626,6 +1626,25 @@ jobs:
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker tag litellm-docker-database:ci my-app:latest
       - run:
+          name: Start OpenAI image record/replay proxy
+          background: true
+          command: |
+            CASSETTE_REDIS_URL="$CASSETTE_REDIS_URL" \
+            RECORDER_UPSTREAM_BASE_URL="https://api.openai.com" \
+              uv run --no-sync python tests/_openai_record_replay_proxy.py --host 0.0.0.0 --port 8090
+      - run:
+          name: Wait for record/replay proxy
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8090/__recorder_health >/dev/null 2>&1; then
+                echo "record/replay proxy is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "record/replay proxy did not become ready" >&2
+            exit 1
+      - run:
           name: Run Docker container
           command: |
             docker run -d \
@@ -1655,6 +1674,7 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              -e IMAGE_GEN_RECORDER_BASE_URL=http://host.docker.internal:8090/v1 \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
