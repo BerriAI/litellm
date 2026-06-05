@@ -1182,6 +1182,52 @@ def test_bedrock_tools_transformation_valid_params():
     assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
 
 
+def test_bedrock_tools_pt_strict_parameter():
+    """Regression for strict tools silently dropped on the Bedrock Converse path.
+
+    Bedrock Converse supports strict in toolSpec since 2026-02; without forwarding
+    strict (and additionalProperties, which Bedrock requires alongside strict) the
+    model ignores the enum constraint the caller asked for.
+    """
+    tools_with_strict = [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_sql",
+                "strict": True,
+                "description": "Generate a SQL query",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    result = _bedrock_tools_pt(tools_with_strict)
+    assert result[0]["toolSpec"]["strict"] is True
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
+
+    tools_without_strict = [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_sql",
+                "description": "Generate a SQL query",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+    result = _bedrock_tools_pt(tools_without_strict)
+    assert "strict" not in result[0]["toolSpec"]
+    assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
+
+
 def test_not_found_error():
     with pytest.raises(litellm.NotFoundError):
         completion(
