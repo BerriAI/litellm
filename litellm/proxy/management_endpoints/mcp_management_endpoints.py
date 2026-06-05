@@ -659,6 +659,7 @@ if MCP_AVAILABLE:
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
+            timeout=payload.timeout,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -1542,7 +1543,7 @@ if MCP_AVAILABLE:
                         master_key,
                         algorithms=["HS256"],
                         # UI session cookies may omit exp; don't require it.
-                        options={"verify_exp": False},
+                        options={"verify_exp": False, "verify_aud": False},
                     )
                     if decoded.get("login_method") in ("sso", "username_password"):
                         cookie_key = decoded.get("key", "")

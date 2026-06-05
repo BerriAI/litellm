@@ -97,6 +97,15 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       required: false,
       type: "text",
     },
+    {
+      name: "vertex_engine_id",
+      label: "Engine ID (optional)",
+      tooltip:
+        "Search app (engine) ID. Required for website, healthcare, and connector-based data stores (Workspace, Slack, Jira, etc.) because these sources route search through an engine. Leave blank to query the data store directly.",
+      placeholder: "e.g. my-search-app_1234567890",
+      required: false,
+      type: "text",
+    },
   ],
   openai: [
     {

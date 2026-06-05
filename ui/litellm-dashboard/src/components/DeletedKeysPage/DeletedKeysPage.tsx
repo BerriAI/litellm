@@ -10,11 +10,7 @@ export default function DeletedKeysPage() {
   const [pageIndex, setPageIndex] = useState(0);
   const [pageSize] = useState(50);
 
-  const {
-    data: keysData,
-    isPending: isLoading,
-    isFetching,
-  } = useDeletedKeys(pageIndex + 1, pageSize);
+  const { data: keysData, isPending: isLoading, isFetching } = useDeletedKeys(pageIndex + 1, pageSize);
 
   return (
     <div className="flex flex-col gap-4">

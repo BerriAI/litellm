@@ -2,6 +2,7 @@
 MCP Server Utilities
 """
 
+import json
 import re
 from typing import Any, Dict, Iterator, Mapping, Optional, Tuple, Union
 
@@ -160,6 +161,36 @@ def lookup_mcp_server_auth_in_headers(
             if key in normalized_headers:
                 return normalized_headers[key]
     return None
+
+
+MCP_TOOL_ALLOWLIST_ENFORCED_KEY = "tool_allowlist_enforced"
+
+
+def _parse_mcp_info_dict(mcp_info: Any) -> Optional[Dict[str, Any]]:
+    if mcp_info is None:
+        return None
+    if isinstance(mcp_info, dict):
+        return mcp_info
+    if isinstance(mcp_info, str):
+        try:
+            parsed = json.loads(mcp_info)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def is_server_tool_allowlist_enforced(mcp_server: Any) -> bool:
+    mcp_info = _parse_mcp_info_dict(getattr(mcp_server, "mcp_info", None))
+    if not mcp_info:
+        return False
+    return bool(mcp_info.get(MCP_TOOL_ALLOWLIST_ENFORCED_KEY))
+
+
+def server_applies_tool_allowlist(mcp_server: Any) -> bool:
+    """Whether server-level allowed_tools whitelist filtering is active."""
+    allowed_tools = getattr(mcp_server, "allowed_tools", None) or []
+    return is_server_tool_allowlist_enforced(mcp_server) or bool(allowed_tools)
 
 
 def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
