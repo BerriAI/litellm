@@ -2321,7 +2321,10 @@ export const updateUsefulLinksCall = async (
   useful_links: Record<string, string | { url: string; index: number }>,
 ) => {
   try {
-    return apiClient.post(`/model_hub/update_useful_links`, { accessToken, body: { useful_links: useful_links } });
+    return await apiClient.post(`/model_hub/update_useful_links`, {
+      accessToken,
+      body: { useful_links: useful_links },
+    });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -5213,7 +5216,7 @@ export const suggestPolicyTemplates = async (
   model: string,
 ) => {
   try {
-    return apiClient.post(`/policy/templates/suggest`, {
+    return await apiClient.post(`/policy/templates/suggest`, {
       accessToken,
       body: {
         attack_examples: attackExamples.filter((e) => e.trim()),
@@ -5229,7 +5232,7 @@ export const suggestPolicyTemplates = async (
 
 export const testPolicyTemplate = async (accessToken: string, guardrailDefinitions: any[], text: string) => {
   try {
-    return apiClient.post(`/policy/templates/test`, {
+    return await apiClient.post(`/policy/templates/test`, {
       accessToken,
       body: {
         guardrail_definitions: guardrailDefinitions,
@@ -5478,7 +5481,10 @@ export const updatePolicyVersionStatus = async (
   versionStatus: "published" | "production",
 ): Promise<any> => {
   try {
-    return apiClient.put(`/policies/${policyId}/status`, { accessToken, body: { version_status: versionStatus } });
+    return await apiClient.put(`/policies/${policyId}/status`, {
+      accessToken,
+      body: { version_status: versionStatus },
+    });
   } catch (error) {
     console.error("Failed to update policy version status:", error);
     throw error;
@@ -5605,7 +5611,7 @@ export const resolvePoliciesCall = async (
   context: { team_alias?: string; key_alias?: string; model?: string; tags?: string[] },
 ) => {
   try {
-    return apiClient.post(`/policies/resolve`, { accessToken, body: context });
+    return await apiClient.post(`/policies/resolve`, { accessToken, body: context });
   } catch (error) {
     console.error("Failed to resolve policies:", error);
     throw error;
@@ -6298,7 +6304,7 @@ export const createMCPServer = async (
 
 export const updateMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    return apiClient.put(`/v1/mcp/server`, { accessToken, body: formValues });
+    return await apiClient.put(`/v1/mcp/server`, { accessToken, body: formValues });
   } catch (error) {
     console.error("Failed to update MCP server:", error);
     throw error;
