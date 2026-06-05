@@ -1315,7 +1315,7 @@ async def merge_user_env_vars(
         signed=True,
     )
     async with prisma_client.db.tx() as tx:
-        await tx.query_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
+        await tx.execute_raw("SELECT pg_advisory_xact_lock($1::bigint)", lock_key)
         row = await tx.litellm_mcpuserenvvars.find_unique(
             where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}}
         )

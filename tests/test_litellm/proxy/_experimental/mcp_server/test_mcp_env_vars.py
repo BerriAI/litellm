@@ -866,12 +866,12 @@ def _transactional_env_vars_prisma(read_delay: float = 0.0):
                 self._held = None
             return False
 
-        async def query_raw(self, query, *args):
+        async def execute_raw(self, query, *args):
             lock_key = args[0]
             lock = self._store.locks.setdefault(lock_key, asyncio.Lock())
             await lock.acquire()
             self._held = lock
-            return [{"pg_advisory_xact_lock": None}]
+            return 1
 
     class _DB:
         def __init__(self, store, delay):
@@ -1056,6 +1056,65 @@ async def test_merge_user_env_vars_serializes_concurrent_writes(env_vars_salt_ke
 
     stored = await get_user_env_vars(prisma, "alice", "srv-1")
     assert stored == {"TOKEN_A": "a", "TOKEN_B": "b"}
+
+
+@pytest.mark.asyncio
+async def test_merge_user_env_vars_acquires_lock_without_deserializing_void(
+    env_vars_salt_key,
+):
+    """``pg_advisory_xact_lock`` returns ``void``; running it through ``query_raw``
+    makes Prisma try to deserialize that column and raises ``RawQueryError``. The
+    lock must be taken via ``execute_raw`` (no result-set deserialization) so the
+    merge still completes."""
+    from unittest.mock import MagicMock
+
+    from prisma.errors import RawQueryError
+
+    from litellm.proxy._experimental.mcp_server.db import merge_user_env_vars
+
+    class _Tx:
+        def __init__(self):
+            self.stored = None
+            self.litellm_mcpuserenvvars = self
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def query_raw(self, query, *args):
+            raise RawQueryError(
+                {
+                    "user_facing_error": {
+                        "error_code": "P2010",
+                        "meta": {
+                            "message": "Failed to deserialize column of type 'void'."
+                        },
+                    }
+                }
+            )
+
+        async def execute_raw(self, query, *args):
+            return 1
+
+        async def find_unique(self, where):
+            return None
+
+        async def upsert(self, where, data):
+            self.stored = data["create"]["values_b64"]
+
+    tx = _Tx()
+    prisma = MagicMock()
+    prisma.db.tx = MagicMock(return_value=tx)
+
+    values = {"CORP_TOKEN": "t0ken"}
+    merged = await merge_user_env_vars(
+        prisma, "alice", "srv-1", values, allowed_names=values.keys()
+    )
+
+    assert merged == values
+    assert tx.stored is not None
 
 
 @pytest.mark.asyncio
