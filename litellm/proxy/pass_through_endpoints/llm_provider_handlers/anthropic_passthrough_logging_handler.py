@@ -19,6 +19,11 @@ from litellm.llms.anthropic.chat.handler import (
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
+    BasePassthroughLoggingHandler,
+    get_actual_model_id_from_router,
+    store_batch_managed_object,
+)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
@@ -819,7 +824,7 @@ class AnthropicPassthroughLoggingHandler:
                 # Create unified object ID for tracking
                 # Format: base64(litellm_proxy;model_id:{};llm_batch_id:{})
                 # For Anthropic passthrough, prefix model with "anthropic/" so router can determine provider
-                actual_model_id = AnthropicPassthroughLoggingHandler.get_actual_model_id_from_router(model_name)
+                actual_model_id = get_actual_model_id_from_router(model_name)
 
                 # If model not in router, use "anthropic/{model_name}" format so router can determine provider
                 if actual_model_id == model_name and not actual_model_id.startswith("anthropic/"):
@@ -832,7 +837,7 @@ class AnthropicPassthroughLoggingHandler:
 
                 # Store the managed object for cost tracking
                 # This will be picked up by check_batch_cost polling mechanism
-                AnthropicPassthroughLoggingHandler._store_batch_managed_object(
+                store_batch_managed_object(
                     unified_object_id=unified_object_id,
                     batch_object=litellm_batch_response,
                     model_object_id=batch_id,
@@ -953,98 +958,3 @@ class AnthropicPassthroughLoggingHandler:
                 "result": litellm_model_response,
                 "kwargs": kwargs,
             }
-
-    @staticmethod
-    def _store_batch_managed_object(
-        unified_object_id: str,
-        batch_object: LiteLLMBatch,
-        model_object_id: str,
-        logging_obj: LiteLLMLoggingObj,
-        **kwargs,
-    ) -> None:
-        """
-        Store batch managed object for cost tracking.
-        This will be picked up by the check_batch_cost polling mechanism.
-        """
-        try:
-            # Get the managed files hook from the logging object
-            # This is a bit of a hack, but we need access to the proxy logging system
-            from litellm.proxy.proxy_server import proxy_logging_obj
-
-            managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
-            if managed_files_hook is not None and hasattr(managed_files_hook, "store_unified_object_id"):
-                # Create a mock user API key dict for the managed object storage
-                from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
-                _request_metadata = (kwargs.get("litellm_params", {}) or {}).get("metadata", {}) or {}
-
-                user_api_key_dict = UserAPIKeyAuth(
-                    user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
-                    api_key="",
-                    team_id=_request_metadata.get("user_api_key_team_id"),
-                    team_alias=None,
-                    user_role=LitellmUserRoles.CUSTOMER,  # Use proper enum value
-                    user_email=None,
-                    max_budget=None,
-                    spend=0.0,  # Set to 0.0 instead of None
-                    models=[],  # Set to empty list instead of None
-                    tpm_limit=None,
-                    rpm_limit=None,
-                    budget_duration=None,
-                    budget_reset_at=None,
-                    max_parallel_requests=None,
-                    allowed_model_region=None,
-                    metadata={},  # Set to empty dict instead of None
-                    key_alias=None,
-                    permissions={},  # Set to empty dict instead of None
-                    model_max_budget={},  # Set to empty dict instead of None
-                    model_spend={},  # Set to empty dict instead of None
-                )
-
-                # Store the unified object for batch cost tracking
-                import asyncio
-
-                asyncio.create_task(
-                    managed_files_hook.store_unified_object_id(  # type: ignore
-                        unified_object_id=unified_object_id,
-                        file_object=batch_object,
-                        litellm_parent_otel_span=None,
-                        model_object_id=model_object_id,
-                        file_purpose="batch",
-                        user_api_key_dict=user_api_key_dict,
-                    )
-                )
-
-                verbose_proxy_logger.info(
-                    f"Stored Anthropic batch managed object with unified_object_id={unified_object_id}, batch_id={model_object_id}"
-                )
-            else:
-                verbose_proxy_logger.warning(
-                    "Managed files hook not available, cannot store batch object for cost tracking"
-                )
-
-        except Exception as e:
-            verbose_proxy_logger.error(f"Error storing Anthropic batch managed object: {e}")
-
-    @staticmethod
-    def get_actual_model_id_from_router(model_name: str) -> str:
-        from litellm.proxy.proxy_server import llm_router
-
-        if llm_router is not None:
-            # Try to find the model in the router by the model name
-            # Use the existing get_model_ids method from router
-            model_ids = llm_router.get_model_ids(model_name=model_name)
-            if model_ids and len(model_ids) > 0:
-                # Use the first model ID found
-                actual_model_id = model_ids[0]
-                verbose_proxy_logger.info(f"Found model ID in router: {actual_model_id}")
-                return actual_model_id
-            else:
-                # Fallback to model name
-                actual_model_id = model_name
-                verbose_proxy_logger.warning(f"Model not found in router, using model name: {actual_model_id}")
-                return actual_model_id
-        else:
-            # Fallback if router is not available
-            verbose_proxy_logger.warning(f"Router not available, using model name: {model_name}")
-            return model_name

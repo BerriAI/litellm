@@ -436,6 +436,7 @@ class PassThroughEndpointLogging:
             or OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(url_route)
             or OpenAIPassthroughLoggingHandler.is_openai_responses_route(url_route)
+            or OpenAIPassthroughLoggingHandler.is_openai_batch_route(url_route)
         )
 
     def _set_cost_per_request(

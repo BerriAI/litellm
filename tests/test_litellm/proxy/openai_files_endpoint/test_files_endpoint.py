@@ -2610,3 +2610,70 @@ def test_list_files_with_all_proxy_models_team_uses_openai_deployment(
     assert captured_kwargs.get("api_key") == "team-openai-key"
     assert captured_kwargs.get("custom_llm_provider") == "openai"
     proxy_logging_obj.post_call_failure_hook.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_route_create_file_model_based_batch_strips_proxy_alias_from_jsonl():
+    """Model-based file uploads must rewrite batch JSONL body.model to the provider id."""
+    from litellm import CreateFileRequest
+    from litellm.proxy.openai_files_endpoints.files_endpoints import route_create_file
+
+    proxy_alias = "openai/openai/gpt-5.4-batch"
+    jsonl = (
+        '{"custom_id": "1", "method": "POST", "url": "/v1/chat/completions", '
+        f'"body": {{"model": "{proxy_alias}", "messages": [{{"role": "user", "content": "hi"}}]}}}}'
+    ).encode()
+    captured_file_content = {}
+
+    async def mock_acreate_file(**kwargs):
+        file_tuple = kwargs.get("file")
+        if file_tuple and len(file_tuple) >= 2:
+            captured_file_content["bytes"] = file_tuple[1]
+        return OpenAIFileObject(
+            id="file-provider123",
+            bytes=len(jsonl),
+            created_at=0,
+            filename="batch.jsonl",
+            object="file",
+            purpose="batch",
+            status="processed",
+        )
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": proxy_alias,
+                "litellm_params": {
+                    "model": "openai/gpt-5.4",
+                    "api_key": "test-key",
+                    "custom_llm_provider": "openai",
+                },
+                "model_info": {"id": "openai/openai/gpt-5.4-batch-1"},
+            }
+        ]
+    )
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(litellm, "acreate_file", mock_acreate_file)
+        await route_create_file(
+            llm_router=llm_router,
+            _create_file_request=CreateFileRequest(
+                file=("batch.jsonl", jsonl, "application/jsonl"),
+                purpose="batch",
+            ),
+            purpose="batch",
+            proxy_logging_obj=proxy_logging_obj,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_id="user-1"),
+            target_model_names_list=[],
+            is_router_model=False,
+            router_model=None,
+            custom_llm_provider="openai",
+            model=proxy_alias,
+        )
+
+    uploaded = captured_file_content["bytes"].decode()
+    assert proxy_alias not in uploaded
+    assert '"model": "gpt-5.4"' in uploaded

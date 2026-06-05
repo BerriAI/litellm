@@ -16,7 +16,12 @@ from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )
-from litellm.types.utils import LlmProviders, ModelResponse, TextCompletionResponse
+from litellm.types.utils import (
+    LiteLLMBatch,
+    LlmProviders,
+    ModelResponse,
+    TextCompletionResponse,
+)
 
 if TYPE_CHECKING:
     from ..success_handler import PassThroughEndpointLogging
@@ -218,3 +223,81 @@ class BasePassthroughLoggingHandler(ABC):
             "result": complete_streaming_response,
             "kwargs": kwargs,
         }
+
+
+def get_actual_model_id_from_router(model_name: str) -> str:
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is not None:
+        model_ids = llm_router.get_model_ids(model_name=model_name)
+        if model_ids:
+            return model_ids[0]
+    return model_name
+
+
+def store_batch_managed_object(
+    unified_object_id: str,
+    batch_object: "LiteLLMBatch",
+    model_object_id: str,
+    logging_obj: LiteLLMLoggingObj,
+    **kwargs,
+) -> None:
+    try:
+        from litellm.proxy.proxy_server import proxy_logging_obj
+
+        managed_files_hook = proxy_logging_obj.get_proxy_hook("managed_files")
+        if managed_files_hook is None or not hasattr(
+            managed_files_hook, "store_unified_object_id"
+        ):
+            verbose_proxy_logger.warning(
+                "Managed files hook not available, cannot store batch object for cost tracking"
+            )
+            return
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        _request_metadata = (kwargs.get("litellm_params", {}) or {}).get(
+            "metadata", {}
+        ) or {}
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id=_request_metadata.get("user_api_key_user_id", "default-user"),
+            api_key="",
+            team_id=_request_metadata.get("user_api_key_team_id"),
+            team_alias=None,
+            user_role=LitellmUserRoles.CUSTOMER,
+            user_email=None,
+            max_budget=None,
+            spend=0.0,
+            models=[],
+            tpm_limit=None,
+            rpm_limit=None,
+            budget_duration=None,
+            budget_reset_at=None,
+            max_parallel_requests=None,
+            allowed_model_region=None,
+            metadata={},
+            key_alias=None,
+            permissions={},
+            model_max_budget={},
+            model_spend={},
+        )
+
+        import asyncio
+
+        asyncio.create_task(
+            managed_files_hook.store_unified_object_id(  # type: ignore
+                unified_object_id=unified_object_id,
+                file_object=batch_object,
+                litellm_parent_otel_span=None,
+                model_object_id=model_object_id,
+                file_purpose="batch",
+                user_api_key_dict=user_api_key_dict,
+            )
+        )
+
+        verbose_proxy_logger.info(
+            f"Stored batch managed object: unified_object_id={unified_object_id}, batch_id={model_object_id}"
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error storing batch managed object: {e}")
