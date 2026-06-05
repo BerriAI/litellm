@@ -5,6 +5,7 @@ from functools import wraps
 from typing import Any, Callable, List, Optional, Tuple
 
 from fastapi import HTTPException, Request
+from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_logger
@@ -436,31 +437,56 @@ async def send_management_endpoint_alert(
             )
 
 
+def _redacted_env_var(entry: Any) -> dict:
+    get = entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
+    return {
+        "name": get("name"),
+        "scope": get("scope"),
+        "description": get("description"),
+        "value": "",
+    }
+
+
+def _redact_record_env_vars(record: Any) -> Any:
+    """Return ``record`` with its ``env_vars[].value`` blanked.
+
+    Copies rather than mutating, because the record aliases the live response
+    object that is also returned to the caller. Records without an ``env_vars``
+    list are returned unchanged.
+    """
+    env_vars = (
+        record.get("env_vars")
+        if isinstance(record, dict)
+        else getattr(record, "env_vars", None)
+    )
+    if not isinstance(env_vars, list):
+        return record
+    redacted = [_redacted_env_var(entry) for entry in env_vars]
+    if isinstance(record, dict):
+        return {**record, "env_vars": redacted}
+    if isinstance(record, BaseModel):
+        return record.model_copy(update={"env_vars": redacted})
+    return record
+
+
 def _redact_env_var_values(response: dict) -> None:
     """Blank ``env_vars[].value`` in a management response before telemetry.
 
-    MCP create/update endpoints return decrypted ``scope="global"`` env var
-    values so the admin UI can pre-fill the edit form; those values are
-    upstream credentials and must not be serialized verbatim into OTEL spans,
-    where an observability user could read them. Names, scopes, and
-    descriptions are kept so traces stay useful.
+    MCP endpoints return decrypted ``scope="global"`` env var values so the admin
+    UI can pre-fill the edit form; those values are upstream credentials and must
+    not be serialized verbatim into OTEL spans, where an observability user could
+    read them. The values surface both at the top level (single-server
+    create/update) and nested under ``items`` (the submissions queue), so both are
+    scrubbed. Names, scopes, and descriptions are kept so traces stay useful.
     """
-    env_vars = response.get("env_vars")
-    if not isinstance(env_vars, list):
-        return
+    if isinstance(response.get("env_vars"), list):
+        response["env_vars"] = [
+            _redacted_env_var(entry) for entry in response["env_vars"]
+        ]
 
-    def _redacted(entry: Any) -> dict:
-        get = (
-            entry.get if isinstance(entry, dict) else lambda k: getattr(entry, k, None)
-        )
-        return {
-            "name": get("name"),
-            "scope": get("scope"),
-            "description": get("description"),
-            "value": "",
-        }
-
-    response["env_vars"] = [_redacted(entry) for entry in env_vars]
+    items = response.get("items")
+    if isinstance(items, list):
+        response["items"] = [_redact_record_env_vars(item) for item in items]
 
 
 async def _emit_management_endpoint_otel_span(
