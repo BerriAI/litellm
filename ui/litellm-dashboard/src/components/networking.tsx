@@ -77,6 +77,7 @@ import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./e
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+import { resolveApiBase } from "@/lib/http/resolveApiBase";
 
 export { deriveErrorMessage };
 export { ApiError } from "@/lib/http/client";
@@ -84,11 +85,13 @@ export { ApiError } from "@/lib/http/client";
 const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
 // to the backend — use relative URLs (null) so rewrites can intercept them.
-const defaultProxyBaseUrl = process.env.NEXT_PUBLIC_BASE_URL
-  ? process.env.NEXT_PUBLIC_BASE_URL
-  : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
-    ? "http://localhost:4000"
-    : null;
+const resolveDefaultBase = (fallback: string | null): string | null =>
+  process.env.NEXT_PUBLIC_BASE_URL
+    ? process.env.NEXT_PUBLIC_BASE_URL
+    : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
+      ? "http://localhost:4000"
+      : fallback;
+const defaultProxyBaseUrl = resolveDefaultBase(null);
 const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 const WORKER_URL_KEY = "litellm_worker_url";
@@ -128,28 +131,10 @@ const updateProxyBaseUrl = (serverRootPath: string, receivedProxyBaseUrl: string
   if (typeof window !== "undefined" && window.localStorage.getItem(WORKER_URL_KEY)) {
     return;
   }
-  const browserLocation = getWindowLocation();
-  const resolvedDefaultProxyBaseUrl = process.env.NEXT_PUBLIC_BASE_URL
-    ? process.env.NEXT_PUBLIC_BASE_URL
-    : isLocal && process.env.NEXT_PUBLIC_USE_REWRITES !== "true"
-      ? "http://localhost:4000"
-      : browserLocation?.origin ?? null;
-  let initialProxyBaseUrl = receivedProxyBaseUrl || resolvedDefaultProxyBaseUrl;
-  console.log("proxyBaseUrl:", proxyBaseUrl);
-  console.log("serverRootPath:", serverRootPath);
-
-  if (!initialProxyBaseUrl) {
-    proxyBaseUrl = proxyBaseUrl ?? null;
-    console.log("Updated proxyBaseUrl:", proxyBaseUrl);
-    return;
-  }
-
-  if (serverRootPath.length > 0 && !initialProxyBaseUrl.endsWith(serverRootPath) && serverRootPath != "/") {
-    initialProxyBaseUrl += serverRootPath;
-  }
-
-  proxyBaseUrl = initialProxyBaseUrl;
-  console.log("Updated proxyBaseUrl:", proxyBaseUrl);
+  proxyBaseUrl = resolveApiBase({
+    explicitBase: receivedProxyBaseUrl || resolveDefaultBase(getWindowLocation()?.origin ?? null),
+    serverRootPath,
+  });
 };
 
 const updateServerRootPath = (receivedServerRootPath: string) => {
