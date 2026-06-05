@@ -2466,8 +2466,22 @@ class MCPServerManager:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
         except asyncio.CancelledError:
-            verbose_logger.warning(
-                f"Task cancelled while listing tools from {server_name}"
+            import traceback as _diag_tb
+
+            _diag_task = asyncio.current_task()
+            try:
+                _diag_cancelling = (
+                    _diag_task.cancelling() if _diag_task is not None else -1
+                )
+            except Exception:
+                _diag_cancelling = -1
+            verbose_logger.error(
+                "[MCP-DIAG] CancelledError listing tools from %s | "
+                "current_task.cancelling()=%s | is_passthrough=%s | stack:\n%s",
+                server_name,
+                _diag_cancelling,
+                is_passthrough,
+                _diag_tb.format_exc(),
             )
             return []
         except ConnectionError as e:
