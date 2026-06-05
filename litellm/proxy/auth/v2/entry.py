@@ -7,6 +7,7 @@ from .authorizer import AuthorizationDenied, authorize
 from .context import AuthMethod, RequestAuthContext, set_auth_context
 from .end_user import resolve_end_user
 from .enforcer import CasbinEnforcer
+from .enrichment import enrich_identity
 from .policy_store import load_policy_snapshot
 from .principal import Principal, build_principal
 from .route_map import is_inference_route, match_route
@@ -36,6 +37,34 @@ async def _build_enforcer(principal: Principal, prisma_client: Any) -> CasbinEnf
         resource_groupings,
         domain_groupings,
     )
+
+
+async def _enrich_for_limits(identity: Any, ctx: AuthContext) -> None:
+    """Fill user/team budget+limit fields for non-key logins (master/JWT/OAuth) so
+    the existing pre-call budget/limit hooks can enforce them. Virtual keys are
+    already populated by get_key_object and skip this."""
+    from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
+
+    async def load_user(user_id: str) -> Any:
+        return await get_user_object(
+            user_id=user_id,
+            prisma_client=ctx.prisma_client,
+            user_api_key_cache=ctx.user_api_key_cache,
+            user_id_upsert=False,
+            parent_otel_span=ctx.parent_otel_span,
+            proxy_logging_obj=ctx.proxy_logging_obj,
+        )
+
+    async def load_team(team_id: str) -> Any:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=ctx.prisma_client,
+            user_api_key_cache=ctx.user_api_key_cache,
+            parent_otel_span=ctx.parent_otel_span,
+            proxy_logging_obj=ctx.proxy_logging_obj,
+        )
+
+    await enrich_identity(identity, load_user=load_user, load_team=load_team)
 
 
 async def _best_effort_identity(api_key: Optional[str], ctx: AuthContext) -> AuthResult:
@@ -113,6 +142,8 @@ async def user_api_key_auth_v2(
         # key.models / access-group mechanism is intentionally not consulted.
         result = await authenticate(token, ctx)
         request_data = await _read_request_body(request=request)
+        if result.method is not AuthMethod.VIRTUAL_KEY:
+            await _enrich_for_limits(result.identity, ctx)
         principal, identity = _establish_context(request, result, route)
         requested_model = (
             request_data.get("model") if isinstance(request_data, dict) else None

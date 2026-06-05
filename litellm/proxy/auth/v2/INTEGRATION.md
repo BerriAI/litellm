@@ -54,21 +54,19 @@ independent of v1/v2.
 JWT, and OAuth authenticators return a thin identity (no budget/limit fields), so
 the hooks read `None` and enforce nothing for those logins.
 
-**Change.** Add an enrichment stage that runs after authentication: when the
-identity lacks budget/limit fields, load the user and team and populate them.
+**Built.** `enrichment.py` (`enrich_identity`) copies the user/team limit fields
+1:1 from the rows into the identity's distinct `user_*` / `team_*` slots, filling
+only unset fields so it never overrides an already-resolved value. It is wired
+into the inference path in `entry.py` for non-virtual-key logins
+(`_enrich_for_limits`), with the loaders (`get_user_object` auth_checks.py:1650,
+`get_team_object` auth_checks.py:1982) injected. Unit-tested in
+`test_enrichment.py`.
 
-    from litellm.proxy.auth.auth_checks import get_user_object, get_team_object
-    # get_user_object: auth_checks.py:1650   get_team_object: auth_checks.py:1982
-
-Populate exactly the fields the hooks read, sourced from the user/team rows.
-Dependency-inject the loaders so the stage is unit-testable without a DB.
-
-**Why this is not done blind here.** The field mapping is subtle: a JWT principal
-has no key, so "the limit" is the user limit, the team limit, or their
-combination, and the hooks aggregate key/user/team in a specific way. Getting it
-wrong silently under- or over-enforces a customer's spend. It is additive today
-(these logins currently enforce nothing, so this cannot regress existing
-behavior), but the exact mapping must be confirmed on a running proxy.
+**What remains (live).** Only the verification below. The mapping is additive
+(these logins enforce nothing today, so it cannot regress existing behavior), but
+because it newly turns on enforcement for JWT/master/OAuth requests, the exact
+behavior must be confirmed against a running proxy before it is trusted — a wrong
+limit silently over- or under-enforces a customer's spend.
 
 **Verify (live).**
 1. Create a user with `rpm_limit: 2`. Authenticate as that user via JWT.
