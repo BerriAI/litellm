@@ -1,11 +1,27 @@
 import secrets
-from typing import Any, List, Optional, Protocol, runtime_checkable
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, List, Optional, Protocol, runtime_checkable
 
 from fastapi import HTTPException, status
+
+from .context import AuthMethod
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+
+@dataclass(frozen=True)
+class AuthResult:
+    """The output of the authenticator chain: the resolved identity and how."""
+
+    identity: "UserAPIKeyAuth"
+    method: AuthMethod
 
 
 @runtime_checkable
 class Authenticator(Protocol):
+    method: AuthMethod
+
     def can_handle(self, api_key: Optional[str]) -> bool: ...
 
     async def authenticate(self, api_key: str, ctx: "AuthContext") -> Any: ...
@@ -35,6 +51,8 @@ class MasterKeyAuthenticator:
     downstream; a stable alias stands in for it.
     """
 
+    method = AuthMethod.MASTER_KEY
+
     def can_handle(self, api_key: Optional[str]) -> bool:
         from litellm.proxy.proxy_server import master_key
 
@@ -59,6 +77,8 @@ class MasterKeyAuthenticator:
 
 class VirtualKeyAuthenticator:
     """Resolves a ``sk-`` virtual key to its identity via the existing key store."""
+
+    method = AuthMethod.VIRTUAL_KEY
 
     def can_handle(self, api_key: Optional[str]) -> bool:
         return isinstance(api_key, str) and api_key.startswith("sk-")
@@ -112,6 +132,8 @@ def _jwt_is_configured() -> bool:
 
 class JWTAuthenticator:
     """Verifies a bearer JWT with authlib and maps its claims to an identity."""
+
+    method = AuthMethod.JWT
 
     def can_handle(self, api_key: Optional[str]) -> bool:
         # Only claim JWT-shaped tokens when JWT auth is actually configured, so an
@@ -184,6 +206,8 @@ def _load_introspection_settings() -> Any:
 class OAuth2IntrospectionAuthenticator:
     """Validates an opaque bearer token via an RFC 7662 introspection endpoint."""
 
+    method = AuthMethod.OAUTH2
+
     def can_handle(self, api_key: Optional[str]) -> bool:
         if not isinstance(api_key, str) or not api_key:
             return False
@@ -248,11 +272,15 @@ AUTHENTICATORS: List[Authenticator] = [
 ]
 
 
-async def authenticate(api_key: Optional[str], ctx: AuthContext) -> Any:
+async def authenticate(api_key: Optional[str], ctx: AuthContext) -> AuthResult:
     """Dispatch by credential shape to the first authenticator that handles it."""
     for authenticator in AUTHENTICATORS:
-        if authenticator.can_handle(api_key):
-            return await authenticator.authenticate(api_key, ctx)
+        # The isinstance narrowing is redundant with can_handle at runtime (every
+        # can_handle requires a str) but makes the str guarantee explicit to the
+        # type checker before dispatching.
+        if authenticator.can_handle(api_key) and isinstance(api_key, str):
+            identity = await authenticator.authenticate(api_key, ctx)
+            return AuthResult(identity=identity, method=authenticator.method)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="auth_v2: no authenticator for the supplied credential",

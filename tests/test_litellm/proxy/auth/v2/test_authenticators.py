@@ -1,12 +1,24 @@
 import pytest
 
 from litellm.proxy.auth.v2.authenticators import (
+    OAuth2IntrospectionAuthenticator,
     JWTAuthenticator,
     MasterKeyAuthenticator,
     VirtualKeyAuthenticator,
 )
+from litellm.proxy.auth.v2.context import AuthMethod
 
 JWT_SHAPED = "header.payload.signature"
+
+
+def test_each_authenticator_advertises_its_method():
+    # The method is recorded on the auth context for telemetry, so the chain can
+    # tag how a request authenticated without re-deriving it.
+    assert MasterKeyAuthenticator().method is AuthMethod.MASTER_KEY
+    assert VirtualKeyAuthenticator().method is AuthMethod.VIRTUAL_KEY
+    assert JWTAuthenticator().method is AuthMethod.JWT
+    assert OAuth2IntrospectionAuthenticator().method is AuthMethod.OAUTH2
+
 
 MASTER = "sk-master-secret-123"
 
