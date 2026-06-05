@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
-import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse } from "./types";
+import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
 import { listMCPTools, callMCPTool } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
 import { sanitizeMcpAliasForHeader } from "@/utils/mcpHeaderUtils";
@@ -15,7 +15,8 @@ const MCPToolsViewer = ({
   serverId,
   accessToken,
   auth_type,
-  tokenUrl,
+  oauth2_flow,
+  delegate_auth_to_upstream,
   userRole,
   userID,
   serverAlias,
@@ -30,26 +31,23 @@ const MCPToolsViewer = ({
   const [passthroughHeaders, setPassthroughHeaders] = useState<Record<string, string>>({});
   const [showHeaderInput, setShowHeaderInput] = useState(false);
 
-  // OAuth session token (sessionStorage-backed, cleared on tab/browser close).
-  // Only the interactive (authorization_code/PKCE) flow needs a user-facing
-  // auth gate. M2M (client_credentials) servers are also `auth_type === "oauth2"`,
-  // but the backend fetches their token internally — gating tool listing on
-  // them would force users through a non-existent authorization endpoint.
-  // We detect M2M via the presence of `tokenUrl`, matching the heuristic in
-  // `mcp_server_edit.tsx`.
-  const isOAuth = auth_type === "oauth2" && !tokenUrl;
+  // Only PKCE passthrough uses a browser-held session token (sessionStorage,
+  // cleared on tab/browser close) and a user-facing auth gate. OBO uses the
+  // backend-stored per-user token and M2M uses the backend's own service token,
+  // so neither needs a gate — they list tools with just the LiteLLM key.
+  const isPassthrough = getMcpOAuthMode({ auth_type, oauth2_flow, delegate_auth_to_upstream }) === "passthrough";
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
-    isOAuth && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
+    isPassthrough && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
   );
 
   // Re-sync token when serverId/userID changes (useState initializer only runs on mount).
   useEffect(() => {
-    if (!isOAuth) {
+    if (!isPassthrough) {
       setOauthToken(null);
       return;
     }
     setOauthToken(isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null);
-  }, [serverId, userID, isOAuth]);
+  }, [serverId, userID, isPassthrough]);
 
   const {
     startOAuthFlow,
@@ -75,7 +73,8 @@ const MCPToolsViewer = ({
     // The backend's _get_mcp_server_auth_headers_from_headers() picks up the
     // x-mcp-{alias}-{header} pattern and forwards it to the upstream MCP server.
     // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
-    if (oauthToken) {
+    // Passthrough only: OBO/M2M tokens are attached server-side, not from the browser.
+    if (isPassthrough && oauthToken) {
       if (serverAlias) {
         const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
         if (safeAlias) {
@@ -137,7 +136,7 @@ const MCPToolsViewer = ({
       return result;
     },
     // For OAuth servers, block the query until a session token is available
-    enabled: !!accessToken && (!isOAuth || oauthToken !== null),
+    enabled: !!accessToken && (!isPassthrough || oauthToken !== null),
     staleTime: 30000, // Consider data fresh for 30 seconds
     retry: (failureCount, error: any) => {
       // Don't retry on 401 — token is invalid, user must re-authenticate
@@ -289,7 +288,7 @@ const MCPToolsViewer = ({
                 </Text>
 
                 {/* OAuth Auth Gate — shown when token is absent for OAuth servers */}
-                {isOAuth && !oauthToken && (
+                {isPassthrough && !oauthToken && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
                     <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
@@ -308,7 +307,7 @@ const MCPToolsViewer = ({
                 )}
 
                 {/* Search Bar — only shown when tools are loaded */}
-                {!isOAuth || oauthToken ? (
+                {!isPassthrough || oauthToken ? (
                   <>
                     {toolsData.length > 0 && (
                       <div className="mb-3">
