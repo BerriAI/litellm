@@ -49,6 +49,9 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
             if isinstance(data.get(field), str):
                 data[field] = json.loads(data[field])
 
+        if data.get("org_id") is None and data.get("organization_id") is not None:
+            data["org_id"] = data["organization_id"]
+
         return LiteLLM_VerificationToken(**data)
 
     async def find_by_id(
@@ -298,18 +301,46 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
         if token_record is None:
             return None
 
-        token_data = token_record.model_dump(exclude_none=True)
-        token_data.pop("object_permission", None)
-        token_data["deleted_by"] = deleted_by
-        token_data["deleted_by_api_key"] = deleted_by_api_key
-        token_data["litellm_changed_by"] = litellm_changed_by
-        token_data["deleted_at"] = datetime.utcnow()
+        archive_data = self._build_archive_data(token_record)
+        archive_data["deleted_by"] = deleted_by
+        archive_data["deleted_by_api_key"] = deleted_by_api_key
+        archive_data["litellm_changed_by"] = litellm_changed_by
+        archive_data["deleted_at"] = datetime.utcnow()
 
         async with self.prisma_client.db.tx() as tx:
-            await tx.litellm_deletedverificationtoken.create(data=token_data)
+            await tx.litellm_deletedverificationtoken.create(data=archive_data)
             await tx.litellm_verificationtoken.delete(where={"token": token})
 
         return token_record
+
+    def _build_archive_data(self, token: LiteLLM_VerificationToken) -> Dict[str, Any]:
+        """Build archive data with only columns present in LiteLLM_DeletedVerificationToken.
+
+        Serializes JSON columns to strings (the archive table stores them as JSON
+        columns the same way the live table does) and maps ``org_id`` onto the
+        ``organization_id`` column so the foreign key is preserved.
+        """
+        data = token.model_dump(exclude_none=True)
+        for field in ("object_permission", "litellm_budget_table", "budget_limits"):
+            data.pop(field, None)
+
+        org_id = data.pop("org_id", None)
+        if org_id is not None:
+            data["organization_id"] = org_id
+
+        json_fields = [
+            "aliases",
+            "config",
+            "permissions",
+            "metadata",
+            "model_spend",
+            "model_max_budget",
+            "router_settings",
+        ]
+        for field in json_fields:
+            if field in data:
+                data[field] = json.dumps(data[field])
+        return data
 
     async def update_spend(
         self, token: str, spend: float
