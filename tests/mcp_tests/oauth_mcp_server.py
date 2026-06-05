@@ -1,9 +1,12 @@
 import argparse
+import asyncio
 import base64
 import contextvars
 import hashlib
 import os
 import secrets
+import socket
+import sys
 import time
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
@@ -399,9 +402,17 @@ def main() -> None:
     parser.add_argument("--host", default=os.getenv("MCP_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.getenv("MCP_PORT", "0")))
     args = parser.parse_args()
-    if args.port <= 0:
-        raise ValueError("OAuth MCP server requires --port > 0")
-    uvicorn.run(build_app(), host=args.host, port=args.port, log_level="warning")
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((args.host, args.port))
+    actual_port = sock.getsockname()[1]
+    print(f"LISTENING:{actual_port}", flush=True)
+    sys.stdout.flush()
+
+    config = uvicorn.Config(build_app(), log_level="warning")
+    server = uvicorn.Server(config)
+    asyncio.run(server.serve(sockets=[sock]))
 
 
 if __name__ == "__main__":
