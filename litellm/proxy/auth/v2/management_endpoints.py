@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from .authz.policy_admin import (
     make_permission_rule,
 )
 from .authz.policy_store import reset_cache
+from .protocols import CasbinRuleRow, PolicyAdminDB
 
 router = APIRouter(tags=["auth_v2"])
 
@@ -41,10 +42,11 @@ def rule_to_row_data(rule: List[str]) -> Dict[str, str]:
     return data
 
 
-def row_to_rule(row: Any) -> List[str]:
-    rule = [row.ptype]
-    for index in range(6):
-        value = getattr(row, f"v{index}", None)
+def row_to_rule(row: CasbinRuleRow) -> List[str]:
+    rule: List[str] = []
+    if row.ptype is not None:
+        rule.append(row.ptype)
+    for value in (row.v0, row.v1, row.v2, row.v3, row.v4, row.v5):
         if value is not None and value != "":
             rule.append(value)
     return rule
@@ -58,7 +60,7 @@ def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
         )
 
 
-def _prisma() -> Any:
+def _prisma() -> PolicyAdminDB:
     from litellm.proxy.proxy_server import prisma_client
 
     if prisma_client is None:
@@ -66,7 +68,7 @@ def _prisma() -> Any:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="auth_v2 policy administration requires a connected database",
         )
-    return prisma_client
+    return cast(PolicyAdminDB, prisma_client)
 
 
 async def _add_rule(rule: List[str]) -> None:

@@ -1,5 +1,11 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from enum import Enum
+from typing import TYPE_CHECKING, List, Optional
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 @dataclass(frozen=True)
@@ -17,21 +23,20 @@ class Principal:
     groupings: List[List[str]]
 
 
-def _role_to_str(role: Any) -> Optional[str]:
+def _role_to_str(role: object) -> Optional[str]:
     if role is None:
         return None
-    return getattr(role, "value", role)
+    if isinstance(role, Enum):
+        value = role.value
+        return value if isinstance(value, str) else str(value)
+    return str(role)
 
 
-def build_principal(identity: Any) -> Principal:
-    """Derive a :class:`Principal` from an authenticated identity object.
-
-    Duck-typed on ``user_id`` / ``team_id`` / ``token`` / ``user_role`` so it
-    stays decoupled from the full ``UserAPIKeyAuth`` import.
-    """
-    user_id = getattr(identity, "user_id", None)
-    team_id = getattr(identity, "team_id", None)
-    token = getattr(identity, "token", None)
+def build_principal(identity: UserAPIKeyAuth) -> Principal:
+    """Derive a :class:`Principal` from an authenticated identity."""
+    user_id = identity.user_id
+    team_id = identity.team_id
+    token = identity.token
 
     if user_id:
         subject = f"user:{user_id}"
@@ -43,7 +48,7 @@ def build_principal(identity: Any) -> Principal:
     domain = f"team:{team_id}" if team_id else "*"
 
     groupings: List[List[str]] = []
-    role = _role_to_str(getattr(identity, "user_role", None))
+    role = _role_to_str(identity.user_role)
     if role:
         groupings.append([subject, f"role:{role}"])
 

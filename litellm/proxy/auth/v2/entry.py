@@ -1,4 +1,6 @@
-from typing import Any, Optional, Tuple
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional, Tuple, cast
 
 from fastapi import HTTPException, Request, status
 
@@ -11,29 +13,43 @@ from .authz.policy_store import load_policy_snapshot
 from .authz.route_map import is_inference_route, match_route
 from .context import AuthMethod, RequestAuthContext, set_auth_context
 from .principal import Principal, build_principal
+from .protocols import PolicyDB
 from .stages.budgets import enforce_hierarchy_budgets
 from .stages.end_user import resolve_end_user
 from .stages.enrichment import enrich_identity
 
+if TYPE_CHECKING:
+    from litellm.proxy._types import (
+        LiteLLM_TeamTable,
+        LiteLLM_UserTable,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.utils import PrismaClient
 
-async def _anonymous_identity(api_key: Optional[str]) -> Any:
+
+async def _anonymous_identity(api_key: Optional[str]) -> UserAPIKeyAuth:
     from litellm.proxy._types import UserAPIKeyAuth
 
     return UserAPIKeyAuth(api_key=api_key)
 
 
-async def _build_enforcer(principal: Principal, prisma_client: Any) -> CasbinEnforcer:
+async def _build_enforcer(
+    principal: Principal, prisma_client: Optional[PrismaClient]
+) -> CasbinEnforcer:
     """Build the casbin engine for this principal from the current policy snapshot.
 
     The principal's identity-to-role bridges are added on top of the stored
     groupings. One engine authorizes both the control plane and model calls.
     """
+    # The Prisma client's casbin-rule table is generated dynamically; narrow it to
+    # the read surface the store needs at this single adapter boundary.
+    policy_db = cast(Optional[PolicyDB], prisma_client)
     (
         policies,
         groupings,
         resource_groupings,
         domain_groupings,
-    ) = await load_policy_snapshot(prisma_client)
+    ) = await load_policy_snapshot(policy_db)
     return CasbinEnforcer(
         policies,
         groupings + principal.groupings,
@@ -42,13 +58,13 @@ async def _build_enforcer(principal: Principal, prisma_client: Any) -> CasbinEnf
     )
 
 
-async def _enrich_for_limits(identity: Any, ctx: AuthContext) -> None:
+async def _enrich_for_limits(identity: UserAPIKeyAuth, ctx: AuthContext) -> None:
     """Fill user/team budget+limit fields for non-key logins (master/JWT/OAuth) so
     the existing pre-call budget/limit hooks can enforce them. Virtual keys are
     already populated by get_key_object and skip this."""
     from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
 
-    async def load_user(user_id: str) -> Any:
+    async def load_user(user_id: str) -> Optional[LiteLLM_UserTable]:
         return await get_user_object(
             user_id=user_id,
             prisma_client=ctx.prisma_client,
@@ -58,7 +74,7 @@ async def _enrich_for_limits(identity: Any, ctx: AuthContext) -> None:
             proxy_logging_obj=ctx.proxy_logging_obj,
         )
 
-    async def load_team(team_id: str) -> Any:
+    async def load_team(team_id: str) -> Optional[LiteLLM_TeamTable]:
         return await get_team_object(
             team_id=team_id,
             prisma_client=ctx.prisma_client,
@@ -70,7 +86,9 @@ async def _enrich_for_limits(identity: Any, ctx: AuthContext) -> None:
     await enrich_identity(identity, load_user=load_user, load_team=load_team)
 
 
-async def _enforce_budgets(identity: Any, route: str, ctx: AuthContext) -> None:
+async def _enforce_budgets(
+    identity: UserAPIKeyAuth, route: str, ctx: AuthContext
+) -> None:
     """Enforce team/org/global budgets (reusing v1's functions) and surface a
     breach as the same ProxyException v1 raises."""
     import litellm
@@ -101,7 +119,7 @@ async def _best_effort_identity(api_key: Optional[str], ctx: AuthContext) -> Aut
 
 def _establish_context(
     request: Request, result: AuthResult, route: str
-) -> Tuple[Principal, Any]:
+) -> Tuple[Principal, UserAPIKeyAuth]:
     """Derive the principal and publish the typed auth context for downstream
     stages (budget/limit hooks, end-user resolver, telemetry span)."""
     principal = build_principal(result.identity)
@@ -120,7 +138,7 @@ def _establish_context(
 async def user_api_key_auth_v2(
     request: Request,
     api_key: str = "",
-) -> Any:
+) -> UserAPIKeyAuth:
     """auth_v2 entry point: authenticator chain establishes identity, casbin
     authorizes governed routes. Routes v2 doesn't yet own are loud-open."""
     from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
@@ -194,7 +212,7 @@ async def user_api_key_auth_v2(
 
 
 class _DenyAll:
-    def enforce(self, *_args: Any) -> bool:
+    def enforce(self, *_args: object) -> bool:
         return False
 
 

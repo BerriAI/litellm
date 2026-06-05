@@ -1,20 +1,29 @@
+from __future__ import annotations
+
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Protocol, runtime_checkable
 
 from fastapi import HTTPException, status
 
 from ..context import AuthMethod
 
 if TYPE_CHECKING:
+    from opentelemetry.trace import Span
+
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+    from .jwt_claims import JWTSettings
+    from .oauth2_introspection import IntrospectionSettings
 
 
 @dataclass(frozen=True)
 class AuthResult:
     """The output of the authenticator chain: the resolved identity and how."""
 
-    identity: "UserAPIKeyAuth"
+    identity: UserAPIKeyAuth
     method: AuthMethod
 
 
@@ -24,7 +33,7 @@ class Authenticator(Protocol):
 
     def can_handle(self, api_key: Optional[str]) -> bool: ...
 
-    async def authenticate(self, api_key: str, ctx: "AuthContext") -> Any: ...
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> UserAPIKeyAuth: ...
 
 
 class AuthContext:
@@ -32,10 +41,10 @@ class AuthContext:
 
     def __init__(
         self,
-        prisma_client: Any,
-        user_api_key_cache: Any,
-        proxy_logging_obj: Any,
-        parent_otel_span: Any = None,
+        prisma_client: Optional[PrismaClient],
+        user_api_key_cache: UserApiKeyCache,
+        proxy_logging_obj: ProxyLogging,
+        parent_otel_span: Optional[Span] = None,
     ):
         self.prisma_client = prisma_client
         self.user_api_key_cache = user_api_key_cache
@@ -63,7 +72,7 @@ class MasterKeyAuthenticator:
         except Exception:
             return False
 
-    async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> UserAPIKeyAuth:
         from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
@@ -83,7 +92,7 @@ class VirtualKeyAuthenticator:
     def can_handle(self, api_key: Optional[str]) -> bool:
         return isinstance(api_key, str) and api_key.startswith("sk-")
 
-    async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> UserAPIKeyAuth:
         from litellm.proxy._types import hash_token
         from litellm.proxy.auth.auth_checks import get_key_object
 
@@ -96,7 +105,7 @@ class VirtualKeyAuthenticator:
         )
 
 
-def _load_jwt_settings() -> Any:
+def _load_jwt_settings() -> JWTSettings:
     from litellm.proxy.proxy_server import general_settings
 
     from .jwt_claims import JWTSettings
@@ -142,7 +151,7 @@ class JWTAuthenticator:
             return False
         return _jwt_is_configured()
 
-    async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> UserAPIKeyAuth:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
         from .jwt_claims import extract_identity
@@ -174,7 +183,7 @@ class JWTAuthenticator:
         )
 
 
-def _load_introspection_settings() -> Any:
+def _load_introspection_settings() -> Optional[IntrospectionSettings]:
     from litellm.proxy.proxy_server import general_settings
 
     from .oauth2_introspection import IntrospectionSettings
@@ -208,7 +217,7 @@ class OAuth2IntrospectionAuthenticator:
             return False
         return _load_introspection_settings() is not None
 
-    async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> UserAPIKeyAuth:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
         from .oauth2_introspection import (
@@ -217,6 +226,11 @@ class OAuth2IntrospectionAuthenticator:
         )
 
         settings = _load_introspection_settings()
+        if settings is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="auth_v2: OAuth2 introspection is not configured",
+            )
         data = await self._introspect(api_key, settings)
         try:
             identity = parse_introspection_response(data, settings)
@@ -238,7 +252,9 @@ class OAuth2IntrospectionAuthenticator:
             user_role=user_role,
         )
 
-    async def _introspect(self, token: str, settings: Any) -> Any:
+    async def _introspect(
+        self, token: str, settings: IntrospectionSettings
+    ) -> Dict[str, Any]:
         import base64
 
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client

@@ -2,6 +2,7 @@ import logging
 from typing import Any, Dict, Optional
 
 from ..principal import Principal
+from ..protocols import SupportsEnforce
 from .route_map import GovernedRoute, match_route
 
 logger = logging.getLogger("litellm.proxy.auth.v2")
@@ -32,7 +33,7 @@ def authorize(
     principal: Principal,
     route: str,
     request_data: Optional[Dict[str, Any]],
-    enforcer: Any,
+    enforcer: SupportsEnforce,
     method: Optional[str] = None,
 ) -> None:
     """Enforce policy for ``route``. No-op (loud) for routes v2 doesn't yet govern.

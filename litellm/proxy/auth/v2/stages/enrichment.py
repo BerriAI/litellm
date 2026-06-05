@@ -1,8 +1,14 @@
-from typing import Any, Awaitable, Callable, Optional
+from __future__ import annotations
 
-# Loaders are injected so the mapping is unit-testable without a DB.
-UserLoader = Callable[[str], Awaitable[Optional[Any]]]
-TeamLoader = Callable[[str], Awaitable[Optional[Any]]]
+from typing import TYPE_CHECKING, Awaitable, Callable, Dict, Optional
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+# Loaders are injected so the mapping is unit-testable without a DB. The loaded
+# row is only read by attribute, so ``object`` is enough and keeps this decoupled.
+UserLoader = Callable[[str], Awaitable[Optional[object]]]
+TeamLoader = Callable[[str], Awaitable[Optional[object]]]
 
 # Source attr on the user/team row -> destination attr on the identity. The
 # destination user_*/team_* slots are distinct from key-level fields, so this
@@ -23,7 +29,9 @@ _TEAM_FIELD_MAP = {
 }
 
 
-def _copy_missing(identity: Any, source: Any, field_map: dict) -> None:
+def _copy_missing(
+    identity: UserAPIKeyAuth, source: object, field_map: Dict[str, str]
+) -> None:
     for src_attr, dest_attr in field_map.items():
         value = getattr(source, src_attr, None)
         if value is not None and getattr(identity, dest_attr, None) is None:
@@ -31,11 +39,11 @@ def _copy_missing(identity: Any, source: Any, field_map: dict) -> None:
 
 
 async def enrich_identity(
-    identity: Any,
+    identity: UserAPIKeyAuth,
     *,
     load_user: Optional[UserLoader] = None,
     load_team: Optional[TeamLoader] = None,
-) -> Any:
+) -> UserAPIKeyAuth:
     """Populate the identity's user/team budget+limit fields from the user/team rows.
 
     Virtual keys arrive fully populated via ``get_key_object``; master/JWT/OAuth

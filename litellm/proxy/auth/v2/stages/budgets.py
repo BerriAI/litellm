@@ -1,7 +1,16 @@
-from typing import Any, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
+
+    from ..authn.authenticators import AuthContext
 
 
-async def enforce_hierarchy_budgets(identity: Any, route: str, ctx: Any) -> None:
+async def enforce_hierarchy_budgets(
+    identity: UserAPIKeyAuth, route: str, ctx: AuthContext
+) -> None:
     """Enforce team, organization, and global budgets for an auth_v2 request.
 
     These hierarchy caps live in v1's ``common_checks`` (not the pre-call hooks),
@@ -21,7 +30,7 @@ async def enforce_hierarchy_budgets(identity: Any, route: str, ctx: Any) -> None
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
     team_id = getattr(identity, "team_id", None)
-    team_object: Optional[Any] = None
+    team_object: Optional[LiteLLM_TeamTable] = None
     if team_id is not None:
         team_object = await get_team_object(
             team_id=team_id,

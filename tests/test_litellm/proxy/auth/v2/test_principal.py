@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Optional
 
 from litellm.proxy.auth.v2.principal import build_principal
@@ -12,9 +13,9 @@ class _Identity:
     user_role: Any = None
 
 
-class _Role:
-    def __init__(self, value):
-        self.value = value
+class _Role(str, Enum):
+    # Mirrors LitellmUserRoles (a str Enum); build_principal reads .value off enums.
+    PROXY_ADMIN = "proxy_admin"
 
 
 def test_user_id_becomes_subject_and_team_becomes_domain():

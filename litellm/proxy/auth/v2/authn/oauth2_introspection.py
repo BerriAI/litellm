@@ -25,7 +25,7 @@ class IntrospectionIdentity:
     role: Optional[str] = None
 
 
-def _scopes(raw: Any) -> List[str]:
+def _scopes(raw: object) -> List[str]:
     if raw is None:
         return []
     if isinstance(raw, str):

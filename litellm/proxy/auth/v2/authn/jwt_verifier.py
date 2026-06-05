@@ -1,5 +1,10 @@
+from __future__ import annotations
+
 import time
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from authlib.jose import KeySet
 
 
 class JWTVerificationError(Exception):
@@ -38,7 +43,7 @@ def build_claims_options(
 
 def verify(
     token: str,
-    key_set: Any,
+    key_set: KeySet,
     issuer: Optional[str] = None,
     audience: Optional[str] = None,
     algorithms: Optional[List[str]] = None,
@@ -74,10 +79,10 @@ class JWKSProvider:
     def __init__(self, jwks_uri: str, ttl_seconds: float = 600.0):
         self.jwks_uri = jwks_uri
         self.ttl_seconds = ttl_seconds
-        self._key_set: Any = None
+        self._key_set: Optional[KeySet] = None
         self._fetched_at: float = 0.0
 
-    async def get_key_set(self) -> Any:
+    async def get_key_set(self) -> KeySet:
         now = time.monotonic()
         if self._key_set is not None and (now - self._fetched_at) < self.ttl_seconds:
             return self._key_set
