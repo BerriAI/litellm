@@ -5,7 +5,10 @@ const okResponse = (data: unknown): Response =>
   ({ ok: true, status: 200, json: async () => data }) as unknown as Response;
 
 const errorResponse = (status: number, body: unknown): Response =>
-  ({ ok: false, status, json: async () => body }) as unknown as Response;
+  ({ ok: false, status, text: async () => JSON.stringify(body) }) as unknown as Response;
+
+const rawErrorResponse = (status: number, text: string): Response =>
+  ({ ok: false, status, text: async () => text }) as unknown as Response;
 
 describe("createApiClient", () => {
   it("builds the URL from base + path + query and sets the auth + JSON headers", async () => {
@@ -51,6 +54,17 @@ describe("createApiClient", () => {
     await expect(promise).rejects.toBeInstanceOf(ApiError);
     await expect(promise).rejects.toMatchObject({ message: "no access", status: 403 });
     expect(onError).toHaveBeenCalledWith("no access");
+  });
+
+  it("falls back to the raw text body when a non-2xx response is not JSON (e.g. an HTML 502)", async () => {
+    const fetchImpl = vi.fn(async () => rawErrorResponse(502, "<html>Bad Gateway</html>"));
+    const onError = vi.fn();
+    const client = createApiClient({ getBaseUrl: () => "", onError, fetchImpl });
+
+    const promise = client.get("/keys", { accessToken: "sk" });
+
+    await expect(promise).rejects.toMatchObject({ message: "<html>Bad Gateway</html>", status: 502 });
+    expect(onError).toHaveBeenCalledWith("<html>Bad Gateway</html>");
   });
 
   it("omits the auth header when no token is provided", async () => {

@@ -127,8 +127,15 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     const response = await doFetch(url, init);
 
     if (!response.ok) {
-      const errorBody = await response.json();
-      const message = deriveErrorMessage(errorBody);
+      const raw = await response.text();
+      let errorBody: unknown = raw;
+      let message: string;
+      try {
+        errorBody = JSON.parse(raw);
+        message = deriveErrorMessage(errorBody);
+      } catch {
+        message = raw || `HTTP ${response.status}`;
+      }
       onError?.(message);
       throw new ApiError(message, response.status, errorBody);
     }
