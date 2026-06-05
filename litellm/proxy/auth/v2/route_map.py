@@ -12,15 +12,22 @@ class GovernedRoute:
     id_fields: List[str] = field(default_factory=list)
 
 
-# Slice 1 governs only the model-deployment management plane. Every other route
-# is intentionally left ungoverned (loud-open) until later slices wire it in.
+# Governs the model and team management planes. Every other route is
+# intentionally left ungoverned (loud-open) until later slices wire it in. Team
+# membership/permission routes (member_add, etc.) are deferred with the recursive
+# `manage` action.
 _MODEL_ID_FIELDS = ["model_id", "id"]
+_TEAM_ID_FIELDS = ["team_id", "id"]
 
 _GOVERNED: Dict[str, GovernedRoute] = {
     "/model/new": GovernedRoute("model", "write"),
     "/model/update": GovernedRoute("model", "write", _MODEL_ID_FIELDS),
     "/model/delete": GovernedRoute("model", "delete", _MODEL_ID_FIELDS),
     "/model/info": GovernedRoute("model", "read", _MODEL_ID_FIELDS),
+    "/team/new": GovernedRoute("team", "write"),
+    "/team/update": GovernedRoute("team", "write", _TEAM_ID_FIELDS),
+    "/team/delete": GovernedRoute("team", "delete", _TEAM_ID_FIELDS),
+    "/team/info": GovernedRoute("team", "read", _TEAM_ID_FIELDS),
 }
 
 

@@ -1,3 +1,4 @@
+import secrets
 from typing import Any, List, Optional, Protocol, runtime_checkable
 
 from fastapi import HTTPException, status
@@ -28,6 +29,36 @@ class AuthContext:
         self.parent_otel_span = parent_otel_span
 
 
+class MasterKeyAuthenticator:
+    """Authenticates the configured master key as the proxy admin.
+
+    Checked before the virtual-key node because the master key also looks like a
+    ``sk-`` token but is not a row in the key table. The raw key never propagates
+    downstream; a stable alias stands in for it.
+    """
+
+    def can_handle(self, api_key: Optional[str]) -> bool:
+        from litellm.proxy.proxy_server import master_key
+
+        if not isinstance(api_key, str) or not isinstance(master_key, str):
+            return False
+        try:
+            return secrets.compare_digest(api_key, master_key)
+        except Exception:
+            return False
+
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
+        from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.proxy_server import litellm_proxy_admin_name
+
+        return UserAPIKeyAuth(
+            api_key=LITELLM_PROXY_MASTER_KEY_ALIAS,
+            user_id=litellm_proxy_admin_name,
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+
+
 class VirtualKeyAuthenticator:
     """Resolves a ``sk-`` virtual key to its identity via the existing key store."""
 
@@ -47,9 +78,12 @@ class VirtualKeyAuthenticator:
         )
 
 
-# Slice 1: virtual keys only. authlib-backed JWT / OAuth2 nodes slot in here next,
-# implementing the same interface.
-AUTHENTICATORS: List[Authenticator] = [VirtualKeyAuthenticator()]
+# Master key is matched first (exact compare), then virtual keys. authlib-backed
+# JWT / OAuth2 nodes slot in next, implementing the same interface.
+AUTHENTICATORS: List[Authenticator] = [
+    MasterKeyAuthenticator(),
+    VirtualKeyAuthenticator(),
+]
 
 
 async def authenticate(api_key: Optional[str], ctx: AuthContext) -> Any:

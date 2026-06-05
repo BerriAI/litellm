@@ -18,11 +18,27 @@ def test_create_has_no_id_field():
     assert match_route("/model/new").id_fields == []
 
 
+def test_team_routes_map_to_team_resource():
+    assert match_route("/team/new").resource == "team"
+    assert match_route("/team/new").action == "write"
+    assert match_route("/team/update").action == "write"
+    assert match_route("/team/delete").action == "delete"
+    assert match_route("/team/info").action == "read"
+    assert match_route("/team/delete").id_fields == ["team_id", "id"]
+
+
 def test_trailing_slash_is_normalized():
     assert match_route("/model/info/").resource == "model"
 
 
 def test_ungoverned_routes_return_none():
-    # These are loud-open in slice 1 and must not be governed yet.
-    for route in ("/chat/completions", "/key/generate", "/team/new", "/v1/models", "/"):
+    # These are loud-open in this slice and must not be governed yet.
+    # /team/member_add is deferred with the recursive `manage` action.
+    for route in (
+        "/chat/completions",
+        "/key/generate",
+        "/team/member_add",
+        "/v1/models",
+        "/",
+    ):
         assert match_route(route) is None
