@@ -78,11 +78,81 @@ class VirtualKeyAuthenticator:
         )
 
 
-# Master key is matched first (exact compare), then virtual keys. authlib-backed
-# JWT / OAuth2 nodes slot in next, implementing the same interface.
+def _load_jwt_settings() -> Any:
+    import os
+
+    from litellm.proxy.proxy_server import general_settings
+
+    from .jwt_claims import JWTSettings
+
+    cfg = (general_settings or {}).get("auth_v2_jwt") or {}
+    jwks_uri = cfg.get("jwks_uri") or os.getenv("AUTH_V2_JWKS_URI")
+    if not jwks_uri:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="auth_v2: JWT auth received a token but no jwks_uri is configured",
+        )
+    return JWTSettings(
+        jwks_uri=jwks_uri,
+        issuer=cfg.get("issuer") or os.getenv("AUTH_V2_JWT_ISSUER"),
+        audience=cfg.get("audience") or os.getenv("AUTH_V2_JWT_AUDIENCE"),
+        user_id_claim=cfg.get("user_id_claim", "sub"),
+        team_claim=cfg.get("team_claim"),
+        role_claim=cfg.get("role_claim"),
+        role_map=cfg.get("role_map") or {},
+    )
+
+
+class JWTAuthenticator:
+    """Verifies a bearer JWT with authlib and maps its claims to an identity."""
+
+    def can_handle(self, api_key: Optional[str]) -> bool:
+        return (
+            isinstance(api_key, str)
+            and not api_key.startswith("sk-")
+            and api_key.count(".") == 2
+        )
+
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        from .jwt_claims import extract_identity
+        from .jwt_verifier import JWKSProvider, JWTVerificationError, verify
+
+        settings = _load_jwt_settings()
+        key_set = await JWKSProvider(settings.jwks_uri).get_key_set()
+        try:
+            claims = verify(
+                api_key, key_set, settings.issuer, settings.audience
+            )
+        except JWTVerificationError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"auth_v2: {e}",
+            )
+
+        identity = extract_identity(claims, settings)
+        user_role = None
+        if identity.role is not None:
+            try:
+                user_role = LitellmUserRoles(identity.role)
+            except ValueError:
+                user_role = None
+
+        return UserAPIKeyAuth(
+            user_id=identity.user_id,
+            team_id=identity.team_id,
+            user_role=user_role,
+            jwt_claims=claims,
+        )
+
+
+# Master key is matched first (exact compare), then virtual keys, then JWTs.
+# Dispatch is by credential shape, so the chain is deterministic, not "ask everyone".
 AUTHENTICATORS: List[Authenticator] = [
     MasterKeyAuthenticator(),
     VirtualKeyAuthenticator(),
+    JWTAuthenticator(),
 ]
 
 
