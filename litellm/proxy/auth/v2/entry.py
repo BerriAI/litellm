@@ -17,6 +17,22 @@ async def _anonymous_identity(api_key: Optional[str]) -> Any:
     return UserAPIKeyAuth(api_key=api_key)
 
 
+def _model_access_groups(requested_model: str) -> Any:
+    """Access-group names the requested model belongs to, via the router.
+
+    Returns an empty tuple when no router is configured so the caller degrades to
+    plain name/pattern matching.
+    """
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return ()
+    try:
+        return llm_router.get_model_access_groups(model_name=requested_model)
+    except Exception:
+        return ()
+
+
 async def _best_effort_identity(api_key: Optional[str], ctx: AuthContext) -> Any:
     """On loud-open routes, use the real identity if a usable key is present,
     otherwise fall back to an anonymous principal. Never fails the request."""
@@ -80,14 +96,17 @@ async def user_api_key_auth_v2(
         return identity
 
     if is_inference_route(route):
-        # Data plane: plain allowed-model predicate over the principal's key.
+        # Data plane: plain allowed-model predicate over the principal's key,
+        # with access-group expansion resolved from the router.
         identity = await authenticate(token, ctx)
         request_data = await _read_request_body(request=request)
         requested_model = (
             request_data.get("model") if isinstance(request_data, dict) else None
         )
         if requested_model and not can_call_model(
-            getattr(identity, "models", None), requested_model
+            getattr(identity, "models", None),
+            requested_model,
+            _model_access_groups(requested_model),
         ):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

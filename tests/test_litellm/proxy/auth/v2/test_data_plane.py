@@ -49,3 +49,26 @@ def test_partial_wildcard_within_provider():
 def test_exact_name_without_wildcard_does_not_pattern_match():
     # No '*' -> exact membership only, never a substring/regex match.
     assert can_call_model(["gpt-4o"], "gpt-4o-mini") is False
+
+
+def test_access_group_membership_grants_access():
+    # Mirrors v1 model_in_access_group: the requested model belongs to "beta", and
+    # the key lists the group name, so the call is allowed.
+    groups = {"beta": ["o1", "o1-mini"]}
+    assert can_call_model(["beta"], "o1", model_access_groups=groups) is True
+
+
+def test_unlisted_access_group_is_denied():
+    groups = {"beta": ["o1"]}
+    # Model is in group "beta" but the key only lists group "gamma".
+    assert can_call_model(["gamma"], "o1", model_access_groups=groups) is False
+
+
+def test_access_groups_accept_any_iterable_of_names():
+    assert can_call_model(["beta"], "o1", model_access_groups={"beta", "alpha"}) is True
+
+
+def test_no_access_groups_falls_back_to_name_and_pattern():
+    # Without groups, only name/pattern matching applies (existing behavior).
+    assert can_call_model(["beta"], "o1") is False
+    assert can_call_model(["o1"], "o1", model_access_groups=None) is True
