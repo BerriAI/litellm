@@ -1900,7 +1900,7 @@ async def test_auth_builder_rbac_team_loads_team_for_passthrough_allowlist():
             JWTAuthManager,
             "get_objects",
             new_callable=AsyncMock,
-            return_value=(None, None, None, None),
+            return_value=(None, None, None, None, None),
         ),
         patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
         patch.object(
