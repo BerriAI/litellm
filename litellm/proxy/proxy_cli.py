@@ -267,13 +267,11 @@ class ProxyInitializationHelpers:
         and signal reloaded workers to re-read .env with override so edits to
         existing keys actually take effect rather than staying masked by the
         value inherited from the reloader process."""
-        from dotenv import find_dotenv
-
         from litellm._logging import verbose_proxy_logger
 
         uvicorn_args.update(ProxyInitializationHelpers._get_reload_options(config_path))
         os.environ["LITELLM_DEV_ENV_HOT_RELOAD"] = "True"
-        env_path = find_dotenv(usecwd=True) or os.path.join(os.getcwd(), ".env")
+        env_path = os.path.join(os.getcwd(), ".env")
         ProxyInitializationHelpers._patch_statreload_extra_paths(
             [config_path, env_path]
         )
