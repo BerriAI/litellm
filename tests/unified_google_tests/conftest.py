@@ -154,7 +154,7 @@ def setup_and_teardown(request):
 
     import litellm
 
-    if "proxy_genai_sdk" not in request.node.name:
+    if "google_genai_proxy_url" not in request.fixturenames:
         importlib.reload(litellm)
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
