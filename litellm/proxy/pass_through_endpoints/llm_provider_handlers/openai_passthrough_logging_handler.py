@@ -32,6 +32,24 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.utils import ImageResponse, LlmProviders, PassthroughCallTypes
 from litellm.utils import ModelResponse, TextCompletionResponse
 
+# Hostnames that route to OpenAI-compatible APIs. `cognitiveservices.azure.com`
+# is the Azure subdomain used by newer Azure OpenAI resource types (e.g. the
+# "Azure AI Foundry" / Cognitive Services-hosted deployments). Older Azure
+# OpenAI resources use `openai.azure.com`; both are valid in production.
+_OPENAI_COMPATIBLE_HOSTNAMES = (
+    "api.openai.com",
+    "openai.azure.com",
+    "cognitiveservices.azure.com",
+)
+
+
+def _is_openai_compatible_host(hostname: Optional[str]) -> bool:
+    """True if the hostname is one of the recognized OpenAI-compatible
+    surfaces (OpenAI proper or any Azure OpenAI subdomain)."""
+    if not hostname:
+        return False
+    return any(host in hostname for host in _OPENAI_COMPATIBLE_HOSTNAMES)
+
 
 class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
     """
@@ -52,12 +70,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
+        return (
+            _is_openai_compatible_host(parsed_url.hostname)
             and "/v1/chat/completions" in parsed_url.path
         )
 
@@ -67,12 +81,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
+        return (
+            _is_openai_compatible_host(parsed_url.hostname)
             and "/v1/images/generations" in parsed_url.path
         )
 
@@ -82,12 +92,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
+        return (
+            _is_openai_compatible_host(parsed_url.hostname)
             and "/v1/images/edits" in parsed_url.path
         )
 
@@ -97,13 +103,8 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route:
             return False
         parsed_url = urlparse(url_route)
-        return bool(
-            parsed_url.hostname
-            and (
-                "api.openai.com" in parsed_url.hostname
-                or "openai.azure.com" in parsed_url.hostname
-            )
-            and ("/v1/responses" in parsed_url.path or "/responses" in parsed_url.path)
+        return _is_openai_compatible_host(parsed_url.hostname) and (
+            "/v1/responses" in parsed_url.path or "/responses" in parsed_url.path
         )
 
     def _get_user_from_metadata(
