@@ -28,6 +28,13 @@ _GOVERNED: Dict[str, GovernedRoute] = {
     "/team/update": GovernedRoute("team", "write", _TEAM_ID_FIELDS),
     "/team/delete": GovernedRoute("team", "delete", _TEAM_ID_FIELDS),
     "/team/info": GovernedRoute("team", "read", _TEAM_ID_FIELDS),
+    # The policy-admin surface governs itself: only a role permitted to manage the
+    # "policy" resource (the bootstrap proxy_admin role does) may edit policies.
+    "/auth/v2/policy/permission/add": GovernedRoute("policy", "write"),
+    "/auth/v2/policy/permission/remove": GovernedRoute("policy", "delete"),
+    "/auth/v2/policy/assignment/add": GovernedRoute("policy", "write"),
+    "/auth/v2/policy/assignment/remove": GovernedRoute("policy", "delete"),
+    "/auth/v2/policy/list": GovernedRoute("policy", "read"),
 }
 
 
