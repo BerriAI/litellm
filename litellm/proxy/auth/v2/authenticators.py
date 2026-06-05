@@ -97,14 +97,12 @@ class VirtualKeyAuthenticator:
 
 
 def _load_jwt_settings() -> Any:
-    import os
-
     from litellm.proxy.proxy_server import general_settings
 
     from .jwt_claims import JWTSettings
 
     cfg = (general_settings or {}).get("auth_v2_jwt") or {}
-    jwks_uri = cfg.get("jwks_uri") or os.getenv("AUTH_V2_JWKS_URI")
+    jwks_uri = cfg.get("jwks_uri")
     if not jwks_uri:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -112,8 +110,8 @@ def _load_jwt_settings() -> Any:
         )
     return JWTSettings(
         jwks_uri=jwks_uri,
-        issuer=cfg.get("issuer") or os.getenv("AUTH_V2_JWT_ISSUER"),
-        audience=cfg.get("audience") or os.getenv("AUTH_V2_JWT_AUDIENCE"),
+        issuer=cfg.get("issuer"),
+        audience=cfg.get("audience"),
         user_id_claim=cfg.get("user_id_claim", "sub"),
         team_claim=cfg.get("team_claim"),
         role_claim=cfg.get("role_claim"),
@@ -122,12 +120,10 @@ def _load_jwt_settings() -> Any:
 
 
 def _jwt_is_configured() -> bool:
-    import os
-
     from litellm.proxy.proxy_server import general_settings
 
     cfg = (general_settings or {}).get("auth_v2_jwt") or {}
-    return bool(cfg.get("jwks_uri") or os.getenv("AUTH_V2_JWKS_URI"))
+    return bool(cfg.get("jwks_uri"))
 
 
 class JWTAuthenticator:
@@ -179,23 +175,18 @@ class JWTAuthenticator:
 
 
 def _load_introspection_settings() -> Any:
-    import os
-
     from litellm.proxy.proxy_server import general_settings
 
     from .oauth2_introspection import IntrospectionSettings
 
     cfg = (general_settings or {}).get("auth_v2_oauth2") or {}
-    endpoint = cfg.get("introspection_endpoint") or os.getenv(
-        "AUTH_V2_OAUTH2_INTROSPECTION_ENDPOINT"
-    )
+    endpoint = cfg.get("introspection_endpoint")
     if not endpoint:
         return None
     return IntrospectionSettings(
         endpoint=endpoint,
-        client_id=cfg.get("client_id") or os.getenv("AUTH_V2_OAUTH2_CLIENT_ID"),
-        client_secret=cfg.get("client_secret")
-        or os.getenv("AUTH_V2_OAUTH2_CLIENT_SECRET"),
+        client_id=cfg.get("client_id"),
+        client_secret=cfg.get("client_secret"),
         user_id_claim=cfg.get("user_id_claim", "sub"),
         team_claim=cfg.get("team_claim"),
         scope_claim=cfg.get("scope_claim", "scope"),
@@ -248,17 +239,25 @@ class OAuth2IntrospectionAuthenticator:
         )
 
     async def _introspect(self, token: str, settings: Any) -> Any:
-        import httpx
+        import base64
 
-        auth = (
-            (settings.client_id, settings.client_secret) if settings.client_id else None
-        )
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                settings.endpoint, data={"token": token}, auth=auth
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        # RFC 7662 client auth is HTTP Basic; the shared handler's post() takes
+        # headers, not an auth tuple, so build the header explicitly.
+        headers = {}
+        if settings.client_id:
+            credentials = f"{settings.client_id}:{settings.client_secret or ''}"
+            headers["Authorization"] = (
+                "Basic " + base64.b64encode(credentials.encode()).decode()
             )
-            response.raise_for_status()
-            return response.json()
+
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        response = await client.post(
+            settings.endpoint, data={"token": token}, headers=headers
+        )
+        return response.json()
 
 
 # Master key first (exact compare), then virtual keys, then JWTs, then opaque

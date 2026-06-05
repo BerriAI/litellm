@@ -82,12 +82,13 @@ class JWKSProvider:
         if self._key_set is not None and (now - self._fetched_at) < self.ttl_seconds:
             return self._key_set
 
-        import httpx
         from authlib.jose import JsonWebKey
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(self.jwks_uri)
-            response.raise_for_status()
-            self._key_set = JsonWebKey.import_key_set(response.json())
-            self._fetched_at = now
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        response = await client.get(self.jwks_uri)
+        self._key_set = JsonWebKey.import_key_set(response.json())
+        self._fetched_at = now
         return self._key_set
