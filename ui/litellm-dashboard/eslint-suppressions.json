@@ -4,83 +4,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/accessGroups/useAccessGroups.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/accessGroups/useCreateAccessGroup.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/accessGroups/useEditAccessGroup.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/blogPosts/useBlogPosts.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroDryRun.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroExport.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings.ts": {
-    "local/no-bare-fetch": {
-      "count": 3
-    }
-  },
-  "src/app/(dashboard)/hooks/configOverrides/hashicorpVaultApi.ts": {
-    "local/no-bare-fetch": {
-      "count": 4
-    }
-  },
-  "src/app/(dashboard)/hooks/guardrails/useRegisterGuardrail.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/hooks/keys/useKeyAliases.test.ts": {
     "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/keys/useKeys.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/keys/useResetKeySpend.ts": {
-    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -94,18 +19,8 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/hooks/projects/useCreateProject.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/hooks/projects/useDeleteProject.test.ts": {
     "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/projects/useDeleteProject.ts": {
-    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -114,54 +29,14 @@
       "count": 1
     }
   },
-  "src/app/(dashboard)/hooks/projects/useProjectDetails.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
   "src/app/(dashboard)/hooks/projects/useProjects.test.ts": {
     "react/display-name": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/projects/useProjects.ts": {
-    "local/no-bare-fetch": {
       "count": 1
     }
   },
   "src/app/(dashboard)/hooks/projects/useUpdateProject.test.ts": {
     "react/display-name": {
       "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/projects/useUpdateProject.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/proxyConfig/useProxyConfig.ts": {
-    "local/no-bare-fetch": {
-      "count": 2
-    }
-  },
-  "src/app/(dashboard)/hooks/router/useRouterFields.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/storeModelInDB/useStoreModelInDB.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
-  "src/app/(dashboard)/hooks/teams/useTeams.ts": {
-    "local/no-bare-fetch": {
-      "count": 2
     }
   },
   "src/app/(dashboard)/layout.tsx": {
@@ -356,11 +231,6 @@
       "count": 1
     }
   },
-  "src/components/CostTrackingSettings/pricing_calculator/use_multi_cost_estimate.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
   "src/components/CostTrackingSettings/provider_discount_table.test.tsx": {
     "unused-imports/no-unused-imports": {
       "count": 1
@@ -379,16 +249,6 @@
   "src/components/CostTrackingSettings/provider_margin_table.tsx": {
     "no-restricted-imports": {
       "count": 1
-    }
-  },
-  "src/components/CostTrackingSettings/use_discount_config.ts": {
-    "local/no-bare-fetch": {
-      "count": 2
-    }
-  },
-  "src/components/CostTrackingSettings/use_margin_config.ts": {
-    "local/no-bare-fetch": {
-      "count": 2
     }
   },
   "src/components/CreateUserButton.tsx": {
@@ -702,9 +562,6 @@
     }
   },
   "src/components/WebRTCTester.jsx": {
-    "local/no-bare-fetch": {
-      "count": 2
-    },
     "react/no-unescaped-entities": {
       "count": 2
     }
@@ -970,9 +827,6 @@
     }
   },
   "src/components/cloudzero_export_modal.tsx": {
-    "local/no-bare-fetch": {
-      "count": 3
-    },
     "no-restricted-imports": {
       "count": 1
     },
@@ -1175,9 +1029,6 @@
     }
   },
   "src/components/guardrails/edit_guardrail_form.tsx": {
-    "local/no-bare-fetch": {
-      "count": 1
-    },
     "no-restricted-imports": {
       "count": 1
     },
@@ -1250,11 +1101,6 @@
   },
   "src/components/mcp_server_management/MCPToolPermissions.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/mcp_tools/ByokCredentialModal.tsx": {
-    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -1500,9 +1346,6 @@
     }
   },
   "src/components/networking.tsx": {
-    "local/no-bare-fetch": {
-      "count": 270
-    },
     "max-params": {
       "count": 23
     }
@@ -1621,11 +1464,6 @@
       "count": 13
     }
   },
-  "src/components/playground/chat_ui/CodeInterpreterOutput.tsx": {
-    "local/no-bare-fetch": {
-      "count": 2
-    }
-  },
   "src/components/playground/chat_ui/CodeInterpreterTool.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1655,9 +1493,6 @@
     }
   },
   "src/components/playground/llm_calls/a2a_send_message.tsx": {
-    "local/no-bare-fetch": {
-      "count": 2
-    },
     "max-params": {
       "count": 2
     }
@@ -1683,15 +1518,7 @@
     }
   },
   "src/components/playground/llm_calls/embeddings_api.tsx": {
-    "local/no-bare-fetch": {
-      "count": 1
-    },
     "max-params": {
-      "count": 1
-    }
-  },
-  "src/components/playground/llm_calls/fetch_agents.tsx": {
-    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -1706,9 +1533,6 @@
     }
   },
   "src/components/playground/llm_calls/interactions_api.tsx": {
-    "local/no-bare-fetch": {
-      "count": 1
-    },
     "max-params": {
       "count": 1
     }
@@ -1904,11 +1728,6 @@
       "count": 1
     }
   },
-  "src/components/prompts/prompt_editor_view/conversation_panel/useConversation.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
   "src/components/prompts/prompt_info.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1967,11 +1786,6 @@
   },
   "src/components/survey/NudgePrompt.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/survey/SurveyModal.tsx": {
-    "local/no-bare-fetch": {
       "count": 1
     }
   },
@@ -2037,11 +1851,6 @@
       "count": 1
     }
   },
-  "src/components/team/useMyTeamMember.ts": {
-    "local/no-bare-fetch": {
-      "count": 1
-    }
-  },
   "src/components/templates/key_edit_view.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -2066,9 +1875,6 @@
     }
   },
   "src/components/ui_theme_settings.tsx": {
-    "local/no-bare-fetch": {
-      "count": 3
-    },
     "no-restricted-imports": {
       "count": 1
     },
@@ -2223,20 +2029,12 @@
     }
   },
   "src/components/workflow_runs/index.tsx": {
-    "local/no-bare-fetch": {
-      "count": 3
-    },
     "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },
   "src/contexts/AuthContext.tsx": {
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/contexts/ThemeContext.tsx": {
-    "local/no-bare-fetch": {
       "count": 1
     }
   },
