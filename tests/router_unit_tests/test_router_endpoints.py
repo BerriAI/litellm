@@ -772,6 +772,78 @@ def test_apply_default_settings():
         mock_add_checks.assert_called_once_with([])
 
 
+def test_router_encrypted_content_affinity_callback_ordering():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = []
+    router = Router(
+        model_list=[
+            {
+                "model_name": "openai.gpt-5.1-codex",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_key": "mock-api-key",
+                },
+                "model_info": {"id": "deployment-a"},
+            }
+        ],
+        optional_pre_call_checks=["deployment_affinity"],
+    )
+
+    try:
+        deployment_callback = next(
+            cb
+            for cb in router.optional_callbacks or []
+            if isinstance(cb, DeploymentAffinityCheck)
+        )
+        encrypted_callback = EncryptedContentAffinityCheck(router=router)
+
+        callbacks = [deployment_callback]
+        Router._insert_callback_before_type(
+            callback_list=callbacks,
+            callback=encrypted_callback,
+            before_type=DeploymentAffinityCheck,
+        )
+        assert callbacks == [encrypted_callback, deployment_callback]
+
+        callbacks = [deployment_callback, encrypted_callback]
+        Router._move_callback_before_type(
+            callback_list=callbacks,
+            callback=encrypted_callback,
+            callback_type=EncryptedContentAffinityCheck,
+            before_type=DeploymentAffinityCheck,
+        )
+        assert callbacks == [encrypted_callback, deployment_callback]
+
+        router.optional_callbacks = [deployment_callback]
+        litellm.callbacks = [deployment_callback]
+        router._add_encrypted_content_affinity_check()
+
+        assert [
+            type(callback)
+            for callback in router.optional_callbacks or []
+            if isinstance(
+                callback, (EncryptedContentAffinityCheck, DeploymentAffinityCheck)
+            )
+        ] == [EncryptedContentAffinityCheck, DeploymentAffinityCheck]
+        assert [
+            type(callback)
+            for callback in litellm.callbacks
+            if isinstance(
+                callback, (EncryptedContentAffinityCheck, DeploymentAffinityCheck)
+            )
+        ] == [EncryptedContentAffinityCheck, DeploymentAffinityCheck]
+    finally:
+        router.discard()
+        litellm.callbacks = original_callbacks
+
+
 def test_initialize_core_endpoints():
     """
     Test that _initialize_core_endpoints correctly sets up all core router endpoints.

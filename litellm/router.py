@@ -1658,11 +1658,102 @@ class Router:
                     f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
                 )
 
+    @staticmethod
+    def _insert_callback_before_type(
+        callback_list: List[Any],
+        callback: Any,
+        before_type: Any,
+    ) -> None:
+        insert_index = next(
+            (
+                index
+                for index, existing_callback in enumerate(callback_list)
+                if isinstance(existing_callback, before_type)
+            ),
+            len(callback_list),
+        )
+        callback_list.insert(insert_index, callback)
+
+    @staticmethod
+    def _move_callback_before_type(
+        callback_list: List[Any],
+        callback: Any,
+        callback_type: Any,
+        before_type: Any,
+    ) -> None:
+        callback_to_move = None
+        for existing_callback in callback_list:
+            if existing_callback is callback:
+                callback_to_move = existing_callback
+                break
+
+        if callback_to_move is None:
+            for existing_callback in callback_list:
+                if isinstance(existing_callback, callback_type):
+                    callback_to_move = existing_callback
+                    break
+
+        if callback_to_move is None:
+            return
+
+        callback_list.remove(callback_to_move)
+        Router._insert_callback_before_type(
+            callback_list=callback_list,
+            callback=callback_to_move,
+            before_type=before_type,
+        )
+
+    def _add_encrypted_content_affinity_check(self) -> None:
+        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+            EncryptedContentAffinityCheck,
+        )
+
+        if self.optional_callbacks is None:
+            self.optional_callbacks = []
+
+        ec_callback = next(
+            (
+                cb
+                for cb in self.optional_callbacks
+                if isinstance(cb, EncryptedContentAffinityCheck)
+            ),
+            None,
+        )
+        if ec_callback is None:
+            ec_callback = EncryptedContentAffinityCheck(router=self)
+            self._insert_callback_before_type(
+                callback_list=self.optional_callbacks,
+                callback=ec_callback,
+                before_type=DeploymentAffinityCheck,
+            )
+        else:
+            ec_callback.router = self
+            self._move_callback_before_type(
+                callback_list=self.optional_callbacks,
+                callback=ec_callback,
+                callback_type=EncryptedContentAffinityCheck,
+                before_type=DeploymentAffinityCheck,
+            )
+
+        litellm.logging_callback_manager.add_litellm_callback(ec_callback)
+        self._move_callback_before_type(
+            callback_list=litellm.callbacks,
+            callback=ec_callback,
+            callback_type=EncryptedContentAffinityCheck,
+            before_type=DeploymentAffinityCheck,
+        )
+
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
         if optional_pre_call_checks is None:
             return
+
+        # ---------------------------------------------------------------------
+        # Encrypted content affinity
+        # ---------------------------------------------------------------------
+        if "encrypted_content_affinity" in optional_pre_call_checks:
+            self._add_encrypted_content_affinity_check()
 
         # ---------------------------------------------------------------------
         # Unified deployment affinity (session stickiness)
@@ -1718,27 +1809,6 @@ class Router:
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
 
-        # ---------------------------------------------------------------------
-        # Encrypted content affinity
-        # ---------------------------------------------------------------------
-        if "encrypted_content_affinity" in optional_pre_call_checks:
-            from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-                EncryptedContentAffinityCheck,
-            )
-
-            if self.optional_callbacks is None:
-                self.optional_callbacks = []
-
-            already_registered = any(
-                isinstance(cb, EncryptedContentAffinityCheck)
-                for cb in self.optional_callbacks
-            )
-            if not already_registered:
-                ec_callback = EncryptedContentAffinityCheck(router=self)
-                self.optional_callbacks.append(ec_callback)
-                litellm.logging_callback_manager.add_litellm_callback(ec_callback)
-
-        # ---------------------------------------------------------------------
         # Remaining optional pre-call checks
         # ---------------------------------------------------------------------
         for pre_call_check in optional_pre_call_checks:

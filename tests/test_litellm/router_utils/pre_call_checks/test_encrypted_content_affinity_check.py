@@ -26,6 +26,12 @@ import pytest
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
+from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+    DeploymentAffinityCheck,
+)
+from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+    EncryptedContentAffinityCheck,
+)
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -60,6 +66,46 @@ def _extract_encoded_item_id(response) -> str:
         if item_id.startswith("encitem_"):
             return item_id
     return ""
+
+
+def _build_two_deployment_router(optional_pre_call_checks):
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "openai.gpt-5.1-codex",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_key": "mock-api-key-1",
+                },
+                "model_info": {"id": "deployment-a"},
+            },
+            {
+                "model_name": "openai.gpt-5.1-codex",
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_key": "mock-api-key-2",
+                },
+                "model_info": {"id": "deployment-b"},
+            },
+        ],
+        optional_pre_call_checks=optional_pre_call_checks,
+        num_retries=0,
+    )
+
+
+def _affinity_callback_order():
+    return [
+        type(callback).__name__
+        for callback in litellm.callbacks
+        if isinstance(
+            callback,
+            (EncryptedContentAffinityCheck, DeploymentAffinityCheck),
+        )
+    ]
+
+
+def _deployment_ids(deployments):
+    return [deployment["model_info"]["id"] for deployment in deployments]
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +312,131 @@ class TestRestoreEncryptedContentItemIds:
 # ---------------------------------------------------------------------------
 # Integration tests (router-level)
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "optional_pre_call_checks",
+    [
+        ["deployment_affinity", "encrypted_content_affinity"],
+        ["encrypted_content_affinity", "deployment_affinity"],
+    ],
+)
+async def test_encrypted_content_affinity_wins_over_deployment_affinity(
+    optional_pre_call_checks,
+):
+    """
+    If user-key affinity points to deployment A but encrypted content was produced
+    by deployment B, the encrypted-content routing constraint should win.
+    """
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = []
+    router = None
+
+    try:
+        router = _build_two_deployment_router(
+            optional_pre_call_checks=optional_pre_call_checks,
+        )
+        assert _affinity_callback_order() == [
+            "EncryptedContentAffinityCheck",
+            "DeploymentAffinityCheck",
+        ]
+
+        user_key = "test-user-key"
+        affinity_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+            model_group="openai.gpt-5.1-codex",
+            user_key=user_key,
+        )
+        await router.cache.async_set_cache(
+            affinity_cache_key,
+            {"model_id": "deployment-a"},
+            ttl=3600,
+        )
+
+        wrapped_content = (
+            ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                "gAAAAABpnW_yEYmSNEyOG_original_content",
+                "deployment-b",
+            )
+        )
+        request_kwargs = {
+            "input": [
+                {
+                    "type": "reasoning",
+                    "encrypted_content": wrapped_content,
+                }
+            ],
+            "litellm_metadata": {"user_api_key_hash": user_key},
+        }
+
+        deployments = await router.async_callback_filter_deployments(
+            model="openai.gpt-5.1-codex",
+            healthy_deployments=router.model_list,
+            messages=None,
+            request_kwargs=request_kwargs,
+            parent_otel_span=None,
+        )
+
+        assert _deployment_ids(deployments) == ["deployment-b"]
+        assert request_kwargs["_encrypted_content_affinity_pinned"] is True
+    finally:
+        if router is not None:
+            router.discard()
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_deployment_affinity_still_applies_without_encrypted_content_marker():
+    """
+    EncryptedContentAffinityCheck should be a no-op for ordinary requests, so
+    deployment_affinity should still apply when no encrypted marker is present.
+    """
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = []
+    router = None
+
+    try:
+        router = _build_two_deployment_router(
+            optional_pre_call_checks=[
+                "deployment_affinity",
+                "encrypted_content_affinity",
+            ],
+        )
+        assert _affinity_callback_order() == [
+            "EncryptedContentAffinityCheck",
+            "DeploymentAffinityCheck",
+        ]
+
+        user_key = "test-user-key"
+        affinity_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+            model_group="openai.gpt-5.1-codex",
+            user_key=user_key,
+        )
+        await router.cache.async_set_cache(
+            affinity_cache_key,
+            {"model_id": "deployment-a"},
+            ttl=3600,
+        )
+
+        request_kwargs = {
+            "input": "plain follow-up without encrypted content",
+            "litellm_metadata": {"user_api_key_hash": user_key},
+        }
+
+        deployments = await router.async_callback_filter_deployments(
+            model="openai.gpt-5.1-codex",
+            healthy_deployments=router.model_list,
+            messages=None,
+            request_kwargs=request_kwargs,
+            parent_otel_span=None,
+        )
+
+        assert _deployment_ids(deployments) == ["deployment-a"]
+        assert "_encrypted_content_affinity_pinned" not in request_kwargs
+    finally:
+        if router is not None:
+            router.discard()
+        litellm.callbacks = original_callbacks
 
 
 @pytest.mark.asyncio
@@ -710,10 +881,6 @@ def test_encrypted_content_wrapping_with_multiple_semicolons():
 # ---------------------------------------------------------------------------
 # Regression tests: affinity check must not break tag-based routing
 # ---------------------------------------------------------------------------
-
-from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-    EncryptedContentAffinityCheck,
-)
 
 
 @pytest.mark.asyncio
