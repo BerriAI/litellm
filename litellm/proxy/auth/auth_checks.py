@@ -3074,6 +3074,19 @@ def _model_in_team_aliases(
     return False
 
 
+def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> List[str]:
+    """
+    Expand key model sentinels before auth checks.
+
+    ``all-team-models`` means inherit the parent team's allowlist — same
+    semantics as ``get_key_models`` in ``model_checks.py``.
+    """
+    models = list(valid_token.models or [])
+    if SpecialModelNames.all_team_models.value in models:
+        return list(valid_token.team_models or [])
+    return models
+
+
 async def can_key_call_model(
     model: Union[str, List[str]],
     llm_model_list: Optional[list],
@@ -3092,11 +3105,12 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    key_models = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=valid_token.models,
+            models=key_models,
             team_model_aliases=valid_token.team_model_aliases,
             team_id=valid_token.team_id,
             object_type="key",

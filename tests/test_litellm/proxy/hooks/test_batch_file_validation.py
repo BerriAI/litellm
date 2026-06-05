@@ -219,6 +219,42 @@ async def test_pre_call_rejects_unauthorized_model_in_batch_file():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_allows_all_team_models_key_when_model_in_team_allowlist():
+    """Keys with ``all-team-models`` must inherit the team allowlist when
+    validating models embedded in batch JSONL."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    proxy_alias = "openai/openai/gpt-5.5-batch"
+    file_dict = [
+        {
+            "body": {
+                "model": proxy_alias,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-team",
+        user_id="alice",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[proxy_alias],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    with patch("litellm.proxy.proxy_server.llm_router", None):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+
+@pytest.mark.asyncio
 async def test_pre_call_allows_authorized_model_in_batch_file():
     """If every model in the JSONL is on the caller's allowlist, the hook
     must not raise."""
