@@ -261,6 +261,54 @@ def local_cost_map(monkeypatch):
         litellm.get_model_info.cache_clear()
 
 
+class TestBedrockMantleResponsesSigV4:
+    def test_bearer_short_circuits_without_credentials(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        headers, signed_body = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key="bearer-from-config",
+        )
+        assert headers["Authorization"] == "Bearer bearer-from-config"
+        assert signed_body == b'{"input": "hi"}'
+        signer.get_credentials.assert_not_called()
+
+    def test_bearer_resolved_from_mantle_env_key(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-bearer")
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key=None,
+        )
+        assert headers["Authorization"] == "Bearer env-bearer"
+
+
 class TestBedrockMantleResponsesPricing:
     def test_gpt_5_5_pricing_and_mode(self, local_cost_map):
         info = litellm.get_model_info("bedrock_mantle/openai.gpt-5.5")
