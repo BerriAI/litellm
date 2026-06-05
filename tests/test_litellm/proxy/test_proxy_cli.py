@@ -271,11 +271,19 @@ class TestProxyInitializationHelpers:
         monkeypatch.chdir(tmp_path)
 
         uvicorn_args: dict = {}
-        ProxyInitializationHelpers._configure_dev_reload(uvicorn_args, str(config_file))
+        with patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning:
+            ProxyInitializationHelpers._configure_dev_reload(
+                uvicorn_args, str(config_file)
+            )
 
         assert os.environ["LITELLM_DEV_ENV_HOT_RELOAD"] == "True"
         assert uvicorn_args["reload"] is True
         assert ".env" in uvicorn_args["reload_includes"]
+
+        mock_warning.assert_called_once()
+        warning_text = mock_warning.call_args.args[0].lower()
+        assert "override" in warning_text
+        assert ".env" in warning_text
 
         fake_self = types.SimpleNamespace(
             config=types.SimpleNamespace(reload_dirs=[tmp_path])

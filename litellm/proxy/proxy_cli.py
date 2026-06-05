@@ -269,11 +269,18 @@ class ProxyInitializationHelpers:
         value inherited from the reloader process."""
         from dotenv import find_dotenv
 
+        from litellm._logging import verbose_proxy_logger
+
         uvicorn_args.update(ProxyInitializationHelpers._get_reload_options(config_path))
         os.environ["LITELLM_DEV_ENV_HOT_RELOAD"] = "True"
         env_path = find_dotenv(usecwd=True) or os.path.join(os.getcwd(), ".env")
         ProxyInitializationHelpers._patch_statreload_extra_paths(
             [config_path, env_path]
+        )
+        verbose_proxy_logger.warning(
+            "LiteLLM --reload: worker processes re-read .env with override, so .env "
+            "values win over shell-exported environment variables. Unset a key in .env "
+            "to let a shell-exported value take precedence."
         )
 
     @staticmethod
