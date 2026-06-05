@@ -454,3 +454,223 @@ async def test_apply_user_models_filter_override_semantics(
         )
     else:
         assert sorted({d["model_name"] for d in result}) == expected
+
+
+# ---------------------------------------------------------------------------
+# End-to-end: /v2/model/info?user_models_only=true must drive the
+# non_admin_all_models -> user_models_override path (one DB lookup, not two)
+# even on cache miss. Locks the perf-fix contract on the actual route.
+# ---------------------------------------------------------------------------
+
+
+def test_v2_model_info_user_models_only_uses_override_path(
+    client, configure_router, monkeypatch
+):
+    """`?user_models_only=true` must populate `user_models_override` from
+    the row `non_admin_all_models` already loaded, so the downstream
+    `apply_user_models_filter_to_deployments` does not re-query the user."""
+
+    _override_auth(user_id="u-test")
+
+    # The route's `non_admin_all_models` path issues a real
+    # `prisma_client.db.litellm_usertable.find_unique`. Stub the prisma
+    # client to return a row with .models set, and skip the unrelated
+    # _check_if_model_is_user_added / _check_if_model_is_team_model
+    # helpers which depend on more of the DB schema than this test cares
+    # about.
+    fake_user_row = MagicMock()
+    fake_user_row.models = ["claude-3-opus"]
+    fake_user_row.teams = []
+
+    async def _find_unique(*args, **kwargs):
+        return fake_user_row
+
+    prisma = MagicMock()
+    prisma.db.litellm_usertable.find_unique = _find_unique
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+
+    async def _noop_user_added(*, models, **kwargs):
+        return models
+
+    def _noop_team(*, models, user_row):
+        return []
+
+    monkeypatch.setattr(ps, "_check_if_model_is_user_added", _noop_user_added)
+    monkeypatch.setattr(ps, "_check_if_model_is_team_model", _noop_team)
+
+    # Defense: if anything in the user_models_only branch still calls
+    # get_user_object, the assertion below fires. This is the contract
+    # the perf fix exists to preserve.
+    async def _must_not_call(*args, **kwargs):
+        raise AssertionError(
+            "get_user_object must not be called on user_models_only=true "
+            "when non_admin_all_models has already loaded the row"
+        )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        _must_not_call,
+    )
+
+    resp = client.get(
+        "/v2/model/info?user_models_only=true",
+        headers={"Authorization": "Bearer sk-test"},
+    )
+    assert resp.status_code == 200
+    # Only claude-3-opus survives — non_admin_all_models passed _noop_team
+    # (no team expansion) and the override narrowed via user_row.models.
+    assert _model_names(resp.json()) == ["claude-3-opus"]
+
+
+# ---------------------------------------------------------------------------
+# Defense path: if get_user_object raises, _apply_user_models_filter must
+# swallow and return all_models unchanged. Tests the except handler at
+# utils.py:6157-6166. Failure here would break /v1/models for every user
+# under a transient DB blip.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_user_models_filter_swallows_get_user_object_exception(
+    configure_router, monkeypatch
+):
+    """A raise inside get_user_object must not propagate — discovery
+    endpoints must stay available even if user lookup blips."""
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    async def _boom(*args, **kwargs):
+        raise RuntimeError("simulated db blip")
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        _boom,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="u-test",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_id=None,
+        team_models=[],
+    )
+
+    # Override is None -> goes through the get_user_object path -> hits
+    # the except handler.
+    result = await apply_user_models_filter_to_deployments(
+        deployments=list(_PROXY_MODELS),
+        user_api_key_dict=user_api_key_dict,
+        llm_router=configure_router,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        user_models_override=None,
+    )
+
+    # Pass-through: all 5 returned, no filter applied.
+    assert sorted({d["model_name"] for d in result}) == sorted(
+        {m["model_name"] for m in _PROXY_MODELS}
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_user_models_filter_empty_deployments_short_circuits(monkeypatch):
+    """Empty deployment list -> return immediately, never touch the user
+    lookup. Cheap guard for /v1/model/info on an empty router."""
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    async def _must_not_call(*args, **kwargs):
+        raise AssertionError(
+            "get_user_object must not be called when deployments is empty"
+        )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        _must_not_call,
+    )
+
+    result = await apply_user_models_filter_to_deployments(
+        deployments=[],
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="u-test",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            models=[],
+            team_id=None,
+            team_models=[],
+        ),
+        llm_router=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+    )
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_apply_user_models_filter_no_router_uses_empty_model_set(monkeypatch):
+    """`llm_router is None` (e.g. proxy boot before router init) -> proxy
+    model list defaults to []; filter still applies override semantics
+    using whatever raw names the user listed."""
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="u-test",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_id=None,
+        team_models=[],
+    )
+
+    result = await apply_user_models_filter_to_deployments(
+        deployments=list(_PROXY_MODELS),
+        user_api_key_dict=user_api_key_dict,
+        llm_router=None,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        user_models_override=["claude-3-opus"],
+    )
+    assert sorted({d["model_name"] for d in result}) == ["claude-3-opus"]
+
+
+@pytest.mark.asyncio
+async def test_apply_user_models_filter_user_not_found_passes_through(
+    configure_router, monkeypatch
+):
+    """`get_user_object` returns None (user row genuinely missing) ->
+    pass-through. Matches the swallow path: never break /v1/models if
+    we can't resolve the user."""
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    async def _missing(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        _missing,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="u-test",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_id=None,
+        team_models=[],
+    )
+
+    result = await apply_user_models_filter_to_deployments(
+        deployments=list(_PROXY_MODELS),
+        user_api_key_dict=user_api_key_dict,
+        llm_router=configure_router,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        user_models_override=None,
+    )
+    # No filter applied — all 5 deployments returned.
+    assert sorted({d["model_name"] for d in result}) == sorted(
+        {m["model_name"] for m in _PROXY_MODELS}
+    )
