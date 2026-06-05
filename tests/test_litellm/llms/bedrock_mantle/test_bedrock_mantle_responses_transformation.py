@@ -307,6 +307,31 @@ class TestBedrockMantleResponsesSigV4:
         )
         assert headers["Authorization"] == "Bearer env-bearer"
 
+    def test_bearer_arg_takes_priority_over_mantle_env_key(self, monkeypatch):
+        # The passed api_key (e.g. litellm_params.api_key) must win over the env
+        # bearer; a reordered precedence chain would silently use the wrong token.
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-bearer")
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key="arg-bearer",
+        )
+        assert headers["Authorization"] == "Bearer arg-bearer"
+        signer.get_credentials.assert_not_called()
+
     def test_access_key_produces_sigv4_headers(self, monkeypatch):
         from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 

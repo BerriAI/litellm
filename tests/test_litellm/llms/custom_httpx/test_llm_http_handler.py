@@ -816,3 +816,71 @@ def test_responses_handler_sends_signed_bytes_when_signed():
     assert kwargs.get("data") == b'{"input": "hi"}'
     assert "json" not in kwargs
     assert kwargs["headers"] == {"X-Signed": "1"}
+
+
+def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
+    """Fake-stream signing-order invariant: the bytes SIGNED must equal the bytes SENT.
+
+    In the streaming + fake-stream path the handler first runs
+    _prepare_fake_stream_request, which pops "stream" out of the body, and only
+    then calls sign_request. If signing ran before that pop, the signed body
+    would still carry "stream" while the body sent over the wire would not,
+    producing a SigV4 payload-hash mismatch (401) for a real Mantle deployment.
+    We snapshot request_data at sign time and assert "stream" is already gone.
+    """
+    from unittest.mock import MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.llms.openai import ResponsesAPIResponse
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = (
+        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+    )
+    provider_config.transform_responses_api_request.return_value = {
+        "input": "hi",
+        "stream": True,
+    }
+    provider_config.should_fake_stream.return_value = True
+    provider_config.transform_response_api_response.return_value = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        output=[],
+        status="completed",
+        model="openai.gpt-5.5",
+    )
+
+    captured = {}
+
+    def _capture_sign(**kwargs):
+        captured["request_data"] = dict(kwargs["request_data"])
+        return ({"X-Signed": "1"}, b'{"input": "hi"}')
+
+    provider_config.sign_request.side_effect = _capture_sign
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    handler.response_api_handler(
+        model="openai.gpt-5.5",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={"stream": True},
+        custom_llm_provider="bedrock_mantle",
+        litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        logging_obj=MagicMock(),
+        client=mock_client,
+        _is_async=False,
+        fake_stream=True,
+    )
+
+    assert "stream" not in captured["request_data"]
+    assert "input" in captured["request_data"]
+
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert post_kwargs.get("data") == b'{"input": "hi"}'
+    assert "json" not in post_kwargs
+    assert "stream" in post_kwargs
