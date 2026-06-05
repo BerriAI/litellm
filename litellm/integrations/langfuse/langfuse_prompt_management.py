@@ -102,11 +102,17 @@ def langfuse_client_init(
     if Version(langfuse.version.__version__) >= Version("2.6.0"):
         parameters["sdk_integration"] = "litellm"
 
-    from ...llms.custom_httpx.http_handler import _get_httpx_client
-
     if Version(langfuse.version.__version__) >= Version("2.7.3"):
-        http_client = _get_httpx_client()
-        parameters["httpx_client"] = http_client.client
+        import httpx
+
+        import litellm
+
+        from ...llms.custom_httpx.http_handler import get_ssl_configuration
+
+        parameters["httpx_client"] = httpx.Client(
+            verify=get_ssl_configuration(),
+            cert=os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate),
+        )
 
     client = Langfuse(**parameters)
 
