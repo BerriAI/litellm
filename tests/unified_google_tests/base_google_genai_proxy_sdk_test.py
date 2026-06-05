@@ -104,12 +104,12 @@ class BaseGoogleGenAIProxySDKTest(ABC):
         )
 
         chunks: List[types.GenerateContentResponse] = []
-        stream_error: Optional[BaseException] = None
+        stream_error: Optional[Exception] = None
 
         try:
             for chunk in stream:
                 chunks.append(chunk)
-        except BaseException as exc:
+        except Exception as exc:
             stream_error = exc
 
         assert (
