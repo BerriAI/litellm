@@ -291,6 +291,8 @@ async def proxy_realtime_calls(
         user_id = decoded_payload.get("user_id") or None
         team_id = decoded_payload.get("team_id") or None
         session_type = decoded_payload.get("session_type") or "realtime"
+        if session_type not in ("realtime", "transcription"):
+            session_type = "realtime"
     else:
         # Backward compatibility: older tokens contained only encrypted upstream key.
         openai_ephemeral_key = decrypted_token_value
@@ -464,7 +466,7 @@ async def create_realtime_transcription_session(
         )
         if isinstance(e, HTTPException):
             raise ProxyException(
-                message=getattr(e, "message", str(e)),
+                message=getattr(e, "detail", getattr(e, "message", str(e))),
                 type=getattr(e, "type", "None"),
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", http_status.HTTP_400_BAD_REQUEST),

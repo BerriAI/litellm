@@ -212,6 +212,12 @@ async def acreate_realtime_transcription_session(
         custom_llm_provider=custom_llm_provider,
     )
     request_data = req.model_dump(exclude_none=True, exclude={"model"})
+    # Ensure the upstream body's input_audio_transcription.model matches the
+    # authorized routing model. This prevents a caller from supplying an allowed
+    # top-level model for auth while sneaking a different model into the nested
+    # transcription config that gets forwarded to the provider.
+    if isinstance(request_data.get("input_audio_transcription"), dict):
+        request_data["input_audio_transcription"]["model"] = model_name
     return await base_llm_http_handler.async_realtime_transcription_session_handler(
         api_base=resolved_api_base,
         api_key=resolved_api_key,

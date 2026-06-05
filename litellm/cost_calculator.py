@@ -2534,11 +2534,12 @@ def handle_realtime_stream_cost_calculation(
         break  # exit if we find a valid model
     total_cost = input_cost_per_token + output_cost_per_token
 
-    total_cost += handle_realtime_transcription_cost_calculation(
-        results=results,
-        custom_llm_provider=custom_llm_provider,
-        litellm_model_name=litellm_model_name,
-    )
+    if any(r.get("type") == _TRANSCRIPTION_COMPLETED_EVENT_TYPE for r in results):
+        total_cost += handle_realtime_transcription_cost_calculation(
+            results=results,
+            custom_llm_provider=custom_llm_provider,
+            litellm_model_name=litellm_model_name,
+        )
 
     return total_cost
 
@@ -2602,7 +2603,7 @@ def _get_transcription_model_name_from_results(
             transcription = (
                 (session.get("audio", {}) or {}).get("input", {}) or {}
             ).get("transcription", {}) or session.get("input_audio_transcription", {})
-            model = (transcription or {}).get("model")
+            model = (transcription or {}).get("model") or session.get("model")
             if model:
                 return model
     return None
