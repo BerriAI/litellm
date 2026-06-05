@@ -221,7 +221,7 @@ class ProxyInitializationHelpers:
         }
 
     @staticmethod
-    def _patch_statreload_extra_paths(paths: Iterable[str]) -> bool:
+    def _patch_statreload_extra_paths(paths: Iterable[Optional[str]]) -> bool:
         """Make uvicorn's StatReload reloader notice non-Python dev files
         (the --config YAML and .env).
 
