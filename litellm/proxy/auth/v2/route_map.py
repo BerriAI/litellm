@@ -38,7 +38,26 @@ _GOVERNED: Dict[str, GovernedRoute] = {
 }
 
 
+# Inference routes carry a `model` in the body and are authorized on the data
+# plane (casbin ABAC over the principal's allowed-model attribute), not the
+# control-plane RBAC map.
+_INFERENCE_ROUTES = {
+    "/chat/completions",
+    "/v1/chat/completions",
+    "/completions",
+    "/v1/completions",
+    "/embeddings",
+    "/v1/embeddings",
+    "/responses",
+    "/v1/responses",
+}
+
+
 def match_route(route: str) -> Optional[GovernedRoute]:
     """Return the governance rule for ``route``, or None if v2 doesn't yet own it."""
     normalized = route.rstrip("/") or "/"
     return _GOVERNED.get(normalized)
+
+
+def is_inference_route(route: str) -> bool:
+    return (route.rstrip("/") or "/") in _INFERENCE_ROUTES

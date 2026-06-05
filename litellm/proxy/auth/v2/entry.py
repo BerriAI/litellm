@@ -4,10 +4,11 @@ from fastapi import HTTPException, Request, status
 
 from .authenticators import AuthContext, authenticate
 from .authorizer import AuthorizationDenied, authorize
+from .data_plane import can_call_model
 from .enforcer import CasbinEnforcer
 from .policy_store import load_policy_snapshot
 from .principal import build_principal
-from .route_map import match_route
+from .route_map import is_inference_route, match_route
 
 
 async def _anonymous_identity(api_key: Optional[str]) -> Any:
@@ -51,25 +52,45 @@ async def user_api_key_auth_v2(
     )
 
     rule = match_route(route)
-    if rule is None:
-        # Loud-open handled inside authorize(); no identity required here.
-        identity = await _best_effort_identity(token, ctx)
-        authorize(build_principal(identity), route, None, _DENY_ALL)
+    if rule is not None:
+        # Control plane: RBAC policy rows.
+        identity = await authenticate(token, ctx)
+        request_data = await _read_request_body(request=request)
+        principal = build_principal(identity)
+
+        policies, groupings = await load_policy_snapshot(prisma_client)
+        enforcer = CasbinEnforcer(policies, groupings + principal.groupings)
+
+        try:
+            authorize(principal, route, request_data, enforcer)
+        except AuthorizationDenied as e:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN, detail=str(e)
+            )
+
         identity.request_route = route
         return identity
 
-    identity = await authenticate(token, ctx)
-    request_data = await _read_request_body(request=request)
-    principal = build_principal(identity)
+    if is_inference_route(route):
+        # Data plane: casbin ABAC over the principal's allowed-model attribute.
+        identity = await authenticate(token, ctx)
+        request_data = await _read_request_body(request=request)
+        requested_model = (
+            request_data.get("model") if isinstance(request_data, dict) else None
+        )
+        if requested_model and not can_call_model(
+            getattr(identity, "models", None), requested_model
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"auth_v2: not permitted to call model '{requested_model}'",
+            )
+        identity.request_route = route
+        return identity
 
-    policies, groupings = await load_policy_snapshot(prisma_client)
-    enforcer = CasbinEnforcer(policies, groupings + principal.groupings)
-
-    try:
-        authorize(principal, route, request_data, enforcer)
-    except AuthorizationDenied as e:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
-
+    # Loud-open: route v2 doesn't yet govern. No identity required.
+    identity = await _best_effort_identity(token, ctx)
+    authorize(build_principal(identity), route, None, _DENY_ALL)
     identity.request_route = route
     return identity
 

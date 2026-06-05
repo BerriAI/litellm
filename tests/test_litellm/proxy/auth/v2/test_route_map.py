@@ -1,4 +1,4 @@
-from litellm.proxy.auth.v2.route_map import match_route
+from litellm.proxy.auth.v2.route_map import is_inference_route, match_route
 
 
 def test_model_routes_map_to_resource_and_action():
@@ -29,6 +29,28 @@ def test_team_routes_map_to_team_resource():
 
 def test_trailing_slash_is_normalized():
     assert match_route("/model/info/").resource == "model"
+
+
+def test_inference_routes_are_detected():
+    for route in (
+        "/chat/completions",
+        "/v1/chat/completions",
+        "/embeddings",
+        "/v1/embeddings",
+        "/completions",
+        "/responses",
+    ):
+        assert is_inference_route(route) is True
+
+
+def test_non_inference_routes_are_not_inference():
+    for route in ("/model/new", "/team/info", "/key/generate", "/"):
+        assert is_inference_route(route) is False
+
+
+def test_inference_routes_are_not_control_plane_governed():
+    # Inference is data-plane (model attribute), not in the RBAC route map.
+    assert match_route("/chat/completions") is None
 
 
 def test_ungoverned_routes_return_none():
