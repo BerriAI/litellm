@@ -55,6 +55,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         return [
             "temperature",
             "max_tokens",
+            "max_completion_tokens",
             "top_p",
             "stream",
             "response_format",
@@ -103,13 +104,22 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         stream: bool = optional_params.pop("stream", False) or False
         extra_body = optional_params.pop("extra_body", {})
 
-        return {
+        max_tokens = optional_params.pop("max_tokens", None)
+        max_completion_tokens = optional_params.pop("max_completion_tokens", None)
+        resolved_max = max_completion_tokens or max_tokens
+
+        body: dict = {
             "model": model,
             "messages": messages,
             "stream": stream,
             **optional_params,
             **extra_body,
         }
+
+        if resolved_max is not None:
+            body["max_completion_tokens"] = resolved_max
+
+        return body
 
     def transform_response(
         self,
