@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-from litellm.auth.rbac import RBACEngine, get_rbac_engine
+from litellm.auth.rbac import RBACEngine, RBACPolicy, RBACRole, get_rbac_engine
 from litellm.auth.route_checks import RouteChecks
 from litellm.proxy._types import (
     LiteLLM_UserTable,
@@ -68,6 +68,34 @@ class TestRBACEngine:
         assert engine.is_route_allowed("loop-a", "/a") is True
         assert engine.is_route_allowed("loop-a", "/b") is True
         assert engine.is_route_allowed("loop-b", "/a") is True
+
+    def test_wildcard_pattern_route_match(self):
+        # A "/prefix/*" pattern is matched by the wildcard matcher, not plain prefix
+        e = RBACEngine.from_config(
+            {"roles": [{"name": "w", "allowed_routes": ["/v1/foo/*"]}]}
+        )
+        assert e.is_route_allowed("w", "/v1/foo/bar") is True
+        assert e.is_route_allowed("w", "/v1/other") is False
+
+    def test_role_names_exposes_declared_roles(self, engine):
+        assert set(engine.role_names) == {
+            "base-reader",
+            "data-scientist",
+            "ops",
+            "loop-a",
+            "loop-b",
+        }
+
+    def test_from_config_accepts_policy_instance(self):
+        policy = RBACPolicy(roles=[RBACRole(name="x", allowed_routes=["/x"])])
+        e = RBACEngine.from_config(policy)
+        assert e.is_route_allowed("x", "/x") is True
+
+    def test_get_rbac_engine_accepts_policy_instance(self):
+        policy = RBACPolicy(roles=[RBACRole(name="pol", allowed_routes=["/p"])])
+        e = get_rbac_engine(policy)
+        assert e is not None
+        assert e.is_route_allowed("pol", "/p") is True
 
     def test_unknown_inherit_is_ignored_default_deny(self):
         e = RBACEngine.from_config(

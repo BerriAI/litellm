@@ -18,7 +18,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
+from litellm.proxy._types import (
+    UserAPIKeyAuth,
+    is_internal_user_role,
+    user_api_key_has_admin_view,
+)
 from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -44,8 +48,7 @@ async def _get_internal_user_api_keys(
     prisma_client,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> List[str]:
-    user_role = user_api_key_dict.user_role
-    if user_role is None or not user_role.is_internal_user_role:
+    if not is_internal_user_role(user_api_key_dict.user_role):
         return []
 
     user_api_keys = set()
@@ -73,9 +76,8 @@ async def _get_tag_list_scope(
     prisma_client,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, dict]]:
-    user_role = user_api_key_dict.user_role
-    if user_api_key_has_admin_view(user_api_key_dict) or (
-        user_role is None or not user_role.is_internal_user_role
+    if user_api_key_has_admin_view(user_api_key_dict) or not is_internal_user_role(
+        user_api_key_dict.user_role
     ):
         return None
 
@@ -91,9 +93,8 @@ async def _get_tag_daily_activity_api_key_filter(
     user_api_key_dict: UserAPIKeyAuth,
     requested_api_key: Optional[str],
 ) -> Optional[Union[str, List[str]]]:
-    user_role = user_api_key_dict.user_role
-    if user_api_key_has_admin_view(user_api_key_dict) or (
-        user_role is None or not user_role.is_internal_user_role
+    if user_api_key_has_admin_view(user_api_key_dict) or not is_internal_user_role(
+        user_api_key_dict.user_role
     ):
         return requested_api_key
 

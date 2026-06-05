@@ -200,6 +200,12 @@ def coerce_user_role(
         return str(value)
 
 
+def is_internal_user_role(role: Optional[Union[str, LitellmUserRoles]]) -> bool:
+    """Whether ``role`` is an internal-user role. Safe for custom RBAC role
+    strings, which are never internal-user roles."""
+    return isinstance(role, LitellmUserRoles) and role.is_internal_user_role
+
+
 def validate_assignable_user_role(
     value: Optional[Union[str, LitellmUserRoles]],
 ) -> Optional[Union[str, LitellmUserRoles]]:
