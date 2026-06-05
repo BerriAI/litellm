@@ -79,6 +79,22 @@ class TestIsOpenAIBatchRoute:
             OpenAIPassthroughLoggingHandler.is_openai_batch_route(url, "POST") is True
         )
 
+    def test_azure_foundry_batch_post(self):
+        url = (
+            "https://myresource.cognitiveservices.azure.com/openai/v1/batches"
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_batch_route(url, "POST") is True
+        )
+
+    def test_azure_foundry_batch_get_ignored(self):
+        url = (
+            "https://myresource.cognitiveservices.azure.com/openai/v1/batches"
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_batch_route(url, "GET") is False
+        )
+
     def test_non_batch_route(self):
         url = "https://api.openai.com/v1/chat/completions"
         assert OpenAIPassthroughLoggingHandler.is_openai_batch_route(url) is False
@@ -114,6 +130,15 @@ class TestExtractModelFromBatchUrl:
             url, "azure"
         )
         assert result == "azure/gpt-4-turbo"
+
+    def test_azure_foundry_url_returns_azure(self):
+        url = (
+            "https://myresource.cognitiveservices.azure.com/openai/v1/batches"
+        )
+        result = OpenAIPassthroughLoggingHandler._extract_model_from_batch_url(
+            url, "azure"
+        )
+        assert result == "azure"
 
 
 class TestBatchCreationHandler:
@@ -231,6 +256,50 @@ class TestBatchCreationHandler:
         decoded = base64.urlsafe_b64decode(unified_object_id + padding).decode()
         assert "azure/gpt-4o" in decoded
         assert "batch_azure_001" in decoded
+
+    def test_openai_batch_resolves_model_from_input_file(self):
+        logging_obj = _make_logging_obj()
+        httpx_response = _make_batch_httpx_response("batch_file_model")
+        url_route = "https://api.openai.com/v1/batches"
+
+        mock_router = MagicMock()
+        mock_router.has_model_id.return_value = False
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.store_batch_managed_object"
+            ) as mock_store,
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.get_actual_model_id_from_router",
+                return_value="openai",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_provider_handlers.openai_passthrough_logging_handler.resolve_proxy_model_from_batch_input_file",
+                return_value="gpt-4o-mini",
+            ),
+            patch(
+                "litellm.proxy.proxy_server.llm_router",
+                mock_router,
+            ),
+        ):
+            result = OpenAIPassthroughLoggingHandler.batch_creation_handler(
+                httpx_response=httpx_response,
+                logging_obj=logging_obj,
+                url_route=url_route,
+                start_time=datetime.now(),
+                request_body={"input_file_id": "file-xyz"},
+                litellm_params={"metadata": {}},
+                custom_llm_provider="openai",
+            )
+
+        mock_store.assert_called_once()
+        assert result["kwargs"]["model"] == "gpt-4o-mini"
+        unified_object_id = result["kwargs"]["unified_object_id"]
+        padding = (
+            "=" * (4 - len(unified_object_id) % 4) if len(unified_object_id) % 4 else ""
+        )
+        decoded = base64.urlsafe_b64decode(unified_object_id + padding).decode()
+        assert "gpt-4o-mini" in decoded
 
 
 class TestOpenAIPassthroughHandlerBatchDispatch:

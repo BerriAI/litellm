@@ -23,6 +23,35 @@ if TYPE_CHECKING:
 CHECK_BATCH_COST_USER_AGENT = "LiteLLM Proxy/CheckBatchCost"
 
 
+def _get_passthrough_batch_retrieve_kwargs(model_id: str) -> dict:
+    """Build litellm.aretrieve_batch kwargs using passthrough env credentials."""
+    from litellm.proxy.proxy_server import passthrough_endpoint_router
+    from litellm.secret_managers.main import get_secret_str
+
+    custom_llm_provider = "openai"
+    if model_id.startswith("azure/") or "azure" in model_id.lower():
+        custom_llm_provider = "azure"
+
+    retrieve_kwargs: dict = {"custom_llm_provider": custom_llm_provider}
+
+    if passthrough_endpoint_router is not None:
+        api_key = passthrough_endpoint_router.get_credentials(
+            custom_llm_provider=custom_llm_provider,
+            region_name=None,
+        )
+        if api_key:
+            retrieve_kwargs["api_key"] = api_key
+
+    if custom_llm_provider == "azure":
+        api_base = get_secret_str("AZURE_API_BASE")
+        if api_base:
+            retrieve_kwargs["api_base"] = api_base
+        if model_id.startswith("azure/"):
+            retrieve_kwargs["model"] = model_id.split("/", 1)[1]
+
+    return retrieve_kwargs
+
+
 class CheckBatchCost:
     def __init__(
         self,
@@ -285,6 +314,8 @@ class CheckBatchCost:
         model_id: str,
         batch_id: str,
         prom_logger: Optional["PrometheusLogger"],
+        use_router_deployment: bool = True,
+        passthrough_retrieve_kwargs: Optional[dict] = None,
     ) -> Optional[Tuple[Optional[str], Optional[str]]]:
         """
         Fetch a completed batch's results, compute cost/usage, and emit the
@@ -292,6 +323,12 @@ class CheckBatchCost:
         success, None when the job can't be routed to a deployment. Raises on
         results-fetch or cost-computation failures so the caller can leave the
         job unprocessed and retry it on a later poll.
+
+        When `use_router_deployment` is False, `model_id` has no matching
+        router deployment (e.g. an OpenAI/Azure batch created via passthrough)
+        and `passthrough_retrieve_kwargs` (built by
+        `_get_passthrough_batch_retrieve_kwargs`) is used instead of router
+        deployment credentials/config for file retrieval and cost calculation.
         """
         from litellm.batches.batch_utils import (
             _get_file_content_as_dictionary,
@@ -334,7 +371,11 @@ class CheckBatchCost:
             except (IndexError, AttributeError):
                 pass
 
-        credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+        credentials = (
+            self.llm_router.get_deployment_credentials_with_provider(model_id)
+            if use_router_deployment
+            else (passthrough_retrieve_kwargs or {})
+        ) or {}
         _file_content = await afile_content(
             file_id=raw_output_file_id,
             **credentials,
@@ -364,15 +405,27 @@ class CheckBatchCost:
             except Exception:
                 pass
 
-        deployment_info = self.llm_router.get_deployment(model_id=model_id)
-        if deployment_info is None:
+        deployment_info = (
+            self.llm_router.get_deployment(model_id=model_id)
+            if use_router_deployment
+            else None
+        )
+        if use_router_deployment and deployment_info is None:
             verbose_proxy_logger.info(
                 f"Skipping job {job.unified_object_id} because it is not a valid deployment info"
             )
             self._record_error(prom_logger, "deployment_not_found")
             return None
-        custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
-        litellm_model_name = deployment_info.litellm_params.model
+
+        if deployment_info is not None:
+            custom_llm_provider = deployment_info.litellm_params.custom_llm_provider
+            litellm_model_name = deployment_info.litellm_params.model
+        else:
+            passthrough_retrieve_kwargs = passthrough_retrieve_kwargs or {}
+            custom_llm_provider = passthrough_retrieve_kwargs.get(
+                "custom_llm_provider", "openai"
+            )
+            litellm_model_name = passthrough_retrieve_kwargs.get("model", model_id)
 
         model_name, llm_provider, _, _ = get_llm_provider(
             model=litellm_model_name,
@@ -395,7 +448,9 @@ class CheckBatchCost:
                         _unified_file_id = managed_files_hook.get_unified_output_file_id(
                             output_file_id=_raw_file_id,
                             model_id=model_id,
-                            model_name=str(model_name) if model_name else deployment_info.model_name or None,
+                            model_name=str(model_name)
+                            if model_name
+                            else (deployment_info.model_name if deployment_info else None),
                         )
                         await managed_files_hook.store_unified_file_id(
                             file_id=_unified_file_id,
@@ -417,7 +472,11 @@ class CheckBatchCost:
 
         # Pass deployment model_info so custom batch pricing
         # (input_cost_per_token_batches etc.) is used for cost calc
-        deployment_model_info = deployment_info.model_info.model_dump() if deployment_info.model_info else {}
+        deployment_model_info = (
+            deployment_info.model_info.model_dump()
+            if deployment_info and deployment_info.model_info
+            else {}
+        )
         batch_cost, batch_usage, batch_models = (
             await calculate_batch_cost_and_usage(
                 file_content_dictionary=file_content_as_dict,
@@ -545,22 +604,58 @@ class CheckBatchCost:
                 f"Querying model ID: {model_id} for cost and usage of batch ID: {batch_id}"
             )
 
-            try:
-                response = await self.llm_router.aretrieve_batch(
-                    model=model_id,
-                    batch_id=batch_id,
-                    litellm_metadata={
-                        "user_api_key_user_id": job.created_by or "default-user-id",
-                        "batch_ignore_default_logging": True,
-                    },
+            use_router_deployment = self.llm_router.has_model_id(model_id)
+            response = None
+            passthrough_retrieve_kwargs: Optional[dict] = None
+
+            if use_router_deployment:
+                try:
+                    response = await self.llm_router.aretrieve_batch(
+                        model=model_id,
+                        batch_id=batch_id,
+                        litellm_metadata={
+                            "user_api_key_user_id": job.created_by or "default-user-id",
+                            "batch_ignore_default_logging": True,
+                        },
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.info(
+                        f"Skipping job {job.unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
+                    )
+                    if prom_logger:
+                        prom_logger.record_check_batch_cost_error(
+                            "provider_retrieval_error"
+                        )
+                    continue
+            else:
+                import litellm
+
+                passthrough_retrieve_kwargs = _get_passthrough_batch_retrieve_kwargs(
+                    model_id
                 )
-            except Exception as e:
-                verbose_proxy_logger.info(
-                    f"Skipping job {job.unified_object_id} because of error querying model ID: {model_id} for cost and usage of batch ID: {batch_id}: {e}"
-                )
-                if prom_logger:
-                    prom_logger.record_check_batch_cost_error("provider_retrieval_error")
-                continue
+                try:
+                    verbose_proxy_logger.info(
+                        f"CheckBatchCost: no proxy deployment for model_id={model_id!r}, "
+                        f"using passthrough env credentials"
+                    )
+                    response = await litellm.aretrieve_batch(
+                        batch_id=batch_id,
+                        litellm_metadata={
+                            "user_api_key_user_id": job.created_by
+                            or "default-user-id",
+                            "batch_ignore_default_logging": True,
+                        },
+                        **passthrough_retrieve_kwargs,
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.info(
+                        f"Skipping job {job.unified_object_id} because of error querying batch ID: {batch_id} via passthrough env creds: {e}"
+                    )
+                    if prom_logger:
+                        prom_logger.record_check_batch_cost_error(
+                            "provider_retrieval_error"
+                        )
+                    continue
 
             ## RETRIEVE THE BATCH JOB OUTPUT FILE
             if (
@@ -574,6 +669,8 @@ class CheckBatchCost:
                         model_id=model_id,
                         batch_id=batch_id,
                         prom_logger=prom_logger,
+                        use_router_deployment=use_router_deployment,
+                        passthrough_retrieve_kwargs=passthrough_retrieve_kwargs,
                     )
                 except Exception as tracking_err:
                     verbose_proxy_logger.error(

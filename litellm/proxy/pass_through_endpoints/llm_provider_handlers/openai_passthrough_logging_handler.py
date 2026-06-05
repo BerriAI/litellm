@@ -18,6 +18,7 @@ from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.base_passthrough_logging_handler import (
     BasePassthroughLoggingHandler,
     get_actual_model_id_from_router,
+    resolve_proxy_model_from_batch_input_file,
     store_batch_managed_object,
 )
 from litellm.proxy.pass_through_endpoints.success_handler import (
@@ -112,6 +113,10 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         return OpenAIConfig()
 
     @staticmethod
+    def _is_azure_openai_hostname(hostname: str) -> bool:
+        return "openai.azure.com" in hostname or "cognitiveservices.azure.com" in hostname
+
+    @staticmethod
     def is_openai_chat_completions_route(url_route: str) -> bool:
         """Check if the URL route is an OpenAI chat completions endpoint."""
         if not url_route:
@@ -150,25 +155,29 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
         if not url_route or method.upper() != "POST":
             return False
         parsed_url = urlparse(url_route)
-        if not parsed_url.hostname:
+        hostname = parsed_url.hostname or ""
+        if not hostname:
             return False
-        is_openai = "api.openai.com" in parsed_url.hostname
-        is_azure = "openai.azure.com" in parsed_url.hostname
+        is_openai = "api.openai.com" in hostname
+        is_azure = OpenAIPassthroughLoggingHandler._is_azure_openai_hostname(hostname)
         if not (is_openai or is_azure):
             return False
         path = parsed_url.path
         return bool(
             re.search(r"/v1/batches$", path)
+            or re.search(r"/openai/v1/batches$", path)
             or (is_azure and re.search(r"/deployments/[^/]+/batches$", path))
         )
 
     @staticmethod
     def _extract_model_from_batch_url(url_route: str, custom_llm_provider: str) -> str:
         parsed_url = urlparse(url_route)
-        if "openai.azure.com" in (parsed_url.hostname or ""):
+        hostname = parsed_url.hostname or ""
+        if OpenAIPassthroughLoggingHandler._is_azure_openai_hostname(hostname):
             match = re.search(r"/deployments/([^/]+)/batches", parsed_url.path)
             if match:
                 return f"azure/{match.group(1)}"
+            return "azure"
         return "openai"
 
     @staticmethod
@@ -189,11 +198,30 @@ class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):
                 return {"result": None, "kwargs": {**kwargs, "response_cost": 0.0}}
 
             batch_id = _json_response["id"]
-            custom_llm_provider = kwargs.get("custom_llm_provider", "openai")
+            custom_llm_provider = (
+                kwargs.get("custom_llm_provider")
+                or logging_obj.model_call_details.get("custom_llm_provider")
+                or "openai"
+            )
             raw_model = OpenAIPassthroughLoggingHandler._extract_model_from_batch_url(
                 url_route, custom_llm_provider
             )
             actual_model_id = get_actual_model_id_from_router(raw_model)
+
+            from litellm.proxy.proxy_server import llm_router
+
+            if llm_router is None or not llm_router.has_model_id(actual_model_id):
+                input_file_id = _json_response.get("input_file_id") or (
+                    request_body or {}
+                ).get("input_file_id")
+                if input_file_id:
+                    resolved_model_id = resolve_proxy_model_from_batch_input_file(
+                        input_file_id=input_file_id,
+                        custom_llm_provider=custom_llm_provider,
+                        litellm_params=kwargs.get("litellm_params", {}) or {},
+                    )
+                    if resolved_model_id:
+                        actual_model_id = resolved_model_id
 
             import base64
 

@@ -235,6 +235,87 @@ def get_actual_model_id_from_router(model_name: str) -> str:
     return model_name
 
 
+def try_get_proxy_model_id_from_router(model_name: str) -> Optional[str]:
+    """Return a proxy deployment id when ``model_name`` maps to a configured model."""
+    from litellm.proxy.proxy_server import llm_router
+
+    if llm_router is None:
+        return None
+
+    model_ids = llm_router.get_model_ids(model_name=model_name)
+    if model_ids:
+        return model_ids[0]
+
+    proxy_model_name = llm_router.resolve_model_name_from_model_id(model_name)
+    if proxy_model_name:
+        model_ids = llm_router.get_model_ids(model_name=proxy_model_name)
+        if model_ids:
+            return model_ids[0]
+
+    return None
+
+
+def resolve_proxy_model_from_batch_input_file(
+    input_file_id: str,
+    custom_llm_provider: str,
+    litellm_params: Optional[dict] = None,
+) -> Optional[str]:
+    """Resolve a proxy deployment id from models named in a batch input JSONL file."""
+    try:
+        from litellm.batches.batch_utils import (
+            _get_file_content_as_dictionary,
+            _get_models_from_batch_input_file_content,
+        )
+        from litellm.files.main import file_content
+        from litellm.proxy.proxy_server import llm_router, passthrough_endpoint_router
+
+        if llm_router is None:
+            return None
+
+        file_content_kwargs: dict = {
+            "file_id": input_file_id,
+            "custom_llm_provider": custom_llm_provider,
+        }
+
+        litellm_params = litellm_params or {}
+        api_key = litellm_params.get("api_key")
+        if not api_key and passthrough_endpoint_router is not None:
+            api_key = passthrough_endpoint_router.get_credentials(
+                custom_llm_provider=custom_llm_provider,
+                region_name=None,
+            )
+        if api_key:
+            file_content_kwargs["api_key"] = api_key
+
+        for key in ("api_base", "api_version", "organization"):
+            if litellm_params.get(key):
+                file_content_kwargs[key] = litellm_params[key]
+
+        _file_response = file_content(**file_content_kwargs)
+        content_bytes = (
+            _file_response.content
+            if hasattr(_file_response, "content")
+            else _file_response
+        )
+        file_content_as_dict = _get_file_content_as_dictionary(content_bytes)
+        models = _get_models_from_batch_input_file_content(file_content_as_dict)
+
+        for model in models:
+            proxy_model_id = try_get_proxy_model_id_from_router(model)
+            if proxy_model_id:
+                verbose_proxy_logger.info(
+                    f"Resolved batch input file model {model!r} to proxy deployment {proxy_model_id!r}"
+                )
+                return proxy_model_id
+
+        return None
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Could not resolve proxy model from batch input file {input_file_id!r}: {e}"
+        )
+        return None
+
+
 def store_batch_managed_object(
     unified_object_id: str,
     batch_object: "LiteLLMBatch",

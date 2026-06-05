@@ -1,26 +1,9 @@
 model_list:
-  - model_name: gpt-5-mini-end-user-test
+  - model_name: gpt-4o-mini
     litellm_params:
-      model: gpt-5-mini
-      region_name: "eu"
-    model_info:
-      id: "1"
-  - model_name: gpt-5-mini-end-user-test
-    litellm_params:
-      model: openai/gpt-5-mini
-      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
-  - model_name: gpt-3.5-turbo
-    litellm_params:
-      model: openai/gpt-4.1-mini
-      api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
-  - model_name: gpt-3.5-turbo-large
-    litellm_params:
-      model: "gpt-4.1"
+      model: openai/gpt-4o-mini
       api_key: os.environ/OPENAI_API_KEY
-      rpm: 480
-      timeout: 300
-      stream_timeout: 60
-  - model_name: gpt-4
+  - model_name: gpt-4.1-mini-batch
     litellm_params:
       model: openai/gpt-4.1
       api_key: os.environ/OPENAI_API_KEY # The `os.environ/` prefix tells litellm to read this from the env. See https://docs.litellm.ai/docs/simple_proxy#load-api-keys-from-vault
@@ -28,6 +11,11 @@ model_list:
       rpm: 480
       timeout: 300
       stream_timeout: 60
+  - model_name: azure-gpt-4.1-mini-batch
+    litellm_params:
+      model: azure/gpt-4.1-mini-batch
+      api_base: os.environ/AZURE_API_BASE
+      api_key: os.environ/AZURE_API_KEY
   - model_name: sagemaker-completion-model
     litellm_params:
       model: sagemaker/berri-benchmarking-Llama-2-70b-chat-hf-4
@@ -220,12 +208,14 @@ router_settings:
   enable_pre_call_checks: true
   model_group_alias: {"my-special-fake-model-alias-name": "fake-openai-endpoint-3"} 
 
-general_settings: 
+general_settings:
   master_key: sk-1234 # [OPTIONAL] Use to enforce auth on proxy. See - https://docs.litellm.ai/docs/proxy/virtual_keys
   store_model_in_db: True
   proxy_budget_rescheduler_min_time: 60
   proxy_budget_rescheduler_max_time: 64
   proxy_batch_write_at: 1
+  proxy_batch_polling_interval: 10
+  passthrough_managed_object_ids: true
   database_connection_pool_limit: 10
   # background_health_checks: true
   # use_shared_health_check: true
@@ -237,7 +227,7 @@ general_settings:
     - path: "/v1/rerank"                                  # route you want to add to LiteLLM Proxy Server
       target: "https://api.cohere.com/v1/rerank"          # URL this route should forward requests to
       headers:                                            # headers to forward to this URL
-        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint 
+        content-type: application/json                    # (Optional) Extra Headers to pass to this endpoint
         accept: application/json
       forward_headers: True
 
@@ -245,4 +235,4 @@ general_settings:
   # settings for using redis caching
   # REDIS_HOST: redis-16337.c322.us-east-1-2.ec2.cloud.redislabs.com
   # REDIS_PORT: "16337"
-  # REDIS_PASSWORD: 
+  # REDIS_PASSWORD:
