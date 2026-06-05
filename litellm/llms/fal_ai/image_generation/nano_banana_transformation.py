@@ -60,15 +60,15 @@ class FalAINanoBananaConfig(FalAIBaseConfig):
     ) -> dict:
         supported_params = self.get_supported_openai_params(model)
         for key, value in non_default_params.items():
-            if key in optional_params:
-                continue
             if key == "response_format":
                 continue
             elif key == "n":
-                optional_params["num_images"] = value
+                if "num_images" not in optional_params:
+                    optional_params["num_images"] = value
             elif key == "size":
-                optional_params["aspect_ratio"] = self._map_aspect_ratio(value)
-            elif not drop_params:
+                if "aspect_ratio" not in optional_params:
+                    optional_params["aspect_ratio"] = self._map_aspect_ratio(value)
+            elif key not in optional_params and not drop_params:
                 raise ValueError(
                     f"Parameter {key} is not supported for model {model}. "
                     f"Supported parameters are {supported_params}. "
