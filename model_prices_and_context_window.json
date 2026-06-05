@@ -13984,6 +13984,22 @@
             "/v1/images/generations"
         ]
     },
+    "fal_ai/fal-ai/nano-banana": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
+    "fal_ai/fal-ai/gemini-25-flash-image": {
+        "litellm_provider": "fal_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.039,
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "featherless_ai/featherless-ai/Qwerky-72B": {
         "litellm_provider": "featherless_ai",
         "max_input_tokens": 32768,
