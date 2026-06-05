@@ -2206,6 +2206,10 @@
         "search": true
       }
     },
+    "you_com": {
+      "display_name": "You.com (`you_com`)",
+      "url": "https://docs.litellm.ai/docs/search/you_com"
+    },
     "apiserpent": {
       "display_name": "APISerpent (`apiserpent`)",
       "url": "https://docs.litellm.ai/docs/search/apiserpent",
