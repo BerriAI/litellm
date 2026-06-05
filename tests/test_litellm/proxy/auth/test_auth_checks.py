@@ -305,6 +305,30 @@ async def test_can_key_call_model_all_team_models_uses_team_allowlist():
 
 
 @pytest.mark.asyncio
+async def test_can_key_call_model_all_team_models_empty_team_models_is_unrestricted():
+    """When team_models is empty, all-team-models resolves to [] which grants unrestricted access."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-team-key",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    assert (
+        await can_key_call_model(
+            model="any-model",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
 async def test_get_key_object_should_reconnect_once_on_db_connection_error():
     mock_prisma_client = MagicMock()
     mock_prisma_client.get_data = AsyncMock(

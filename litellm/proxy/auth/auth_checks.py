@@ -3080,6 +3080,10 @@ def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> List[str]
 
     ``all-team-models`` means inherit the parent team's allowlist — same
     semantics as ``get_key_models`` in ``model_checks.py``.
+
+    If ``team_models`` is empty or None, returns ``[]``. An empty model list
+    is treated as unrestricted access by ``_check_model_access_helper``
+    (consistent with ``get_key_models`` behavior on other auth paths).
     """
     models = list(valid_token.models or [])
     if SpecialModelNames.all_team_models.value in models:
