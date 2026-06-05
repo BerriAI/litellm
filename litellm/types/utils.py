@@ -3375,6 +3375,7 @@ class LlmProviders(str, Enum):
     NANOGPT = "nano-gpt"
     POE = "poe"
     CHUTES = "chutes"
+    NEOSANTARA = "neosantara"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"
