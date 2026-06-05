@@ -283,9 +283,7 @@ async def get_form_data(request: Request) -> Dict[str, Any]:
     # Starlette's FormData exposes `multi_items()` which yields every
     # (key, value) pair even when the same key appears multiple times.
     # Some unit-test mocks pass a plain dict; tolerate both shapes.
-    items = (
-        form.multi_items() if hasattr(form, "multi_items") else list(form.items())
-    )
+    items = form.multi_items() if hasattr(form, "multi_items") else list(form.items())
     parsed_form_data: dict[str, Any] = {}
     for key, value in items:
         if key.endswith("[]"):
