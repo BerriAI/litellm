@@ -83,7 +83,9 @@ class FocusDestinationFactory:
                 or os.getenv("FOCUS_GCS_PATH_SERVICE_ACCOUNT"),
             }
             if not resolved.get("bucket_name"):
-                raise ValueError("FOCUS_GCS_BUCKET_NAME must be provided for GCS exports")
+                raise ValueError(
+                    "FOCUS_GCS_BUCKET_NAME must be provided for GCS exports"
+                )
             return {k: v for k, v in resolved.items() if v is not None}
         raise NotImplementedError(
             f"Provider '{provider}' not supported for Focus export configuration"
