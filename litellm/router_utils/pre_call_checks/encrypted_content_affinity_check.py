@@ -37,7 +37,7 @@ Safe to enable globally:
 """
 
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 import httpx
 
@@ -64,16 +64,44 @@ class EncryptedContentAffinityCheck(CustomLogger):
     The ``model_id`` is decoded directly from the litellm-encoded item IDs –
     no caching or TTL management needed.
 
-    Wired via ``Router(optional_pre_call_checks=["encrypted_content_affinity"])``.
+    Wired via ``Router(optional_pre_call_checks=["encrypted_content_affinity"])`` or
+    per-model group ``model_group_affinity_config``.
     """
 
-    def __init__(self, router: Optional["Router"] = None) -> None:
+    def __init__(
+        self,
+        router: Optional["Router"] = None,
+        enable_global_affinity: bool = True,
+        model_group_affinity_config: Optional[Dict[str, List[str]]] = None,
+    ) -> None:
         super().__init__()
         self.router = router
+        self.enable_global_affinity = enable_global_affinity
+        self.model_group_affinity_config: Dict[str, List[str]] = (
+            model_group_affinity_config or {}
+        )
 
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def has_model_group_affinity_enabled(
+        model_group_affinity_config: Optional[Dict[str, List[str]]],
+    ) -> bool:
+        if not model_group_affinity_config:
+            return False
+
+        return any(
+            "encrypted_content_affinity" in checks
+            for checks in model_group_affinity_config.values()
+        )
+
+    def _is_enabled_for_model_group(self, model_group: str) -> bool:
+        group_checks = self.model_group_affinity_config.get(model_group)
+        return self.enable_global_affinity or (
+            group_checks is not None and "encrypted_content_affinity" in group_checks
+        )
 
     @staticmethod
     def _extract_model_id_from_input(request_input: Any) -> Optional[str]:
@@ -213,6 +241,8 @@ class EncryptedContentAffinityCheck(CustomLogger):
         """
         request_kwargs = request_kwargs or {}
         typed_healthy_deployments = cast(List[dict], healthy_deployments)
+        if not self._is_enabled_for_model_group(model):
+            return typed_healthy_deployments
 
         # Signal to the response post-processor that encrypted item IDs should be
         # encoded in the output of this request.  Only set the flag when

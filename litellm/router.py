@@ -1658,6 +1658,67 @@ class Router:
                     f"Dictionary '{fallback_dict}' must have exactly one key, but has {len(fallback_dict)} keys."
                 )
 
+    def _add_encrypted_content_affinity_check(
+        self, enable_global_affinity: bool
+    ) -> None:
+        from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+            EncryptedContentAffinityCheck,
+        )
+
+        def _move_before_deployment_affinity(
+            callback_list: List[Any],
+            callback_to_move: EncryptedContentAffinityCheck,
+        ) -> None:
+            if callback_to_move not in callback_list:
+                return
+            callback_list.remove(callback_to_move)
+            insert_index = next(
+                (
+                    idx
+                    for idx, callback in enumerate(callback_list)
+                    if isinstance(callback, DeploymentAffinityCheck)
+                ),
+                len(callback_list),
+            )
+            callback_list.insert(insert_index, callback_to_move)
+
+        if (
+            enable_global_affinity
+            or EncryptedContentAffinityCheck.has_model_group_affinity_enabled(
+                self.model_group_affinity_config
+            )
+        ):
+            if self.optional_callbacks is None:
+                self.optional_callbacks = []
+
+            existing_ec_callback: Optional[EncryptedContentAffinityCheck] = None
+            for cb in self.optional_callbacks:
+                if isinstance(cb, EncryptedContentAffinityCheck):
+                    existing_ec_callback = cb
+                    break
+
+            if existing_ec_callback is not None:
+                existing_ec_callback.router = self
+                existing_ec_callback.enable_global_affinity = (
+                    existing_ec_callback.enable_global_affinity
+                    or enable_global_affinity
+                )
+                existing_ec_callback.model_group_affinity_config = (
+                    self.model_group_affinity_config or {}
+                )
+                ec_callback = existing_ec_callback
+            else:
+                ec_callback = EncryptedContentAffinityCheck(
+                    router=self,
+                    enable_global_affinity=enable_global_affinity,
+                    model_group_affinity_config=self.model_group_affinity_config,
+                )
+                self.optional_callbacks.append(ec_callback)
+                litellm.logging_callback_manager.add_litellm_callback(ec_callback)
+
+            _move_before_deployment_affinity(self.optional_callbacks, ec_callback)
+            _move_before_deployment_affinity(litellm.callbacks, ec_callback)
+
     def add_optional_pre_call_checks(
         self, optional_pre_call_checks: Optional[OptionalPreCallChecks]
     ):
@@ -1721,22 +1782,11 @@ class Router:
         # ---------------------------------------------------------------------
         # Encrypted content affinity
         # ---------------------------------------------------------------------
-        if "encrypted_content_affinity" in optional_pre_call_checks:
-            from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
-                EncryptedContentAffinityCheck,
+        self._add_encrypted_content_affinity_check(
+            enable_global_affinity=(
+                "encrypted_content_affinity" in optional_pre_call_checks
             )
-
-            if self.optional_callbacks is None:
-                self.optional_callbacks = []
-
-            already_registered = any(
-                isinstance(cb, EncryptedContentAffinityCheck)
-                for cb in self.optional_callbacks
-            )
-            if not already_registered:
-                ec_callback = EncryptedContentAffinityCheck(router=self)
-                self.optional_callbacks.append(ec_callback)
-                litellm.logging_callback_manager.add_litellm_callback(ec_callback)
+        )
 
         # ---------------------------------------------------------------------
         # Remaining optional pre-call checks

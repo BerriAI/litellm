@@ -1236,3 +1236,60 @@ async def test_init_containers_api_endpoints_managed_id_without_model_id_applies
     assert call_kw["container_id"] == "cfile_upstream_abc"
     assert call_kw["file_id"] == "cfile_xyz"
     assert call_kw["custom_llm_provider"] == "azure"
+
+
+def test_router_model_group_encrypted_content_affinity_callback_registration():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    model_group_affinity_config = {
+        model_group: ["encrypted_content_affinity"],
+    }
+    router = Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {
+                    "model": "openai/gpt-5.1-codex",
+                    "api_key": "mock-api-key",
+                },
+            }
+        ],
+        model_group_affinity_config=model_group_affinity_config,
+        num_retries=0,
+    )
+
+    try:
+        callbacks = router.optional_callbacks or []
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
+        deployment_callback = next(
+            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
+        )
+        assert len(encrypted_content_callbacks) == 1
+        assert encrypted_content_callbacks[0].enable_global_affinity is False
+        assert (
+            encrypted_content_callbacks[0].model_group_affinity_config
+            == model_group_affinity_config
+        )
+        assert callbacks.index(encrypted_content_callbacks[0]) < callbacks.index(
+            deployment_callback
+        )
+
+        router._add_encrypted_content_affinity_check(enable_global_affinity=True)
+
+        callbacks = router.optional_callbacks or []
+        encrypted_content_callbacks = [
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        ]
+        assert len(encrypted_content_callbacks) == 1
+        assert encrypted_content_callbacks[0].enable_global_affinity is True
+        assert encrypted_content_callbacks[0].router is router
+    finally:
+        router.discard()

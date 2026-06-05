@@ -1471,3 +1471,191 @@ async def test_affinity_does_not_raise_when_boundary_peer_available():
 
     assert result == [peer]
     assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
+
+
+@pytest.mark.asyncio
+async def test_model_group_affinity_config_enables_encrypted_content_affinity():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    target_deployment = {
+        "model_name": model_group,
+        "litellm_params": {"model": "openai/gpt-5.1-codex"},
+        "model_info": {"id": "deployment-b"},
+    }
+    healthy_deployments = [
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-5.1-codex"},
+            "model_info": {"id": "deployment-a"},
+        },
+        target_deployment,
+    ]
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-b", "rs_test"
+    )
+    request_kwargs = {
+        "input": [{"type": "reasoning", "id": encoded_id}],
+        "litellm_metadata": {},
+    }
+    check = EncryptedContentAffinityCheck(
+        enable_global_affinity=False,
+        model_group_affinity_config={
+            model_group: ["encrypted_content_affinity"],
+        },
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == [target_deployment]
+    assert request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"]
+    assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
+
+
+@pytest.mark.asyncio
+async def test_model_group_affinity_config_does_not_disable_global_encrypted_content_affinity():
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    target_deployment = {
+        "model_name": model_group,
+        "litellm_params": {"model": "openai/gpt-5.1-codex"},
+        "model_info": {"id": "deployment-b"},
+    }
+    healthy_deployments = [
+        {
+            "model_name": model_group,
+            "litellm_params": {"model": "openai/gpt-5.1-codex"},
+            "model_info": {"id": "deployment-a"},
+        },
+        target_deployment,
+    ]
+    encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+        "deployment-b", "rs_test"
+    )
+    request_kwargs = {
+        "input": [{"type": "reasoning", "id": encoded_id}],
+        "litellm_metadata": {},
+    }
+    check = EncryptedContentAffinityCheck(
+        enable_global_affinity=True,
+        model_group_affinity_config={
+            model_group: ["deployment_affinity"],
+        },
+    )
+
+    filtered = await check.async_filter_deployments(
+        model=model_group,
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert filtered == [target_deployment]
+    assert request_kwargs["litellm_metadata"]["encrypted_content_affinity_enabled"]
+    assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
+
+
+@pytest.mark.asyncio
+async def test_model_group_encrypted_content_affinity_overrides_global_deployment_affinity():
+    from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
+        DeploymentAffinityCheck,
+    )
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    model_group = "openai.gpt-5.1-codex"
+    user_api_key_hash = "test-user-key"
+    deployment_a = {
+        "model_name": model_group,
+        "litellm_params": {
+            "model": "openai/gpt-5.1-codex",
+            "api_key": "mock-api-key-a",
+        },
+        "model_info": {"id": "deployment-a"},
+    }
+    deployment_b = {
+        "model_name": model_group,
+        "litellm_params": {
+            "model": "openai/gpt-5.1-codex",
+            "api_key": "mock-api-key-b",
+        },
+        "model_info": {"id": "deployment-b"},
+    }
+    router = litellm.Router(
+        model_list=[deployment_a, deployment_b],
+        optional_pre_call_checks=["deployment_affinity"],
+        model_group_affinity_config={
+            model_group: ["encrypted_content_affinity"],
+        },
+        num_retries=0,
+    )
+
+    try:
+        callbacks = router.optional_callbacks or []
+        deployment_callback = next(
+            cb for cb in callbacks if isinstance(cb, DeploymentAffinityCheck)
+        )
+        encrypted_content_callback = next(
+            cb for cb in callbacks if isinstance(cb, EncryptedContentAffinityCheck)
+        )
+        assert callbacks.index(encrypted_content_callback) < callbacks.index(
+            deployment_callback
+        )
+        assert encrypted_content_callback.enable_global_affinity is False
+
+        cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+            model_group=model_group,
+            user_key=user_api_key_hash,
+        )
+        await deployment_callback.cache.async_set_cache(
+            key=cache_key,
+            value={"model_id": "deployment-a"},
+            ttl=60,
+        )
+        encoded_id = ResponsesAPIRequestUtils._build_encrypted_item_id(
+            "deployment-b", "rs_test"
+        )
+        request_kwargs = {
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": encoded_id,
+                    "encrypted_content": "gAAAAABpnW_yEYmSNEyOG...",
+                }
+            ],
+            "metadata": {"user_api_key_hash": user_api_key_hash},
+            "litellm_metadata": {},
+        }
+
+        after_deployment_affinity = await deployment_callback.async_filter_deployments(
+            model=model_group,
+            healthy_deployments=[deployment_a, deployment_b],
+            messages=None,
+            request_kwargs=request_kwargs,
+        )
+        assert after_deployment_affinity == [deployment_a, deployment_b]
+
+        after_encrypted_content_affinity = (
+            await encrypted_content_callback.async_filter_deployments(
+                model=model_group,
+                healthy_deployments=after_deployment_affinity,
+                messages=None,
+                request_kwargs=request_kwargs,
+            )
+        )
+
+        assert after_encrypted_content_affinity == [deployment_b]
+        assert request_kwargs.get("_encrypted_content_affinity_pinned") is True
+    finally:
+        router.discard()

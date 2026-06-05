@@ -39,7 +39,12 @@ class DeploymentAffinityCheck(CustomLogger):
 
     CACHE_KEY_PREFIX = "deployment_affinity:v1"
     VALID_FLAGS = frozenset(
-        {"deployment_affinity", "responses_api_deployment_check", "session_affinity"}
+        {
+            "deployment_affinity",
+            "responses_api_deployment_check",
+            "session_affinity",
+            "encrypted_content_affinity",
+        }
     )
 
     def __init__(
