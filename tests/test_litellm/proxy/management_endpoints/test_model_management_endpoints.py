@@ -1664,6 +1664,202 @@ class TestAddAndDeleteModelLifecycle:
             assert str(exc_info.value.code) == "400"
 
 
+class TestDeleteModelCascadeTeams:
+    """Deleting a model should remove it from all teams' models arrays."""
+
+    @pytest.mark.asyncio
+    async def test_delete_model_removes_from_teams(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+            ModelInfoDelete,
+        )
+
+        model_id = "cascade-test-model"
+        admin_user = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="gpt-4",
+            litellm_params={"model": "openai/gpt-4"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        team_a = MagicMock()
+        team_a.team_id = "team-a"
+        team_a.models = ["gpt-4", "claude-sonnet"]
+
+        team_b = MagicMock()
+        team_b.team_id = "team-b"
+        team_b.models = ["gpt-4"]
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(
+            return_value=[team_a, team_b]
+        )
+        mock_prisma.db.litellm_teamtable.update = AsyncMock()
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+            assert "deleted successfully" in result["message"]
+
+            mock_prisma.db.litellm_teamtable.find_many.assert_called_once_with(
+                where={"models": {"has": "gpt-4"}}
+            )
+            assert mock_prisma.db.litellm_teamtable.update.call_count == 2
+
+            calls = mock_prisma.db.litellm_teamtable.update.call_args_list
+            team_a_call = next(
+                c for c in calls if c.kwargs["where"]["team_id"] == "team-a"
+            )
+            assert team_a_call.kwargs["data"]["models"] == ["claude-sonnet"]
+
+            team_b_call = next(
+                c for c in calls if c.kwargs["where"]["team_id"] == "team-b"
+            )
+            assert team_b_call.kwargs["data"]["models"] == []
+
+    @pytest.mark.asyncio
+    async def test_team_scoped_delete_does_not_cascade(self):
+        """A team-scoped model deletion should NOT cascade to other teams."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+            ModelInfoDelete,
+        )
+
+        model_id = "team-scoped-model"
+        admin_user = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        team_row = MagicMock()
+        team_row.team_id = "team-owner"
+        team_row.models = ["gpt-4"]
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="gpt-4",
+            litellm_params={"model": "openai/gpt-4"},
+            model_info={"id": model_id, "team_id": "team-owner"},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable.update = AsyncMock()
+
+        _PS = "litellm.proxy.proxy_server"
+        _MM = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+            patch(f"{_MM}.delete_team_model_alias", AsyncMock(return_value=[])),
+            patch(
+                f"{_MM}.ModelManagementAuthChecks.can_user_make_model_call",
+                AsyncMock(return_value=True),
+            ),
+        ):
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+            # The cascade find_many should NOT be called for team-scoped models
+            mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delete_skips_cascade_when_other_deployment_exists(self):
+        """When another deployment shares the same model_name, don't remove from teams."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            delete_model as delete_model_endpoint,
+            ModelInfoDelete,
+        )
+
+        model_id = "deployment-1"
+        admin_user = UserAPIKeyAuth(
+            user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="gpt-4",
+            litellm_params={"model": "openai/gpt-4", "api_key": "key-1"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+
+        other_deployment = MagicMock()
+        other_deployment.model_id = "deployment-2"
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[other_deployment]
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable.update = AsyncMock()
+
+        _PS = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.general_settings", {}),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+        ):
+            await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+            # Should not query teams since another deployment exists
+            mock_prisma.db.litellm_teamtable.find_many.assert_not_called()
+            mock_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
 class TestGetTeamDeployments:
     """Tests for _get_team_deployments which filters by model_name prefix + Python-side team_id check."""
 
