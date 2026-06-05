@@ -147,12 +147,97 @@ class JWTAuthenticator:
         )
 
 
-# Master key is matched first (exact compare), then virtual keys, then JWTs.
-# Dispatch is by credential shape, so the chain is deterministic, not "ask everyone".
+def _load_introspection_settings() -> Any:
+    import os
+
+    from litellm.proxy.proxy_server import general_settings
+
+    from .oauth2_introspection import IntrospectionSettings
+
+    cfg = (general_settings or {}).get("auth_v2_oauth2") or {}
+    endpoint = cfg.get("introspection_endpoint") or os.getenv(
+        "AUTH_V2_OAUTH2_INTROSPECTION_ENDPOINT"
+    )
+    if not endpoint:
+        return None
+    return IntrospectionSettings(
+        endpoint=endpoint,
+        client_id=cfg.get("client_id") or os.getenv("AUTH_V2_OAUTH2_CLIENT_ID"),
+        client_secret=cfg.get("client_secret")
+        or os.getenv("AUTH_V2_OAUTH2_CLIENT_SECRET"),
+        user_id_claim=cfg.get("user_id_claim", "sub"),
+        team_claim=cfg.get("team_claim"),
+        scope_claim=cfg.get("scope_claim", "scope"),
+        role_map=cfg.get("role_map") or {},
+    )
+
+
+class OAuth2IntrospectionAuthenticator:
+    """Validates an opaque bearer token via an RFC 7662 introspection endpoint."""
+
+    def can_handle(self, api_key: Optional[str]) -> bool:
+        if not isinstance(api_key, str) or not api_key:
+            return False
+        # Opaque token: not a virtual key, not a JWT. Only when introspection is
+        # configured, so unconfigured deployments fall through to a clean 401.
+        if api_key.startswith("sk-") or api_key.count(".") == 2:
+            return False
+        return _load_introspection_settings() is not None
+
+    async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+        from .oauth2_introspection import (
+            OAuth2IntrospectionError,
+            parse_introspection_response,
+        )
+
+        settings = _load_introspection_settings()
+        data = await self._introspect(api_key, settings)
+        try:
+            identity = parse_introspection_response(data, settings)
+        except OAuth2IntrospectionError as e:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, detail=f"auth_v2: {e}"
+            )
+
+        user_role = None
+        if identity.role is not None:
+            try:
+                user_role = LitellmUserRoles(identity.role)
+            except ValueError:
+                user_role = None
+
+        return UserAPIKeyAuth(
+            user_id=identity.user_id,
+            team_id=identity.team_id,
+            user_role=user_role,
+        )
+
+    async def _introspect(self, token: str, settings: Any) -> Any:
+        import httpx
+
+        auth = (
+            (settings.client_id, settings.client_secret)
+            if settings.client_id
+            else None
+        )
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                settings.endpoint, data={"token": token}, auth=auth
+            )
+            response.raise_for_status()
+            return response.json()
+
+
+# Master key first (exact compare), then virtual keys, then JWTs, then opaque
+# tokens via introspection. Dispatch is by credential shape, so the chain is
+# deterministic, not "ask everyone".
 AUTHENTICATORS: List[Authenticator] = [
     MasterKeyAuthenticator(),
     VirtualKeyAuthenticator(),
     JWTAuthenticator(),
+    OAuth2IntrospectionAuthenticator(),
 ]
 
 
