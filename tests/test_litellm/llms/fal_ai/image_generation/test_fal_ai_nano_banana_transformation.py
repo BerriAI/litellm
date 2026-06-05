@@ -25,7 +25,6 @@ from litellm.types.utils import ImageObject, ImageResponse
         "fal-ai/nano-banana",
         "nano-banana",
         "fal-ai/gemini-25-flash-image",
-        "fal-ai/gemini-2.5-flash-image",
     ],
 )
 def test_nano_banana_config_selected(model):

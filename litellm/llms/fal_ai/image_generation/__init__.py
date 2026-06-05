@@ -47,11 +47,7 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
     model_lower = model.lower()
 
     # Map model names to their corresponding configuration classes
-    if (
-        "nano-banana" in model_lower
-        or "gemini-25-flash-image" in model_lower
-        or "gemini-2.5-flash-image" in model_lower
-    ):
+    if "nano-banana" in model_lower or "gemini-25-flash-image" in model_lower:
         return FalAINanoBananaConfig()
     elif "imagen4" in model_lower or "imagen-4" in model_lower:
         return FalAIImagen4Config()
