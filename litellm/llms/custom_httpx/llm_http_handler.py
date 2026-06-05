@@ -2586,6 +2586,8 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        headers.setdefault("Content-Type", "application/json")
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2675,6 +2677,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        headers.setdefault("Content-Type", "application/json")
 
         ## LOGGING
         logging_obj.pre_call(
