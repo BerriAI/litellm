@@ -580,6 +580,8 @@ class AmazonAnthropicClaudeMessagesConfig(
                 content = msg.get("content")
                 if isinstance(content, str):
                     if content:
+                        if content.startswith("x-anthropic-billing-header:"):
+                            continue
                         block = {"type": "text", "text": content}
                         if "cache_control" in msg:
                             block["cache_control"] = msg["cache_control"]
@@ -590,6 +592,10 @@ class AmazonAnthropicClaudeMessagesConfig(
                             if item.get("type") == "text":
                                 text_val = item.get("text")
                                 if text_val:
+                                    if text_val.startswith(
+                                        "x-anthropic-billing-header:"
+                                    ):
+                                        continue
                                     block = {"type": "text", "text": text_val}
                                     if "cache_control" in item:
                                         block["cache_control"] = item["cache_control"]

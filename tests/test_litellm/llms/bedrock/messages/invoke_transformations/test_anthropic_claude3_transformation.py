@@ -1868,3 +1868,40 @@ def test_bedrock_anthropic_messages_system_role_transformation():
         {"content": "no_role_key"},
         {"role": "user", "content": "Hello"},
     ]
+
+    # 11. Test case: system message in messages array containing billing-header as string (should be skipped)
+    req = config.transform_anthropic_messages_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {"role": "system", "content": "x-anthropic-billing-header:some-billing-id"},
+            {"role": "user", "content": "Hello"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 100},
+        litellm_params={},
+        headers={},
+    )
+    assert req["messages"] == [{"role": "user", "content": "Hello"}]
+    assert "system" not in req
+
+    # 12. Test case: system message in messages array containing billing-header inside list (should be skipped)
+    req = config.transform_anthropic_messages_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "x-anthropic-billing-header:some-billing-id",
+                    },
+                    {"type": "text", "text": "Valid system prompt"},
+                ],
+            },
+            {"role": "user", "content": "Hello"},
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 100},
+        litellm_params={},
+        headers={},
+    )
+    assert req["messages"] == [{"role": "user", "content": "Hello"}]
+    assert req["system"] == [{"type": "text", "text": "Valid system prompt"}]
