@@ -10,16 +10,8 @@ The submodules are aliased to the exact module objects loaded under
 import importlib
 import pkgutil
 import sys
-import warnings
 
 import litellm.auth as _new_pkg
-
-warnings.warn(
-    "litellm.proxy.auth has moved to litellm.auth; update your imports. "
-    "The old path will keep working as a compatibility shim",
-    DeprecationWarning,
-    stacklevel=2,
-)
 
 for _submodule in pkgutil.iter_modules(_new_pkg.__path__):
     _old_name = f"{__name__}.{_submodule.name}"
