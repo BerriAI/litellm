@@ -91,8 +91,8 @@ function CreateKeyPageContent() {
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [createClicked, setCreateClicked] = useState<boolean>(false);
 
-  const { data: uiSettingsData } = useUISettings();
-  const nudgesDisabled = Boolean(uiSettingsData?.values?.disable_ui_nudges);
+  const { data: uiSettingsData, isLoading: uiSettingsLoading } = useUISettings();
+  const nudgesDisabled = uiSettingsLoading || Boolean(uiSettingsData?.values?.disable_ui_nudges);
 
   // Survey state - always show by default
   const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
