@@ -9641,21 +9641,7 @@ export const listMCPUserCredentials = async (accessToken: string): Promise<MCPUs
 // ============================================================
 
 export const getMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
-    : `/v1/mcp/server/${serverId}/user-env-vars`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    const detail = (err as { detail?: unknown })?.detail;
-    const message =
-      typeof detail === "string" ? detail : (detail as { error?: string })?.error || "Failed to load env vars";
-    throw new Error(message);
-  }
-  return response.json();
+  return apiClient.get<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, { accessToken });
 };
 
 export const storeMCPUserEnvVars = async (
@@ -9663,35 +9649,20 @@ export const storeMCPUserEnvVars = async (
   serverId: string,
   values: Record<string, string>,
 ): Promise<MCPUserEnvVarsStatus> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/v1/mcp/server/${serverId}/user-env-vars`
-    : `/v1/mcp/server/${serverId}/user-env-vars`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ values }),
+  return apiClient.post<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, {
+    accessToken,
+    body: { values },
   });
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    const detail = (err as { detail?: unknown })?.detail;
-    const message =
-      typeof detail === "string" ? detail : (detail as { error?: string })?.error || "Failed to save env vars";
-    throw new Error(message);
-  }
-  return response.json();
 };
 
 export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/user-env-vars/status` : `/v1/mcp/user-env-vars/status`;
-  const response = await fetch(url, {
-    method: "GET",
-    headers: { [globalLitellmHeaderName]: `Bearer ${accessToken}` },
-  });
-  if (!response.ok) return [];
-  return response.json();
+  // Best-effort status badges: a failure here must not break the page, so fall
+  // back to an empty list rather than surfacing the error to the caller.
+  try {
+    return await apiClient.get<MCPUserEnvVarsStatus[]>("/v1/mcp/user-env-vars/status", { accessToken });
+  } catch {
+    return [];
+  }
 };
 
 // ============================================================
