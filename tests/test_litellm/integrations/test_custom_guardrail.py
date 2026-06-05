@@ -1249,3 +1249,47 @@ class TestCustomGuardrailSpendLogMatchRedaction:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
         assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestGuardrailInterventionClassification:
+    """A routing decision is a deliberate guardrail intervention, not a failure."""
+
+    def test_sensitive_data_route_exception_is_intervention(self):
+        from litellm.exceptions import SensitiveDataRouteException
+
+        exc = SensitiveDataRouteException(
+            route_to_model="on-prem-model",
+            session_id="sess-1",
+            guardrail_name="pii-rail",
+        )
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.asyncio
+    async def test_routing_logged_as_intervened_not_failed(self):
+        from litellm.exceptions import SensitiveDataRouteException
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class RoutingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="pii-rail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise SensitiveDataRouteException(
+                    route_to_model="on-prem-model",
+                    session_id="sess-1",
+                    guardrail_name=self.guardrail_name,
+                )
+
+        guardrail = RoutingGuardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(SensitiveDataRouteException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"
