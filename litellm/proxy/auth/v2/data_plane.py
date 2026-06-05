@@ -1,47 +1,37 @@
-import os
-from dataclasses import dataclass
+import re
 from typing import List, Optional
-
-import casbin
-
-_MODEL_PATH = os.path.join(os.path.dirname(__file__), "data_plane.conf")
 
 # Sentinels that mean "any model" in the existing key/team model lists.
 _UNRESTRICTED_SENTINELS = {"*", "all-proxy-models", "all-team-models"}
 
 
-@dataclass
-class ModelAccessSubject:
-    """Carries the principal's model entitlement as a casbin ABAC attribute.
-
-    The data plane runs on the inference hot path, so access is decided from
-    attributes already on the loaded key/team (no per-key policy rows, no policy
-    store read). An empty list means unrestricted, matching existing key
-    semantics where ``models == []`` allows every model.
-    """
-
-    allowed_models: List[str]
-
-    @property
-    def unrestricted(self) -> bool:
-        if not self.allowed_models:
-            return True
-        return any(model in _UNRESTRICTED_SENTINELS for model in self.allowed_models)
+def _is_unrestricted(allowed_models: List[str]) -> bool:
+    # An empty list means "no restriction" in litellm, matching key/team semantics.
+    if not allowed_models:
+        return True
+    return any(model in _UNRESTRICTED_SENTINELS for model in allowed_models)
 
 
-_enforcer: Optional[casbin.Enforcer] = None
-
-
-def _get_enforcer() -> casbin.Enforcer:
-    global _enforcer
-    if _enforcer is None:
-        enforcer = casbin.Enforcer(_MODEL_PATH)
-        enforcer.add_policy("allow")  # single gate; the matcher does the deciding
-        _enforcer = enforcer
-    return _enforcer
+def _matches_pattern(requested_model: str, pattern: str) -> bool:
+    # Mirrors v1 is_model_allowed_by_pattern: '*' is the only wildcard.
+    if "*" not in pattern:
+        return False
+    return bool(re.match("^" + pattern.replace("*", ".*") + "$", requested_model))
 
 
 def can_call_model(allowed_models: Optional[List[str]], requested_model: str) -> bool:
-    """Decide whether a principal with ``allowed_models`` may call ``requested_model``."""
-    subject = ModelAccessSubject(allowed_models=list(allowed_models or []))
-    return _get_enforcer().enforce(subject, requested_model)
+    """Decide whether a principal with ``allowed_models`` may call ``requested_model``.
+
+    Data-plane access is a direct membership/pattern predicate, not a policy
+    engine: it runs on the inference hot path where a casbin evaluation would be
+    pure overhead for what is a list check. Empty list or a sentinel means
+    unrestricted; an exact name matches; a wildcard pattern (e.g. ``bedrock/*``)
+    matches using v1's pattern semantics. Access-group expansion is not yet
+    honored here (tracked as a parity follow-up).
+    """
+    models = list(allowed_models or [])
+    if _is_unrestricted(models):
+        return True
+    if requested_model in models:
+        return True
+    return any(_matches_pattern(requested_model, model) for model in models)
