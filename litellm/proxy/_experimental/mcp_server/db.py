@@ -1212,30 +1212,6 @@ async def get_mcp_submissions(
 # ── Per-user MCP environment variables ────────────────────────────────────
 
 
-async def store_user_env_vars(
-    prisma_client: PrismaClient,
-    user_id: str,
-    server_id: str,
-    values: Dict[str, str],
-) -> None:
-    """Persist (or overwrite) the calling user's env var values for ``server_id``.
-
-    Values are JSON-serialised and stored encrypted in ``values_b64``.
-    """
-    encoded = encrypt_value_helper(json.dumps(values))
-    await prisma_client.db.litellm_mcpuserenvvars.upsert(
-        where={"user_id_server_id": {"user_id": user_id, "server_id": server_id}},
-        data={
-            "create": {
-                "user_id": user_id,
-                "server_id": server_id,
-                "values_b64": encoded,
-            },
-            "update": {"values_b64": encoded},
-        },
-    )
-
-
 def _decode_user_env_vars(stored: str) -> Dict[str, str]:
     """Decrypt a ``values_b64`` blob and parse it as a flat ``{name: value}`` dict."""
     decrypted = decrypt_value_helper(

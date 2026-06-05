@@ -659,7 +659,6 @@ async def test_load_user_env_vars_caches_within_ttl(env_vars_salt_key, monkeypat
     from unittest.mock import MagicMock
 
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as mgr_mod
-    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
     )
@@ -667,10 +666,8 @@ async def test_load_user_env_vars_caches_within_ttl(env_vars_salt_key, monkeypat
 
     mgr_mod._user_env_vars_cache.clear()
 
-    blob_prisma = _mock_env_vars_prisma()
-    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "t0p"})
     row = MagicMock()
-    row.values_b64 = _captured_values_blob(blob_prisma)
+    row.values_b64 = _encrypted_user_env_blob({"TOKEN": "t0p"})
 
     prisma = _mock_env_vars_prisma(row=row)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
@@ -699,7 +696,6 @@ async def test_load_user_env_vars_force_refresh_bypasses_cache(
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as mgr_mod
-    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
     )
@@ -707,13 +703,10 @@ async def test_load_user_env_vars_force_refresh_bypasses_cache(
 
     mgr_mod._user_env_vars_cache.clear()
 
-    blob_prisma = _mock_env_vars_prisma()
-    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "old"})
     old_row = MagicMock()
-    old_row.values_b64 = _captured_values_blob(blob_prisma)
-    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "new"})
+    old_row.values_b64 = _encrypted_user_env_blob({"TOKEN": "old"})
     new_row = MagicMock()
-    new_row.values_b64 = _captured_values_blob(blob_prisma)
+    new_row.values_b64 = _encrypted_user_env_blob({"TOKEN": "new"})
 
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(
@@ -748,7 +741,6 @@ async def test_load_user_env_vars_invalidation_forces_refetch(
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._experimental.mcp_server import mcp_server_manager as mgr_mod
-    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         invalidate_user_env_vars_cache,
@@ -757,13 +749,10 @@ async def test_load_user_env_vars_invalidation_forces_refetch(
 
     mgr_mod._user_env_vars_cache.clear()
 
-    blob_prisma = _mock_env_vars_prisma()
-    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "old"})
     old_row = MagicMock()
-    old_row.values_b64 = _captured_values_blob(blob_prisma)
-    await store_user_env_vars(blob_prisma, "alice", "srv-1", {"TOKEN": "new"})
+    old_row.values_b64 = _encrypted_user_env_blob({"TOKEN": "old"})
     new_row = MagicMock()
-    new_row.values_b64 = _captured_values_blob(blob_prisma)
+    new_row.values_b64 = _encrypted_user_env_blob({"TOKEN": "new"})
 
     prisma = _mock_env_vars_prisma()
     prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(
@@ -808,14 +797,14 @@ def _mock_env_vars_prisma(row=None):
     return prisma
 
 
-def _captured_values_blob(prisma) -> str:
-    """Pull the values_b64 value passed to the most recent upsert."""
-    call = prisma.db.litellm_mcpuserenvvars.upsert.call_args
-    data = call.kwargs["data"]
-    create_value = data["create"]["values_b64"]
-    update_value = data["update"]["values_b64"]
-    assert create_value == update_value
-    return create_value
+def _encrypted_user_env_blob(values: dict) -> str:
+    """Encrypt ``values`` the way the production per-user write does, so tests can
+    seed a correctly-encrypted ``values_b64`` blob without a live DB."""
+    import json
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    return encrypt_value_helper(json.dumps(values))
 
 
 def _transactional_env_vars_prisma(read_delay: float = 0.0):
@@ -901,37 +890,39 @@ def _transactional_env_vars_prisma(read_delay: float = 0.0):
 
 
 @pytest.mark.asyncio
-async def test_store_user_env_vars_does_not_persist_plaintext(env_vars_salt_key):
-    from litellm.proxy._experimental.mcp_server.db import store_user_env_vars
-
-    prisma = _mock_env_vars_prisma()
-    await store_user_env_vars(
-        prisma, "alice", "srv-1", {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
+async def test_merge_user_env_vars_does_not_persist_plaintext(env_vars_salt_key):
+    """The per-user write path must encrypt values at rest; ``values_b64`` must
+    never hold plaintext personal credentials, but must still round-trip."""
+    from litellm.proxy._experimental.mcp_server.db import (
+        _decode_user_env_vars,
+        merge_user_env_vars,
     )
-    stored = _captured_values_blob(prisma)
-    # Stored blob must not contain plaintext values
+
+    prisma = _transactional_env_vars_prisma()
+    values = {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
+    await merge_user_env_vars(
+        prisma, "alice", "srv-1", values, allowed_names=values.keys()
+    )
+
+    row = await prisma.db.litellm_mcpuserenvvars.find_unique(
+        where={"user_id_server_id": {"user_id": "alice", "server_id": "srv-1"}}
+    )
+    stored = row.values_b64
     assert "s3cret" not in stored
-    assert "alice" not in stored or stored.count("alice") == 0  # encrypted form
+    assert "alice" not in stored
+    assert _decode_user_env_vars(stored) == values
 
 
 @pytest.mark.asyncio
 async def test_get_user_env_vars_round_trip(env_vars_salt_key):
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
-    from litellm.proxy._experimental.mcp_server.db import (
-        get_user_env_vars,
-        store_user_env_vars,
-    )
+    from litellm.proxy._experimental.mcp_server.db import get_user_env_vars
 
-    prisma = _mock_env_vars_prisma()
     payload = {"CORP_USERNAME": "alice", "CORP_PASSWORD": "s3cret"}
-    await store_user_env_vars(prisma, "alice", "srv-1", payload)
-    stored = _captured_values_blob(prisma)
-
-    # Now simulate the read returning that blob.
     row = MagicMock()
-    row.values_b64 = stored
-    prisma.db.litellm_mcpuserenvvars.find_unique = AsyncMock(return_value=row)
+    row.values_b64 = _encrypted_user_env_blob(payload)
+    prisma = _mock_env_vars_prisma(row=row)
 
     result = await get_user_env_vars(prisma, "alice", "srv-1")
     assert result == payload
@@ -956,14 +947,9 @@ async def test_decode_user_env_vars_warns_when_undecryptable(
     from unittest.mock import MagicMock
 
     import litellm.proxy._experimental.mcp_server.db as mcp_db
-    from litellm.proxy._experimental.mcp_server.db import (
-        _decode_user_env_vars,
-        store_user_env_vars,
-    )
+    from litellm.proxy._experimental.mcp_server.db import _decode_user_env_vars
 
-    prisma = _mock_env_vars_prisma()
-    await store_user_env_vars(prisma, "alice", "srv-1", {"CORP_PASSWORD": "s3cret"})
-    blob = _captured_values_blob(prisma)
+    blob = _encrypted_user_env_blob({"CORP_PASSWORD": "s3cret"})
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "a-totally-different-salt-key-0000")
     logger = MagicMock()
@@ -977,17 +963,10 @@ async def test_decode_user_env_vars_warns_when_undecryptable(
 async def test_get_user_env_vars_bulk_distributes_results(env_vars_salt_key):
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.proxy._experimental.mcp_server.db import (
-        get_user_env_vars_bulk,
-        store_user_env_vars,
-    )
+    from litellm.proxy._experimental.mcp_server.db import get_user_env_vars_bulk
 
-    # Use store_user_env_vars to get correctly-encrypted blobs.
-    prisma1 = _mock_env_vars_prisma()
-    await store_user_env_vars(prisma1, "alice", "srv-1", {"A": "1"})
-    blob1 = _captured_values_blob(prisma1)
-    await store_user_env_vars(prisma1, "alice", "srv-2", {"B": "2"})
-    blob2 = _captured_values_blob(prisma1)
+    blob1 = _encrypted_user_env_blob({"A": "1"})
+    blob2 = _encrypted_user_env_blob({"B": "2"})
 
     row1 = MagicMock()
     row1.server_id = "srv-1"
@@ -1031,17 +1010,15 @@ async def test_merge_user_env_vars_preserves_existing_and_prunes_disallowed(
 ):
     """Merging one update keeps the user's other stored values and drops any
     name the admin no longer declares as user-scoped."""
-    from litellm.proxy._experimental.mcp_server.db import (
-        merge_user_env_vars,
-        store_user_env_vars,
-    )
+    from litellm.proxy._experimental.mcp_server.db import merge_user_env_vars
 
     prisma = _transactional_env_vars_prisma()
-    await store_user_env_vars(
+    await merge_user_env_vars(
         prisma,
         "alice",
         "srv-1",
         {"CORP_USERNAME": "alice", "CORP_PASSWORD": "old", "RETIRED": "x"},
+        {"CORP_USERNAME", "CORP_PASSWORD", "RETIRED"},
     )
 
     merged = await merge_user_env_vars(
@@ -1325,7 +1302,6 @@ async def test_create_mcp_server_decrypts_env_vars_when_prisma_returns_json_stri
     ``add_server`` (which trusts the caller) seeds the registry with ciphertext
     and the subsequent ``reload_servers_from_database`` reuses that broken entry
     (timestamps match), so headers forward ciphertext upstream."""
-    import json
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._experimental.mcp_server.db import (
