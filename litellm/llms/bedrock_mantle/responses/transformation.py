@@ -97,12 +97,8 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
             or get_secret_str("BEDROCK_MANTLE_API_KEY")
             or get_secret_str("AWS_BEARER_TOKEN_BEDROCK")
         )
-        if not api_key:
-            raise ValueError(
-                "Bedrock Mantle API key is required. Set BEDROCK_MANTLE_API_KEY "
-                "(or AWS_BEARER_TOKEN_BEDROCK) or pass api_key."
-            )
-        headers["Authorization"] = f"Bearer {api_key}"
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def supports_native_file_search(self) -> bool:

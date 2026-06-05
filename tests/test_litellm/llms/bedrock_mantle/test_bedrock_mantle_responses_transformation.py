@@ -114,16 +114,15 @@ class TestBedrockMantleResponsesAuth:
         )
         assert headers["Authorization"] == "Bearer bearer-key"
 
-    def test_missing_key_raises(self, monkeypatch):
+    def test_missing_bearer_does_not_raise_in_validate_environment(self, monkeypatch):
+        # SigV4 may still apply, so validate_environment must defer instead of raising.
         monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         cfg = BedrockMantleResponsesAPIConfig()
-        with pytest.raises(ValueError, match="Bedrock Mantle API key"):
-            cfg.validate_environment(
-                headers={},
-                model="openai.gpt-5.5",
-                litellm_params=GenericLiteLLMParams(),
-            )
+        headers = cfg.validate_environment(
+            headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams()
+        )
+        assert "Authorization" not in headers
 
     def test_custom_llm_provider(self):
         cfg = BedrockMantleResponsesAPIConfig()
@@ -529,6 +528,30 @@ class TestBedrockMantleResponsesSigV4:
         )
         assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
         assert "Bearer stale-caller-token" not in headers["Authorization"]
+
+    def test_no_bearer_and_no_credentials_raises_both_paths(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from botocore.exceptions import NoCredentialsError
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        with pytest.raises(ValueError) as exc:
+            cfg.sign_request(
+                headers={},
+                optional_params={"aws_region_name": "us-east-2"},
+                request_data={"input": "hi"},
+                api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+                api_key=None,
+            )
+        msg = str(exc.value)
+        assert "Bearer" in msg
+        assert "SigV4" in msg or "IAM" in msg
 
 
 class TestBedrockMantleResponsesPricing:
