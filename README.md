@@ -407,7 +407,7 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 ### Run in Developer Mode
 #### Services
 1. Setup .env file in root
-2. Run dependant services `docker-compose up db prometheus`
+2. Run dependent services `docker-compose up db prometheus`
 
 #### Backend
 1. (In root) create virtual environment `python -m venv .venv`
