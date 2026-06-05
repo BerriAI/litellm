@@ -1,0 +1,162 @@
+name: Reusable — build, push and keyless-sign a container image
+
+on:
+  workflow_call:
+    inputs:
+      image-name:
+        type: string
+        required: true
+      dockerfile:
+        type: string
+        required: true
+      context:
+        type: string
+        default: "."
+      platforms:
+        type: string
+        default: "linux/amd64,linux/arm64"
+      tag:
+        type: string
+        required: true
+      commit-hash:
+        type: string
+        required: true
+      enable-docker-hub:
+        type: boolean
+        default: false
+      cosign-release:
+        type: string
+        default: "v3.0.6"  # Keep in sync with publish_to_pypi.yml's COSIGN_VERSION
+    outputs:
+      digest:
+        description: "Image digest of the built+pushed image"
+        value: ${{ jobs.build.outputs.digest }}
+      image:
+        description: "Image reference (without digest)"
+        value: ${{ jobs.build.outputs.image }}
+
+permissions: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+      packages: write
+      attestations: write   # required for actions/attest-build-provenance
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image: ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}
+    steps:
+      - name: Checkout source at release commit
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955  # v4.3.0
+        with:
+          ref: ${{ inputs.commit-hash }}
+          persist-credentials: false
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a  # v4.0.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12
+      - name: Log in to GHCR
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Log in to Docker Hub via OIDC
+        if: inputs.enable-docker-hub
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121  # v4.1.0
+        with:
+          registry: docker.io
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          oidc-federation-id: ${{ vars.DOCKERHUB_OIDC_ID }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@0adf9959216b96bec444f325f1e493d4aa344497  # v6.14
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          platforms: ${{ inputs.platforms }}
+          push: true
+          # Disabled deliberately: SLSA provenance is produced by the GitHub-native
+          # attest-build-provenance step below. BuildKit's own provenance attestation
+          # would alter the multi-arch manifest digest and break signature verification.
+          provenance: false
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}:${{ inputs.tag }}
+            ${{ inputs.enable-docker-hub && format('docker.io/litellm/{0}:{1}', inputs.image-name, inputs.tag) || '' }}
+      - name: Install cosign
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6  # v4.1.2
+        with:
+          cosign-release: ${{ inputs.cosign-release }}
+      - name: Sign image (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          OWNER: ${{ github.repository_owner }}
+          IMAGE: ${{ inputs.image-name }}
+          ENABLE_DH: ${{ inputs.enable-docker-hub }}
+        run: |
+          set -euo pipefail
+          cosign sign --yes "ghcr.io/${OWNER}/${IMAGE}@${DIGEST}"
+          if [ "${ENABLE_DH}" = "true" ]; then
+            cosign sign --yes "docker.io/litellm/${IMAGE}@${DIGEST}"
+          fi
+      - name: SLSA build provenance (GitHub-native attestation)
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32  # v4.1.0
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/${{ inputs.image-name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Post-sign verify
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAG: ${{ inputs.tag }}
+          IMAGE: ${{ inputs.image-name }}
+          OWNER: ${{ github.repository_owner }}
+          ENABLE_DH: ${{ inputs.enable-docker-hub }}
+        run: |
+          set -euo pipefail
+          TAG_ESC=$(printf '%s' "${TAG}" | sed 's/\./\\./g')
+          # When sign happens inside this reusable, the cert subject reflects the reusable's
+          # path (job_workflow_ref), not the orchestrator's (workflow_ref). Match accordingly.
+          IDENTITY_RE="^https://github\.com/${GITHUB_REPOSITORY}/\.github/workflows/_publish-container\.yml@refs/tags/${TAG_ESC}$"
+          cosign verify \
+            --certificate-identity-regexp="${IDENTITY_RE}" \
+            --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+            "ghcr.io/${OWNER}/${IMAGE}@${DIGEST}"
+          if [ "${ENABLE_DH}" = "true" ]; then
+            cosign verify \
+              --certificate-identity-regexp="${IDENTITY_RE}" \
+              --certificate-oidc-issuer="https://token.actions.githubusercontent.com" \
+              "docker.io/litellm/${IMAGE}@${DIGEST}"
+          fi
+      - name: Cleanup on failure — delete just-pushed tag
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          TAG: ${{ inputs.tag }}
+          IMAGE: ${{ inputs.image-name }}
+        run: |
+          set +e
+          if gh api "/orgs/${OWNER}" --silent 2>/dev/null; then
+            PKG_BASE="/orgs/${OWNER}/packages/container/${IMAGE}"
+          else
+            PKG_BASE="/users/${OWNER}/packages/container/${IMAGE}"
+          fi
+          PACKAGE_VERSION_ID=$(gh api "${PKG_BASE}/versions" \
+            --jq ".[] | select(.metadata.container.tags[]? == \"${TAG}\") | .id" \
+            | head -1)
+          if [ -n "${PACKAGE_VERSION_ID}" ]; then
+            echo "Deleting partial push: ${IMAGE}:${TAG} (version_id=${PACKAGE_VERSION_ID})"
+            gh api -X DELETE "${PKG_BASE}/versions/${PACKAGE_VERSION_ID}"
+          else
+            echo "No matching package version found for ${IMAGE}:${TAG}; nothing to clean up."
+          fi
+          # Docker Hub cleanup (best-effort) when enabled.
+          if [ "${{ inputs.enable-docker-hub }}" = "true" ]; then
+            echo "Note: Docker Hub tag ${IMAGE}:${TAG} may also have been pushed."
+            echo "Docker Hub API requires its own credentials; manual cleanup may be needed."
+          fi
