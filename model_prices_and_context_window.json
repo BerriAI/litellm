@@ -36039,7 +36039,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": false,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-3-beta": {
         "cache_read_input_token_cost": 7.5e-07,
@@ -36238,7 +36239,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-fast-non-reasoning": {
         "cache_read_input_token_cost": 5e-08,
@@ -36255,7 +36257,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-0709": {
         "input_cost_per_token": 3e-06,
@@ -36271,7 +36274,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-latest": {
         "input_cost_per_token": 3e-06,
@@ -36329,7 +36333,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-1-fast-reasoning-latest": {
         "cache_read_input_token_cost": 5e-08,
@@ -36350,7 +36355,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-1-fast-non-reasoning": {
         "cache_read_input_token_cost": 5e-08,
@@ -36370,7 +36376,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-1-fast-non-reasoning-latest": {
         "cache_read_input_token_cost": 5e-08,
@@ -36390,7 +36397,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4.20-multi-agent-beta-0309": {
         "cache_read_input_token_cost": 2e-07,
@@ -36541,7 +36549,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-code-fast-1-0825": {
         "cache_read_input_token_cost": 2e-08,
@@ -36556,7 +36565,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-vision-beta": {
         "input_cost_per_image": 5e-06,
