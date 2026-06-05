@@ -685,28 +685,7 @@ export const alertingSettingsCall = async (accessToken: string) => {
    * Get all configurable params for setting a model
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/alerting/settings` : `/alerting/settings`;
-
-    //NotificationsManager.info("Requesting model data");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    //NotificationsManager.info("Received model data");
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.get(`/alerting/settings`, { accessToken });
   } catch (error) {
     console.error("Failed to get callbacks:", error);
     throw error;
@@ -943,32 +922,8 @@ export const userCreateCall = async (
 
 export const keyDeleteCall = async (accessToken: string, user_key: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/key/delete` : `/key/delete`;
     console.log("in keyDeleteCall:", user_key);
-    //NotificationsManager.info("Making key delete request");
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        keys: [user_key],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
-    //NotificationsManager.success("API Key Deleted");
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.post(`/key/delete`, { accessToken, body: { keys: [user_key] } });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -977,31 +932,8 @@ export const keyDeleteCall = async (accessToken: string, user_key: string) => {
 
 export const userDeleteCall = async (accessToken: string, userIds: string[]) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/user/delete` : `/user/delete`;
     console.log("in userDeleteCall:", userIds);
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        user_ids: userIds,
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
-    //NotificationsManager.success("User(s) Deleted");
-    return data;
+    return await apiClient.post(`/user/delete`, { accessToken, body: { user_ids: userIds } });
   } catch (error) {
     console.error("Failed to delete user(s):", error);
     throw error;
@@ -1010,30 +942,8 @@ export const userDeleteCall = async (accessToken: string, userIds: string[]) => 
 
 export const teamDeleteCall = async (accessToken: string, teamID: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/delete` : `/team/delete`;
     console.log("in teamDeleteCall:", teamID);
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        team_ids: [teamID],
-      }),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log(data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.post(`/team/delete`, { accessToken, body: { team_ids: [teamID] } });
   } catch (error) {
     console.error("Failed to delete key:", error);
     throw error;
