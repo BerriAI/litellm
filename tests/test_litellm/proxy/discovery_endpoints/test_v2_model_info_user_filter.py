@@ -346,3 +346,111 @@ def test_v2_model_info_include_team_models_no_default_models_returns_empty(
     )
     assert resp.status_code == 200
     assert resp.json()["data"] == []
+
+
+# ---------------------------------------------------------------------------
+# Direct unit tests on apply_user_models_filter_to_deployments — verify the
+# `user_models_override` shortcut bypasses get_user_object entirely so the
+# `user_models_only=true` branch of /v2/model/info doesn't hit the DB twice
+# for the same user_id under cache-miss conditions.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_user_models_filter_override_narrows_and_skips_get_user_object(
+    configure_router, monkeypatch
+):
+    """When the caller passes user_models_override, get_user_object MUST NOT
+    be called — the override list is the single source of truth."""
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    async def _must_not_call(*args, **kwargs):
+        raise AssertionError(
+            "get_user_object must not be called when user_models_override is set"
+        )
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        _must_not_call,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="u-test",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_id=None,
+        team_models=[],
+    )
+
+    result = await apply_user_models_filter_to_deployments(
+        deployments=list(_PROXY_MODELS),
+        user_api_key_dict=user_api_key_dict,
+        llm_router=configure_router,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        user_models_override=["claude-3-opus"],
+    )
+
+    assert sorted({d["model_name"] for d in result}) == ["claude-3-opus"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "override,expected",
+    [
+        # Empty list = "user has no model restriction" -> pass-through (no narrowing).
+        ([], None),
+        # Sentinel -> empty.
+        (["no-default-models"], []),
+        # Sentinel -> pass-through (no narrowing).
+        (["all-proxy-models"], None),
+        # Wildcard.
+        (
+            ["anthropic/*"],
+            ["anthropic/claude-3-5-sonnet", "anthropic/claude-3-7-sonnet"],
+        ),
+    ],
+)
+async def test_apply_user_models_filter_override_semantics(
+    configure_router, monkeypatch, override, expected
+):
+    """The override path must apply the same SpecialModelNames + wildcard
+    semantics as the get_user_object path, so swapping in the shortcut
+    can never change observable behavior."""
+    from litellm.proxy.utils import apply_user_models_filter_to_deployments
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        lambda *a, **kw: (_ for _ in ()).throw(
+            AssertionError("override path must not consult get_user_object")
+        ),
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_id="u-test",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_id=None,
+        team_models=[],
+    )
+
+    result = await apply_user_models_filter_to_deployments(
+        deployments=list(_PROXY_MODELS),
+        user_api_key_dict=user_api_key_dict,
+        llm_router=configure_router,
+        prisma_client=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+        user_api_key_cache=DualCache(),
+        user_models_override=override,
+    )
+
+    if expected is None:
+        # No narrowing — all five deployments returned, order-insensitive.
+        assert sorted({d["model_name"] for d in result}) == sorted(
+            {m["model_name"] for m in _PROXY_MODELS}
+        )
+    else:
+        assert sorted({d["model_name"] for d in result}) == expected

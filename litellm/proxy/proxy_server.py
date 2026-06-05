@@ -11435,13 +11435,24 @@ async def non_admin_all_models(
     llm_router: Router,
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: Optional[PrismaClient],
-):
+) -> Tuple[List[Dict], Optional[List[str]]]:
     """
     Check if model is in db
 
     Check if db model is 'created_by' == user_api_key_dict.user_id
 
     Only return models that match
+
+    Returns
+    -------
+    (unique_models, user_models)
+        unique_models: the de-duplicated deployment list as before.
+        user_models:   `LiteLLM_UserTable.models` (Personal Models) for
+                       the calling user if a row was loaded, else None.
+                       Lets the caller forward this to
+                       `apply_user_models_filter_to_deployments` as
+                       `user_models_override` to avoid a redundant
+                       `get_user_object` lookup downstream.
     """
     if prisma_client is None:
         raise HTTPException(
@@ -11456,6 +11467,7 @@ async def non_admin_all_models(
         prisma_client=prisma_client,
     )
 
+    user_models: Optional[List[str]] = None
     if user_api_key_dict.user_id:
         try:
             user_row = await UserRepository(prisma_client).table.find_unique(
@@ -11463,6 +11475,13 @@ async def non_admin_all_models(
             )
         except Exception:
             raise HTTPException(status_code=400, detail={"error": "User not found"})
+
+        if user_row is not None:
+            # Empty list "user has no model restriction configured" is
+            # distinct from None "we never loaded a row" — keep the
+            # distinction so the override path can short-circuit
+            # correctly downstream.
+            user_models = list(user_row.models or [])
 
         # Get all models that are team models, when model team_id == user_row.teams
         all_models += _check_if_model_is_team_model(
@@ -11472,7 +11491,7 @@ async def non_admin_all_models(
 
     # de-duplicate models. Only return unique model ids
     unique_models = _deduplicate_litellm_router_models(models=all_models)
-    return unique_models
+    return unique_models, user_models
 
 
 def _add_team_models_to_all_models(
@@ -12629,8 +12648,14 @@ async def model_info_v2(
             sort_by=sortBy,
         )
 
+    # When user_models_only=true, `non_admin_all_models` already
+    # queries `litellm_usertable` to expand team-membership. Capture
+    # the user's `models` list here so the filter step below can
+    # forward it as `user_models_override` and skip a second
+    # `get_user_object` call on cache miss.
+    user_models_for_filter: Optional[List[str]] = None
     if user_models_only:
-        all_models = await non_admin_all_models(
+        all_models, user_models_for_filter = await non_admin_all_models(
             all_models=all_models,
             llm_router=llm_router,
             user_api_key_dict=user_api_key_dict,
@@ -12671,6 +12696,7 @@ async def model_info_v2(
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
         user_api_key_cache=user_api_key_cache,
+        user_models_override=user_models_for_filter,
     )
 
     # Apply teamId filter if provided

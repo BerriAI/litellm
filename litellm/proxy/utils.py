@@ -6462,6 +6462,7 @@ async def _apply_user_models_filter(
     prisma_client: Optional["PrismaClient"],
     proxy_logging_obj: Optional["ProxyLogging"],
     user_api_key_cache: Optional["DualCache"],
+    user_models_override: Optional[List[str]] = None,
 ) -> List[str]:
     """
     Intersect `all_models` with `LiteLLM_UserTable.models` (Personal
@@ -6476,6 +6477,13 @@ async def _apply_user_models_filter(
 
     Returns `[]` when the user has `no-default-models` (sentinel matches
     `can_user_call_model` behavior at inference time).
+
+    `user_models_override` lets callers that already loaded
+    `LiteLLM_UserTable.models` (e.g. `non_admin_all_models` on
+    `/v2/model/info?user_models_only=true`) pass the list in so we skip
+    the redundant `get_user_object` DB hit on cache miss. Pass `[]`
+    for "user has no model restrictions configured" and a populated
+    list (including sentinels) when the user does.
     """
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import get_user_object
@@ -6484,43 +6492,50 @@ async def _apply_user_models_filter(
         get_user_models,
     )
 
-    if (
-        not user_api_key_dict.user_id
-        or prisma_client is None
-        or user_api_key_cache is None
-    ):
+    if user_models_override is not None:
+        user_models = list(user_models_override)
+    else:
+        if (
+            not user_api_key_dict.user_id
+            or prisma_client is None
+            or user_api_key_cache is None
+        ):
+            return all_models
+
+        try:
+            user_obj = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception as e:
+            # Mirror the swallow in user_api_key_auth.py — never break
+            # /v1/models if user lookup blips. No filter applied, which
+            # matches current behavior pre-fix.
+            verbose_proxy_logger.debug(
+                "_apply_user_models_filter: get_user_object failed, skipping "
+                "user-level filter. Exception: %s",
+                str(e),
+            )
+            return all_models
+
+        if user_obj is None:
+            return all_models
+        user_models = list(user_obj.models or [])
+
+    if not user_models:
         return all_models
 
-    try:
-        user_obj = await get_user_object(
-            user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-    except Exception as e:
-        # Mirror the swallow in user_api_key_auth.py — never break
-        # /v1/models if user lookup blips. No filter applied, which
-        # matches current behavior pre-fix.
-        verbose_proxy_logger.debug(
-            "_apply_user_models_filter: get_user_object failed, skipping "
-            "user-level filter. Exception: %s",
-            str(e),
-        )
-        return all_models
-
-    if user_obj is None or not user_obj.models:
-        return all_models
-
-    if SpecialModelNames.no_default_models.value in user_obj.models:
+    if SpecialModelNames.no_default_models.value in user_models:
         return []
 
-    if SpecialModelNames.all_proxy_models.value in user_obj.models:
+    if SpecialModelNames.all_proxy_models.value in user_models:
         return all_models
 
     user_allowed = get_user_models(
-        user_models=list(user_obj.models),
+        user_models=user_models,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
     )
@@ -6537,6 +6552,7 @@ async def apply_user_models_filter_to_deployments(
     prisma_client: Optional["PrismaClient"],
     proxy_logging_obj: Optional["ProxyLogging"],
     user_api_key_cache: Optional["DualCache"],
+    user_models_override: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Apply the `LiteLLM_UserTable.models` (Personal Models) filter to a
@@ -6553,6 +6569,11 @@ async def apply_user_models_filter_to_deployments(
 
     Order of `deployments` is preserved; duplicates with the same
     `model_name` are kept (multiple deployments can share a name).
+
+    `user_models_override` is forwarded to `_apply_user_models_filter`
+    so callers that already loaded the row (e.g. `model_info_v2` on the
+    `user_models_only=true` branch, where `non_admin_all_models` just
+    queried `litellm_usertable`) skip the redundant lookup.
     """
     if not deployments:
         return deployments
@@ -6575,6 +6596,7 @@ async def apply_user_models_filter_to_deployments(
         prisma_client=prisma_client,
         proxy_logging_obj=proxy_logging_obj,
         user_api_key_cache=user_api_key_cache,
+        user_models_override=user_models_override,
     )
 
     allowed_set = set(allowed_model_names)
