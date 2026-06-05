@@ -82,3 +82,30 @@ def test_garbage_is_rejected(signing):
     _, _, key_set = signing
     with pytest.raises(JWTVerificationError):
         verify("not.a.jwt", key_set, ISSUER, AUDIENCE)
+
+
+def test_rs256_to_hs256_algorithm_confusion_is_rejected(signing):
+    # The JWKS holds an RSA public key. An attacker forges an HS256 token using
+    # that public key as the HMAC secret. Pinning to asymmetric algorithms must
+    # refuse it; accepting it would be a full authentication bypass.
+    import base64
+    import hashlib
+    import hmac
+
+    key, kid, key_set = signing
+    public_pem = key.as_pem(is_private=False)
+
+    def b64(raw: bytes) -> bytes:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+    header = b64(b'{"alg":"HS256","kid":"%s"}' % kid.encode())
+    payload = b64(
+        b'{"sub":"attacker","iss":"%s","aud":"%s","exp":9999999999}'
+        % (ISSUER.encode(), AUDIENCE.encode())
+    )
+    signing_input = header + b"." + payload
+    signature = b64(hmac.new(public_pem, signing_input, hashlib.sha256).digest())
+    forged = (signing_input + b"." + signature).decode("utf-8")
+
+    with pytest.raises(JWTVerificationError):
+        verify(forged, key_set, ISSUER, AUDIENCE)
