@@ -692,6 +692,7 @@ async def rotate_mcp_server_credentials_master_key(
 
     mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
 
+    updated = 0
     for mcp_server in mcp_servers:
         update_data: Dict[str, Any] = {}
 
@@ -721,6 +722,11 @@ async def rotate_mcp_server_credentials_master_key(
             where={"server_id": mcp_server.server_id},
             data=update_data,
         )
+        updated += 1
+    verbose_proxy_logger.info(
+        "rotate_mcp_server_credentials_master_key: rotated %d MCP server row(s)",
+        updated,
+    )
 
 
 def _decode_user_credential(stored: str) -> Optional[str]:
@@ -775,6 +781,8 @@ async def rotate_mcp_user_credentials_master_key(
     are logged and skipped so one corrupt row does not abort the rotation.
     """
     rows = await prisma_client.db.litellm_mcpusercredentials.find_many()
+    rotated = 0
+    skipped = 0
     for row in rows:
         plaintext = _decode_user_credential(row.credential_b64)
         if plaintext is None:
@@ -784,6 +792,7 @@ async def rotate_mcp_user_credentials_master_key(
                 row.user_id,
                 row.server_id,
             )
+            skipped += 1
             continue
         re_encrypted = encrypt_value_helper(
             plaintext, new_encryption_key=new_master_key
@@ -797,6 +806,12 @@ async def rotate_mcp_user_credentials_master_key(
             },
             data={"credential_b64": re_encrypted},
         )
+        rotated += 1
+    verbose_proxy_logger.info(
+        "rotate_mcp_user_credentials_master_key: rotated %d row(s), skipped %d",
+        rotated,
+        skipped,
+    )
 
 
 async def rotate_mcp_user_env_vars_master_key(
@@ -810,6 +825,8 @@ async def rotate_mcp_user_env_vars_master_key(
     that may still be recoverable.
     """
     rows = await prisma_client.db.litellm_mcpuserenvvars.find_many()
+    rotated = 0
+    skipped = 0
     for row in rows:
         plaintext = decrypt_value_helper(
             value=row.values_b64,
@@ -824,6 +841,7 @@ async def rotate_mcp_user_env_vars_master_key(
                 row.user_id,
                 row.server_id,
             )
+            skipped += 1
             continue
         re_encrypted = encrypt_value_helper(
             plaintext, new_encryption_key=new_master_key
@@ -837,6 +855,12 @@ async def rotate_mcp_user_env_vars_master_key(
             },
             data={"values_b64": re_encrypted},
         )
+        rotated += 1
+    verbose_proxy_logger.info(
+        "rotate_mcp_user_env_vars_master_key: rotated %d row(s), skipped %d",
+        rotated,
+        skipped,
+    )
 
 
 async def store_user_credential(

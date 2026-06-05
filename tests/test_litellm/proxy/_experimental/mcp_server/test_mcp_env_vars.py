@@ -1384,6 +1384,70 @@ def test_reencrypt_global_env_var_values_handles_json_string(env_vars_salt_key):
     assert rebuilt[0]["value"] != "s3cr3t-p@ss"
 
 
+@pytest.mark.asyncio
+async def test_rotate_mcp_user_env_vars_logs_rotated_and_skipped_counts(
+    env_vars_salt_key, monkeypatch
+):
+    """Master-key rotation is a rare, high-stakes batch op, so it emits one
+    summary line. The counts must track real work: a decryptable row is
+    re-encrypted and counted as rotated, while a row that no longer decrypts is
+    left untouched and counted as skipped."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy._experimental.mcp_server.db as mcp_db
+    from litellm.proxy._experimental.mcp_server.db import (
+        rotate_mcp_user_env_vars_master_key,
+    )
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    def _row(user_id, server_id, blob):
+        row = MagicMock()
+        row.user_id = user_id
+        row.server_id = server_id
+        row.values_b64 = blob
+        return row
+
+    import json
+
+    # Encrypted under an unrelated key, so it won't decrypt under the active salt
+    # key and must be skipped rather than re-encrypted.
+    undecryptable = encrypt_value_helper(
+        json.dumps({"X": "y"}), new_encryption_key="unrelated-key-9999"
+    )
+    good_one = _row("alice", "srv-1", _encrypted_user_env_blob({"GH_TOKEN": "tok-1"}))
+    good_two = _row("bob", "srv-2", _encrypted_user_env_blob({"GH_TOKEN": "tok-2"}))
+    bad = _row("carol", "srv-3", undecryptable)
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(
+        return_value=[good_one, good_two, bad]
+    )
+    prisma.db.litellm_mcpuserenvvars.update = AsyncMock()
+
+    logger = MagicMock()
+    monkeypatch.setattr(mcp_db, "verbose_proxy_logger", logger)
+
+    await rotate_mcp_user_env_vars_master_key(prisma, new_master_key="rotated-key-0000")
+
+    update = prisma.db.litellm_mcpuserenvvars.update
+    assert update.await_count == 2
+    updated_servers = {
+        call.kwargs["where"]["user_id_server_id"]["server_id"]
+        for call in update.call_args_list
+    }
+    assert updated_servers == {"srv-1", "srv-2"}  # srv-3 was skipped, not rotated
+    for call in update.call_args_list:
+        assert call.kwargs["data"]["values_b64"] not in (
+            good_one.values_b64,
+            good_two.values_b64,
+        )
+
+    logger.info.assert_called_once()
+    info_args = logger.info.call_args.args
+    assert info_args[1] == 2  # rotated
+    assert info_args[2] == 1  # skipped
+
+
 def test_decrypt_global_env_var_drops_undecryptable_value(
     env_vars_salt_key, monkeypatch
 ):
