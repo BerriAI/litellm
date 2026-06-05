@@ -22,7 +22,16 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import openai
-from openai import AsyncOpenAI, OpenAI
+from openai import AsyncOpenAI, AsyncStream, OpenAI, Stream
+from openai.types.chat import ChatCompletion, ChatCompletionChunk
+
+try:
+    from openai._base_client import make_request_options
+    from openai._constants import RAW_RESPONSE_HEADER
+
+    _OPENAI_CHAT_TRANSFORM_BYPASS_AVAILABLE = True
+except ImportError:  # pragma: no cover - private SDK symbols moved or renamed
+    _OPENAI_CHAT_TRANSFORM_BYPASS_AVAILABLE = False
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel
@@ -419,6 +428,35 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )
             return client
 
+    @staticmethod
+    def _chat_completion_post_kwargs(
+        data: dict, timeout: Union[float, httpx.Timeout]
+    ) -> dict:
+        """Reach /chat/completions identically to
+        chat.completions.with_raw_response.create(**data), but skip the SDK's
+        async_maybe_transform. That transform recurses the message-param union and
+        runs uncached typing introspection per field, which dominates CPU on large
+        multi-message requests; the chat-completion request types declare no field
+        aliases and no format converters, so it is pure overhead for this body.
+        extra_headers/extra_body/extra_query are extracted and forwarded the same
+        way create() forwards them."""
+        body = dict(data)
+        extra_headers = body.pop("extra_headers", None) or {}
+        extra_body = body.pop("extra_body", None)
+        extra_query = body.pop("extra_query", None)
+        body.pop("timeout", None)
+        return {
+            "body": body,
+            "cast_to": ChatCompletion,
+            "options": make_request_options(
+                extra_headers={RAW_RESPONSE_HEADER: "true", **extra_headers},
+                extra_query=extra_query,
+                extra_body=extra_body,
+                timeout=timeout,
+            ),
+            "stream": bool(body.get("stream", False)),
+        }
+
     @track_llm_api_timing()
     async def make_openai_chat_completion_request(
         self,
@@ -428,17 +466,32 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[dict, BaseModel]:
         """
-        Helper to:
-        - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
-        - call chat.completions.create by default
+        Send the chat completion request and return (headers, parsed response).
+
+        By default this posts to /chat/completions directly, skipping the OpenAI
+        SDK request transform (pure overhead for this body; see
+        _chat_completion_post_kwargs). Falls back to
+        chat.completions.with_raw_response.create when
+        litellm.skip_openai_chat_transform is False or the SDK request-option
+        internals are unavailable.
         """
         start_time = time.time()
         try:
-            raw_response = (
-                await openai_aclient.chat.completions.with_raw_response.create(
-                    **data, timeout=timeout
+            if (
+                litellm.skip_openai_chat_transform
+                and _OPENAI_CHAT_TRANSFORM_BYPASS_AVAILABLE
+            ):
+                raw_response = await openai_aclient.post(
+                    "/chat/completions",
+                    stream_cls=AsyncStream[ChatCompletionChunk],
+                    **self._chat_completion_post_kwargs(data, timeout),
                 )
-            )
+            else:
+                raw_response = (
+                    await openai_aclient.chat.completions.with_raw_response.create(
+                        **data, timeout=timeout
+                    )
+                )
             end_time = time.time()
 
             if hasattr(raw_response, "headers"):
@@ -469,15 +522,30 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         logging_obj: LiteLLMLoggingObj,
     ) -> Tuple[dict, BaseModel]:
         """
-        Helper to:
-        - call chat.completions.create.with_raw_response when litellm.return_response_headers is True
-        - call chat.completions.create by default
+        Send the chat completion request and return (headers, parsed response).
+
+        By default this posts to /chat/completions directly, skipping the OpenAI
+        SDK request transform (pure overhead for this body; see
+        _chat_completion_post_kwargs). Falls back to
+        chat.completions.with_raw_response.create when
+        litellm.skip_openai_chat_transform is False or the SDK request-option
+        internals are unavailable.
         """
         raw_response = None
         try:
-            raw_response = openai_client.chat.completions.with_raw_response.create(
-                **data, timeout=timeout
-            )
+            if (
+                litellm.skip_openai_chat_transform
+                and _OPENAI_CHAT_TRANSFORM_BYPASS_AVAILABLE
+            ):
+                raw_response = openai_client.post(
+                    "/chat/completions",
+                    stream_cls=Stream[ChatCompletionChunk],
+                    **self._chat_completion_post_kwargs(data, timeout),
+                )
+            else:
+                raw_response = openai_client.chat.completions.with_raw_response.create(
+                    **data, timeout=timeout
+                )
 
             if hasattr(raw_response, "headers"):
                 headers = dict(raw_response.headers)

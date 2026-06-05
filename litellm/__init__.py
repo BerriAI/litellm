@@ -352,6 +352,9 @@ enable_preview_features: bool = False
 return_response_headers: bool = (
     False  # get response headers from LLM Api providers - example x-remaining-requests,
 )
+skip_openai_chat_transform: bool = (
+    True  # post chat/completions directly, skipping the OpenAI SDK request transform; set False to use chat.completions.create
+)
 enable_json_schema_validation: bool = False
 enable_model_config_credential_overrides: bool = False
 enable_key_alias_format_validation: bool = (

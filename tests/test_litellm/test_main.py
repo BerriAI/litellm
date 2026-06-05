@@ -110,9 +110,7 @@ def test_completion_missing_role(openai_api_response):
 
     print(f"openai_api_response: {openai_api_response}")
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create", mock_raw_response
-    ) as mock_create:
+    with patch.object(client, "post", return_value=mock_raw_response) as mock_create:
         litellm.completion(
             model="gpt-4o-mini",
             messages=[
@@ -298,9 +296,7 @@ async def test_url_with_format_param_openai(model, sync_mode):
             }
         ],
     }
-    with patch.object(
-        client.chat.completions.with_raw_response, "create"
-    ) as mock_client:
+    with patch.object(client, "post") as mock_client:
         try:
             if sync_mode:
                 response = completion(**args, client=client)
@@ -314,7 +310,7 @@ async def test_url_with_format_param_openai(model, sync_mode):
 
         print(mock_client.call_args.kwargs)
 
-        json_str = json.dumps(mock_client.call_args.kwargs)
+        json_str = json.dumps(mock_client.call_args.kwargs["body"])
 
         assert "format" not in json_str
 
