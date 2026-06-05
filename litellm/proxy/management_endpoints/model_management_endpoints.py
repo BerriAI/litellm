@@ -35,7 +35,7 @@ from litellm.proxy._types import (
     TeamModelDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (

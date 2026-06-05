@@ -53,7 +53,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_info,
     user_update,
 )
-from litellm.proxy.auth.auth_checks import get_key_object
+from litellm.auth.auth_checks import get_key_object
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,
@@ -2393,7 +2393,7 @@ async def test_upperbound_key_param_none_duration(prisma_client):
 
 
 def test_get_bearer_token():
-    from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
+    from litellm.auth.user_api_key_auth import _get_bearer_token
 
     # Test valid Bearer token
     api_key = "Bearer valid_token"
@@ -3821,7 +3821,7 @@ async def test_user_api_key_auth_db_unavailable():
         api_key="Bearer sk-123456789",
     )
 
-    from litellm.proxy.auth.auth_exception_handler import (
+    from litellm.auth.auth_exception_handler import (
         DB_UNAVAILABLE_FALLBACK_USER_ID,
     )
 

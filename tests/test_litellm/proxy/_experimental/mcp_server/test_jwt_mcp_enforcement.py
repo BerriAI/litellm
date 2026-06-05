@@ -17,7 +17,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
@@ -143,7 +143,7 @@ async def test_mcp_route_check_passes_for_team():
     This is required for teams to access MCP endpoints with JWT auth.
     """
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
+    from litellm.auth.auth_checks import allowed_routes_check
 
     jwt_auth = LiteLLM_JWTAuth()  # Use defaults
 
@@ -169,7 +169,7 @@ async def test_mcp_route_check_passes_for_team_server_subpaths():
     Regression test for JWT users accessing /v1/mcp/server/register and similar endpoints.
     """
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.auth_checks import allowed_routes_check
+    from litellm.auth.auth_checks import allowed_routes_check
 
     jwt_auth = LiteLLM_JWTAuth()
 

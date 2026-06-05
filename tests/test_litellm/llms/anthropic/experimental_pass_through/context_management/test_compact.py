@@ -2181,7 +2181,7 @@ def test_endpoint_returns_anthropic_400_on_context_management_error():
     from fastapi.testclient import TestClient
 
     from litellm.proxy.anthropic_endpoints.endpoints import router
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     # Stub proxy_server to avoid apscheduler/heavy proxy deps imported lazily
     # inside the route handler at request time.
@@ -2242,7 +2242,7 @@ def test_endpoint_runs_failure_hook_on_500_context_management_error():
     from fastapi.testclient import TestClient
 
     from litellm.proxy.anthropic_endpoints.endpoints import router
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     failure_hook = AsyncMock()
     mock_proxy_server = MagicMock()

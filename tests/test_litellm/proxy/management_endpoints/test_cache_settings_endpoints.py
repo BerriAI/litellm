@@ -16,7 +16,7 @@ sys.path.insert(
 
 import litellm
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.cache_settings_endpoints import (
     CacheSettingsManager,
     CacheSettingsUpdateRequest,

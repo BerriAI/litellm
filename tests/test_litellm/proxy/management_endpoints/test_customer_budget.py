@@ -20,7 +20,7 @@ from litellm.proxy._types import (
     NewCustomerRequest,
     UpdateCustomerRequest,
 )
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.customer_endpoints import (
     new_budget_request,
     update_end_user,

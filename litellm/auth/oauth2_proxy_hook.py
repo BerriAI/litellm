@@ -4,7 +4,7 @@ from fastapi import Request
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.trusted_proxy_utils import require_trusted_proxy_request
+from litellm.auth.trusted_proxy_utils import require_trusted_proxy_request
 
 # OAuth2-proxy header trust is for **identity assertion** from a trusted
 # upstream auth proxy (oauth2-proxy, Authelia, etc.). The allowlist below

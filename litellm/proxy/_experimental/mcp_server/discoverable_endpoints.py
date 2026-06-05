@@ -19,7 +19,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
     get_request_base_url,
     validate_trusted_redirect_uri,
 )
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,

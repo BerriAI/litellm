@@ -29,7 +29,7 @@ async def test_create_and_get_tag():
     from datetime import datetime
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
@@ -125,7 +125,7 @@ async def test_update_tag():
     from datetime import datetime
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
@@ -203,7 +203,7 @@ async def test_delete_tag():
     from datetime import datetime
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
@@ -259,7 +259,7 @@ async def test_list_tags_with_dynamic_tags():
     from datetime import datetime
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
@@ -340,7 +340,7 @@ async def test_list_tags_no_dynamic_tags():
     from datetime import datetime
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
@@ -388,7 +388,7 @@ async def test_internal_user_list_tags_only_returns_tags_used_by_their_keys():
     from datetime import datetime
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         api_key="current-owned-key",
@@ -476,7 +476,7 @@ async def test_list_tags_with_date_range_filters_dynamic_tags():
     """
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
@@ -716,7 +716,7 @@ async def test_list_tags_without_date_range_omits_date_filter():
     """When no date range is passed, the WHERE clause must not carry a date key."""
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",
@@ -757,7 +757,7 @@ async def test_list_tags_without_date_range_omits_date_filter():
 async def test_list_tags_rejects_invalid_date_range(query, expected_detail_fragment):
     from unittest.mock import AsyncMock, Mock
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     mock_user_auth = UserAPIKeyAuth(
         user_id="test-user-123",

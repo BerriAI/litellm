@@ -23,7 +23,7 @@ from litellm.proxy.a2a.discovery import (
     DiscoveryMode,
     fetch_well_known_card,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 

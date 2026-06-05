@@ -474,7 +474,7 @@ def route_in_additonal_public_routes(current_route: str):
         public_routes: ["LiteLLMRoutes.public_routes", "/spend/calculate", "/api/*"]
     ```
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.auth.route_checks import RouteChecks
     from litellm.proxy.proxy_server import general_settings, premium_user
 
     try:

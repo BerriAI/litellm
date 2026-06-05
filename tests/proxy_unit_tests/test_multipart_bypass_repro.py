@@ -15,7 +15,7 @@ class TestMultipartNestedBypass:
 
     def test_nested_banned_param_caught_when_dict(self):
         """Baseline: nested api_base inside a dict IS caught."""
-        from litellm.proxy.auth.auth_utils import is_request_body_safe
+        from litellm.auth.auth_utils import is_request_body_safe
 
         request_body = {
             "model": "text-embedding-ada-002",
@@ -36,7 +36,7 @@ class TestMultipartNestedBypass:
         _coerce_metadata_to_dict now parses it before the banned-param check,
         so api_base nested inside the stringified config IS caught.
         """
-        from litellm.proxy.auth.auth_utils import is_request_body_safe
+        from litellm.auth.auth_utils import is_request_body_safe
 
         # Exactly what _read_request_body produces for multipart:
         # dict(await request.form()) gives string values for non-file fields.
@@ -57,7 +57,7 @@ class TestMultipartNestedBypass:
 
     def test_nested_aws_sts_endpoint_blocked_when_json_string(self):
         """Regression: aws_sts_endpoint nested in JSON-string config is caught."""
-        from litellm.proxy.auth.auth_utils import is_request_body_safe
+        from litellm.auth.auth_utils import is_request_body_safe
 
         request_body = {
             "model": "text-embedding-ada-002",

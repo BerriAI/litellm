@@ -254,7 +254,7 @@ class TestUserIsOrgAdminRouteCheck:
     """
 
     def test_no_candidate_org_ids_returns_false(self):
-        from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+        from litellm.auth.auth_checks_organization import _user_is_org_admin
 
         user = LiteLLM_UserTable(
             user_id="org-admin-user",
@@ -264,7 +264,7 @@ class TestUserIsOrgAdminRouteCheck:
         assert result is False, "Must NOT grant blanket access when no org in request"
 
     def test_matching_org_id_returns_true(self):
-        from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+        from litellm.auth.auth_checks_organization import _user_is_org_admin
 
         user = LiteLLM_UserTable(
             user_id="org-admin-user",
@@ -276,7 +276,7 @@ class TestUserIsOrgAdminRouteCheck:
         assert result is True
 
     def test_non_matching_org_id_returns_false(self):
-        from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+        from litellm.auth.auth_checks_organization import _user_is_org_admin
 
         user = LiteLLM_UserTable(
             user_id="org-admin-user",
@@ -288,7 +288,7 @@ class TestUserIsOrgAdminRouteCheck:
         assert result is False
 
     def test_organizations_list_field(self):
-        from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+        from litellm.auth.auth_checks_organization import _user_is_org_admin
 
         user = LiteLLM_UserTable(
             user_id="org-admin-user",
@@ -300,7 +300,7 @@ class TestUserIsOrgAdminRouteCheck:
         assert result is True
 
     def test_none_user_object_returns_false(self):
-        from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+        from litellm.auth.auth_checks_organization import _user_is_org_admin
 
         result = _user_is_org_admin(request_data={}, user_object=None)
         assert result is False

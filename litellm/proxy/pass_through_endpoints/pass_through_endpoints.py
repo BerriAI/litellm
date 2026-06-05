@@ -52,7 +52,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
@@ -997,7 +997,7 @@ async def pass_through_request(  # noqa: PLR0915
             and request.method == "GET"
             and proxy_logging_obj.get_proxy_hook("managed_files") is not None
         ):
-            from litellm.proxy.auth.auth_utils import get_request_route
+            from litellm.auth.auth_utils import get_request_route
             from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
                 is_passthrough_list_route,
                 list_passthrough_ids_from_db,
@@ -1237,7 +1237,7 @@ async def pass_through_request(  # noqa: PLR0915
                 "managed_files"
             )
             if _passthrough_managed_hook is not None:
-                from litellm.proxy.auth.auth_utils import get_request_route
+                from litellm.auth.auth_utils import get_request_route
                 from litellm.proxy.pass_through_endpoints.managed_id_rewriter import (
                     rewrite_response_ids,
                 )
@@ -1549,7 +1549,7 @@ def create_pass_through_route(
             user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
             subpath: str = "",  # captures sub-paths when include_subpath=True
         ):
-            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            from litellm.auth.auth_utils import (  # noqa: PLC0415
                 get_request_route,
             )
             from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
@@ -1701,7 +1701,7 @@ def create_websocket_passthrough_route(
     Returns:
         A WebSocket passthrough function that can be registered with app.websocket()
     """
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_websocket
+    from litellm.auth.user_api_key_auth import user_api_key_auth_websocket
 
     async def websocket_endpoint_func(
         websocket: WebSocket,

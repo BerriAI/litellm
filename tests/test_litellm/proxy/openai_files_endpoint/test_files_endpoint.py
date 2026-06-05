@@ -1487,7 +1487,7 @@ def _post_file_with_team_metadata(
     form_data: dict,
 ):
     """POST /v1/files with given team_metadata, return captured expires_after."""
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     proxy_logging_obj = ProxyLogging(
         user_api_key_cache=DualCache(default_in_memory_ttl=1)
@@ -1591,7 +1591,7 @@ def _post_file_raw(
     monkeypatch, llm_router: Router, team_metadata: dict, form_data: dict
 ):
     """POST /v1/files and return the raw response (no status assertion)."""
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     proxy_logging_obj = ProxyLogging(
         user_api_key_cache=DualCache(default_in_memory_ttl=1)

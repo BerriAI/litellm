@@ -38,7 +38,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamMembership,
     hash_token,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     get_key_object,
     get_team_membership,
     get_team_object,

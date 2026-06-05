@@ -3,11 +3,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
-from litellm.proxy.auth.handle_jwt import JWTAuthManager
+from litellm.auth.handle_jwt import JWTAuthManager
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
-    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.auth.model_checks import get_team_models
 
     team_models = ["all-proxy-models", "team-only-model", "team-only-model-2"]
     proxy_model_list = ["model1", "model2", "model3"]
@@ -27,7 +27,7 @@ def test_get_team_models_all_proxy_models_includes_access_groups():
     the result should include model access group names (e.g. 'claude-model-group')
     in addition to individual model names.
     """
-    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.auth.model_checks import get_team_models
 
     team_models = ["all-proxy-models"]
     proxy_model_list = ["model1", "model2"]
@@ -54,7 +54,7 @@ def test_get_team_models_all_proxy_models_without_include_flag():
     When include_model_access_groups=False, access group names should NOT
     appear in the result even with 'all-proxy-models'.
     """
-    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.auth.model_checks import get_team_models
 
     team_models = ["all-proxy-models"]
     proxy_model_list = ["model1", "model2"]
@@ -81,7 +81,7 @@ def test_get_key_models_all_proxy_models_includes_access_groups():
     the result should include model access group names.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.auth.model_checks import get_key_models
 
     user_api_key_dict = UserAPIKeyAuth(
         models=["all-proxy-models"],
@@ -111,7 +111,7 @@ def test_get_key_models_passes_include_model_access_groups():
     (not stripped by _get_models_from_access_groups).
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.auth.model_checks import get_key_models
 
     user_api_key_dict = UserAPIKeyAuth(
         models=["group-a"],
@@ -140,7 +140,7 @@ def test_get_key_models_does_not_mutate_input():
     cached UserAPIKeyAuth objects if all_models were an alias instead of a copy.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.auth.model_checks import get_key_models
 
     original_models = ["group-a", "extra-model"]
     user_api_key_dict = UserAPIKeyAuth(
@@ -211,7 +211,7 @@ def test_get_complete_model_list_order(
     """
     Test that get_complete_model_list preserves order
     """
-    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm.auth.model_checks import get_complete_model_list
     from litellm import Router
 
     assert (
@@ -233,7 +233,7 @@ def test_get_complete_model_list_byok_wildcard_expansion():
     no deployment for them - BYOK case where team has openai/* but proxy has
     no openai config.
     """
-    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm.auth.model_checks import get_complete_model_list
     from litellm import Router
 
     # Router with empty model_list - no openai/* deployment (BYOK scenario)
@@ -260,8 +260,8 @@ def test_get_complete_model_list_expands_team_scoped_wildcard_with_stored_creden
     """
     import litellm
     from litellm import Router
-    from litellm.proxy.auth import model_checks
-    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm.auth import model_checks
+    from litellm.auth.model_checks import get_complete_model_list
     from litellm.types.utils import CredentialItem
 
     monkeypatch.setattr(
@@ -330,8 +330,8 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
     monkeypatch,
 ):
     import litellm
-    from litellm.proxy.auth import model_checks
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.auth import model_checks
+    from litellm.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
     from litellm.types.utils import CredentialItem
 
@@ -392,8 +392,8 @@ def test_wildcard_credential_hydration_preserves_missing_credential_name(
     monkeypatch,
 ):
     import litellm
-    from litellm.proxy.auth import model_checks
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.auth import model_checks
+    from litellm.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
     monkeypatch.setattr(litellm, "credential_list", [])
@@ -432,7 +432,7 @@ async def test_get_available_models_for_user_expands_query_team_wildcard(
 ):
     import litellm
     from litellm import Router
-    from litellm.proxy.auth import model_checks
+    from litellm.auth import model_checks
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import get_available_models_for_user
     from litellm.types.utils import CredentialItem

@@ -8,7 +8,7 @@ from litellm.caching.caching import RedisCache
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.caching import CachePingResponse, HealthCheckCacheParams
 
 masker = SensitiveDataMasker()

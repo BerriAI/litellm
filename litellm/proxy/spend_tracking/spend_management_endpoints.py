@@ -12,7 +12,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
@@ -1861,7 +1861,7 @@ async def ui_view_spend_logs(  # noqa: PLR0915
 
     try:
         # Inline import — auth_utils participates in a proxy import cycle.
-        from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+        from litellm.auth.auth_utils import get_request_route  # noqa: PLC0415
 
         is_v2 = "/spend/logs/v2" in get_request_route(request)
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
@@ -3652,7 +3652,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     ``/spend/logs`` permission, allowing them to view team-wide spend logs.
     """
     # Imported here to avoid circular import: proxy_server imports this module.
-    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.auth.auth_checks import get_user_object
     from litellm.proxy.management_endpoints.common_utils import (
         _is_user_team_admin,
         _team_member_has_permission,

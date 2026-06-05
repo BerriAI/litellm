@@ -22,8 +22,8 @@ from litellm.proxy._experimental.mcp_server.ui_session_utils import (
 )
 from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.ip_address_utils import IPAddressUtils
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
 from litellm.types.utils import CallTypes

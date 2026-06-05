@@ -33,7 +33,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.auth.auth_utils import get_model_rate_limit_from_metadata
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.utils import CallTypes, ModelResponse, Usage
@@ -1325,7 +1325,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model: The model being requested
             descriptors: List of rate limit descriptors to append to
         """
-        from litellm.proxy.auth.auth_utils import (
+        from litellm.auth.auth_utils import (
             get_key_model_rpm_limit,
             get_key_model_tpm_limit,
         )
@@ -1388,7 +1388,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         MCP tool calls have no token usage, so only requests_per_unit is set;
         tokens_per_unit stays None so the TPM reservation path is never engaged.
         """
-        from litellm.proxy.auth.auth_utils import get_key_mcp_rpm_limit
+        from litellm.auth.auth_utils import get_key_mcp_rpm_limit
 
         if not mcp_server_name or not user_api_key_dict.api_key:
             return
@@ -1423,7 +1423,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Add a per-MCP-server rpm descriptor for the team, if a limit is
         configured for the server being called.
         """
-        from litellm.proxy.auth.auth_utils import get_team_mcp_rpm_limit
+        from litellm.auth.auth_utils import get_team_mcp_rpm_limit
 
         if not mcp_server_name or not user_api_key_dict.team_id:
             return
@@ -1614,7 +1614,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         Returns list of descriptors for API key, user, team, team member, end user,
         model-specific, agent, and agent-session limits.
         """
-        from litellm.proxy.auth.auth_utils import (
+        from litellm.auth.auth_utils import (
             get_team_model_rpm_limit,
             get_team_model_tpm_limit,
         )

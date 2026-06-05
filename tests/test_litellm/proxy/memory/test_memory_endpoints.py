@@ -198,7 +198,7 @@ def _make_prisma() -> MagicMock:
 
 
 def _make_client(auth: UserAPIKeyAuth) -> TestClient:
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     app = FastAPI()
     app.include_router(router)

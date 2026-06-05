@@ -57,7 +57,7 @@ class EnterpriseCustomSSOHandler:
             premium_user,
             user_custom_ui_sso_sign_in_handler,
         )
-        from litellm.proxy.auth.trusted_proxy_utils import (
+        from litellm.auth.trusted_proxy_utils import (
             require_trusted_proxy_request,
         )
 

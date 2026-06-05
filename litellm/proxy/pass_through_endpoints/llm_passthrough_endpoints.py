@@ -26,8 +26,8 @@ from litellm.constants import (
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
-from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.route_checks import RouteChecks
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,

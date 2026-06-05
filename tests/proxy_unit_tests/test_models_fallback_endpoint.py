@@ -271,7 +271,7 @@ def test_response_structure_compatibility():
 
 def test_get_all_fallbacks_integration():
     """Test that get_all_fallbacks function can be imported and has correct signature."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
     import inspect
 
     # Test function signature

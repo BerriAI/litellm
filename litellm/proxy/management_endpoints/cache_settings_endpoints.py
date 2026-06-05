@@ -26,7 +26,7 @@ from litellm.proxy._types import (
     LitellmTableNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.management_endpoints import (
     CACHE_SETTINGS_FIELDS,
     REDIS_TYPE_DESCRIPTIONS,

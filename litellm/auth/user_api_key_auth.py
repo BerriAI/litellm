@@ -27,7 +27,7 @@ from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _cache_key_object,
     _check_end_user_budget,
@@ -49,8 +49,8 @@ from litellm.proxy.auth.auth_checks import (
     is_valid_fallback_model,
     resolve_and_validate_end_user_id,
 )
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
-from litellm.proxy.auth.auth_utils import (
+from litellm.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.auth.auth_utils import (
     abbreviate_api_key,
     get_end_user_id_from_request_body,
     get_model_from_request,
@@ -60,10 +60,10 @@ from litellm.proxy.auth.auth_utils import (
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
 )
-from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
-from litellm.proxy.auth.oauth2_check import Oauth2Handler
-from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.auth.oauth2_check import Oauth2Handler
+from litellm.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
+from litellm.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.http_parsing_utils import (
@@ -509,7 +509,7 @@ def get_api_key(
     Returns:
         Tuple[Optional[str], Optional[str]]: Tuple of the api_key and the passed_in_key
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.auth.route_checks import RouteChecks
     from litellm.proxy.common_utils.http_parsing_utils import (
         _safe_get_request_query_params,
     )
@@ -1354,7 +1354,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
-                        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                        from litellm.auth.auth_checks import _is_model_cost_zero
 
                         skip_budget_checks = _is_model_cost_zero(
                             model=model, llm_router=llm_router
@@ -1461,7 +1461,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         )
                 elif litellm.max_end_user_budget_id is not None:
                     # End user doesn't exist yet, but apply default budget limits if configured
-                    from litellm.proxy.auth.auth_checks import (
+                    from litellm.auth.auth_checks import (
                         get_default_end_user_budget,
                     )
 
@@ -1772,7 +1772,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             )
             skip_budget_checks = False
             if model is not None and llm_router is not None:
-                from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                from litellm.auth.auth_checks import _is_model_cost_zero
 
                 skip_budget_checks = _is_model_cost_zero(
                     model=model, llm_router=llm_router
@@ -2742,7 +2742,7 @@ async def _lookup_end_user_and_apply_budget(
                 valid_token=valid_token, end_user_params=end_user_params
             )
         elif litellm.max_end_user_budget_id is not None:
-            from litellm.proxy.auth.auth_checks import get_default_end_user_budget
+            from litellm.auth.auth_checks import get_default_end_user_budget
 
             default_budget = await get_default_end_user_budget(
                 prisma_client=prisma_client,

@@ -15,8 +15,8 @@ import pytest
 from fastapi import Request
 
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import common_checks
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.auth_checks import common_checks
+from litellm.auth.route_checks import RouteChecks
 
 
 class MockRequest:

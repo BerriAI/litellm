@@ -29,7 +29,7 @@ import pytest
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.auth_checks import get_user_object
+from litellm.auth.auth_checks import get_user_object
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,

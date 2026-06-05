@@ -10,7 +10,7 @@ Policies are matched via policy_attachments which define WHERE each policy appli
 from typing import Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.route_checks import RouteChecks
 from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext, PolicyScope
 
 

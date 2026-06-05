@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,

@@ -2769,7 +2769,7 @@ class UserAPIKeyAuth(
             normalized = normalized[7:]
         if normalized.startswith("sk-"):
             return hash_token(normalized)
-        from litellm.proxy.auth.handle_jwt import JWTHandler
+        from litellm.auth.handle_jwt import JWTHandler
 
         if JWTHandler.is_jwt(token=normalized):
             return f"hashed-jwt-{hash_token(token=normalized)}"

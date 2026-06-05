@@ -28,7 +28,7 @@ from litellm.proxy._types import (
     ResetSpendRequest,
     UpdateKeyRequest,
 )
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_org_key_limits,
     _check_team_key_limits,
@@ -271,7 +271,7 @@ async def test_key_token_handling(monkeypatch):
     )
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_fn,
     )
@@ -493,7 +493,7 @@ async def test_key_generation_with_object_permission(monkeypatch):
         LiteLLM_ObjectPermissionBase,
         LitellmUserRoles,
     )
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_fn,
     )
@@ -621,7 +621,7 @@ async def test_key_generation_with_mcp_tool_permissions(monkeypatch):
         LiteLLM_ObjectPermissionBase,
         LitellmUserRoles,
     )
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_fn,
     )
@@ -3008,7 +3008,7 @@ async def test_generate_key_with_object_permission():
         LiteLLM_ObjectPermissionBase,
         LitellmUserRoles,
     )
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _common_key_generation_helper,
     )
@@ -3109,7 +3109,7 @@ async def test_generate_key_team_member_inherits_org_skips_membership_check():
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _common_key_generation_helper,
     )
@@ -3197,7 +3197,7 @@ async def test_generate_key_foreign_org_without_team_still_enforces_membership()
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _common_key_generation_helper,
     )
@@ -3262,7 +3262,7 @@ async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_memb
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         _common_key_generation_helper,
     )
@@ -5736,7 +5736,7 @@ async def test_generate_key_with_router_settings(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
     from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_fn,
     )

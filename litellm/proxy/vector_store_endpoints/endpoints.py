@@ -5,7 +5,7 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
     LiteLLM_ManagedVectorStore,
 )
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import jsonify_object
 from litellm.proxy.vector_store_endpoints.management_endpoints import (

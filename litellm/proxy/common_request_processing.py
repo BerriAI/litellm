@@ -39,7 +39,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
+from litellm.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.common_utils.callback_utils import (
     get_logging_caching_headers,
     get_remaining_tokens_and_requests_from_request_data,

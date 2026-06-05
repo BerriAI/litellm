@@ -2145,7 +2145,7 @@ def video_proxy_test_client():
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.video_endpoints.endpoints import router as video_router
 
     app = FastAPI()

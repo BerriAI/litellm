@@ -930,7 +930,7 @@ def run_server(  # noqa: PLR0915
         ### GET DB TOKEN FOR IAM AUTH ###
 
         if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
-            from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+            from litellm.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")
             # Default to the Postgres standard port. Without a default,

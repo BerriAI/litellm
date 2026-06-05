@@ -15,7 +15,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import get_key_object, get_team_object
+from litellm.auth.auth_checks import get_key_object, get_team_object
 
 
 @pytest.mark.asyncio

@@ -127,7 +127,7 @@ async def _check_summary_model_access(  # noqa: PLR0915
         return True
     try:
         from litellm.proxy._types import ProxyException
-        from litellm.proxy.auth.auth_checks import (
+        from litellm.auth.auth_checks import (
             _can_object_call_model,
             can_project_access_model,
             can_user_call_model,

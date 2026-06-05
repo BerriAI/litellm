@@ -11,7 +11,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     InProductNudgeResponse,

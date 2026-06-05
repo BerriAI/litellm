@@ -18,7 +18,7 @@ class CustomSSOLoginHandler(CustomLogger):
         self,
         request: Request,
     ) -> OpenID:
-        from litellm.proxy.auth.trusted_proxy_utils import (
+        from litellm.auth.trusted_proxy_utils import (
             require_trusted_proxy_request,
         )
         from litellm.proxy.proxy_server import general_settings

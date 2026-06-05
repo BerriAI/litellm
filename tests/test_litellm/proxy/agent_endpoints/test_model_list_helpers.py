@@ -17,7 +17,7 @@ from litellm.proxy.agent_endpoints.model_list_helpers import (
     append_agents_to_model_group,
     append_agents_to_model_info,
 )
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.agents import AgentResponse
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,

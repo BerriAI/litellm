@@ -76,7 +76,7 @@ from litellm.proxy._types import (
     MCPTransportType,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.llms.custom_http import httpxSpecialProvider

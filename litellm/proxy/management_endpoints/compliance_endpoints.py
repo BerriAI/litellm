@@ -10,7 +10,7 @@ Endpoints for checking regulatory compliance of LLM request logs.
 from fastapi import APIRouter, Depends, Request
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.compliance_checks import ComplianceChecker
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.types.proxy.compliance_endpoints import (

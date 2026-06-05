@@ -62,7 +62,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     get_chain_id_from_headers,

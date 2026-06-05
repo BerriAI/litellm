@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
     from litellm.caching import DualCache
-    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.router import Router
 
 

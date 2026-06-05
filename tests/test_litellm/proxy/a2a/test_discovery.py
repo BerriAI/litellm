@@ -15,7 +15,7 @@ from litellm.proxy.a2a.discovery import (
     fetch_well_known_card,
 )
 from litellm.proxy.a2a.endpoints import router as a2a_router
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 
 @pytest.fixture(autouse=True)

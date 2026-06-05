@@ -35,7 +35,7 @@ from litellm.proxy.management_endpoints.internal_user_endpoints import (
     user_info,
     user_update,
 )
-from litellm.proxy.auth.auth_checks import get_key_object
+from litellm.auth.auth_checks import get_key_object
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_key_fn,
     generate_key_fn,

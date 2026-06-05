@@ -189,7 +189,7 @@ def auth_as(app) -> Callable[..., contextlib.AbstractContextManager]:
     Outside the ``with`` block the override is removed so other tests see
     the real dependency.
     """
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     @contextlib.contextmanager
     def _auth_as(

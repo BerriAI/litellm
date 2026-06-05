@@ -13,7 +13,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.proxy._types import CommonProxyErrors, CurrentItemRateLimit, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import (
+from litellm.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
@@ -795,7 +795,7 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         We need this because the UserApiKeyAuth object does not contain the rpm/tpm limits for a User AND there could be a perf impact by additionally reading the UserTable.
         """
         from litellm._logging import verbose_proxy_logger
-        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import prisma_client
 
         try:

@@ -8,7 +8,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.auth.litellm_license import LicenseCheck
 
 
 def test_read_public_key_loads_successfully():

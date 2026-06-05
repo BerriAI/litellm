@@ -14,8 +14,8 @@ from litellm.proxy._types import (
     SpecialHeaders,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.ip_address_utils import IPAddressUtils
 
 
 def _parse_mcp_server_names_from_path(
@@ -202,7 +202,7 @@ class MCPRequestHandler:
 
         request.body = mock_body  # type: ignore
         # Inline import — auth_utils participates in a proxy import cycle.
-        from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+        from litellm.auth.auth_utils import (  # noqa: PLC0415
             get_request_route,
         )
 
@@ -856,7 +856,7 @@ class MCPRequestHandler:
         Note: object_permission is automatically populated when the team is fetched via
         get_team_object() in litellm/proxy/auth/auth_checks.py
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -1057,7 +1057,7 @@ class MCPRequestHandler:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
-            from litellm.proxy.auth.auth_checks import (
+            from litellm.auth.auth_checks import (
                 _get_mcp_server_ids_from_access_groups,
             )
             from litellm.proxy.proxy_server import (
@@ -1101,7 +1101,7 @@ class MCPRequestHandler:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
-            from litellm.proxy.auth.auth_checks import (
+            from litellm.auth.auth_checks import (
                 get_object_permission,
             )
             from litellm.proxy.proxy_server import (
@@ -1176,7 +1176,7 @@ class MCPRequestHandler:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
                 global_mcp_server_manager,
             )
-            from litellm.proxy.auth.auth_checks import (
+            from litellm.auth.auth_checks import (
                 _get_mcp_server_ids_from_access_groups,
                 get_team_object,
             )
@@ -1252,7 +1252,7 @@ class MCPRequestHandler:
         ``get_object_permission`` helpers so MCP requests share the same
         ``user_api_key_cache`` entries as the rest of the proxy.
         """
-        from litellm.proxy.auth.auth_checks import get_object_permission, get_org_object
+        from litellm.auth.auth_checks import get_object_permission, get_org_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -1345,7 +1345,7 @@ class MCPRequestHandler:
 
         Returns the MCP servers from the end_user's object_permission.
         """
-        from litellm.proxy.auth.auth_checks import get_end_user_object
+        from litellm.auth.auth_checks import get_end_user_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -1419,7 +1419,7 @@ class MCPRequestHandler:
         avoid re-reading the agent row on every request, and reuses the shared
         ``object_permission_id`` cache populated by the org / team / key paths.
         """
-        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.auth.auth_checks import get_object_permission
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -1677,7 +1677,7 @@ class MCPRequestHandler:
     async def _get_mcp_access_groups_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
-        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.auth.auth_checks import get_object_permission
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -1717,7 +1717,7 @@ class MCPRequestHandler:
         """
         Get MCP access groups for the team
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,

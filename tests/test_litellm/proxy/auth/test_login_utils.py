@@ -18,7 +18,7 @@ from litellm.proxy._types import (
     ProxyException,
     hash_token,
 )
-from litellm.proxy.auth.login_utils import (
+from litellm.auth.login_utils import (
     LoginResult,
     authenticate_user,
     get_ui_credentials,

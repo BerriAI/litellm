@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     encode_file_id_with_model,
 )

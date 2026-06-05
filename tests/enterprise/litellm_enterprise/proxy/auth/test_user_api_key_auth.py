@@ -66,7 +66,7 @@ async def test_enterprise_custom_auth_returns_string():
             )
 
             # Call _user_api_key_auth_builder with the returned key
-            from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+            from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
 
             try:
                 auth_obj = await _user_api_key_auth_builder(

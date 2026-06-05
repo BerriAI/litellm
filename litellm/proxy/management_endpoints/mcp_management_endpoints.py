@@ -153,7 +153,7 @@ if MCP_AVAILABLE:
         UserAPIKeyAuth,
         UserMCPManagementMode,
     )
-    from litellm.proxy.auth.user_api_key_auth import (
+    from litellm.auth.user_api_key_auth import (
         _user_api_key_auth_builder,
         user_api_key_auth,
     )
@@ -743,7 +743,7 @@ if MCP_AVAILABLE:
         description="Returns the caller's IP address as seen by the proxy.",
     )
     async def get_client_ip(request: Request):
-        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+        from litellm.auth.ip_address_utils import IPAddressUtils
 
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
         return {"ip": client_ip}
@@ -760,7 +760,7 @@ if MCP_AVAILABLE:
                 detail="MCP registry is not enabled",
             )
 
-        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+        from litellm.auth.ip_address_utils import IPAddressUtils
 
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
 
@@ -807,7 +807,7 @@ if MCP_AVAILABLE:
         Return MCP servers scoped to a team: team's allowed servers + allow_all_keys servers.
         Used by the Create Key UI to populate the MCP server dropdown.
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.auth.auth_checks import get_team_object
         from litellm.proxy.management_helpers.object_permission_utils import (
             _get_allow_all_keys_server_ids,
             _get_team_allowed_mcp_servers,
@@ -885,7 +885,7 @@ if MCP_AVAILABLE:
             sanitized_team_id = team_id.strip()
             is_admin = _user_has_admin_view(user_api_key_dict)
             if not is_admin:
-                from litellm.proxy.auth.auth_checks import get_team_object
+                from litellm.auth.auth_checks import get_team_object
                 from litellm.proxy.proxy_server import (
                     prisma_client,
                     user_api_key_cache,
@@ -1273,7 +1273,7 @@ if MCP_AVAILABLE:
 
         if mcp_server is None:
             # Fallback: check registry (config-based servers) - list endpoint uses get_registry()
-            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+            from litellm.auth.ip_address_utils import IPAddressUtils
 
             client_ip = IPAddressUtils.get_mcp_client_ip(request)
             registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
@@ -1568,7 +1568,7 @@ if MCP_AVAILABLE:
             from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415
                 global_mcp_server_manager,
             )
-            from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
+            from litellm.auth.auth_utils import (  # noqa: PLC0415
                 get_request_route,
             )
 
@@ -1629,7 +1629,7 @@ if MCP_AVAILABLE:
         if server is None:
             # Fall back to real DB/config server (e.g. for the user-side OAuth flow
             # which calls these endpoints with a real server_id, not a temp session id).
-            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+            from litellm.auth.ip_address_utils import IPAddressUtils
 
             client_ip = IPAddressUtils.get_mcp_client_ip(request) if request else None
             server = global_mcp_server_manager.get_mcp_server_by_id(

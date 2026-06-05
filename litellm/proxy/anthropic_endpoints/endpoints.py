@@ -12,7 +12,7 @@ from litellm.llms.anthropic.experimental_pass_through.context_management import 
     AnthropicContextManagementError,
 )
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
     create_response,

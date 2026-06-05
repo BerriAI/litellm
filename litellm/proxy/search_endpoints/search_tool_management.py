@@ -14,7 +14,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
 from litellm.types.search import (
     ListSearchToolsResponse,
@@ -60,7 +60,7 @@ async def _filter_visible_search_tools(
     ):
         return search_tools
 
-    from litellm.proxy.auth.auth_checks import (
+    from litellm.auth.auth_checks import (
         can_user_view_search_tool,
         get_team_object,
     )

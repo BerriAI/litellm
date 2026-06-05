@@ -9,7 +9,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     hash_token,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 
 router = APIRouter()

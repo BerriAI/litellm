@@ -11,7 +11,7 @@ from starlette.websockets import WebSocket, WebSocketDisconnect
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.auth.user_api_key_auth import (
     UserAPIKeyAuth,
     user_api_key_auth,
     user_api_key_auth_websocket,
@@ -1030,7 +1030,7 @@ async def _enforce_responses_ws_first_frame_model_auth(
     user_api_key_dict: UserAPIKeyAuth,
     llm_router: Optional[Any],
 ) -> None:
-    from litellm.proxy.auth.user_api_key_auth import (
+    from litellm.auth.user_api_key_auth import (
         _enforce_key_and_fallback_model_access,
         _run_centralized_common_checks,
     )

@@ -20,7 +20,7 @@ import litellm
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,

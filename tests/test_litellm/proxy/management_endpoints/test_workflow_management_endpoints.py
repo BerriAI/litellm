@@ -147,7 +147,7 @@ def _override_auth_user_with_token(token: str = "tok-abc") -> Any:
 
 class TestCreateWorkflowRun:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()
@@ -177,7 +177,7 @@ class TestCreateWorkflowRun:
 
 class TestListWorkflowRuns:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()
@@ -219,7 +219,7 @@ class TestListWorkflowRuns:
 
 class TestGetWorkflowRun:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()
@@ -247,7 +247,7 @@ class TestGetWorkflowRun:
 
 class TestUpdateWorkflowRun:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()
@@ -278,7 +278,7 @@ class TestUpdateWorkflowRun:
 
 class TestAppendWorkflowEvent:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()
@@ -389,7 +389,7 @@ class TestAppendWorkflowEvent:
 
 class TestWorkflowMessages:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()
@@ -460,7 +460,7 @@ class TestWorkflowMessages:
 
 class TestListWorkflowEvents:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()
@@ -513,7 +513,7 @@ class TestTenantIsolation:
     """Ownership enforcement: non-admin callers only see their own runs."""
 
     def _make_app_with_auth(self, auth_fn):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         self._prisma = _make_prisma_client()
         app = _make_app()

@@ -8,7 +8,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import _virtual_key_multi_budget_check
+from litellm.auth.auth_checks import _virtual_key_multi_budget_check
 
 
 def _make_valid_token(**kwargs) -> UserAPIKeyAuth:

@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,

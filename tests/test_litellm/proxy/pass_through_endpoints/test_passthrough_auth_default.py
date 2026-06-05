@@ -29,7 +29,7 @@ from fastapi import FastAPI
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import PassThroughGenericEndpoint
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.auth.user_api_key_auth import (
     check_api_key_for_custom_headers_or_pass_through_endpoints,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (

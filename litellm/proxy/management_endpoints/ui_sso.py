@@ -76,14 +76,14 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
+from litellm.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.auth.auth_utils import (
+from litellm.auth.auth_utils import (
     _get_request_ip_address,
     _has_user_setup_sso,
 )
-from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.handle_jwt import JWTHandler
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
     show_missing_vars_in_env,
@@ -1837,7 +1837,7 @@ async def auth_callback(request: Request, state: Optional[str] = None):  # noqa:
     # Check if this is a CLI login (state starts with our CLI prefix)
     from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,
@@ -2163,7 +2163,7 @@ async def cli_poll_key(
         key_id: The CLI login session ID
         team_id: Optional team ID to assign to the JWT. If provided, must be one of user's teams.
     """
-    from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+    from litellm.auth.auth_checks import ExperimentalUIJWTToken
     from litellm.proxy.proxy_server import user_api_key_cache
 
     try:
@@ -4401,7 +4401,7 @@ async def debug_sso_callback(request: Request):
     from fastapi.responses import HTMLResponse
 
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
     from litellm.proxy.proxy_server import (
         general_settings,
         jwt_handler,

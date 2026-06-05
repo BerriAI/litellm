@@ -17,7 +17,7 @@ from litellm_enterprise.types.proxy.audit_logging_endpoints import (
 )
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 

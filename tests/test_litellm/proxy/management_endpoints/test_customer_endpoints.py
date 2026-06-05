@@ -11,7 +11,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyException,
 )
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.management_endpoints.customer_endpoints import router
 
 app = FastAPI()

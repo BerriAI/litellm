@@ -63,7 +63,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     _cache_team_object,
     allowed_route_check_inside_route,
     can_org_access_model,
@@ -72,7 +72,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_object,
     get_user_object,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.management_endpoints.common_utils import (
     _check_passthrough_routes_caller_permission,

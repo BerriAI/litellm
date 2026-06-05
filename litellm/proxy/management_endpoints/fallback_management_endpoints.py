@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Dict, List, Literal
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.model_checks import get_all_fallbacks
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.model_checks import get_all_fallbacks
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, status

@@ -159,7 +159,7 @@ class MCPEndUserPermissionGuardrail(CustomGuardrail):
         Fetch end user object via the same cached path used during auth.
         No extra DB round-trip when the cache is warm.
         """
-        from litellm.proxy.auth.auth_checks import get_end_user_object
+        from litellm.auth.auth_checks import get_end_user_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,

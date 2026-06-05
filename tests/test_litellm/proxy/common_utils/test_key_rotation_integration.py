@@ -165,7 +165,7 @@ class TestKeyRotationSecretNamingStability:
         from litellm.proxy.hooks.key_management_event_hooks import (
             KeyManagementEventHooks,
         )
-        from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+        from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 
         # 1. Existing key without alias
         initial_token_hash = "hashed-initial-token"
@@ -215,7 +215,7 @@ class TestKeyRotationSecretNamingStability:
         from litellm.proxy.hooks.key_management_event_hooks import (
             KeyManagementEventHooks,
         )
-        from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+        from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 
         test_alias = "tenant1/stable-key"
         existing_key = MagicMock(spec=LiteLLM_VerificationToken)

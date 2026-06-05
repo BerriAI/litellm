@@ -23,7 +23,7 @@ from litellm.proxy._types import (
     CostEstimateResponse,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import LlmProvidersSet
 
 router = APIRouter()

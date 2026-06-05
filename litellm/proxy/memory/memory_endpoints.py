@@ -28,7 +28,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.memory_management import (
     LiteLLM_MemoryRow,
     MemoryCreateRequest,

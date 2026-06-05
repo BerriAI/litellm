@@ -18,7 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 # Constants for analytics periods
 MAX_DAYS = 7  # Number of days to show in DAU analytics

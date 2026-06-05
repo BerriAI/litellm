@@ -586,7 +586,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         (wildcards, access groups, ``all-proxy-models``, team aliases)
         the proxy enforces on `/chat/completions` apply here.
         """
-        from litellm.proxy.auth.auth_checks import can_key_call_model
+        from litellm.auth.auth_checks import can_key_call_model
         from litellm.proxy.proxy_server import llm_router
 
         models = _get_models_from_batch_input_file_content(file_content_as_dict)

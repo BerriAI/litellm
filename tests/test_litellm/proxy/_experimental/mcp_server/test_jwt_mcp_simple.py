@@ -176,7 +176,7 @@ async def test_jwt_auth_sets_team_id_for_mcp_route():
     This is the critical test - when user calls /mcp/tools/list with JWT,
     the team_id from JWT groups must be set on UserAPIKeyAuth.
     """
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 
@@ -245,7 +245,7 @@ async def test_mcp_route_without_model_still_returns_team_id():
     4. Route check passes because "mcp_routes" is in team_allowed_routes
     5. team_id is returned and set on UserAPIKeyAuth
     """
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
 

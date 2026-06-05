@@ -15,7 +15,7 @@ def create_mock_router(
 
 def test_no_router_returns_empty_list():
     """Test that None router returns empty list."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     result = get_all_fallbacks("claude-4-sonnet", llm_router=None)
     assert result == []
@@ -23,7 +23,7 @@ def test_no_router_returns_empty_list():
 
 def test_no_fallbacks_config_returns_empty_list():
     """Test that empty fallbacks config returns empty list."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     router = create_mock_router(fallbacks=[])
     result = get_all_fallbacks("claude-4-sonnet", llm_router=router)
@@ -32,7 +32,7 @@ def test_no_fallbacks_config_returns_empty_list():
 
 def test_model_with_fallbacks_returns_complete_list():
     """Test that model with fallbacks returns complete fallback list."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     fallbacks_config = [
         {"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}
@@ -53,7 +53,7 @@ def test_model_with_fallbacks_returns_complete_list():
 
 def test_model_without_fallbacks_returns_empty_list():
     """Test that model without fallbacks returns empty list."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     fallbacks_config = [
         {"claude-4-sonnet": ["bedrock-claude-sonnet-4", "google-claude-sonnet-4"]}
@@ -71,7 +71,7 @@ def test_model_without_fallbacks_returns_empty_list():
 
 def test_general_fallback_type():
     """Test general fallback type uses router.fallbacks."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     fallbacks_config = [{"claude-4-sonnet": ["bedrock-claude-sonnet-4"]}]
     router = create_mock_router(fallbacks=fallbacks_config)
@@ -94,7 +94,7 @@ def test_general_fallback_type():
 
 def test_context_window_fallback_type():
     """Test context_window fallback type uses router.context_window_fallbacks."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     context_fallbacks_config = [{"gpt-4": ["gpt-3.5-turbo"]}]
     router = create_mock_router(context_window_fallbacks=context_fallbacks_config)
@@ -117,7 +117,7 @@ def test_context_window_fallback_type():
 
 def test_content_policy_fallback_type():
     """Test content_policy fallback type uses router.content_policy_fallbacks."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     content_fallbacks_config = [{"claude-4": ["claude-3"]}]
     router = create_mock_router(content_policy_fallbacks=content_fallbacks_config)
@@ -140,7 +140,7 @@ def test_content_policy_fallback_type():
 
 def test_invalid_fallback_type_returns_empty_list():
     """Test that invalid fallback type returns empty list and logs warning."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     router = create_mock_router(fallbacks=[])
 
@@ -155,7 +155,7 @@ def test_invalid_fallback_type_returns_empty_list():
 
 def test_exception_handling_returns_empty_list():
     """Test that exceptions are handled gracefully and return empty list."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     router = create_mock_router(fallbacks=[{"claude-4-sonnet": ["fallback"]}])
 
@@ -179,7 +179,7 @@ def test_exception_handling_returns_empty_list():
 
 def test_multiple_fallbacks_complete_list():
     """Test model with multiple fallbacks returns the complete list."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     fallbacks_config = [{"gpt-4": ["gpt-4-turbo", "gpt-3.5-turbo", "claude-3-haiku"]}]
     router = create_mock_router(fallbacks=fallbacks_config)
@@ -198,7 +198,7 @@ def test_multiple_fallbacks_complete_list():
 
 def test_wildcard_and_specific_fallbacks():
     """Test fallbacks with wildcard and specific model configurations."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     fallbacks_config = [
         {"*": ["gpt-3.5-turbo"]},
@@ -225,7 +225,7 @@ def test_wildcard_and_specific_fallbacks():
 
 def test_default_fallback_type_is_general():
     """Test that default fallback_type is 'general'."""
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     fallbacks_config = [{"claude-4-sonnet": ["bedrock-claude-sonnet-4"]}]
     router = create_mock_router(fallbacks=fallbacks_config)

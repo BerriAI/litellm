@@ -14,7 +14,7 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../.."))
 )
 
-from litellm.proxy.auth.auth_utils import is_request_body_safe  # noqa: E402
+from litellm.auth.auth_utils import is_request_body_safe  # noqa: E402
 
 
 @pytest.mark.parametrize(

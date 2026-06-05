@@ -14,7 +14,7 @@ sys.path.insert(
 import pytest, litellm
 import httpx
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import get_end_user_object
+from litellm.auth.auth_checks import get_end_user_object
 from litellm.caching.caching import DualCache
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy._types import (
@@ -25,7 +25,7 @@ from litellm.proxy._types import (
     Litellm_EntityType,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     can_team_access_model,
     _virtual_key_soft_budget_check,
     _team_soft_budget_check,
@@ -85,7 +85,7 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     Note: Budget enforcement for end users happens in common_checks() via 
     _check_end_user_budget(), not in get_end_user_object().
     """
-    from litellm.proxy.auth.auth_checks import _check_end_user_budget
+    from litellm.auth.auth_checks import _check_end_user_budget
     
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
     end_user_obj = LiteLLM_EndUserTable(
@@ -132,7 +132,7 @@ async def test_can_key_call_model(model, expect_to_work):
     """
     If wildcard model + specific model is used, choose the specific model settings
     """
-    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from litellm.auth.auth_checks import can_key_call_model
     from fastapi import HTTPException
 
     llm_model_list = [
@@ -185,7 +185,7 @@ async def test_can_key_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_team_call_model(model, expect_to_work):
-    from litellm.proxy.auth.auth_checks import model_in_access_group
+    from litellm.auth.auth_checks import model_in_access_group
     from fastapi import HTTPException
 
     llm_model_list = [
@@ -240,7 +240,7 @@ async def test_can_team_call_model(model, expect_to_work):
 )
 @pytest.mark.asyncio
 async def test_can_key_call_model_wildcard_access(key_models, model, expect_to_work):
-    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from litellm.auth.auth_checks import can_key_call_model
     from fastapi import HTTPException
 
     llm_model_list = [
@@ -328,7 +328,7 @@ async def test_wildcard_access_after_cost_map_reload(key_models, model, expect_t
     Fix: each reload now calls litellm.add_known_models(model_cost_map=new_map)
     with the fetched map passed explicitly to avoid any reference ambiguity.
     """
-    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from litellm.auth.auth_checks import can_key_call_model
 
     # Build a new cost map that includes the brand-new model — exactly what
     # proxy_server.py receives from get_model_cost_map() during a reload.
@@ -431,7 +431,7 @@ async def test_add_known_models_explicit_map_updates_provider_sets():
 
 @pytest.mark.asyncio
 async def test_is_valid_fallback_model():
-    from litellm.proxy.auth.auth_checks import is_valid_fallback_model
+    from litellm.auth.auth_checks import is_valid_fallback_model
     from litellm import Router
 
     router = Router(
@@ -476,7 +476,7 @@ async def test_virtual_key_max_budget_check(
     1. Triggers budget alert for all cases
     2. Raises BudgetExceededError when spend >= max_budget
     """
-    from litellm.proxy.auth.auth_checks import _virtual_key_max_budget_check
+    from litellm.auth.auth_checks import _virtual_key_max_budget_check
     from litellm.proxy.utils import ProxyLogging
 
     # Setup test data
@@ -770,7 +770,7 @@ async def test_team_soft_budget_check(
 
 @pytest.mark.asyncio
 async def test_can_user_call_model():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.auth.auth_checks import can_user_call_model
     from litellm.proxy._types import ProxyException
     from litellm import Router
 
@@ -810,7 +810,7 @@ async def test_can_user_call_model():
 
 @pytest.mark.asyncio
 async def test_can_user_call_model_with_no_default_models():
-    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.auth.auth_checks import can_user_call_model
     from litellm.proxy._types import ProxyException, SpecialModelNames
     from unittest.mock import MagicMock
 
@@ -834,7 +834,7 @@ async def test_can_user_call_model_with_no_default_models():
 
 @pytest.mark.asyncio
 async def test_get_fuzzy_user_object():
-    from litellm.proxy.auth.auth_checks import _get_fuzzy_user_object
+    from litellm.auth.auth_checks import _get_fuzzy_user_object
     from litellm.proxy.utils import PrismaClient
     from unittest.mock import AsyncMock, MagicMock
 
@@ -929,7 +929,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
     """
     Test if can_key_call_model correctly handles model aliases in the token
     """
-    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from litellm.auth.auth_checks import can_key_call_model
 
     llm_model_list = [
         {
@@ -974,7 +974,7 @@ async def test_can_key_call_model_with_aliases(model, alias_map, expect_to_work)
 @pytest.mark.asyncio
 async def test_cache_access_object():
     """Test _cache_access_object stores access group in cache with correct key."""
-    from litellm.proxy.auth.auth_checks import _cache_access_object
+    from litellm.auth.auth_checks import _cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
 
     cache = DualCache()
@@ -1002,7 +1002,7 @@ async def test_cache_access_object():
 @pytest.mark.asyncio
 async def test_delete_cache_access_object():
     """Test _delete_cache_access_object removes access group from in-memory cache."""
-    from litellm.proxy.auth.auth_checks import _delete_cache_access_object
+    from litellm.auth.auth_checks import _delete_cache_access_object
     from litellm.proxy._types import LiteLLM_AccessGroupTable
 
     cache = DualCache()
@@ -1050,7 +1050,7 @@ async def test_get_resources_from_access_groups(
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from litellm.proxy._types import LiteLLM_AccessGroupTable
-    from litellm.proxy.auth.auth_checks import (
+    from litellm.auth.auth_checks import (
         _get_agent_ids_from_access_groups,
         _get_models_from_access_groups,
     )
@@ -1085,7 +1085,7 @@ async def test_get_resources_from_access_groups(
 @pytest.mark.asyncio
 async def test_get_models_from_access_groups_empty_ids():
     """Test _get_models_from_access_groups returns empty list when access_group_ids is empty."""
-    from litellm.proxy.auth.auth_checks import _get_models_from_access_groups
+    from litellm.auth.auth_checks import _get_models_from_access_groups
 
     result = await _get_models_from_access_groups(access_group_ids=[])
     assert result == []
@@ -1101,7 +1101,7 @@ async def test_can_team_access_model_via_access_group_ids():
     """Test can_team_access_model allows access when team has access_group_ids granting model access."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import can_team_access_model
+    from litellm.auth.auth_checks import can_team_access_model
 
     team_object = LiteLLM_TeamTable(
         team_id="test-team",
@@ -1128,7 +1128,7 @@ async def test_can_team_access_model_access_group_ids_denied():
     """Test can_team_access_model denies when neither team models nor access_group_ids grant access."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import can_team_access_model
+    from litellm.auth.auth_checks import can_team_access_model
     from litellm.proxy._types import ProxyException
 
     team_object = LiteLLM_TeamTable(
@@ -1161,7 +1161,7 @@ async def test_can_key_call_model_via_access_group_ids():
     """Test can_key_call_model allows access when key has access_group_ids granting model access."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import can_key_call_model
+    from litellm.auth.auth_checks import can_key_call_model
 
     user_api_key_object = UserAPIKeyAuth(
         token="test-token",
@@ -1235,7 +1235,7 @@ async def test_key_access_group_grants_model_when_team_authorized():
     """
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.auth.auth_checks import _key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
@@ -1288,7 +1288,7 @@ async def test_key_access_group_grants_model_when_key_directly_authorized():
     """
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.auth.auth_checks import _key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token-hashed",
@@ -1336,7 +1336,7 @@ async def test_key_access_group_grants_model_when_key_directly_authorized():
 @pytest.mark.asyncio
 async def test_key_access_group_grants_model_when_key_has_no_groups():
     """Key with no access_group_ids → False (early return, no DB read)."""
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.auth.auth_checks import _key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
@@ -1365,7 +1365,7 @@ async def test_key_access_group_grants_model_when_group_does_not_cover_model():
     """Group authorizes the team but does not grant the requested model → False."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.auth.auth_checks import _key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",
@@ -1419,7 +1419,7 @@ async def test_key_access_group_grants_model_when_group_authorizes_neither():
     """
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.auth.auth_checks import _key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="team-a-token",
@@ -1469,7 +1469,7 @@ async def test_key_access_group_grants_model_when_get_access_object_raises():
     """Group lookup failure (404, network, etc.) is treated as no authorization."""
     from unittest.mock import AsyncMock, patch
 
-    from litellm.proxy.auth.auth_checks import _key_access_group_grants_model
+    from litellm.auth.auth_checks import _key_access_group_grants_model
 
     valid_token = UserAPIKeyAuth(
         token="test-token",

@@ -15,8 +15,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_utils import get_model_from_request
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.auth_utils import get_model_from_request
+from litellm.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 
@@ -358,7 +358,7 @@ async def _get_tag_budget_counters(
     proxy_logging_obj: ProxyLogging,
 ) -> List[_BudgetCounter]:
     from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
-    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+    from litellm.auth.auth_checks import get_tag_objects_batch
 
     tag_names = _dedupe_tags(get_tags_from_request_body(request_body=request_body))
     if not tag_names:

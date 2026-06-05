@@ -39,8 +39,8 @@ from litellm.proxy._types import (
     TeamMemberDeleteRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import _delete_cache_key_object
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.auth_checks import _delete_cache_key_object
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
     ScimTransformations,

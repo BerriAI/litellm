@@ -677,7 +677,7 @@ async def test_project_max_budget_check_fires_alert():
     Test that _project_max_budget_check fires a budget alert
     when project exceeds its max budget (matches _team_max_budget_check pattern).
     """
-    from litellm.proxy.auth.auth_checks import _project_max_budget_check
+    from litellm.auth.auth_checks import _project_max_budget_check
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
         LiteLLM_ProjectTableCachedObj,
@@ -716,7 +716,7 @@ async def test_project_soft_budget_check():
     """
     Test that _project_soft_budget_check triggers alert when soft budget is exceeded.
     """
-    from litellm.proxy.auth.auth_checks import _project_soft_budget_check
+    from litellm.auth.auth_checks import _project_soft_budget_check
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
         LiteLLM_ProjectTableCachedObj,
@@ -752,7 +752,7 @@ async def test_project_soft_budget_check_no_alert_under_budget():
     """
     Test that _project_soft_budget_check does NOT trigger alert when under soft budget.
     """
-    from litellm.proxy.auth.auth_checks import _project_soft_budget_check
+    from litellm.auth.auth_checks import _project_soft_budget_check
     from litellm.proxy._types import (
         LiteLLM_BudgetTable,
         LiteLLM_ProjectTableCachedObj,

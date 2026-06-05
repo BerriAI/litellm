@@ -18,7 +18,7 @@ from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, Prisma
 import litellm.proxy.health_endpoints._health_endpoints as _health_endpoints_module
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     get_callback_identifier,

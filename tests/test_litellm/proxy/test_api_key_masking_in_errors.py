@@ -18,7 +18,7 @@ class TestKeyMaskingInAuthErrors:
         When a key doesn't start with 'sk-', the AssertionError message
         should contain a masked version, not the full key.
         """
-        from litellm.proxy.auth.auth_utils import abbreviate_api_key
+        from litellm.auth.auth_utils import abbreviate_api_key
 
         # Simulate the logic from user_api_key_auth.py
         api_key = "my-secret-api-key-1234567890abcdef"

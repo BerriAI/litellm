@@ -12,8 +12,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
-from litellm.proxy.auth.auth_checks import get_team_object
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.auth_checks import get_team_object
+from litellm.auth.route_checks import RouteChecks
 from litellm.proxy.utils import PrismaClient
 
 BASELINE_TEAM_MEMBER_PERMISSIONS = [

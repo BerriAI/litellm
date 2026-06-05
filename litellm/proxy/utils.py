@@ -108,7 +108,7 @@ from litellm.proxy._types import (
     Member,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.create_views import (
     create_missing_views,
@@ -2846,7 +2846,7 @@ class PrismaClient:
                 # `PrismaWrapper.__getattr__`, which deadlocks the event loop
                 # and times out after 30s.
                 if iam_flag and reader_iam_endpoint is not None:
-                    from litellm.proxy.auth.rds_iam_token import (
+                    from litellm.auth.rds_iam_token import (
                         generate_iam_auth_token,
                     )
 
@@ -6065,8 +6065,8 @@ async def get_available_models_for_user(
     Returns:
         List of model names available to the user
     """
-    from litellm.proxy.auth.auth_checks import get_team_object
-    from litellm.proxy.auth.model_checks import (
+    from litellm.auth.auth_checks import get_team_object
+    from litellm.auth.model_checks import (
         get_complete_model_list,
         get_key_models,
         get_team_models,
@@ -6153,7 +6153,7 @@ def create_model_info_response(
     Returns:
         Dictionary containing model information
     """
-    from litellm.proxy.auth.model_checks import get_all_fallbacks
+    from litellm.auth.model_checks import get_all_fallbacks
 
     model_info = {
         "id": model_id,

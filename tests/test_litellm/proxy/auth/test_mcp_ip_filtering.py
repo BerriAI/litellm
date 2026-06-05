@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import Request
 
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.auth.ip_address_utils import IPAddressUtils
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
 

@@ -8,7 +8,7 @@ import orjson
 from fastapi import APIRouter, Depends, Request, Response
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     convert_upload_files_to_file_data,

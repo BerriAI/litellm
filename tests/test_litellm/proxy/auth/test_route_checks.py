@@ -10,7 +10,7 @@ import pytest
 from fastapi import HTTPException, Request
 
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.route_checks import RouteChecks
 
 
 def test_non_admin_config_update_route_rejected():
@@ -2191,7 +2191,7 @@ def test_route_in_additional_public_routes_wildcard_match():
     """
     Test that route_in_additonal_public_routes supports wildcard patterns.
     """
-    from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+    from litellm.auth.auth_utils import route_in_additonal_public_routes
 
     with (
         patch(
@@ -2210,7 +2210,7 @@ def test_route_in_additional_public_routes_exact_match():
     """
     Test that route_in_additonal_public_routes supports exact matches.
     """
-    from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+    from litellm.auth.auth_utils import route_in_additonal_public_routes
 
     with (
         patch(
@@ -2378,7 +2378,7 @@ def test_available_roles_accessible_to_non_admin_users(user_role):
 from datetime import datetime
 
 from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
-from litellm.proxy.auth.auth_checks_organization import _user_is_org_admin
+from litellm.auth.auth_checks_organization import _user_is_org_admin
 
 
 def _make_org_admin_user(org_id: str) -> LiteLLM_UserTable:
@@ -2573,7 +2573,7 @@ def test_provider_name_substring_not_classified_as_llm_route(route):
     The fix uses an exact/prefix match so only routes that actually *start*
     with a passthrough prefix are allowed through.
     """
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.auth.route_checks import RouteChecks
 
     assert RouteChecks.is_llm_api_route(route=route) is False, (
         f"{route!r} should NOT be classified as an LLM API route — "
@@ -2597,7 +2597,7 @@ def test_provider_name_substring_not_classified_as_llm_route(route):
 )
 def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     """Legitimate passthrough routes must still pass is_llm_api_route."""
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.auth.route_checks import RouteChecks
 
     assert (
         RouteChecks.is_llm_api_route(route=route) is True

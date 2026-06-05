@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 # Clear cache and reload models to pick up the access group changes
 from litellm.proxy.management_endpoints.model_management_endpoints import (

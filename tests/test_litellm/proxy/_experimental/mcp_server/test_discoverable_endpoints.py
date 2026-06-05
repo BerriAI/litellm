@@ -1241,11 +1241,11 @@ def test_xff_misconfig_warning_emitted_once(caplog):
     try:
         from fastapi import Request
 
-        from litellm.proxy import auth as proxy_auth_pkg  # noqa: F401
+        from litellm import auth as proxy_auth_pkg  # noqa: F401
         from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
             get_request_base_url,
         )
-        from litellm.proxy.auth import ip_address_utils
+        from litellm.auth import ip_address_utils
     except ImportError:
         pytest.skip("MCP discoverable endpoints not available")
 

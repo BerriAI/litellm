@@ -117,7 +117,7 @@ class AgentRequestHandler:
         Note: object_permission is automatically populated when the team is fetched via
         get_team_object() in litellm/proxy/auth/auth_checks.py
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -179,7 +179,7 @@ class AgentRequestHandler:
             # 2. Fallback: get agent IDs from key's access_group_ids (unified access groups)
             key_access_group_ids = user_api_key_auth.access_group_ids or []
             if key_access_group_ids:
-                from litellm.proxy.auth.auth_checks import (
+                from litellm.auth.auth_checks import (
                     _get_agent_ids_from_access_groups,
                 )
 
@@ -212,7 +212,7 @@ class AgentRequestHandler:
             return []
 
         try:
-            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.auth.auth_checks import get_team_object
             from litellm.proxy.proxy_server import (
                 prisma_client,
                 proxy_logging_obj,
@@ -254,7 +254,7 @@ class AgentRequestHandler:
             # 2. Also include agents from team's access_group_ids (unified access groups)
             team_access_group_ids = team_obj.access_group_ids or []
             if team_access_group_ids:
-                from litellm.proxy.auth.auth_checks import (
+                from litellm.auth.auth_checks import (
                     _get_agent_ids_from_access_groups,
                 )
 
@@ -370,7 +370,7 @@ class AgentRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """Get agent access groups for the key."""
-        from litellm.proxy.auth.auth_checks import get_object_permission
+        from litellm.auth.auth_checks import get_object_permission
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,
@@ -410,7 +410,7 @@ class AgentRequestHandler:
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
         """Get agent access groups for the team."""
-        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import (
             prisma_client,
             proxy_logging_obj,

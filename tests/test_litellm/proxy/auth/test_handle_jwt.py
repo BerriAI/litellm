@@ -15,7 +15,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
 )
-from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
 
 
 @pytest.mark.asyncio
@@ -835,7 +835,7 @@ async def test_nested_jwt_field_access():
     3. Missing nested paths return appropriate defaults
     """
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     # Create JWT handler
     jwt_handler = JWTHandler()
@@ -958,7 +958,7 @@ async def test_nested_jwt_field_missing_paths():
     3. team_id_default fallback works with nested fields
     """
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     # Create JWT handler
     jwt_handler = JWTHandler()
@@ -1047,7 +1047,7 @@ async def test_metadata_prefix_handling_in_nested_fields():
     The get_nested_value function should remove metadata. prefix before traversing
     """
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     # Create JWT handler
     jwt_handler = JWTHandler()
@@ -2175,7 +2175,7 @@ async def test_get_team_alias_with_nested_fields():
     Test get_team_alias() method with nested JWT fields
     """
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     jwt_handler = JWTHandler()
 
@@ -2212,7 +2212,7 @@ async def test_is_required_team_id_with_team_alias_field():
     Test that is_required_team_id() returns True when team_alias_jwt_field is set
     """
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     jwt_handler = JWTHandler()
 
@@ -2244,7 +2244,7 @@ async def test_find_and_validate_specific_team_id_with_team_alias():
 
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
@@ -2298,7 +2298,7 @@ async def test_find_and_validate_team_id_takes_precedence_over_name():
 
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
@@ -2353,7 +2353,7 @@ async def test_find_and_validate_raises_when_required_team_not_found():
     """
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()
@@ -2391,7 +2391,7 @@ async def test_get_org_alias_with_nested_fields():
     Test get_org_alias() method with nested JWT fields
     """
     from litellm.proxy._types import LiteLLM_JWTAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     jwt_handler = JWTHandler()
 
@@ -2429,7 +2429,7 @@ async def test_get_objects_resolves_org_by_name():
     """
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_OrganizationTable
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+    from litellm.auth.handle_jwt import JWTAuthManager, JWTHandler
     from litellm.proxy.utils import ProxyLogging
 
     jwt_handler = JWTHandler()

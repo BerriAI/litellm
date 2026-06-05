@@ -54,7 +54,7 @@ def test_mock_prisma_has_key_table(mock_prisma):
 
 def test_auth_as_admin_overrides_dependency(app, auth_as):
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     with auth_as(LitellmUserRoles.PROXY_ADMIN):
         assert user_api_key_auth in app.dependency_overrides
@@ -62,7 +62,7 @@ def test_auth_as_admin_overrides_dependency(app, auth_as):
 
 def test_auth_as_internal_user_overrides_dependency(app, auth_as):
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     with auth_as(LitellmUserRoles.INTERNAL_USER) as fake_auth:
         assert user_api_key_auth in app.dependency_overrides
@@ -71,7 +71,7 @@ def test_auth_as_internal_user_overrides_dependency(app, auth_as):
 
 def test_auth_as_cleans_up_on_exit(app, auth_as):
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     assert user_api_key_auth not in app.dependency_overrides
     with auth_as(LitellmUserRoles.PROXY_ADMIN):

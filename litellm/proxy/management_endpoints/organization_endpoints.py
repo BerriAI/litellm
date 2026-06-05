@@ -21,8 +21,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import can_user_call_model, get_user_object
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.auth_checks import can_user_call_model, get_user_object
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,

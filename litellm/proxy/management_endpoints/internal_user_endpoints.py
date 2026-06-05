@@ -25,8 +25,8 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
-from litellm.proxy.auth.auth_checks import get_team_object, get_user_object
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.auth_checks import get_team_object, get_user_object
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,

@@ -727,7 +727,7 @@ async def rewrite_response_ids(
     Returns a shallow-copy of *body* with swapped values when any field is
     rewritten.
     """
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.auth.auth_utils import normalize_request_route
 
     # Strip passthrough prefix then normalize to get e.g. /v1/batches/{batch_id}
     canonical = normalize_request_route(_canonical_path(route))
@@ -821,7 +821,7 @@ def is_passthrough_list_route(provider: str, method: str, route: str) -> bool:
     from the DB (user-scoped) rather than forwarded upstream."""
     if method != "GET":
         return False
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.auth.auth_utils import normalize_request_route
 
     canonical = normalize_request_route(_canonical_path(route))
     return (provider, canonical) in _LIST_ROUTE_TABLE
@@ -1048,7 +1048,7 @@ async def list_passthrough_ids_from_db(
     if prisma_client is None:
         return None
 
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.auth.auth_utils import normalize_request_route
 
     canonical = normalize_request_route(_canonical_path(route))
     resource_kind = _LIST_ROUTE_TABLE.get((provider, canonical))

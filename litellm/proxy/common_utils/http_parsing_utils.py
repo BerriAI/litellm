@@ -547,7 +547,7 @@ def _add_vector_store_id_from_path(request_data: dict, request: Request) -> None
         request: The FastAPI Request object
     """
     # Inline import — auth_utils participates in a proxy import cycle.
-    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+    from litellm.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     path = get_request_route(request)
     vector_store_match = re.search(r"/vector_stores/([^/]+)/", path)

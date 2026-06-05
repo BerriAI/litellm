@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import (
+from litellm.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
     abbreviate_api_key,
     check_complete_credentials,
@@ -535,7 +535,7 @@ def test_abbreviate_api_key():
 
 
 def test_get_customer_user_header_returns_none_when_no_customer_role():
-    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+    from litellm.auth.auth_utils import get_customer_user_header_from_mapping
 
     mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"}
@@ -545,7 +545,7 @@ def test_get_customer_user_header_returns_none_when_no_customer_role():
 
 
 def test_get_customer_user_header_returns_none_for_single_non_customer_mapping():
-    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+    from litellm.auth.auth_utils import get_customer_user_header_from_mapping
 
     mapping = {"header_name": "X-Only-Internal", "litellm_user_role": "internal_user"}
     result = get_customer_user_header_from_mapping(mapping)
@@ -553,7 +553,7 @@ def test_get_customer_user_header_returns_none_for_single_non_customer_mapping()
 
 
 def test_get_customer_user_header_from_mapping_returns_customer_header():
-    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+    from litellm.auth.auth_utils import get_customer_user_header_from_mapping
 
     mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
@@ -564,7 +564,7 @@ def test_get_customer_user_header_from_mapping_returns_customer_header():
 
 
 def test_get_customer_user_header_returns_customers_header_in_config_order_when_multiple_exist():
-    from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
+    from litellm.auth.auth_utils import get_customer_user_header_from_mapping
 
     mappings = [
         {"header_name": "X-OpenWebUI-User-Id", "litellm_user_role": "internal_user"},
@@ -576,7 +576,7 @@ def test_get_customer_user_header_returns_customers_header_in_config_order_when_
 
 
 def test_get_end_user_id_returns_id_from_user_header_mappings():
-    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+    from litellm.auth.auth_utils import get_end_user_id_from_request_body
 
     mappings = [
         {"header_name": "x-openwebui-user-id", "litellm_user_role": "internal_user"},
@@ -600,7 +600,7 @@ def test_get_end_user_id_returns_id_from_user_header_mappings():
 
 
 def test_get_end_user_id_returns_first_customer_header_when_multiple_mappings_exist():
-    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+    from litellm.auth.auth_utils import get_end_user_id_from_request_body
 
     mappings = [
         {"header_name": "x-openwebui-user-id", "litellm_user_role": "internal_user"},
@@ -628,7 +628,7 @@ def test_get_end_user_id_returns_first_customer_header_when_multiple_mappings_ex
 
 
 def test_get_end_user_id_returns_none_when_no_customer_role_in_mappings():
-    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+    from litellm.auth.auth_utils import get_end_user_id_from_request_body
 
     mappings = [
         {"header_name": "x-openwebui-user-id", "litellm_user_role": "internal_user"},
@@ -651,7 +651,7 @@ def test_get_end_user_id_returns_none_when_no_customer_role_in_mappings():
 
 
 def test_get_end_user_id_falls_back_to_deprecated_user_header_name():
-    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+    from litellm.auth.auth_utils import get_end_user_id_from_request_body
 
     general_settings = {"user_header_name": "x-custom-user-id"}
     headers = {"x-custom-user-id": "user-legacy"}
@@ -674,17 +674,17 @@ class TestCoerceUserIdToStr:
     """Unit tests for the _coerce_user_id_to_str helper."""
 
     def test_plain_string_is_returned_verbatim(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         assert _coerce_user_id_to_str("alice@example.com") == "alice@example.com"
 
     def test_string_is_stripped(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         assert _coerce_user_id_to_str("  bob  ") == "bob"
 
     def test_codex_opaque_identifier_is_preserved(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         codex_id = (
             "user_8a4a360c36621665b341e06fb76041d9b6def732bb183eea148d4abc9d97c1de"
@@ -693,18 +693,18 @@ class TestCoerceUserIdToStr:
         assert _coerce_user_id_to_str(codex_id) == codex_id
 
     def test_none_returns_none(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         assert _coerce_user_id_to_str(None) is None
 
     def test_empty_string_returns_none(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         assert _coerce_user_id_to_str("") is None
         assert _coerce_user_id_to_str("   ") is None
 
     def test_dict_returns_none(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         payload = {
             "device_id": "abc",
@@ -714,7 +714,7 @@ class TestCoerceUserIdToStr:
         assert _coerce_user_id_to_str(payload) is None
 
     def test_list_returns_none(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         assert _coerce_user_id_to_str(["a", "b"]) is None
 
@@ -725,7 +725,7 @@ class TestCoerceUserIdToStr:
         intentionally pass JSON-encoded user identifiers keep working.
         """
         import litellm
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         blob = (
             '{"device_id":"d5abe9199ee7759a0558974e9371e78c7b38d7621aae26d6609c1de61af6afb0",'
@@ -740,7 +740,7 @@ class TestCoerceUserIdToStr:
 
     def test_json_encoded_dict_string_returns_none_when_validation_enabled(self):
         import litellm
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         # Same broken shape we saw in spend logs, but pre-stringified to JSON.
         blob = (
@@ -756,7 +756,7 @@ class TestCoerceUserIdToStr:
 
     def test_json_encoded_list_string_passes_through_by_default(self):
         import litellm
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         original = litellm.validate_end_user_id_in_db
         litellm.validate_end_user_id_in_db = False
@@ -767,7 +767,7 @@ class TestCoerceUserIdToStr:
 
     def test_json_encoded_list_string_returns_none_when_validation_enabled(self):
         import litellm
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         original = litellm.validate_end_user_id_in_db
         litellm.validate_end_user_id_in_db = True
@@ -777,12 +777,12 @@ class TestCoerceUserIdToStr:
             litellm.validate_end_user_id_in_db = original
 
     def test_int_returns_str(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         assert _coerce_user_id_to_str(12345) == "12345"
 
     def test_bool_returns_none(self):
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         # bool is an int subclass — reject explicitly, never produce "True"/"False".
         assert _coerce_user_id_to_str(True) is None
@@ -790,7 +790,7 @@ class TestCoerceUserIdToStr:
 
     def test_brace_string_that_isnt_json_is_kept(self):
         """A string starting with `{` but failing to parse stays as-is."""
-        from litellm.proxy.auth.auth_utils import _coerce_user_id_to_str
+        from litellm.auth.auth_utils import _coerce_user_id_to_str
 
         assert _coerce_user_id_to_str("{not json") == "{not json"
 
@@ -1848,7 +1848,7 @@ def test_model_level_allow_does_not_skip_subsequent_banned_params(monkeypatch):
     where that bypass matters: a body pairing a model-level-allowed
     ``api_base`` with an observability credential like ``langfuse_host``
     must still reject on the second field, not silently pass."""
-    from litellm.proxy.auth import auth_utils
+    from litellm.auth import auth_utils
 
     monkeypatch.setattr(
         auth_utils,
@@ -1881,7 +1881,7 @@ def test_observability_ban_covers_canonical_supported_callback_params():
         _request_blocked_callback_params,
         _supported_callback_params,
     )
-    from litellm.proxy.auth.auth_utils import (
+    from litellm.auth.auth_utils import (
         _BANNED_REQUEST_BODY_PARAMS,
         _SAFE_CLIENT_CALLBACK_PARAMS,
     )
@@ -1937,7 +1937,7 @@ class TestPricingInjectionBlocked:
         assert field in str(exc.value)
 
     def test_all_custom_pricing_fields_are_banned(self):
-        from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
+        from litellm.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
         from litellm.types.utils import CustomPricingLiteLLMParams
 
         banned = set(_BANNED_REQUEST_BODY_PARAMS)

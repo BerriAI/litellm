@@ -10,7 +10,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 import litellm
 from litellm.proxy._types import SpecialHeaders
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 # Cache the header name at module level to avoid repeated enum attribute access
 _AUTHORIZATION_HEADER = SpecialHeaders.openai_authorization.value  # "Authorization"

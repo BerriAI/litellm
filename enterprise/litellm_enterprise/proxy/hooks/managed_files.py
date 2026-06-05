@@ -789,7 +789,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         from litellm.llms.base_llm.managed_resources.utils import (
             extract_unified_uuid_from_unified_id,
         )
-        from litellm.proxy.auth.auth_checks import (
+        from litellm.auth.auth_checks import (
             get_managed_vector_store_rows_by_uuids,
         )
         from litellm.proxy.proxy_server import (

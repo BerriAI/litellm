@@ -24,7 +24,7 @@ sys.path.insert(
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app, initialize
 from litellm.utils import _invalidate_model_cost_lowercase_map
 
@@ -7001,7 +7001,7 @@ class _FakePrismaClient:
 def _update_config_setup(monkeypatch):
     """Install fakes for the /config/update endpoint and return (client, prisma)."""
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth as auth_dep
+    from litellm.auth.user_api_key_auth import user_api_key_auth as auth_dep
 
     def _install(initial_rows=None, store_model_in_db=True):
         prisma = _FakePrismaClient(initial_rows=initial_rows)

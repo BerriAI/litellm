@@ -34,7 +34,7 @@ async def resolve_ui_session_team_ids(
     ):
         return []
 
-    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.auth.auth_checks import get_user_object
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,

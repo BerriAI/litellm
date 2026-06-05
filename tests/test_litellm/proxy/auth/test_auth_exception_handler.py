@@ -26,7 +26,7 @@ sys.path.insert(
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
-from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
+from litellm.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 
 
 @pytest.mark.asyncio

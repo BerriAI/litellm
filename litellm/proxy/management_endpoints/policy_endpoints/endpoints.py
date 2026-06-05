@@ -30,7 +30,7 @@ from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code import (
     RESPONSE_REJECTION_GUARDRAIL_CODE,
     CustomCodeGuardrail,

@@ -7,10 +7,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.auth.user_api_key_auth import (
     _resolve_jwt_to_virtual_key,
 )
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.auth.handle_jwt import JWTHandler
 from litellm.proxy._types import (
     JWTKeyMappingResponse,
     LiteLLM_JWTAuth,
@@ -605,7 +605,7 @@ async def test_auto_register_returns_pending_signal_without_creating_key():
     would bypass every JWT policy beyond signature verification.
     """
     from litellm.proxy._types import UnregisteredJWTClientBehavior
-    from litellm.proxy.auth.user_api_key_auth import _PendingAutoRegister
+    from litellm.auth.user_api_key_auth import _PendingAutoRegister
 
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
@@ -652,7 +652,7 @@ async def test_auto_register_creates_key_and_mapping_when_helper_invoked():
     LiteLLM_VerificationToken), not the plaintext key.
     """
     from litellm.proxy._types import hash_token
-    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.auth.user_api_key_auth import _auto_register_jwt_mapping
 
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
@@ -720,7 +720,7 @@ async def test_auto_register_returns_pending_signal_on_stale_no_mapping_sentinel
     None and not create the key on the spot.
     """
     from litellm.proxy._types import UnregisteredJWTClientBehavior
-    from litellm.proxy.auth.user_api_key_auth import _PendingAutoRegister
+    from litellm.auth.user_api_key_auth import _PendingAutoRegister
 
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
@@ -773,7 +773,7 @@ async def test_auto_register_race_condition_unique_conflict():
       2) fall back to the winner's mapping,
       3) not surface an error.
     """
-    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.auth.user_api_key_auth import _auto_register_jwt_mapping
     from litellm.proxy._types import UnregisteredJWTClientBehavior, hash_token
 
     jwt_handler = JWTHandler()
@@ -1064,7 +1064,7 @@ async def test_auto_register_race_conflict_tolerates_delete_failure():
     (e.g. transient DB error), the request must still succeed by returning the
     winner's mapping — the orphan is unmapped and inert.
     """
-    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.auth.user_api_key_auth import _auto_register_jwt_mapping
     from litellm.proxy._types import UnregisteredJWTClientBehavior
 
     jwt_handler = JWTHandler()
@@ -1130,7 +1130,7 @@ async def test_auto_register_raises_503_when_winner_mapping_vanishes():
     AUTO_REGISTER policy). Must now raise HTTP 503 so the caller retries
     rather than getting unintended fallback access.
     """
-    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.auth.user_api_key_auth import _auto_register_jwt_mapping
     from litellm.proxy._types import UnregisteredJWTClientBehavior
 
     jwt_handler = JWTHandler()
@@ -1233,7 +1233,7 @@ async def test_auto_register_helper_stamps_validated_identity_context():
     them — the cached future-request path then inherits the same team/user/org
     limits the auth_builder path would have applied.
     """
-    from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
+    from litellm.auth.user_api_key_auth import _auto_register_jwt_mapping
 
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(

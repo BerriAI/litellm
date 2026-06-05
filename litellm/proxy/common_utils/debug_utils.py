@@ -14,7 +14,7 @@ from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PYTHON_GC_THRESHOLD
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 

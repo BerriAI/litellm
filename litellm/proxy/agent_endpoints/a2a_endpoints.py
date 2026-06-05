@@ -16,7 +16,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import all_litellm_params
 
 router = APIRouter()

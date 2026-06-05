@@ -252,25 +252,25 @@ from litellm.proxy._lazy_features import attach_lazy_features
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     ExperimentalUIJWTToken,
     get_team_object,
     log_db_metrics,
 )
-from litellm.proxy.auth.auth_utils import (
+from litellm.auth.auth_utils import (
     check_response_size_is_safe,
     is_request_body_safe,
 )
-from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.litellm_license import LicenseCheck
-from litellm.proxy.auth.model_checks import (
+from litellm.auth.handle_jwt import JWTHandler
+from litellm.auth.litellm_license import LicenseCheck
+from litellm.auth.model_checks import (
     get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
     get_mcp_server_ids,
     get_team_models,
 )
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.auth.user_api_key_auth import (
     _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
@@ -8265,7 +8265,7 @@ async def model_list(
             )
 
         # Get complete model list including wildcard routes if requested
-        from litellm.proxy.auth.model_checks import get_complete_model_list
+        from litellm.auth.model_checks import get_complete_model_list
 
         all_models = get_complete_model_list(
             key_models=[],
@@ -13046,7 +13046,7 @@ async def fallback_login(request: Request):
 )  # hidden since this is a helper for UI sso login
 async def login(request: Request):  # noqa: PLR0915
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
 
     form = await request.form()
@@ -13096,7 +13096,7 @@ async def login(request: Request):  # noqa: PLR0915
 )  # hidden helper for UI logins via API
 async def login_v2(request: Request):  # noqa: PLR0915
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -13171,7 +13171,7 @@ async def login_v2(request: Request):  # noqa: PLR0915
 )  # control-plane login — always returns token in body for cross-origin use
 async def login_v3(request: Request):  # noqa: PLR0915
     global premium_user, general_settings, master_key
-    from litellm.proxy.auth.login_utils import authenticate_user, create_ui_token_object
+    from litellm.auth.login_utils import authenticate_user, create_ui_token_object
     from litellm.proxy.utils import get_custom_url
 
     try:
@@ -15968,7 +15968,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
-        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+        from litellm.auth.ip_address_utils import IPAddressUtils
 
         client_ip = IPAddressUtils.get_mcp_client_ip(request)
 

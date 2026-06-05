@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     SSOUserDefinedValues,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_model,
     _can_object_call_vector_stores,
@@ -64,7 +64,7 @@ def reset_constants_module():
     import importlib
 
     from litellm import constants
-    from litellm.proxy.auth import auth_checks
+    from litellm.auth import auth_checks
 
     # Reload modules before test
     importlib.reload(constants)
@@ -253,7 +253,7 @@ def test_can_object_call_model_denials_return_forbidden(
 @pytest.mark.asyncio
 async def test_can_user_call_model_no_default_models_returns_forbidden():
     from litellm.proxy._types import SpecialModelNames
-    from litellm.proxy.auth.auth_checks import can_user_call_model
+    from litellm.auth.auth_checks import can_user_call_model
 
     user_object = LiteLLM_UserTable(
         user_id="test-user",
@@ -359,7 +359,7 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     import importlib
 
     from litellm import constants
-    from litellm.proxy.auth import auth_checks
+    from litellm.auth import auth_checks
 
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
@@ -802,7 +802,7 @@ async def test_vector_store_access_check_with_team_permissions():
 def test_can_object_call_model_with_alias():
     """Test that can_object_call_model works with model aliases"""
     from litellm import Router
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     model = "[ip-approved] gpt-4o"
     llm_router = Router(
@@ -846,7 +846,7 @@ def test_can_object_call_model_access_via_alias_only():
     - The call should succeed because access is granted via the alias
     """
     from litellm import Router
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     model = "my-fake-gpt"
     llm_router = Router(
@@ -892,7 +892,7 @@ def test_can_object_call_model_access_via_underlying_model_only():
     - The call should succeed because access is granted via the underlying model
     """
     from litellm import Router
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     model = "my-fake-gpt"
     llm_router = Router(
@@ -933,7 +933,7 @@ def test_can_object_call_model_no_access_to_alias_or_underlying():
     """
     from litellm import Router
     from litellm.proxy._types import ProxyErrorTypes, ProxyException
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     model = "my-fake-gpt"
     llm_router = Router(
@@ -1033,7 +1033,7 @@ def test_can_object_call_model_access_group_with_team_id():
     model_info.access_groups for team-scoped DB models and allow
     access via group name.
     """
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     router = _make_team_scoped_router()
 
@@ -1054,7 +1054,7 @@ def test_can_object_call_model_access_group_without_team_id_fails():
     This is the pre-fix behavior.
     """
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     router = _make_team_scoped_router()
 
@@ -1073,7 +1073,7 @@ def test_can_object_call_model_literal_name_with_team_id():
     Literal model name matching should still work when team_id is
     passed — no regression from adding team_id.
     """
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     router = _make_team_scoped_router()
 
@@ -1093,7 +1093,7 @@ def test_can_object_call_model_denied_model_with_team_id():
     still be denied even when team_id is passed.
     """
     from litellm.proxy._types import ProxyException
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     router = _make_team_scoped_router()
 
@@ -1112,7 +1112,7 @@ def test_can_object_call_model_second_group_member_with_team_id():
     Both models in the access group should be reachable, not just
     the first one.
     """
-    from litellm.proxy.auth.auth_checks import _can_object_call_model
+    from litellm.auth.auth_checks import _can_object_call_model
 
     router = _make_team_scoped_router()
 
@@ -1139,7 +1139,7 @@ async def test_check_team_member_model_access_with_access_group():
         LiteLLM_TeamTable,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+    from litellm.auth.auth_checks import _check_team_member_model_access
 
     router = _make_team_scoped_router()
     team = LiteLLM_TeamTable(team_id="team-a")
@@ -1181,7 +1181,7 @@ async def test_check_team_member_model_access_denied_model():
         ProxyException,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+    from litellm.auth.auth_checks import _check_team_member_model_access
 
     router = _make_team_scoped_router()
     team = LiteLLM_TeamTable(team_id="team-a")
@@ -1224,7 +1224,7 @@ async def test_check_team_member_model_access_no_override_inherits_team():
         LiteLLM_TeamTable,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.auth_checks import _check_team_member_model_access
+    from litellm.auth.auth_checks import _check_team_member_model_access
 
     router = _make_team_scoped_router()
     team = LiteLLM_TeamTable(team_id="team-a")
@@ -1263,7 +1263,7 @@ async def test_get_tag_objects_batch():
     - After fetching, uncached tags are cached
     """
     from litellm.proxy._types import LiteLLM_TagTable
-    from litellm.proxy.auth.auth_checks import get_tag_objects_batch
+    from litellm.auth.auth_checks import get_tag_objects_batch
 
     mock_prisma = MagicMock()
     mock_cache = MagicMock()
@@ -1397,7 +1397,7 @@ async def test_get_team_object_raises_404_when_not_found():
 
     from fastapi import HTTPException
 
-    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.auth.auth_checks import get_team_object
 
     mock_prisma_client = MagicMock()
     mock_db = AsyncMock()
@@ -1428,7 +1428,7 @@ async def test_reject_clientside_metadata_tags_enabled_with_tags():
     """Test that common_checks rejects request when reject_clientside_metadata_tags is True and metadata.tags is present."""
     from fastapi import Request
 
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     request_body = {
         "model": "gpt-3.5-turbo",
@@ -1470,7 +1470,7 @@ async def test_reject_clientside_metadata_tags_enabled_without_tags():
     """Test that common_checks allows request when reject_clientside_metadata_tags is True but no metadata.tags is present."""
     from fastapi import Request
 
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     request_body = {
         "model": "gpt-3.5-turbo",
@@ -1509,7 +1509,7 @@ async def test_reject_clientside_metadata_tags_disabled_with_tags():
     """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is False."""
     from fastapi import Request
 
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     request_body = {
         "model": "gpt-3.5-turbo",
@@ -1548,7 +1548,7 @@ async def test_reject_clientside_metadata_tags_not_set_with_tags():
     """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is not set."""
     from fastapi import Request
 
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     request_body = {
         "model": "gpt-3.5-turbo",
@@ -1587,7 +1587,7 @@ async def test_reject_clientside_metadata_tags_non_llm_route():
     """Test that reject_clientside_metadata_tags check only applies to LLM API routes."""
     from fastapi import Request
 
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     request_body = {
         "metadata": {"tags": ["custom-tag"]},
@@ -1632,7 +1632,7 @@ async def test_reject_clientside_metadata_tags_allows_key_tags_without_client_ta
     """
     from fastapi import Request
 
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     request_body = {
         "model": "gpt-3.5-turbo",
@@ -2201,7 +2201,7 @@ async def test_custom_auth_common_checks_opt_in():
     the pre-existing RPS guarantee for custom-auth hot paths.
     """
     import litellm.proxy.proxy_server as _proxy_server_mod
-    from litellm.proxy.auth.user_api_key_auth import _run_centralized_common_checks
+    from litellm.auth.user_api_key_auth import _run_centralized_common_checks
 
     valid_token = UserAPIKeyAuth(token="test-token", user_id="u1")
     mock_request = MagicMock()
@@ -2477,7 +2477,7 @@ class TestGuardrailModificationCheck:
     """
 
     def _call(self, request_body):
-        from litellm.proxy.auth.auth_checks import _guardrail_modification_check
+        from litellm.auth.auth_checks import _guardrail_modification_check
 
         team_object = MagicMock()
         team_object.metadata = {}  # no permission
@@ -3101,7 +3101,7 @@ def _validation_cache():
 
 def _patch_validation_helpers(monkeypatch, *, end_user=None, user=None, fuzzy=None):
     """Stub out the DB helpers resolve_and_validate_end_user_id delegates to."""
-    from litellm.proxy.auth import auth_checks
+    from litellm.auth import auth_checks
 
     monkeypatch.setattr(
         auth_checks, "get_end_user_object", AsyncMock(return_value=end_user)
@@ -3116,7 +3116,7 @@ def _patch_validation_helpers(monkeypatch, *, end_user=None, user=None, fuzzy=No
 async def test_resolve_end_user_returns_none_for_none_input(
     _validate_flag_on, monkeypatch
 ):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch)
     cache = _validation_cache()
@@ -3134,7 +3134,7 @@ async def test_resolve_end_user_returns_none_for_none_input(
 async def test_resolve_end_user_passes_through_when_flag_disabled(monkeypatch):
     """Default behaviour: flag is off, arbitrary ids pass through untouched."""
     import litellm
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     monkeypatch.setattr(litellm, "validate_end_user_id_in_db", False)
     _patch_validation_helpers(monkeypatch)
@@ -3153,7 +3153,7 @@ async def test_resolve_end_user_passes_through_when_flag_disabled(monkeypatch):
 async def test_resolve_end_user_passes_through_when_no_prisma_client(
     _validate_flag_on, monkeypatch
 ):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch)
     cache = _validation_cache()
@@ -3168,7 +3168,7 @@ async def test_resolve_end_user_passes_through_when_no_prisma_client(
 
 @pytest.mark.asyncio
 async def test_resolve_end_user_matches_end_user_table(_validate_flag_on, monkeypatch):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch, end_user=MagicMock())
     cache = _validation_cache()
@@ -3189,8 +3189,8 @@ async def test_resolve_end_user_matches_end_user_table(_validate_flag_on, monkey
 async def test_resolve_end_user_matches_user_table_by_user_id(
     _validate_flag_on, monkeypatch
 ):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth import auth_checks
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch, user=MagicMock())
     cache = _validation_cache()
@@ -3215,8 +3215,8 @@ async def test_resolve_end_user_matches_user_table_by_email(
     _should_check_db throttle and user_api_key_cache — no direct raw
     Prisma calls on the auth path.
     """
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth import auth_checks
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch, user=MagicMock())
     cache = _validation_cache()
@@ -3240,8 +3240,8 @@ async def test_resolve_end_user_non_email_id_does_not_pass_user_email(
     _validate_flag_on, monkeypatch
 ):
     """Non-email ids skip the email fuzzy path to avoid a pointless DB hit."""
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth import auth_checks
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch, user=MagicMock())
     cache = _validation_cache()
@@ -3260,7 +3260,7 @@ async def test_resolve_end_user_non_email_id_does_not_pass_user_email(
 async def test_resolve_end_user_drops_codex_opaque_identifier(
     _validate_flag_on, monkeypatch
 ):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch)  # all helpers return None
     cache = _validation_cache()
@@ -3290,7 +3290,7 @@ async def test_resolve_end_user_preserves_id_when_default_budget_configured(
     but not found in the db — dropping the id here would bypass those limits.
     """
     import litellm
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     monkeypatch.setattr(litellm, "max_end_user_budget_id", "default-budget")
     _patch_validation_helpers(monkeypatch)
@@ -3306,7 +3306,7 @@ async def test_resolve_end_user_preserves_id_when_default_budget_configured(
 
 @pytest.mark.asyncio
 async def test_resolve_end_user_drops_unknown_email(_validate_flag_on, monkeypatch):
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch)
     cache = _validation_cache()
@@ -3323,8 +3323,8 @@ async def test_resolve_end_user_drops_unknown_email(_validate_flag_on, monkeypat
 async def test_resolve_end_user_uses_cached_valid_result(
     _validate_flag_on, monkeypatch
 ):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth import auth_checks
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch)
     cache = _validation_cache()
@@ -3345,8 +3345,8 @@ async def test_resolve_end_user_uses_cached_valid_result(
 async def test_resolve_end_user_uses_cached_invalid_result(
     _validate_flag_on, monkeypatch
 ):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth import auth_checks
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     _patch_validation_helpers(monkeypatch, end_user=MagicMock())
     cache = _validation_cache()
@@ -3366,8 +3366,8 @@ async def test_resolve_end_user_uses_cached_invalid_result(
 async def test_resolve_end_user_swallows_db_errors_and_returns_none(
     _validate_flag_on, monkeypatch
 ):
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth import auth_checks
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     monkeypatch.setattr(
         auth_checks,
@@ -3407,8 +3407,8 @@ async def test_resolve_end_user(
     resolve_and_validate_end_user_id does not block the request - budget enforcement
     is deferred to common_checks() where skip_budget_checks logic can be applied.
     """
-    from litellm.proxy.auth import auth_checks
-    from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
+    from litellm.auth import auth_checks
+    from litellm.auth.auth_checks import resolve_and_validate_end_user_id
 
     # Mock get_end_user_object to return a user with budget info
     # (simulating a user who may have exceeded their budget)
@@ -3460,7 +3460,7 @@ async def test_cache_team_object_writes_team_id_and_invalidates_team_alias():
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import _cache_team_object
+    from litellm.auth.auth_checks import _cache_team_object
 
     base_team_row = {
         "team_id": "team-1234",
@@ -3545,7 +3545,7 @@ MODEL_DISCOVERY_ROUTES = [
 async def test_model_discovery_route_bypasses_team_budget(route):
     """Regression for #27923: an exhausted team budget must not block model-discovery routes,
     otherwise OpenAI-compatible clients calling GET /v1/models at startup break."""
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
 
@@ -3569,7 +3569,7 @@ async def test_model_discovery_route_bypasses_team_budget(route):
 @pytest.mark.asyncio
 async def test_model_discovery_route_bypasses_user_budget():
     """Regression for #27923: an exhausted user budget must not block model discovery."""
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     user_object = LiteLLM_UserTable(user_id="test-user", spend=100.0, max_budget=50.0)
 
@@ -3595,7 +3595,7 @@ async def test_side_effectful_info_route_still_enforces_budget():
     """#27923 keeps the bypass narrow: /health/services can fire Slack/email/webhook test
     messages, so an exhausted budget must still block it. Widening the exemption back to
     is_info_route() would regress this."""
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
 
@@ -3618,7 +3618,7 @@ async def test_side_effectful_info_route_still_enforces_budget():
 @pytest.mark.asyncio
 async def test_inference_route_still_enforces_team_budget():
     """Control for #27923: inference routes stay fully budget-enforced."""
-    from litellm.proxy.auth.auth_checks import common_checks
+    from litellm.auth.auth_checks import common_checks
 
     team_object = LiteLLM_TeamTable(team_id="test-team", spend=150.0, max_budget=100.0)
 

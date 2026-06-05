@@ -10,7 +10,7 @@ See: https://github.com/BerriAI/litellm/issues/24770
 import copy
 
 import litellm
-from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+from litellm.auth.auth_checks import _is_model_cost_zero
 from litellm.router import Router
 
 

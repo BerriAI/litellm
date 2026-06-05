@@ -159,7 +159,7 @@ def test_route_normalization_for_responses_api():
 
     Fix: Routes are normalized to collapse dynamic IDs into placeholders.
     """
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.auth.auth_utils import normalize_request_route
 
     # Test responses API routes
     responses_routes = [
@@ -191,7 +191,7 @@ def test_route_normalization_for_responses_api():
 
 def test_route_normalization_for_sub_routes():
     """Test that sub-routes like /cancel and /input_items are normalized correctly"""
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.auth.auth_utils import normalize_request_route
 
     sub_routes = [
         ("/v1/responses/id1/cancel", "/v1/responses/{response_id}/cancel"),
@@ -214,7 +214,7 @@ def test_route_normalization_for_sub_routes():
 
 def test_route_normalization_preserves_static_routes():
     """Test that static routes are not affected by normalization"""
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.auth.auth_utils import normalize_request_route
 
     static_routes = [
         "/chat/completions",
@@ -237,7 +237,7 @@ def test_route_normalization_preserves_static_routes():
 
 def test_route_normalization_other_dynamic_apis():
     """Test normalization for other OpenAI-compatible APIs with dynamic IDs"""
-    from litellm.proxy.auth.auth_utils import normalize_request_route
+    from litellm.auth.auth_utils import normalize_request_route
 
     test_cases = [
         # Threads API

@@ -64,7 +64,7 @@ _MOCK_PRISMA = MagicMock()
 
 class TestToolManagementEndpoints:
     def setup_method(self):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         app = _make_app()
         app.dependency_overrides[user_api_key_auth] = _override_auth

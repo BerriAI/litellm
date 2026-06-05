@@ -9,14 +9,14 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     _cache_access_object,
     _cache_key_object,
     _cache_team_object,
     _delete_cache_access_object,
     _get_team_object_from_cache,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import get_prisma_client_or_throw
 from litellm.types.access_group import (

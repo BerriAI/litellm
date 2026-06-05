@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.auth.user_api_key_auth import (
     _enforce_key_and_fallback_model_access,
     iter_router_fallback_model_names,
 )

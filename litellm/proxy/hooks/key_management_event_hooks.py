@@ -412,7 +412,7 @@ class KeyManagementEventHooks:
             return None
 
         try:
-            from litellm.proxy.auth.auth_checks import get_team_object
+            from litellm.auth.auth_checks import get_team_object
 
             team_obj = await get_team_object(
                 team_id=team_id,

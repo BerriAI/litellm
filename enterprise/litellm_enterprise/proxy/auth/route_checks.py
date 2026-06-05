@@ -50,7 +50,7 @@ class EnterpriseRouteChecks:
         """
         Check if management route is disabled and raise exception
         """
-        from litellm.proxy.auth.route_checks import RouteChecks
+        from litellm.auth.route_checks import RouteChecks
 
         if (
             RouteChecks.is_management_route(route=route)

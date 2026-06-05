@@ -12,12 +12,12 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     get_key_object,
     get_team_object,
     log_db_metrics,
 )
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.route_checks import RouteChecks
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.spend_log_error_logger import (
     should_suppress_spend_log_tracebacks,

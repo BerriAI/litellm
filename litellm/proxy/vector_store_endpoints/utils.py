@@ -116,7 +116,7 @@ async def _get_object_permission_for_id(
     if not object_permission_id:
         return None
 
-    from litellm.proxy.auth.auth_checks import get_object_permission
+    from litellm.auth.auth_checks import get_object_permission
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,
@@ -228,7 +228,7 @@ async def get_litellm_managed_vector_store(
             ) from e
 
     try:
-        from litellm.proxy.auth.auth_checks import (
+        from litellm.auth.auth_checks import (
             get_managed_vector_store_rows_by_uuids,
         )
         from litellm.proxy.proxy_server import (
@@ -390,7 +390,7 @@ def is_allowed_to_call_vector_store_endpoint(
     )
 
     # Inline import — auth_utils participates in a proxy import cycle.
-    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+    from litellm.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     request_route = get_request_route(request)
 
@@ -480,7 +480,7 @@ def is_allowed_to_call_vector_store_files_endpoint(
     )
 
     # Inline import — auth_utils participates in a proxy import cycle.
-    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+    from litellm.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     request_route = get_request_route(request)
 

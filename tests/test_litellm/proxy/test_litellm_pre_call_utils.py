@@ -4124,7 +4124,7 @@ class TestApplyClientTagPolicyPreAuth:
         """Regression: string metadata containing an over-budget tag must not
         be silently overwritten when an x-litellm-tags header is present."""
         from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
-        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.auth.auth_checks import _tag_max_budget_check
         from litellm.proxy.utils import ProxyLogging
 
         request_mock = _build_request_mock_with_headers({"x-litellm-tags": "free"})
@@ -4182,7 +4182,7 @@ class TestApplyClientTagPolicyPreAuth:
         """End-to-end: helper + ``_tag_max_budget_check`` enforces budget on
         header-supplied tags. Without the helper, this would silently pass."""
         from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
-        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.auth.auth_checks import _tag_max_budget_check
         from litellm.proxy.utils import ProxyLogging
 
         request_mock = _build_request_mock_with_headers(
@@ -4341,7 +4341,7 @@ class TestApplyKeyTagsPreAuth:
     @pytest.mark.asyncio
     async def test_key_tags_visible_to_tag_max_budget_check(self):
         from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
-        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.auth.auth_checks import _tag_max_budget_check
         from litellm.proxy.utils import ProxyLogging
 
         data = {"model": "gpt-3.5-turbo"}
@@ -4392,7 +4392,7 @@ class TestApplyKeyTagsPreAuth:
     @pytest.mark.asyncio
     async def test_key_tags_within_budget_passes_check(self):
         from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_TagTable
-        from litellm.proxy.auth.auth_checks import _tag_max_budget_check
+        from litellm.auth.auth_checks import _tag_max_budget_check
         from litellm.proxy.utils import ProxyLogging
 
         data = {"model": "gpt-3.5-turbo"}

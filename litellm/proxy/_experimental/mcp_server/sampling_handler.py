@@ -706,7 +706,7 @@ async def _check_model_access(  # noqa: PLR0915
 
     try:
         import litellm
-        from litellm.proxy.auth.auth_checks import (
+        from litellm.auth.auth_checks import (
             can_key_call_model,
             can_team_access_model,
             can_user_call_model,
@@ -845,7 +845,7 @@ async def _run_budget_checks(
     Returns None if all checks pass, or an ErrorData describing the denial.
     """
     try:
-        from litellm.proxy.auth.auth_checks import common_checks
+        from litellm.auth.auth_checks import common_checks
         from litellm.proxy.proxy_server import (
             general_settings,
             llm_router as _llm_router,
@@ -853,7 +853,7 @@ async def _run_budget_checks(
             proxy_logging_obj as _proxy_logging_obj,
             user_api_key_cache as _user_api_key_cache,
         )
-        from litellm.proxy.auth.auth_checks import (
+        from litellm.auth.auth_checks import (
             get_team_object,
             get_user_object,
         )
@@ -902,7 +902,7 @@ async def _run_budget_checks(
     # This mirrors the RouteChecks.should_call_route gate that runs in
     # user_api_key_auth before common_checks for regular requests.
     try:
-        from litellm.proxy.auth.route_checks import RouteChecks
+        from litellm.auth.route_checks import RouteChecks
 
         RouteChecks.should_call_route(
             route="/chat/completions",

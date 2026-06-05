@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.proxy._types import LiteLLM_BudgetTable, LiteLLM_EndUserTable
-from litellm.proxy.auth.auth_checks import get_end_user_object
+from litellm.auth.auth_checks import get_end_user_object
 from litellm.caching import DualCache
 
 
@@ -140,7 +140,7 @@ async def test_budget_enforcement_blocks_over_budget_users():
     Note: Budget enforcement happens in common_checks() via _check_end_user_budget(),
     not in get_end_user_object(). get_end_user_object only fetches the user data.
     """
-    from litellm.proxy.auth.auth_checks import _check_end_user_budget
+    from litellm.auth.auth_checks import _check_end_user_budget
     
     end_user_id = f"test_user_{uuid.uuid4().hex}"
     default_budget_id = str(uuid.uuid4())

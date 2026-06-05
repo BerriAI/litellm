@@ -26,7 +26,7 @@ def _build_agents_client():
     from fastapi.testclient import TestClient
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.google_endpoints.agents_endpoints import router as agents_router
 
     app = FastAPI()

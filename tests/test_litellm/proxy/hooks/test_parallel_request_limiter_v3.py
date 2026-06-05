@@ -730,7 +730,7 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
     """
     Test that model-specific rate limits only trigger should_rate_limit when actually configured for the requested model.
     """
-    from litellm.proxy.auth.auth_utils import (
+    from litellm.auth.auth_utils import (
         get_key_model_rpm_limit,
         get_key_model_tpm_limit,
     )
@@ -3095,7 +3095,7 @@ async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
 
 
 def test_get_key_mcp_rpm_limit_precedence():
-    from litellm.proxy.auth.auth_utils import (
+    from litellm.auth.auth_utils import (
         get_key_mcp_rpm_limit,
         get_team_mcp_rpm_limit,
     )

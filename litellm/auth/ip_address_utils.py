@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Union
 from fastapi import Request
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.auth_utils import _get_request_ip_address
+from litellm.auth.auth_utils import _get_request_ip_address
 
 # One-shot warning so operators upgrading from the prior "always trust X-Forwarded-*"
 # behaviour see an actionable message in their logs the first time it triggers.

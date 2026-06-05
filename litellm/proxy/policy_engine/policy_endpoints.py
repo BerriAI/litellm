@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry

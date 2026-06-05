@@ -26,7 +26,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper

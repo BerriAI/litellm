@@ -46,8 +46,8 @@ from litellm.proxy._types import (
     TeamMemberAddRequest,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import can_team_access_model
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.auth_checks import can_team_access_model
+from litellm.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 

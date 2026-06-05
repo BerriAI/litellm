@@ -442,7 +442,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
         ProxyException,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import hash_token, user_api_key_cache
 
     _team_id = "1234"
@@ -1050,7 +1050,7 @@ async def test_team_update_redis():
     """
     from litellm.caching.caching import DualCache, RedisCache
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
-    from litellm.proxy.auth.auth_checks import _cache_team_object
+    from litellm.auth.auth_checks import _cache_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"
@@ -1079,7 +1079,7 @@ async def test_get_team_redis(client_no_auth):
     Tests if get_team_object gets value from redis cache, if set
     """
     from litellm.caching.caching import DualCache, RedisCache
-    from litellm.proxy.auth.auth_checks import get_team_object
+    from litellm.auth.auth_checks import get_team_object
 
     proxy_logging_obj: ProxyLogging = getattr(
         litellm.proxy.proxy_server, "proxy_logging_obj"

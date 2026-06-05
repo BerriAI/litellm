@@ -283,7 +283,7 @@ class PrismaWrapper:
         if not self.iam_token_db_auth:
             return None
 
-        from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
+        from litellm.auth.rds_iam_token import generate_iam_auth_token
 
         if self._iam_endpoint is not None:
             endpoint = self._iam_endpoint

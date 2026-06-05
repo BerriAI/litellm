@@ -37,7 +37,7 @@ from litellm.proxy._types import (
     LiteLLMRoutes,
     JWTAuthBuilderResult,
 )
-from litellm.proxy.auth.handle_jwt import JWTHandler, JWTAuthManager
+from litellm.auth.handle_jwt import JWTHandler, JWTAuthManager
 from litellm.proxy.management_endpoints.team_endpoints import new_team
 from litellm.proxy.proxy_server import chat_completion
 from typing import Literal, Optional
@@ -1054,7 +1054,7 @@ async def test_allow_access_by_email(
 
 def test_get_public_key_from_jwk_url():
     import litellm
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     jwt_handler = JWTHandler()
 
@@ -1081,7 +1081,7 @@ def test_get_public_key_from_jwk_url():
 @pytest.mark.asyncio
 async def test_end_user_jwt_auth(monkeypatch):
     import litellm
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth
     from litellm.proxy.proxy_server import user_api_key_auth
@@ -1254,7 +1254,7 @@ async def test_end_user_jwt_auth(monkeypatch):
 
 
 def test_can_rbac_role_call_route():
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.auth.handle_jwt import JWTAuthManager
     from litellm.proxy._types import RoleBasedPermissions
     from litellm.proxy._types import LitellmUserRoles
 
@@ -1281,7 +1281,7 @@ def test_user_api_key_auth_jwt_hashing():
     Critical: This was a security fix for users
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     # Test with a JWT token (3 parts separated by dots)
     jwt_token = "test-jwt-token-header.payload.signature"
@@ -1317,7 +1317,7 @@ def test_jwt_handler_is_jwt_static_method():
     """
     Test that JWTHandler.is_jwt is a static method and works correctly
     """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+    from litellm.auth.handle_jwt import JWTHandler
 
     # Test with valid JWT format
     valid_jwt = "test-jwt-token-header.payload.signature"
@@ -1346,7 +1346,7 @@ def test_jwt_handler_is_jwt_static_method():
     ],
 )
 def test_check_scope_based_access(requested_model, should_work):
-    from litellm.proxy.auth.handle_jwt import JWTAuthManager
+    from litellm.auth.handle_jwt import JWTAuthManager
     from litellm.proxy._types import ScopeMapping
 
     args = {

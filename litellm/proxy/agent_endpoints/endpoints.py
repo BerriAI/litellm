@@ -20,7 +20,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.a2a.agent_card import merge_agent_card
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
 from litellm.types.agents import (

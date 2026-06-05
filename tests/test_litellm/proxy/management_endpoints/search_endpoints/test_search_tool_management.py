@@ -58,7 +58,7 @@ async def test_list_search_tools_db_only(monkeypatch):
             mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
-                from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+                from litellm.auth.user_api_key_auth import user_api_key_auth
 
                 app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -123,7 +123,7 @@ async def test_list_search_tools_config_only(monkeypatch):
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
-                from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+                from litellm.auth.user_api_key_auth import user_api_key_auth
 
                 app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -199,7 +199,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
-                from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+                from litellm.auth.user_api_key_auth import user_api_key_auth
 
                 app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -308,7 +308,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
             mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
-                from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+                from litellm.auth.user_api_key_auth import user_api_key_auth
 
                 app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -407,7 +407,7 @@ async def test_list_search_tools_config_error_handling(monkeypatch):
             )
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
-                from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+                from litellm.auth.user_api_key_auth import user_api_key_auth
 
                 app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -438,7 +438,7 @@ async def test_list_search_tools_config_error_handling(monkeypatch):
 async def test_list_search_tools_no_prisma_client(monkeypatch):
     """Test error handling when prisma_client is None"""
     with patch("litellm.proxy.proxy_server.prisma_client", None):
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -528,7 +528,7 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
             mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
-                from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+                from litellm.auth.user_api_key_auth import user_api_key_auth
 
                 app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
                     user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user"
@@ -670,7 +670,7 @@ def _scoping_db_tools():
 
 @contextlib.contextmanager
 def _override_auth(user):
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     app.dependency_overrides[user_api_key_auth] = lambda: user
     try:

@@ -27,10 +27,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     JWTRoutingOverride,
 )
-from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
-from litellm.proxy.auth.route_checks import RouteChecks
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.auth.handle_jwt import JWTHandler
+from litellm.auth.auth_checks import get_key_object, _cache_key_object
+from litellm.auth.route_checks import RouteChecks
+from litellm.auth.user_api_key_auth import (
     _PendingAutoRegister,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
@@ -354,7 +354,7 @@ async def test_user_custom_auth_skips_post_custom_auth_checks_by_default():
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-custom-auth-trusted",
@@ -412,7 +412,7 @@ async def test_user_custom_auth_runs_post_custom_auth_checks_when_opt_in():
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-custom-auth-trusted",
@@ -469,7 +469,7 @@ async def test_enterprise_custom_auth_skips_post_custom_auth_checks_by_default()
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-enterprise-custom-auth-trusted",
@@ -532,7 +532,7 @@ async def test_enterprise_custom_auth_runs_post_custom_auth_checks_when_opt_in()
     import litellm
     import litellm.proxy.proxy_server as _proxy_server_mod
     from litellm.proxy._types import LitellmUserRoles
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
 
     trusted_token = UserAPIKeyAuth(
         api_key="sk-enterprise-custom-auth-trusted",
@@ -1010,7 +1010,7 @@ async def test_proxy_admin_expired_key_from_cache():
         ProxyException,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     # Create an expired PROXY_ADMIN key
@@ -1143,7 +1143,7 @@ async def test_scim_deactivated_user_key_is_rejected():
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.proxy_server import hash_token
 
     api_key = "sk-scim-deactivated-user-key"
@@ -1237,7 +1237,7 @@ async def test_return_user_api_key_auth_obj_user_spend_and_budget():
     from datetime import datetime
 
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    from litellm.auth.user_api_key_auth import _return_user_api_key_auth_obj
 
     user_obj = type(
         "LiteLLM_UserTable",
@@ -2340,7 +2340,7 @@ async def test_user_api_key_auth_builder_no_blocking_calls():
     from starlette.requests import Request
 
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
 
     _blocking_methods = [
         "set_cache",
@@ -2476,7 +2476,7 @@ async def test_team_metadata_refreshed_from_team_object_during_auth():
         LitellmUserRoles,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
 
     api_key = "sk-test-team-metadata-refresh"
 
@@ -2748,7 +2748,7 @@ async def test_centralized_common_checks_tolerates_db_errors_when_fetching_conte
     from fastapi import Request
     from starlette.datastructures import URL
 
-    from litellm.proxy.auth.auth_exception_handler import (
+    from litellm.auth.auth_exception_handler import (
         DB_UNAVAILABLE_FALLBACK_USER_ID,
     )
 
@@ -3395,7 +3395,7 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
     from starlette.datastructures import URL
 
     from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
-    from litellm.proxy.auth.user_api_key_auth import _user_api_key_auth_builder
+    from litellm.auth.user_api_key_auth import _user_api_key_auth_builder
     from litellm.proxy.utils import hash_token
 
     import litellm.proxy.proxy_server as _proxy_server_mod

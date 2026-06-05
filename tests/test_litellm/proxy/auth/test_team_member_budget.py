@@ -15,7 +15,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import common_checks, get_team_membership
+from litellm.auth.auth_checks import common_checks, get_team_membership
 
 
 @pytest.mark.asyncio

@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 import litellm
-from litellm.proxy.auth.user_api_key_auth import (
+from litellm.auth.user_api_key_auth import (
     _run_post_custom_auth_checks,
     update_valid_token_with_end_user_params,
 )

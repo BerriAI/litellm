@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 import litellm
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.litellm_pre_call_utils import _get_dynamic_logging_metadata
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (

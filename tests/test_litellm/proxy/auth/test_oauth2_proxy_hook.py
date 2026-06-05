@@ -23,7 +23,7 @@ from starlette.datastructures import Headers
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from litellm.proxy._types import LitellmUserRoles
-from litellm.proxy.auth.oauth2_proxy_hook import (
+from litellm.auth.oauth2_proxy_hook import (
     ALLOWED_OAUTH2_PROXY_FIELDS,
     handle_oauth2_proxy_request,
 )

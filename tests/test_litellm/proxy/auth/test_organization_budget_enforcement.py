@@ -26,7 +26,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import common_checks
+from litellm.auth.auth_checks import common_checks
 from litellm.proxy.utils import ProxyLogging
 
 

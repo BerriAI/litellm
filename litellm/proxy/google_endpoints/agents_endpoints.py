@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,

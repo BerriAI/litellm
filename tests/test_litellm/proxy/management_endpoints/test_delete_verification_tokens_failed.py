@@ -21,7 +21,7 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     LitellmUserRoles,
 )
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
 )

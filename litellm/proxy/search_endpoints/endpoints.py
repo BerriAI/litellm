@@ -6,7 +6,7 @@ from fastapi.responses import ORJSONResponse
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 
 router = APIRouter()
@@ -137,7 +137,7 @@ async def search(
         search_tool_name_value = data["search_tool_name"]
 
         # Authorization check: verify key can access this search tool
-        from litellm.proxy.auth.auth_checks import (
+        from litellm.auth.auth_checks import (
             can_key_call_search_tool,
             can_team_call_search_tool,
             get_team_object,

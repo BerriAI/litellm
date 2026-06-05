@@ -26,7 +26,7 @@ from pydantic import BaseModel
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 
 router = APIRouter()
 

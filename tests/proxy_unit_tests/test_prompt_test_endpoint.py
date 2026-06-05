@@ -151,7 +151,7 @@ User: Hello"""
             PromptManager,
             PromptTemplate,
         )
-        from litellm.proxy.auth.auth_utils import is_request_body_safe
+        from litellm.auth.auth_utils import is_request_body_safe
 
         malicious_frontmatter = {
             "model": "gpt-4o",

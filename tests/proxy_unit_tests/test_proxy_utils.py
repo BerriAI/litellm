@@ -19,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import litellm
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.auth_utils import (
+from litellm.auth.auth_utils import (
     check_complete_credentials,
     is_request_body_safe,
 )
@@ -1042,7 +1042,7 @@ def test_enforced_params_check(
 def test_get_key_models():
     from collections import defaultdict
 
-    from litellm.proxy.auth.model_checks import get_key_models
+    from litellm.auth.model_checks import get_key_models
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
@@ -1067,7 +1067,7 @@ def test_get_key_models():
 def test_get_team_models():
     from collections import defaultdict
 
-    from litellm.proxy.auth.model_checks import get_team_models
+    from litellm.auth.model_checks import get_team_models
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key="test_api_key",
@@ -1197,7 +1197,7 @@ def test_get_complete_model_list(proxy_model_list, model_list, provider):
     Test that get_complete_model_list correctly expands model groups like 'openai/*' into individual models with provider prefixes
     """
     from litellm import Router
-    from litellm.proxy.auth.model_checks import get_complete_model_list
+    from litellm.auth.model_checks import get_complete_model_list
 
     llm_router = Router(model_list=model_list)
 
@@ -1716,7 +1716,7 @@ def test_get_temp_budget_increase():
     from datetime import datetime, timedelta
 
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import _get_temp_budget_increase
+    from litellm.auth.user_api_key_auth import _get_temp_budget_increase
 
     expiry = datetime.now() + timedelta(days=1)
     expiry_in_isoformat = expiry.isoformat()
@@ -1736,7 +1736,7 @@ def test_update_key_budget_with_temp_budget_increase():
     from datetime import datetime, timedelta
 
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.user_api_key_auth import (
+    from litellm.auth.user_api_key_auth import (
         _update_key_budget_with_temp_budget_increase,
     )
 
@@ -2058,7 +2058,7 @@ from litellm.proxy._types import LiteLLM_UserTable
 def test_get_known_models_from_wildcard(
     wildcard_model, litellm_params, expected_models
 ):
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.auth.model_checks import get_known_models_from_wildcard
     from litellm.types.router import LiteLLM_Params
 
     wildcard_models = get_known_models_from_wildcard(
@@ -2078,7 +2078,7 @@ def test_get_known_models_from_wildcard_without_litellm_params():
     Test wildcard expansion without litellm_params (BYOK case - team has openai/*
     but no deployment in router config).
     """
-    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.auth.model_checks import get_known_models_from_wildcard
 
     wildcard_models = get_known_models_from_wildcard(
         wildcard_model="openai/*", litellm_params=None

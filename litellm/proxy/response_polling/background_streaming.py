@@ -15,7 +15,7 @@ from typing import Any, Optional, cast
 from fastapi import Request, Response
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.response_polling.polling_handler import ResponsePollingHandler
 from litellm.types.llms.openai import ResponsesAPIStatus

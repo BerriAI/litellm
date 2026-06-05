@@ -16,7 +16,7 @@ sys.path.insert(
 
 import litellm
 from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
-from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
@@ -4827,7 +4827,7 @@ class TestSSOReadinessEndpoint:
         from fastapi.testclient import TestClient
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
 
         mock_user_auth = UserAPIKeyAuth(
@@ -4856,7 +4856,7 @@ class TestSSOReadinessEndpoint:
         from fastapi.testclient import TestClient
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
 
         mock_user_auth = UserAPIKeyAuth(
@@ -4893,7 +4893,7 @@ class TestSSOReadinessEndpoint:
         from fastapi.testclient import TestClient
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
 
         mock_user_auth = UserAPIKeyAuth(
@@ -4954,7 +4954,7 @@ class TestSSOReadinessEndpoint:
         from fastapi.testclient import TestClient
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
 
         mock_user_auth = UserAPIKeyAuth(
@@ -5024,7 +5024,7 @@ class TestSSOReadinessEndpoint:
         from fastapi.testclient import TestClient
 
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
         from litellm.proxy.proxy_server import app
 
         mock_user_auth = UserAPIKeyAuth(

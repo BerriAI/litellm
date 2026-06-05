@@ -20,7 +20,7 @@ from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
     build_sandbox_globals,
@@ -770,7 +770,7 @@ def _parse_json_field(value: Any) -> Optional[Dict[str, Any]]:
 
 async def _get_user_team_ids(user_api_key_dict: UserAPIKeyAuth) -> List[str]:
     """Return the list of team_ids the caller belongs to (empty list if none)."""
-    from litellm.proxy.auth.auth_checks import get_user_object
+    from litellm.auth.auth_checks import get_user_object
     from litellm.proxy.proxy_server import (
         prisma_client,
         proxy_logging_obj,

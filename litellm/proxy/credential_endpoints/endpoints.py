@@ -11,7 +11,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.types.utils import CreateCredentialItem, CredentialItem

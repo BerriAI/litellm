@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath("../../.."))
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,

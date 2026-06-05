@@ -21,7 +21,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.auth_checks import (
+from litellm.auth.auth_checks import (
     _check_team_member_budget,
     _is_model_cost_zero,
     _team_max_budget_check,

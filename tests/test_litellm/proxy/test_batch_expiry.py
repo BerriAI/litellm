@@ -15,7 +15,7 @@ sys.path.insert(
 import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router

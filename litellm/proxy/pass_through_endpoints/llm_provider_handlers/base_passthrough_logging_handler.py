@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.litellm_logging import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig
 from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
-from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+from litellm.auth.auth_utils import get_end_user_id_from_request_body
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     PassthroughStandardLoggingPayload,
 )

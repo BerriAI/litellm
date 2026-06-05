@@ -12,7 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
 from litellm.proxy._types import *
-from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.route_llm_request import route_request
 from litellm.types.llms.openai import ChatCompletionUserMessage

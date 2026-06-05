@@ -39,7 +39,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Imported as a module (not `from ... import generate_iam_auth_token`) so the
 # AWS-touching token mint stays patchable at its canonical location in tests.
-from litellm.proxy.auth import rds_iam_token
+from litellm.auth import rds_iam_token
 
 _IAM_ENV_KEY = "IAM_TOKEN_DB_AUTH"
 _DEFAULT_PG_PORT = "5432"

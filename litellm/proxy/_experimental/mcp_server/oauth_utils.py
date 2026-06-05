@@ -9,7 +9,7 @@ from urllib.parse import ParseResult, urlparse, urlunparse
 from fastapi import HTTPException, Request
 
 from litellm._logging import verbose_logger
-from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+from litellm.auth.ip_address_utils import IPAddressUtils
 
 # RFC 6749 §5.1 / OAuth 2.1 draft-15 §4.1.3: token-endpoint responses
 # must not be cached — both success and error bodies may reveal secrets.

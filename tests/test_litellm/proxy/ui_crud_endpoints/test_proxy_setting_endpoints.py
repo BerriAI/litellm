@@ -73,7 +73,7 @@ def mock_proxy_config(monkeypatch):
 @pytest.fixture
 def mock_auth():
     """Mock the authentication to bypass auth checks using FastAPI dependency overrides"""
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.proxy_server import app
 
     async def mock_user_api_key_auth():
@@ -997,7 +997,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         # Override the FastAPI dependency with a proper mock
         mock_user_auth = UserAPIKeyAuth(
@@ -1039,7 +1039,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         # Override the FastAPI dependency with a proper mock
         mock_user_auth = UserAPIKeyAuth(
@@ -1084,7 +1084,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         mock_user_auth = UserAPIKeyAuth(
             user_id="test-user-123",
@@ -1121,7 +1121,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         mock_user_auth = UserAPIKeyAuth(
             user_id="test-user-123",
@@ -1160,7 +1160,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         mock_user_auth = UserAPIKeyAuth(
             user_id="test-user-123",
@@ -1198,7 +1198,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         mock_user_auth = UserAPIKeyAuth(
             user_id="test-user-123",
@@ -1235,7 +1235,7 @@ class TestProxySettingEndpoints:
         from unittest.mock import AsyncMock, MagicMock
 
         from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.auth.user_api_key_auth import user_api_key_auth
 
         mock_user_auth = UserAPIKeyAuth(
             user_id="test-user-123",

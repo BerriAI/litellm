@@ -3392,7 +3392,7 @@ class PrometheusLogger(CustomLogger):
         Fields not available in metadata:
         - `budget_reset_at`
         """
-        from litellm.proxy.auth.auth_checks import get_team_object
+        from litellm.auth.auth_checks import get_team_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_team_spend = (spend or 0) + response_cost
@@ -3486,7 +3486,7 @@ class PrometheusLogger(CustomLogger):
         if not org_id:
             return
 
-        from litellm.proxy.auth.auth_checks import get_org_object
+        from litellm.auth.auth_checks import get_org_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         if prisma_client is None:
@@ -3651,7 +3651,7 @@ class PrometheusLogger(CustomLogger):
         """
         Assemble a UserAPIKeyAuth object
         """
-        from litellm.proxy.auth.auth_checks import get_key_object
+        from litellm.auth.auth_checks import get_key_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_key_spend = (key_spend or 0) + response_cost
@@ -3715,7 +3715,7 @@ class PrometheusLogger(CustomLogger):
         Fields not available in metadata:
         - `budget_reset_at`
         """
-        from litellm.proxy.auth.auth_checks import get_user_object
+        from litellm.auth.auth_checks import get_user_object
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
         _total_user_spend = (spend or 0) + response_cost

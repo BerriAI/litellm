@@ -25,7 +25,7 @@ from litellm.proxy._types import (
     ResponseLiteLLM_ManagedVectorStore,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store

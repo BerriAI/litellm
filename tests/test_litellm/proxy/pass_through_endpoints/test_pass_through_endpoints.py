@@ -1370,7 +1370,7 @@ async def test_create_pass_through_endpoint_auth_true_enforces_allowlist():
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.auth.route_checks import RouteChecks
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         create_pass_through_endpoints,
     )
@@ -1455,7 +1455,7 @@ async def test_update_pass_through_endpoint_auth_true_enforces_allowlist():
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.auth.route_checks import RouteChecks
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         update_pass_through_endpoints,
     )
@@ -1534,7 +1534,7 @@ async def test_update_pass_through_endpoint_preserves_auth_false():
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
     )
-    from litellm.proxy.auth.route_checks import RouteChecks
+    from litellm.auth.route_checks import RouteChecks
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         update_pass_through_endpoints,
     )

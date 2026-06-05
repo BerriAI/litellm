@@ -334,7 +334,7 @@ def _get_metadata_variable_name(request: Request) -> str:
     For ALL other endpoints we call this "metadata"
     """
     # Inline imports — auth_utils/route_checks participate in a proxy import cycle.
-    from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
+    from litellm.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     path = get_request_route(request)
     if "thread" in path or "assistant" in path:
@@ -822,7 +822,7 @@ class LiteLLMProxyRequestSetup:
         """
         Add headers to the LLM call by model group
         """
-        from litellm.proxy.auth.auth_checks import _check_model_access_helper
+        from litellm.auth.auth_checks import _check_model_access_helper
         from litellm.proxy.proxy_server import llm_router
 
         data_model = data.get("model")

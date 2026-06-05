@@ -9,7 +9,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.route_checks import RouteChecks
 
 
 def test_info_route_identification():

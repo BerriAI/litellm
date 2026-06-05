@@ -369,7 +369,7 @@ def _make_warmup_router(app: "FastAPI") -> "APIRouter":
     from fastapi import APIRouter, Depends, HTTPException
     from fastapi.openapi.utils import get_openapi
 
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.auth.user_api_key_auth import user_api_key_auth
 
     router = APIRouter()
 
