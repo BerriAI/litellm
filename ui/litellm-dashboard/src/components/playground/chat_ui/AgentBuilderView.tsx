@@ -335,7 +335,7 @@ export default function AgentBuilderView({
       const createdId: string | null = response?.model_id ?? response?.model_info?.id ?? null;
       const list = await loadAgents();
       const created = createdId
-        ? list.find((a) => getAgentModelId(a) === createdId)
+        ? list.find((a) => getAgentModelId(a) === createdId) ?? list.find((a) => a.model_name === draftName.trim())
         : list.find((a) => a.model_name === draftName.trim());
       setSelectedId(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
       setActiveTab("chat");
