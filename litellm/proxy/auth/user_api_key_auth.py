@@ -645,6 +645,8 @@ async def _auto_register_jwt_mapping(
     cache_key: str,
     team_id: Optional[str] = None,
     user_id: Optional[str] = None,
+    org_id: Optional[str] = None,
+    end_user_id: Optional[str] = None,
 ) -> Optional[UserAPIKeyAuth]:
     """
     Auto-register: create a new virtual key + mapping for an unrecognised JWT
@@ -652,7 +654,7 @@ async def _auto_register_jwt_mapping(
     ``JWTAuthManager.auth_builder`` run — they encode the JWT identity AFTER
     RBAC/scope/custom_validate/email-domain policy has been enforced. The key
     is stamped with those values so the cached future-request path inherits
-    the same team/user limits the auth_builder path would have applied.
+    the same team/user/org limits the auth_builder path would have applied.
 
     Race safety: if two concurrent requests both reach here simultaneously (both
     saw no mapping in the DB), one will win the unique-constraint race on
@@ -675,6 +677,7 @@ async def _auto_register_jwt_mapping(
         table_name="key",
         team_id=team_id,
         user_id=user_id,
+        organization_id=org_id,
         metadata={
             "auto_registered": True,
             "jwt_claim_field": virtual_key_claim_field,
@@ -754,13 +757,17 @@ async def _auto_register_jwt_mapping(
         claim_value,
     )
 
-    return await get_key_object(
+    auto_registered_key = await get_key_object(
         hashed_token=token_hash,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         parent_otel_span=parent_otel_span,
         proxy_logging_obj=proxy_logging_obj,
     )
+    if auto_registered_key is not None:
+        auto_registered_key.org_id = org_id
+        auto_registered_key.end_user_id = end_user_id
+    return auto_registered_key
 
 
 async def _resolve_jwt_to_virtual_key(
@@ -1330,6 +1337,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             cache_key=pending_auto_register.cache_key,
                             team_id=team_id,
                             user_id=user_id,
+                            org_id=org_id,
+                            end_user_id=end_user_id,
                         )
                         if auto_registered is not None:
                             auto_registered.jwt_claims = jwt_claims

@@ -1224,13 +1224,13 @@ async def test_proxy_admin_sentinel_skips_db_lookup_on_cache_hit():
 
 
 @pytest.mark.asyncio
-async def test_auto_register_helper_stamps_validated_team_and_user():
+async def test_auto_register_helper_stamps_validated_identity_context():
     """
     The deferred-auto-register contract: _auto_register_jwt_mapping is called
-    with team_id and user_id from JWTAuthManager.auth_builder's *validated*
+    with identity fields from JWTAuthManager.auth_builder's *validated*
     result (after RBAC, scope mappings, custom_validate, email-domain policy).
     These must be passed to generate_key_helper_fn so the created key carries
-    them — the cached future-request path then inherits the same team/user
+    them — the cached future-request path then inherits the same team/user/org
     limits the auth_builder path would have applied.
     """
     from litellm.proxy.auth.user_api_key_auth import _auto_register_jwt_mapping
@@ -1271,12 +1271,16 @@ async def test_auto_register_helper_stamps_validated_team_and_user():
             cache_key="jwt_key_mapping:sub:new-user",
             team_id="validated-team",
             user_id="validated-user",
+            org_id="validated-org",
+            end_user_id="validated-end-user",
         )
 
     assert result == mock_key_obj
-    # Validated identity flowed to the key (key inherits team + user limits)
     assert mock_gen_key.call_args.kwargs["team_id"] == "validated-team"
     assert mock_gen_key.call_args.kwargs["user_id"] == "validated-user"
+    assert mock_gen_key.call_args.kwargs["organization_id"] == "validated-org"
+    assert result.org_id == "validated-org"
+    assert result.end_user_id == "validated-end-user"
 
 
 # ──────────────────────────────────────────────
