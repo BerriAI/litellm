@@ -14,8 +14,6 @@ try:
 except ImportError:
     GOOGLE_GENAI_SDK_AVAILABLE = False
 
-from base_google_test import load_vertex_ai_credentials
-
 MASTER_KEY = "sk-1234"
 PROMPT = "Reply with only the single word: pong"
 
@@ -54,12 +52,6 @@ class BaseGoogleGenAIProxySDKTest(ABC):
     @abstractmethod
     def proxy_model_name(self) -> str: ...
 
-    @property
-    def _proxy_sdk_temp_files(self) -> List[str]:
-        if not hasattr(self, "_proxy_sdk_temp_files_list"):
-            self._proxy_sdk_temp_files_list: List[str] = []
-        return self._proxy_sdk_temp_files_list
-
     def _skip_reason_if_credentials_missing(self) -> Optional[str]:
         model = self.model_config.get("model", "")
         if model.startswith("gemini/"):
@@ -81,31 +73,8 @@ class BaseGoogleGenAIProxySDKTest(ABC):
         if reason:
             pytest.skip(reason)
 
-    def _setup_vertex_credentials_if_needed(self) -> None:
-        if "vertex_ai" not in self.model_config.get("model", ""):
-            return
-        if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""):
-            return
-        if not (
-            os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
-            and os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
-        ):
-            return
-        temp_file_path = load_vertex_ai_credentials(model=self.model_config["model"])
-        if temp_file_path:
-            self._proxy_sdk_temp_files.append(temp_file_path)
-
-    def teardown_method(self) -> None:
-        for temp_file in self._proxy_sdk_temp_files:
-            try:
-                os.unlink(temp_file)
-            except OSError:
-                pass
-        self._proxy_sdk_temp_files.clear()
-
     def test_proxy_genai_sdk_non_streaming(self, google_genai_proxy_url: str) -> None:
         self._require_proxy_sdk()
-        self._setup_vertex_credentials_if_needed()
 
         client = _make_client(google_genai_proxy_url)
         response = client.models.generate_content(
@@ -122,7 +91,6 @@ class BaseGoogleGenAIProxySDKTest(ABC):
         self, google_genai_proxy_url: str
     ) -> None:
         self._require_proxy_sdk()
-        self._setup_vertex_credentials_if_needed()
 
         client = _make_client(google_genai_proxy_url)
         stream = client.models.generate_content_stream(
@@ -150,7 +118,6 @@ class BaseGoogleGenAIProxySDKTest(ABC):
         self, google_genai_proxy_url: str
     ) -> None:
         self._require_proxy_sdk()
-        self._setup_vertex_credentials_if_needed()
 
         client = _make_client(google_genai_proxy_url)
         stream = client.models.generate_content_stream(
