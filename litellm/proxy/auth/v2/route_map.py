@@ -87,6 +87,16 @@ _GOVERNED: Dict[str, GovernedRoute] = {
     "/customer/list": GovernedRoute("customer", "read"),
     "/customer/block": GovernedRoute("customer", "write", _CUSTOMER_ID_FIELDS),
     "/customer/unblock": GovernedRoute("customer", "write", _CUSTOMER_ID_FIELDS),
+    # MCP server and guardrail admin surfaces expose collection-level operations
+    # (register/list/health/submissions), so objects stay at "<resource>:*"; the
+    # runtime verbs (apply_guardrail, test_custom_code) are not management and are
+    # intentionally left to the data/runtime path.
+    "/v1/mcp/server/register": GovernedRoute("mcp_server", "write"),
+    "/v1/mcp/server/health": GovernedRoute("mcp_server", "read"),
+    "/v1/mcp/server/submissions": GovernedRoute("mcp_server", "read"),
+    "/guardrails/register": GovernedRoute("guardrail", "write"),
+    "/guardrails/list": GovernedRoute("guardrail", "read"),
+    "/guardrails/submissions": GovernedRoute("guardrail", "read"),
 }
 
 

@@ -98,12 +98,23 @@ def test_customer_resource_is_governed():
     assert match_route("/customer/info").id_fields == ["user_id"]
 
 
-def test_deferred_nonuniform_surfaces_are_still_loud_open():
-    # Guardrails/MCP/credentials have non-CRUD verbs; deliberately not governed yet.
+def test_mcp_server_and_guardrail_admin_surfaces_are_governed():
+    assert match_route("/v1/mcp/server/register").resource == "mcp_server"
+    assert match_route("/v1/mcp/server/register").action == "write"
+    assert match_route("/v1/mcp/server/health").action == "read"
+    assert match_route("/guardrails/register").resource == "guardrail"
+    assert match_route("/guardrails/register").action == "write"
+    assert match_route("/guardrails/list").action == "read"
+    # Collection-level operations carry no per-id field.
+    assert match_route("/v1/mcp/server/register").id_fields == []
+
+
+def test_runtime_guardrail_verbs_stay_loud_open():
+    # Applying/testing a guardrail is runtime, not management; deliberately not
+    # governed by the control-plane RBAC map.
     for route in (
         "/guardrails/apply_guardrail",
-        "/guardrails/register",
-        "/v1/mcp/server/register",
+        "/guardrails/test_custom_code",
     ):
         assert match_route(route) is None
 
