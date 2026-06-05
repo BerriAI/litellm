@@ -258,13 +258,25 @@ class OAuth2IntrospectionAuthenticator:
         import base64
 
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.secret_managers.main import get_secret_str
         from litellm.types.llms.custom_http import httpxSpecialProvider
 
         # RFC 7662 client auth is HTTP Basic; the shared handler's post() takes
-        # headers, not an auth tuple, so build the header explicitly.
+        # headers, not an auth tuple, so build the header explicitly. Resolve the
+        # client secret through the secret manager here (not at settings load, which
+        # runs in can_handle) so it is never required to sit in plaintext config;
+        # a literal value passes through unchanged.
         headers = {}
         if settings.client_id:
-            credentials = f"{settings.client_id}:{settings.client_secret or ''}"
+            secret = ""
+            if settings.client_secret:
+                secret = (
+                    get_secret_str(
+                        settings.client_secret, default_value=settings.client_secret
+                    )
+                    or ""
+                )
+            credentials = f"{settings.client_id}:{secret}"
             headers["Authorization"] = (
                 "Basic " + base64.b64encode(credentials.encode()).decode()
             )
