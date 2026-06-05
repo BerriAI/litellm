@@ -5,6 +5,7 @@ from fastapi import HTTPException, Request, status
 from .authenticators import AuthContext, AuthResult, authenticate
 from .authorizer import AuthorizationDenied, authorize
 from .context import AuthMethod, RequestAuthContext, set_auth_context
+from .end_user import resolve_end_user
 from .enforcer import CasbinEnforcer
 from .policy_store import load_policy_snapshot
 from .principal import Principal, build_principal
@@ -125,6 +126,7 @@ async def user_api_key_auth_v2(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"auth_v2: not permitted to call model '{requested_model}'",
                 )
+        await resolve_end_user(request, request_data, dict(request.headers))
         identity.request_route = route
         return identity
 
