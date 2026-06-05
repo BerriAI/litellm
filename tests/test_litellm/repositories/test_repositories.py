@@ -2,6 +2,7 @@
 Tests for gateway repository layer.
 """
 
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
@@ -1564,6 +1565,79 @@ class TestVerificationTokenRepositoryExtended:
     async def test_delete_token_nonexistent(self, repo):
         result = await repo.delete_token("nonexistent")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_delete_token_archive_serialization(self, repo):
+        """Archived token must store JSON columns as strings, map org_id onto the
+        organization_id column, preserve budget_id, and drop relation-only fields
+        that don't exist on LiteLLM_DeletedVerificationToken."""
+        repo._prisma_client.db.litellm_verificationtoken._records["sk-arch"] = {
+            "token": "sk-arch",
+            "key_name": "Archive Me",
+            "aliases": json.dumps({"a": "b"}),
+            "metadata": json.dumps({"team": "x"}),
+            "permissions": json.dumps({"read": True}),
+            "spend": 5.0,
+            "organization_id": "org-9",
+            "budget_id": "budget-9",
+            "budget_limits": [{"model": "gpt-4", "budget": 1.0}],
+        }
+
+        class MockTx:
+            def __init__(self, client):
+                self.litellm_deletedverificationtoken = (
+                    client.db.litellm_deletedverificationtoken
+                )
+                self.litellm_verificationtoken = client.db.litellm_verificationtoken
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+        repo._prisma_client.db.tx = lambda: MockTx(repo._prisma_client)
+
+        await repo.delete_token("sk-arch", deleted_by="admin")
+
+        archived = list(
+            repo._prisma_client.db.litellm_deletedverificationtoken._records.values()
+        )[0]
+
+        assert isinstance(archived["aliases"], str)
+        assert json.loads(archived["aliases"]) == {"a": "b"}
+        assert isinstance(archived["metadata"], str)
+        assert isinstance(archived["permissions"], str)
+
+        assert archived["organization_id"] == "org-9"
+        assert "org_id" not in archived
+
+        assert archived["budget_id"] == "budget-9"
+
+        for relation_field in (
+            "object_permission",
+            "litellm_budget_table",
+            "budget_limits",
+        ):
+            assert relation_field not in archived
+
+        assert (
+            "sk-arch" not in repo._prisma_client.db.litellm_verificationtoken._records
+        )
+
+    @pytest.mark.asyncio
+    async def test_find_by_id_maps_org_and_budget_columns(self, repo):
+        """Reading a token must surface the organization_id column as org_id and
+        populate budget_id rather than silently dropping them."""
+        repo._prisma_client.db.litellm_verificationtoken._records["sk-read"] = {
+            "token": "sk-read",
+            "organization_id": "org-7",
+            "budget_id": "budget-7",
+        }
+        token = await repo.find_by_id("sk-read")
+        assert token is not None
+        assert token.org_id == "org-7"
+        assert token.budget_id == "budget-7"
 
     @pytest.mark.asyncio
     async def test_update_token_all_fields(self, repo):

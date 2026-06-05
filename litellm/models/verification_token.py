@@ -42,6 +42,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     soft_budget_cooldown: bool = False
     blocked: Optional[bool] = None
     litellm_budget_table: Optional[dict] = None
+    budget_id: Optional[str] = None
     org_id: Optional[str] = None  # org id for a given key
     created_at: Optional[datetime] = None
     created_by: Optional[str] = None
