@@ -6,6 +6,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm.integrations.otel.runtime import seed_request_identity
 
+from .audit import AuthzDecision, Decision, record
 from .authn.authenticators import AuthContext, AuthResult, authenticate
 from .authz.authorizer import AuthorizationDenied, authorize
 from .authz.enforcer import CasbinEnforcer
@@ -167,7 +168,14 @@ async def user_api_key_auth_v2(
         enforcer = await _build_enforcer(principal, prisma_client)
 
         try:
-            authorize(principal, route, request_data, enforcer, request.method)
+            authorize(
+                principal,
+                route,
+                request_data,
+                enforcer,
+                request.method,
+                auth_method=result.method.value,
+            )
         except AuthorizationDenied as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
@@ -189,9 +197,21 @@ async def user_api_key_auth_v2(
         )
         if requested_model:
             enforcer = await _build_enforcer(principal, prisma_client)
-            if not enforcer.enforce(
-                principal.subject, principal.domain, f"model:{requested_model}", "call"
-            ):
+            obj = f"model:{requested_model}"
+            allowed = enforcer.enforce(principal.subject, principal.domain, obj, "call")
+            record(
+                AuthzDecision(
+                    decision=Decision.ALLOW if allowed else Decision.DENY,
+                    subject=principal.subject,
+                    domain=principal.domain,
+                    obj=obj,
+                    action="call",
+                    route=route,
+                    reason="model call",
+                    auth_method=result.method.value,
+                )
+            )
+            if not allowed:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"auth_v2: not permitted to call model '{requested_model}'",
@@ -205,7 +225,14 @@ async def user_api_key_auth_v2(
     # Loud-open: route v2 doesn't yet govern. No identity required.
     result = await _best_effort_identity(token, ctx)
     principal, identity = _establish_context(request, result, route)
-    authorize(principal, route, None, _DENY_ALL, request.method)
+    authorize(
+        principal,
+        route,
+        None,
+        _DENY_ALL,
+        request.method,
+        auth_method=result.method.value,
+    )
     seed_request_identity(identity)
     identity.request_route = route
     return identity

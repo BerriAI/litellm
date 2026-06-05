@@ -1,3 +1,4 @@
+from .audit import AuthzDecision, Decision, register_sink, reset_sinks
 from .context import (
     AuthMethod,
     RequestAuthContext,
@@ -20,4 +21,8 @@ __all__ = [
     "attach_end_user",
     "resolve_end_user",
     "enrich_identity",
+    "AuthzDecision",
+    "Decision",
+    "register_sink",
+    "reset_sinks",
 ]
