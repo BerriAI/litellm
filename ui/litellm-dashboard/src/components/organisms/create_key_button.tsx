@@ -154,7 +154,6 @@ export const fetchUserModels = async (
   }
 };
 
-
 /**
  * ─────────────────────────────────────────────────────────────────────────
  * @deprecated
@@ -171,9 +170,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
   const { data: tagsData } = useTags();
   const enableProjectsUI = Boolean(uiSettingsData?.values?.enable_projects_ui);
   const disableCustomApiKeys = Boolean(uiSettingsData?.values?.disable_custom_api_keys);
-  const tagOptions = tagsData
-    ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name }))
-    : [];
+  const tagOptions = tagsData ? Object.values(tagsData).map((tag) => ({ value: tag.name, label: tag.name })) : [];
   const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
@@ -531,7 +528,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
       }
 
       // Add multi-window budget limits (filter out incomplete entries)
-      const validWindows = budgetLimits.filter((w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined);
+      const validWindows = budgetLimits.filter(
+        (w) => w.budget_duration && w.max_budget !== null && w.max_budget !== undefined,
+      );
       if (validWindows.length > 0) {
         formValues.budget_limits = validWindows;
       }
@@ -1074,10 +1073,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       </span>
                     }
                   >
-                    <BudgetWindowsEditor
-                      value={budgetLimits}
-                      onChange={setBudgetLimits}
-                    />
+                    <BudgetWindowsEditor value={budgetLimits} onChange={setBudgetLimits} />
                   </Form.Item>
                   <Form.Item
                     className="mt-4"

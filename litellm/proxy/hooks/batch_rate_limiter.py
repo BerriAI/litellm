@@ -31,7 +31,16 @@ from litellm.batches.batch_utils import (
     _get_models_from_batch_input_file_content,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import SpecialModelNames, UserAPIKeyAuth
+from litellm.proxy._types import (
+    ProxyErrorTypes,
+    ProxyException,
+    SpecialModelNames,
+    UserAPIKeyAuth,
+)
+from litellm.proxy.hooks.rate_limiter_utils import (
+    ProxyHTTPRateLimitError,
+    resolve_llm_provider_for_rate_limit,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -375,6 +384,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         descriptors: List["RateLimitDescriptor"],
         batch_usage: BatchFileUsage,
         limit_type: str,
+        requested_model: Optional[str] = None,
     ) -> None:
         """Raise HTTPException for rate limit exceeded."""
         from datetime import datetime
@@ -419,7 +429,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 f"Limit resets at: {reset_time_formatted}"
             )
 
-        raise HTTPException(
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+            requested_model
+        )
+        raise ProxyHTTPRateLimitError(
             status_code=429,
             detail=detail,
             headers={
@@ -427,6 +440,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 "rate_limit_type": limit_type,
                 "reset_at": reset_time_formatted,
             },
+            model=resolved_model,
+            llm_provider=llm_provider,
         )
 
     async def _check_and_increment_batch_counters(
@@ -470,6 +485,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         )
 
         if rate_limit_response["overall_code"] == "OVER_LIMIT":
+            requested_model = data.get("model") if data else None
             for status in rate_limit_response["statuses"]:
                 if status["code"] == "OVER_LIMIT":
                     self._raise_rate_limit_error(
@@ -477,6 +493,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                         descriptors,
                         batch_usage,
                         status["rate_limit_type"],
+                        requested_model=requested_model,
                     )
 
     async def count_input_file_usage(
@@ -582,16 +599,51 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         """Reject the batch if the caller is not authorized for every
         ``body.model`` named inside the JSONL.
 
-        Reuses ``can_key_call_model`` so the same allowlist semantics
-        (wildcards, access groups, ``all-proxy-models``, team aliases)
-        the proxy enforces on `/chat/completions` apply here.
+        Reuses standard auth helpers so the same model access rules the proxy
+        enforces on `/chat/completions` apply here.
         """
-        from litellm.proxy.auth.auth_checks import can_key_call_model
+        from litellm.proxy.auth.auth_checks import (
+            _check_team_member_model_access,
+            _key_access_group_grants_model,
+            can_key_call_model,
+            can_team_access_model,
+            get_team_object,
+        )
         from litellm.proxy.proxy_server import llm_router
+        from litellm.proxy.proxy_server import prisma_client
+        from litellm.proxy.proxy_server import proxy_logging_obj
+        from litellm.proxy.proxy_server import user_api_key_cache
 
         models = _get_models_from_batch_input_file_content(file_content_as_dict)
         if not models:
             return
+
+        team_object = None
+        if (
+            SpecialModelNames.all_team_models.value in (user_api_key_dict.models or [])
+            and user_api_key_dict.team_id is not None
+            and prisma_client is not None
+        ):
+            try:
+                team_object = await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": (
+                            "Batch input file model access could not be "
+                            "validated against the current team."
+                        )
+                    },
+                ) from e
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
         for model in models:
@@ -602,18 +654,43 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 if proxy_model_name is not None:
                     model_to_check = proxy_model_name
             try:
-                await can_key_call_model(
-                    model=model_to_check,
-                    llm_model_list=llm_model_list,
-                    valid_token=user_api_key_dict,
-                    llm_router=llm_router,
-                )
+                if team_object is not None:
+                    try:
+                        await can_team_access_model(
+                            model=model_to_check,
+                            team_object=team_object,
+                            llm_router=llm_router,
+                            team_model_aliases=user_api_key_dict.team_model_aliases,
+                        )
+                    except ProxyException as team_denial:
+                        if team_denial.type != ProxyErrorTypes.team_model_access_denied:
+                            raise
+                        if not await _key_access_group_grants_model(
+                            model=model_to_check,
+                            valid_token=user_api_key_dict,
+                            team_object=team_object,
+                            llm_router=llm_router,
+                        ):
+                            raise
+                    await _check_team_member_model_access(
+                        model=model_to_check,
+                        team_object=team_object,
+                        valid_token=user_api_key_dict,
+                        llm_router=llm_router,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
+                else:
+                    await can_key_call_model(
+                        model=model_to_check,
+                        llm_model_list=llm_model_list,
+                        valid_token=user_api_key_dict,
+                        llm_router=llm_router,
+                    )
             except HTTPException:
                 raise
             except Exception as e:
-                # `can_key_call_model` raises ProxyException on denial;
-                # re-shape to a 403 so the batch endpoint returns a
-                # consistent rejection without leaking internal types.
                 raise HTTPException(
                     status_code=403,
                     detail={

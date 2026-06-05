@@ -18,11 +18,13 @@ export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" |
 
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
-  getCredentials: () => {
-    client_id?: string;
-    client_secret?: string;
-    scopes?: string[];
-  } | undefined;
+  getCredentials: () =>
+    | {
+        client_id?: string;
+        client_secret?: string;
+        scopes?: string[];
+      }
+    | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
   onTokenReceived: (tokenResponse: Record<string, any>) => void;
   onBeforeRedirect?: () => void;
@@ -134,7 +136,9 @@ export const useMcpOAuthFlow = ({
       }
 
       let registeredClient: { clientId?: string; clientSecret?: string } = {};
-      const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret);
+      const hasPreconfiguredCredentials = Boolean(
+        temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret,
+      );
 
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
@@ -267,7 +271,7 @@ export const useMcpOAuthFlow = ({
       if (!flowState || !flowState.state || !flowState.codeVerifier || !flowState.serverId) {
         throw new Error(
           "OAuth session state was lost. This can happen if you have strict browser privacy settings. " +
-          "Please try again and ensure cookies/storage is enabled."
+            "Please try again and ensure cookies/storage is enabled.",
         );
       }
       if (!payload.state || payload.state !== flowState.state) {

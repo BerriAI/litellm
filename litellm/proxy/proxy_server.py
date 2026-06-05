@@ -1910,7 +1910,7 @@ prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = N
 store_model_in_db: bool = False
 open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
-proxy_logging_obj = ProxyLogging(
+proxy_logging_obj: ProxyLogging = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user
 )
 ### REDIS QUEUE ###
@@ -11888,6 +11888,9 @@ async def model_info_v2(
     # Update total count to include agents
     search_total_count = len(all_models)
 
+    # Translate `model_name` to the public name for team-scoped rows.
+    all_models = [_translate_model_name_for_response(m) for m in all_models]
+
     return _paginate_models_response(
         all_models=all_models,
         page=page,
@@ -12322,6 +12325,33 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
+def _translate_model_name_for_response(model: dict) -> dict:
+    """For team-scoped DB rows, replace `model_name` with the public name
+    in `model_info.team_public_model_name` before returning. The DB column
+    and the in-memory router index keep the internal mangled name
+    (`model_name_{team_id}_{uuid}`) as the routing key -- this swap is a
+    presentation-layer concern. Returns a shallow copy; never mutates.
+
+    Without this swap the internal name leaks into `/v1/model/info` and
+    `/v2/model/info`, the dashboard binds its edit form to it, and a
+    non-rename save round-trips the internal name back -- corrupting
+    `team_public_model_name` and the team ACL (see issue #28382).
+    """
+    if not isinstance(model, dict):
+        return model
+    model_info = model.get("model_info") or {}
+    if not isinstance(model_info, dict):
+        return model
+    team_public = model_info.get("team_public_model_name")
+    team_id = model_info.get("team_id")
+    if not team_public or not team_id:
+        return model
+    current = model.get("model_name") or ""
+    if not current.startswith(f"model_name_{team_id}_"):
+        return model
+    return {**model, "model_name": team_public}
+
+
 def _get_proxy_model_info(model: dict) -> dict:
     # provided model_info in config.yaml
     model_info = model.get("model_info", {})
@@ -12362,7 +12392,7 @@ def _get_proxy_model_info(model: dict) -> dict:
         deployment_dict=model, excluded_keys={"litellm_credential_name"}
     )
 
-    return model
+    return _translate_model_name_for_response(model)
 
 
 @router.get(
@@ -12502,8 +12532,11 @@ async def model_info_v1(  # noqa: PLR0915
         else:
             all_models = []
 
-    for in_place_model in all_models:
-        in_place_model = _get_proxy_model_info(model=in_place_model)
+    # Reassign each entry: _get_proxy_model_info returns a (possibly new)
+    # dict via _translate_model_name_for_response, which does NOT mutate in
+    # place. Binding only the loop variable would drop the public-name swap
+    # for team-scoped rows and leak the internal routing key (#28382).
+    all_models = [_get_proxy_model_info(model=model) for model in all_models]
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -15844,10 +15877,10 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error handling toolset MCP route for {toolset_name}: {str(e)}"
+        verbose_proxy_logger.exception(
+            "Error handling toolset MCP route for %s: %s", toolset_name, str(e)
         )
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def _mcp_forward_as_path(path_segment: str, request: Request):
@@ -16028,7 +16061,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"
+        verbose_proxy_logger.exception(
+            "Error handling dynamic MCP route for %s: %s", mcp_server_name, str(e)
         )
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")

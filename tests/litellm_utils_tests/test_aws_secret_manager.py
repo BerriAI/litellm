@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 import litellm.types
 import litellm.types.utils
 
-
 load_dotenv()
 import io
 
@@ -52,6 +51,11 @@ def skip_on_throttling(func):
 
 def check_aws_credentials():
     """Helper function to check if AWS credentials are set"""
+    if os.getenv("LITELLM_RUN_LIVE_AWS_SECRET_MANAGER_TESTS") != "1":
+        pytest.skip("Live AWS Secrets Manager E2E tests are opt-in")
+    if os.getenv("CASSETTE_REDIS_URL"):
+        pytest.skip("Live AWS Secrets Manager E2E tests cannot run under VCR replay")
+
     required_vars = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION_NAME"]
     missing_vars = [var for var in required_vars if not os.getenv(var)]
     if missing_vars:
@@ -444,6 +448,11 @@ async def test_end_to_end_iam_role_secret_write():
     - TEST_IAM_ROLE_ARN environment variable with ARN of a role that can be assumed
     - Proper AWS credentials configured (via instance profile, IAM role, or environment)
     """
+    if os.getenv("LITELLM_RUN_LIVE_AWS_SECRET_MANAGER_TESTS") != "1":
+        pytest.skip("Live AWS Secrets Manager E2E tests are opt-in")
+    if os.getenv("CASSETTE_REDIS_URL"):
+        pytest.skip("Live AWS Secrets Manager E2E tests cannot run under VCR replay")
+
     # Skip if TEST_IAM_ROLE_ARN is not set
     test_role_arn = os.getenv("TEST_IAM_ROLE_ARN")
     if not test_role_arn:

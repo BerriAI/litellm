@@ -2586,6 +2586,8 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        headers.setdefault("Content-Type", "application/json")
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2675,6 +2677,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        headers.setdefault("Content-Type", "application/json")
 
         ## LOGGING
         logging_obj.pre_call(
@@ -5528,6 +5532,7 @@ class BaseLLMHTTPHandler:
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         custom_llm_provider: Optional[str] = None,
+        first_message: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -5559,6 +5564,7 @@ class BaseLLMHTTPHandler:
                 api_base=api_base,
                 timeout=timeout,
                 custom_llm_provider=custom_llm_provider,
+                first_message=first_message,
                 **kwargs,
             )
             await handler.run()
@@ -5624,6 +5630,7 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                     user_api_key_dict=user_api_key_dict,
                     request_data=_request_data,
+                    first_message=first_message,
                 )
                 await streaming.bidirectional_forward()
 
