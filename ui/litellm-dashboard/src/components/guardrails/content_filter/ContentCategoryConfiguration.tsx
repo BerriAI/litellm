@@ -94,9 +94,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
     try {
       const data = await getCategoryYaml(accessToken, categoryName);
       let content = data.yaml_content;
-      
+
       // Format JSON content for better readability
-      if (data.file_type === 'json') {
+      if (data.file_type === "json") {
         try {
           const parsed = JSON.parse(content);
           content = JSON.stringify(parsed, null, 2);
@@ -105,9 +105,9 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           console.warn(`Failed to format JSON for ${categoryName}:`, e);
         }
       }
-      
+
       setCategoryYaml((prev) => ({ ...prev, [categoryName]: content }));
-      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || 'yaml' }));
+      setCategoryFileTypes((prev) => ({ ...prev, [categoryName]: data.file_type || "yaml" }));
     } catch (error) {
       console.error(`Failed to fetch content for category ${categoryName}:`, error);
     } finally {
@@ -127,14 +127,16 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
       // Fetch the content for preview
       setLoadingPreviewYaml(true);
-      console.log(`Fetching content for category: ${selectedCategoryName}`, { accessToken: accessToken ? "present" : "missing" });
+      console.log(`Fetching content for category: ${selectedCategoryName}`, {
+        accessToken: accessToken ? "present" : "missing",
+      });
       getCategoryYaml(accessToken, selectedCategoryName)
         .then((data) => {
           console.log(`Successfully fetched content for ${selectedCategoryName}:`, data);
           let content = data.yaml_content;
-          
+
           // Format JSON content for better readability
-          if (data.file_type === 'json') {
+          if (data.file_type === "json") {
             try {
               const parsed = JSON.parse(content);
               content = JSON.stringify(parsed, null, 2);
@@ -142,11 +144,11 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
               console.warn(`Failed to format JSON for ${selectedCategoryName}:`, e);
             }
           }
-          
+
           setPreviewYaml(content);
           // Also cache it for later use
           setCategoryYaml((prev) => ({ ...prev, [selectedCategoryName]: content }));
-          setCategoryFileTypes((prev) => ({ ...prev, [selectedCategoryName]: data.file_type || 'yaml' }));
+          setCategoryFileTypes((prev) => ({ ...prev, [selectedCategoryName]: data.file_type || "yaml" }));
         })
         .catch((error) => {
           console.error(`Failed to fetch preview content for category ${selectedCategoryName}:`, error);
@@ -173,9 +175,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           <div>
             <div style={{ fontWeight: 500 }}>{text}</div>
             {category?.description && (
-              <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>
-                {category.description}
-              </div>
+              <div style={{ fontSize: "12px", color: "#888", marginTop: "4px" }}>{category.description}</div>
             )}
           </div>
         );
@@ -223,11 +223,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
       key: "actions",
       width: 80,
       render: (_: any, record: SelectedCategory) => (
-        <Button
-          icon={<DeleteOutlined />}
-          onClick={() => onCategoryRemove(record.id)}
-          size="small"
-        >
+        <Button icon={<DeleteOutlined />} onClick={() => onCategoryRemove(record.id)} size="small">
           Remove
         </Button>
       ),
@@ -235,13 +231,15 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
   ];
 
   const unselectedCategories = availableCategories.filter(
-    (cat) => !selectedCategories.some((sel) => sel.category === cat.name)
+    (cat) => !selectedCategories.some((sel) => sel.category === cat.name),
   );
 
   return (
     <Card
       title={
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <div
+          style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}
+        >
           <Title level={5} style={{ margin: 0 }}>
             Blocked topics
           </Title>
@@ -268,19 +266,12 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             <Option key={cat.name} value={cat.name} label={cat.display_name}>
               <div>
                 <div style={{ fontWeight: 500 }}>{cat.display_name}</div>
-                <div style={{ fontSize: "12px", color: "#666", marginTop: "2px" }}>
-                  {cat.description}
-                </div>
+                <div style={{ fontSize: "12px", color: "#666", marginTop: "2px" }}>{cat.description}</div>
               </div>
             </Option>
           ))}
         </Select>
-        <Button
-          type="primary"
-          onClick={handleAddCategory}
-          disabled={!selectedCategoryName}
-          icon={<PlusOutlined />}
-        >
+        <Button type="primary" onClick={handleAddCategory} disabled={!selectedCategoryName} icon={<PlusOutlined />}>
           Add
         </Button>
       </div>
@@ -305,9 +296,7 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
             )}
           </div>
           {loadingPreviewYaml ? (
-            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-              Loading content...
-            </div>
+            <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
           ) : previewYaml ? (
             <pre
               style={{
@@ -337,20 +326,14 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 
       {selectedCategories.length > 0 ? (
         <>
-        <Table
-          dataSource={selectedCategories}
-          columns={columns}
-          pagination={false}
-          size="small"
-          rowKey="id"
-        />
+          <Table dataSource={selectedCategories} columns={columns} pagination={false} size="small" rowKey="id" />
           <div style={{ marginTop: 16 }}>
             <Collapse
               activeKey={expandedYamlCategories}
               onChange={(keys) => {
                 const keyArray = Array.isArray(keys) ? keys : keys ? [keys] : [];
                 const oldExpanded = new Set(expandedYamlCategories);
-                
+
                 // Find newly expanded categories and fetch their YAML
                 keyArray.forEach((key) => {
                   const categoryName = key as string;
@@ -358,26 +341,26 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
                     fetchCategoryYaml(categoryName);
                   }
                 });
-                
+
                 setExpandedYamlCategories(keyArray as string[]);
               }}
               ghost
               items={selectedCategories.map((category) => {
-                const fileType = categoryFileTypes[category.category] || 'yaml';
+                const fileType = categoryFileTypes[category.category] || "yaml";
                 const fileTypeLabel = fileType.toUpperCase();
-                
+
                 return {
                   key: category.category,
                   label: (
                     <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                       <FileTextOutlined />
-                      <span>View {fileTypeLabel} for {category.display_name}</span>
+                      <span>
+                        View {fileTypeLabel} for {category.display_name}
+                      </span>
                     </div>
                   ),
                   children: loadingYaml[category.category] ? (
-                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>
-                      Loading content...
-                    </div>
+                    <div style={{ padding: "16px", textAlign: "center", color: "#888" }}>Loading content...</div>
                   ) : categoryYaml[category.category] ? (
                     <pre
                       style={{
@@ -421,4 +404,3 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
 };
 
 export default ContentCategoryConfiguration;
-

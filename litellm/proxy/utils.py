@@ -30,7 +30,11 @@ from typing import (
 )
 
 from litellm import _custom_logger_compatible_callbacks_literal
-from litellm.constants import DEFAULT_MODEL_CREATED_AT_TIME, MAX_TEAM_LIST_LIMIT
+from litellm.constants import (
+    DEFAULT_MODEL_CREATED_AT_TIME,
+    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL,
+    MAX_TEAM_LIST_LIMIT,
+)
 from litellm.proxy._types import (
     DB_CONNECTION_ERROR_TYPES,
     CommonProxyErrors,
@@ -85,10 +89,13 @@ from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging, ServiceTypes
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
-from litellm.exceptions import RejectedRequestError
+from litellm.exceptions import RejectedRequestError, SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+)
+from litellm.proxy.hooks.sensitive_data_routing import (
+    _PROXY_SensitiveDataRoutingHandler,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
@@ -557,6 +564,26 @@ class ProxyLogging:
         for idx, initialized_callback in string_callbacks_to_replace.items():
             litellm.callbacks[idx] = initialized_callback
 
+        # Fan ``litellm.callbacks`` (the "all events" registry) out into the
+        # success/failure event lists eagerly, at startup. ``completion()`` does
+        # this lazily in ``function_setup`` on the first call, but request paths
+        # that build their own logging object and never run ``function_setup`` —
+        # notably pass-through endpoints — read ``litellm._async_success_callback``
+        # directly. Without this, a config-registered logger (e.g. ``otel``) is
+        # invisible to pass-through traffic until some other request warms the
+        # global lists. The manager dedupes, so this is idempotent with
+        # ``function_setup``.
+        for callback in litellm.callbacks:
+            if isinstance(callback, CustomLogger):
+                litellm.logging_callback_manager.add_litellm_success_callback(callback)
+                litellm.logging_callback_manager.add_litellm_failure_callback(callback)
+                litellm.logging_callback_manager.add_litellm_async_success_callback(
+                    callback
+                )
+                litellm.logging_callback_manager.add_litellm_async_failure_callback(
+                    callback
+                )
+
     async def update_request_status(
         self, litellm_call_id: str, status: Literal["success", "fail"]
     ):
@@ -619,6 +646,7 @@ class ProxyLogging:
             "user_api_key_request_route": kwargs.get("user_api_key_request_route"),
             "mcp_tool_name": request_obj.tool_name,  # Keep original for reference
             "mcp_arguments": request_obj.arguments,  # Keep original for reference
+            "mcp_server_name": kwargs.get("mcp_rate_limit_server_name"),
             # Raw Bearer token from the original HTTP request — allows guardrails
             # (e.g. MCPJWTSigner) to independently verify the caller's identity
             # before re-signing an outbound token (FR-5 verify+re-sign).
@@ -1126,6 +1154,9 @@ class ProxyLogging:
                     response=response, data=data, call_type=call_type
                 )
 
+        except SensitiveDataRouteException:
+            status = "intervened"
+            raise
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
@@ -1435,47 +1466,57 @@ class ProxyLogging:
                     self._process_guardrail_metadata(data)
                 return data
 
+            deferred_route_exc: Optional[SensitiveDataRouteException] = None
             for _callback in caps.resolved_callbacks:
                 start_time = time.time()
-                if isinstance(_callback, CustomGuardrail) and data is not None:
-                    # Skip guardrails managed by a pipeline
-                    if (
-                        _callback.guardrail_name
-                        and _callback.guardrail_name in pipeline_managed
-                    ):
-                        continue
+                try:
+                    if isinstance(_callback, CustomGuardrail) and data is not None:
+                        # Skip guardrails managed by a pipeline
+                        if (
+                            _callback.guardrail_name
+                            and _callback.guardrail_name in pipeline_managed
+                        ):
+                            continue
 
-                    result = await self._process_guardrail_callback(
-                        callback=_callback,
-                        data=data,  # type: ignore
-                        user_api_key_dict=user_api_key_dict,
-                        call_type=call_type,
-                        event_type=GuardrailEventHooks.pre_call,
-                    )
-                    if result is None:
-                        continue
-                    data = result
-
-                elif (
-                    _callback is not None
-                    and isinstance(_callback, CustomLogger)
-                    and "async_pre_call_hook" in vars(_callback.__class__)
-                    and _callback.__class__.async_pre_call_hook
-                    != CustomLogger.async_pre_call_hook
-                ):
-                    if call_type == "call_mcp_tool" and user_api_key_dict is None:
-                        continue
-
-                    response = await _callback.async_pre_call_hook(
-                        user_api_key_dict=user_api_key_dict,
-                        cache=self.call_details["user_api_key_cache"],
-                        data=data,  # type: ignore
-                        call_type=call_type,  # type: ignore
-                    )
-                    if response is not None:
-                        data = await self.process_pre_call_hook_response(
-                            response=response, data=data, call_type=call_type
+                        result = await self._process_guardrail_callback(
+                            callback=_callback,
+                            data=data,  # type: ignore
+                            user_api_key_dict=user_api_key_dict,
+                            call_type=call_type,
+                            event_type=GuardrailEventHooks.pre_call,
                         )
+                        if result is None:
+                            continue
+                        data = result
+
+                    elif (
+                        _callback is not None
+                        and isinstance(_callback, CustomLogger)
+                        and "async_pre_call_hook" in vars(_callback.__class__)
+                        and _callback.__class__.async_pre_call_hook
+                        != CustomLogger.async_pre_call_hook
+                    ):
+                        if call_type == "call_mcp_tool" and user_api_key_dict is None:
+                            continue
+
+                        response = await _callback.async_pre_call_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            cache=self.call_details["user_api_key_cache"],
+                            data=data,  # type: ignore
+                            call_type=call_type,  # type: ignore
+                        )
+                        if response is not None:
+                            data = await self.process_pre_call_hook_response(
+                                response=response, data=data, call_type=call_type
+                            )
+                except SensitiveDataRouteException as e:
+                    # Defer the reroute until remaining guardrails have run so later
+                    # security checks are not skipped; the first reroute wins and a
+                    # later guardrail that blocks still propagates. Fall through to the
+                    # service-span recording below so the triggering guardrail is still
+                    # timed like every other callback.
+                    if deferred_route_exc is None:
+                        deferred_route_exc = e
 
                 end_time = time.time()
                 duration = end_time - start_time
@@ -1491,12 +1532,75 @@ class ProxyLogging:
                         end_time=end_time,
                     )
 
+            if deferred_route_exc is not None and data is not None:
+                data = await self._handle_sensitive_data_route_exception(
+                    deferred_route_exc, data, user_api_key_dict
+                )
+
             if data is not None:
                 self._process_guardrail_metadata(data)
 
             return data
+        except SensitiveDataRouteException as e:
+            data = await self._handle_sensitive_data_route_exception(
+                e, data, user_api_key_dict
+            )
+            if data is not None:
+                self._process_guardrail_metadata(data)
+            return data
         except Exception as e:
             raise e
+
+    async def _handle_sensitive_data_route_exception(
+        self,
+        exc: SensitiveDataRouteException,
+        data: Optional[dict],
+        user_api_key_dict: Optional[UserAPIKeyAuth],
+    ) -> Optional[dict]:
+        """
+        Handle SensitiveDataRouteException by rerouting the current request to
+        the target model and, when sticky_session_routing is enabled, persisting
+        the session override so subsequent requests reuse the same model.
+        """
+        if data is None:
+            return None
+
+        verbose_proxy_logger.info(
+            "SensitiveDataRouteException caught: session_id=%s route_to_model=%s guardrail=%s sticky=%s",
+            exc.session_id,
+            exc.route_to_model,
+            exc.guardrail_name,
+            exc.sticky_session_routing,
+        )
+
+        if exc.sticky_session_routing:
+            sensitive_routing_hook = self.get_proxy_hook("sensitive_data_routing")
+            if isinstance(sensitive_routing_hook, _PROXY_SensitiveDataRoutingHandler):
+                await sensitive_routing_hook.set_session_routing(
+                    session_id=exc.session_id,
+                    model=exc.route_to_model,
+                    user_api_key_dict=user_api_key_dict,
+                    guardrail_name=exc.guardrail_name,
+                )
+            else:
+                verbose_proxy_logger.warning(
+                    "SensitiveDataRouteException requested sticky routing for session_id=%s "
+                    "but the 'sensitive_data_routing' hook is not registered. Only this request "
+                    "will be rerouted; subsequent requests will not be sticky.",
+                    exc.session_id,
+                )
+
+        original_model = data.get("model")
+        data["model"] = exc.route_to_model
+
+        metadata = data.get("metadata") or {}
+        metadata["sensitive_data_routing_applied"] = True
+        metadata["sensitive_data_routing_original_model"] = original_model
+        metadata["sensitive_data_routing_guardrail"] = exc.guardrail_name
+        metadata["sensitive_data_routing_detection_info"] = exc.detection_info
+        data["metadata"] = metadata
+
+        return data
 
     @staticmethod
     async def _run_guardrail_task_with_enrichment(
@@ -1596,7 +1700,22 @@ class ProxyLogging:
                 iterator_overrides.append((resolved, "override"))
             elif "apply_guardrail" in cls_attrs:
                 iterator_overrides.append((resolved, "apply_guardrail"))
-            if "async_post_call_streaming_hook" in cls_attrs:
+            # Walk the MRO for ``async_post_call_streaming_hook`` rather than
+            # using the leaf-class ``__dict__`` check used by the other flags:
+            # before this PR the hook was unconditionally invoked, so a
+            # callback that inherits an override from an intermediate parent
+            # (e.g. a vendor base class providing the override, with the
+            # registered class adding nothing else) MUST still be detected.
+            # A leaf-class miss here would silently drop the inherited hook.
+            base_streaming_hook = CustomLogger.async_post_call_streaming_hook
+            cls_streaming_hook = getattr(
+                cls,
+                "async_post_call_streaming_hook",
+                base_streaming_hook,
+            )
+            if getattr(
+                cls_streaming_hook, "__func__", cls_streaming_hook
+            ) is not getattr(base_streaming_hook, "__func__", base_streaming_hook):
                 has_streaming_chunk_override = True
             if "async_pre_call_hook" in cls_attrs:
                 has_pre_call_override = True
@@ -2156,6 +2275,15 @@ class ProxyLogging:
             # async_post_call_failure_hook — skip pre_call and failure handlers.
             if litellm_logging_obj.call_type == CallTypes.pass_through.value:
                 return
+            # This is a proxy-gate error (auth/rate-limit) for a request that never
+            # reached a provider. ``pre_call`` below still fires every callback's
+            # input hook so the failure is logged — but tracing callbacks must not
+            # fabricate an LLM-call span for a call that did not happen (and, since
+            # this runs inside the live ``auth`` phase span, would otherwise nest it
+            # under auth). The marker tells them to skip span creation.
+            litellm_logging_obj.model_call_details[
+                LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+            ] = True
             litellm_logging_obj.pre_call(
                 input=input,
                 api_key="",

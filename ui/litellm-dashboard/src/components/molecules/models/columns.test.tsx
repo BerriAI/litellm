@@ -12,16 +12,18 @@ vi.mock("../../provider_info_helpers");
 vi.mock("@tremor/react", async (importOriginal) => {
   const React = await import("react");
   const actual = await importOriginal<typeof import("@tremor/react")>();
-  const IconComponent = React.forwardRef<HTMLButtonElement, any>(({ icon: IconComp, onClick, className, ...props }, ref) => {
-    const ariaLabel = className?.includes("cursor-not-allowed")
-      ? "Config model cannot be deleted on the dashboard. Please delete it from the config file."
-      : "Delete model";
-    return React.createElement(
-      "button",
-      { ...props, onClick, className, ref, "aria-label": ariaLabel },
-      IconComp && React.createElement(IconComp, { className: "w-4 h-4" }),
-    );
-  });
+  const IconComponent = React.forwardRef<HTMLButtonElement, any>(
+    ({ icon: IconComp, onClick, className, ...props }, ref) => {
+      const ariaLabel = className?.includes("cursor-not-allowed")
+        ? "Config model cannot be deleted on the dashboard. Please delete it from the config file."
+        : "Delete model";
+      return React.createElement(
+        "button",
+        { ...props, onClick, className, ref, "aria-label": ariaLabel },
+        IconComp && React.createElement(IconComp, { className: "w-4 h-4" }),
+      );
+    },
+  );
   IconComponent.displayName = "Icon";
   // Re-apply the global Button/Tooltip overrides from tests/setupTests.ts. A file-level
   // vi.mock fully replaces the setup-level mock, so without this the real Tremor Button
@@ -64,13 +66,7 @@ const createMockModel = (overrides: Partial<ModelData> = {}): ModelData => ({
   ...overrides,
 });
 
-const TestTable = ({
-  data,
-  columns: cols,
-}: {
-  data: ModelData[];
-  columns: ReturnType<typeof columns>;
-}) => {
+const TestTable = ({ data, columns: cols }: { data: ModelData[]; columns: ReturnType<typeof columns> }) => {
   const table = useReactTable({
     data,
     columns: cols,
@@ -84,9 +80,7 @@ const TestTable = ({
           <TableRow key={headerGroup.id}>
             {headerGroup.headers.map((header) => (
               <TableHeaderCell key={header.id}>
-                {header.isPlaceholder
-                  ? null
-                  : flexRender(header.column.columnDef.header, header.getContext())}
+                {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
               </TableHeaderCell>
             ))}
           </TableRow>
@@ -96,9 +90,7 @@ const TestTable = ({
         {table.getRowModel().rows.map((row) => (
           <TableRow key={row.id}>
             {row.getVisibleCells().map((cell) => (
-              <TableCell key={cell.id}>
-                {flexRender(cell.column.columnDef.cell, cell.getContext())}
-              </TableCell>
+              <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
             ))}
           </TableRow>
         ))}
@@ -687,7 +679,6 @@ describe("columns", () => {
     expect(onDeleteClick).toHaveBeenCalledWith("user-model");
   });
 
-
   it("should disable delete for config models", () => {
     const cols = columns(
       "Admin",
@@ -797,7 +788,6 @@ describe("columns", () => {
     expect(screen.getByText("group1")).toBeInTheDocument();
     expect(screen.queryByText(/\+/)).not.toBeInTheDocument();
   });
-
 
   it("should handle missing display name gracefully", () => {
     const getDisplayModelName = vi.fn(() => "");

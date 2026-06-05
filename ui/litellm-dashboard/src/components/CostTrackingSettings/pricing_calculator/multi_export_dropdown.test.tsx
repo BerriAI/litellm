@@ -63,9 +63,7 @@ describe("MultiExportDropdown", () => {
   });
 
   it("should not render anything when no entries have results", () => {
-    const { container } = renderWithProviders(
-      <MultiExportDropdown multiResult={makeMultiResult(false)} />
-    );
+    const { container } = renderWithProviders(<MultiExportDropdown multiResult={makeMultiResult(false)} />);
     expect(container.firstChild).toBeNull();
   });
 
@@ -134,7 +132,7 @@ describe("MultiExportDropdown", () => {
       <div>
         <MultiExportDropdown multiResult={makeMultiResult(true)} />
         <div data-testid="outside">Outside</div>
-      </div>
+      </div>,
     );
 
     await user.click(screen.getByRole("button", { name: /^export$/i }));

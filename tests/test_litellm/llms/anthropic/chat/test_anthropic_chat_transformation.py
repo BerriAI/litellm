@@ -1622,6 +1622,29 @@ def test_effort_output_config_preservation():
     assert result["output_config"]["effort"] == "medium"
 
 
+def test_output_config_format_preservation_and_beta_header():
+    """Test that output_config.format is preserved and treated as structured output."""
+    config = AnthropicConfig()
+    output_format = {
+        "type": "json_schema",
+        "schema": {"type": "object", "properties": {"answer": {"type": "string"}}},
+    }
+    optional_params = {"output_config": {"format": output_format, "effort": "xhigh"}}
+
+    result = config.transform_request(
+        model="claude-opus-4-7",
+        messages=[{"role": "user", "content": "Test"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    headers = config.update_headers_with_optional_anthropic_beta({}, optional_params)
+
+    assert result["output_config"]["format"] == output_format
+    assert result["output_config"]["effort"] == "xhigh"
+    assert "structured-outputs-2025-11-13" in headers["anthropic-beta"]
+
+
 def test_effort_beta_header_injection():
     """Test that effort beta header is automatically added when output_config is detected."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -1648,7 +1671,7 @@ def test_effort_validation():
 
     messages = [{"role": "user", "content": "Test"}]
 
-    # Valid values should work
+    # Valid values should work (xhigh is Opus 4.7+ only, not 4.5)
     for effort in ["high", "medium", "low"]:
         optional_params = {"output_config": {"effort": effort}}
         result = config.transform_request(
@@ -2513,14 +2536,14 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
     )
 
     # thinking must be set (adaptive for 4.6+)
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "adaptive"
     # output_config must carry the mapped effort
-    assert "output_config" in result, (
-        f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "output_config" in result
+    ), f"output_config missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["output_config"]["effort"] == "low"
 
 
@@ -2532,7 +2555,9 @@ def test_reasoning_effort_accepts_dict_shape_for_adaptive_model(reasoning_effort
         {"effort": "low", "summary": "concise"},
     ],
 )
-def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_effort_value):
+def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(
+    reasoning_effort_value,
+):
     """
     Non-adaptive (pre-4.6) branch: dict-shape reasoning_effort must still map
     to ``thinking.type='enabled'`` + ``budget_tokens``. ``output_config`` must
@@ -2547,9 +2572,9 @@ def test_reasoning_effort_accepts_dict_shape_for_non_adaptive_model(reasoning_ef
         drop_params=False,
     )
 
-    assert "thinking" in result, (
-        f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
-    )
+    assert (
+        "thinking" in result
+    ), f"thinking missing for reasoning_effort={reasoning_effort_value!r}"
     assert result["thinking"]["type"] == "enabled"
     assert "budget_tokens" in result["thinking"]
     assert result["thinking"]["budget_tokens"] > 0
@@ -2582,12 +2607,12 @@ def test_reasoning_effort_unparseable_dict_is_dropped(bad_value):
         model="claude-sonnet-4-6-20260219",
         drop_params=False,
     )
-    assert "thinking" not in result, (
-        f"thinking should not be set for bad value {bad_value!r}"
-    )
-    assert "output_config" not in result, (
-        f"output_config should not be set for bad value {bad_value!r}"
-    )
+    assert (
+        "thinking" not in result
+    ), f"thinking should not be set for bad value {bad_value!r}"
+    assert (
+        "output_config" not in result
+    ), f"output_config should not be set for bad value {bad_value!r}"
 
 
 @pytest.mark.parametrize(
@@ -4864,3 +4889,302 @@ def test_sanitize_tool_names_in_request_no_tools_is_noop():
     forward, reverse = AnthropicConfig._sanitize_tool_names_in_request({"tools": []})
     assert forward == {}
     assert reverse == {}
+
+
+# -----------------------------------------------------------------------------
+# Regression tests for legacy / OpenAPI $ref defs in tool input_schema.
+#
+# Anthropic only resolves `$defs` (JSON Schema 2020-12). Tools coming from MCP
+# servers (legacy `definitions`) or OpenAPI-derived gateways like AWS
+# AgentCore (`components.schemas`) used to silently lose their def blocks
+# while keeping dangling `$ref`s, causing upstream 400s. See
+# https://github.com/BerriAI/litellm/issues/26692.
+# -----------------------------------------------------------------------------
+
+
+def _assert_no_unresolved_refs(input_schema: dict) -> None:
+    import json
+
+    blob = json.dumps(input_schema)
+    assert "$ref" not in blob, f"unresolved $ref in transformed input_schema: {blob}"
+
+
+def test_map_tool_helper_inlines_components_schemas_refs():
+    """OpenAPI `components.schemas` $refs (AgentCore-style) must be inlined."""
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "slides_presentations_create",
+            "description": "Create a Google Slides presentation",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "body": {"$ref": "#/components/schemas/Presentation"},
+                },
+                "required": ["body"],
+                "components": {
+                    "schemas": {
+                        "Presentation": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "presentationId": {"type": "string"},
+                            },
+                        }
+                    }
+                },
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    schema = transformed["input_schema"]
+    _assert_no_unresolved_refs(schema)
+    assert schema["properties"]["body"] == {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "presentationId": {"type": "string"},
+        },
+    }
+    # The OpenAPI components block is not part of Anthropic's allow-list and
+    # must not be forwarded.
+    assert "components" not in schema
+
+
+def test_map_tool_helper_inlines_legacy_definitions_refs():
+    """Legacy draft-04 `definitions` $refs (DevRev MCP-style) must be inlined."""
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "create_thing",
+            "description": "Create a thing",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "thing": {"$ref": "#/definitions/Thing"},
+                },
+                "definitions": {
+                    "Thing": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                    }
+                },
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    schema = transformed["input_schema"]
+    _assert_no_unresolved_refs(schema)
+    assert schema["properties"]["thing"] == {
+        "type": "object",
+        "properties": {"id": {"type": "string"}},
+    }
+    assert "definitions" not in schema
+
+
+def test_map_tool_helper_preserves_native_dollar_defs():
+    """`$defs` is JSON Schema 2020-12 native; Anthropic resolves it itself.
+
+    Re-implementation must not pop or unpack `$defs`.
+    """
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "native_defs_tool",
+            "description": "",
+            "parameters": {
+                "type": "object",
+                "properties": {"a": {"$ref": "#/$defs/A"}},
+                "$defs": {"A": {"type": "string"}},
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    schema = transformed["input_schema"]
+    assert schema["$defs"] == {"A": {"type": "string"}}
+    assert schema["properties"]["a"] == {"$ref": "#/$defs/A"}
+
+
+def test_map_tool_helper_does_not_mutate_caller_dict():
+    """Caller-supplied tool dict must not be mutated by the inlining step."""
+    import copy
+
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "create_thing",
+            "description": "Create a thing",
+            "parameters": {
+                "type": "object",
+                "properties": {"thing": {"$ref": "#/definitions/Thing"}},
+                "definitions": {
+                    "Thing": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                    }
+                },
+            },
+        },
+    }
+    snapshot = copy.deepcopy(tool)
+
+    config._map_tool_helper(tool)
+
+    assert tool == snapshot, "caller's tool dict was mutated in place"
+
+
+def test_map_tool_helper_collision_prefers_definitions_over_components_schemas():
+    """If both `definitions.X` and `components.schemas.X` exist with the same
+    name, prefer the `definitions` body. ``unpack_defs`` keys refs by last path
+    segment so only one body can win; pick the JSON-Schema-native one.
+
+    This locks in the residual limitation as a deliberate contract: a ref
+    written as ``#/components/schemas/X`` will *also* resolve to the
+    ``definitions`` body when both namespaces define ``X``. Cross-namespace
+    disambiguation would require teaching ``unpack_defs`` to key by full ref
+    path, which is out of scope here.
+    """
+    config = AnthropicConfig()
+    tool = {
+        "type": "function",
+        "function": {
+            "name": "collision_tool",
+            "description": "",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "from_definitions": {"$ref": "#/definitions/Thing"},
+                    "from_components": {"$ref": "#/components/schemas/Thing"},
+                },
+                "definitions": {
+                    "Thing": {"type": "string", "description": "from-definitions"},
+                },
+                "components": {
+                    "schemas": {
+                        "Thing": {"type": "integer", "description": "from-components"},
+                    }
+                },
+            },
+        },
+    }
+
+    transformed, _ = config._map_tool_helper(tool)
+
+    assert transformed is not None
+    expected = {"type": "string", "description": "from-definitions"}
+    # Direct ref resolves to the `definitions` body (the documented winner).
+    assert transformed["input_schema"]["properties"]["from_definitions"] == expected
+    # Cross-namespace ref *also* resolves to the `definitions` body because
+    # ``unpack_defs`` keys by last path segment -- documented limitation.
+    assert transformed["input_schema"]["properties"]["from_components"] == expected
+
+
+def test_namespace_tool_flat_nested_tools_are_extracted():
+    """Codex sends nested tools in flat format {type, name, description, parameters} with no 'function' wrapper.
+    These must be normalized and mapped without raising KeyError: 'function'."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "close_agent",
+                    "description": "Close an agent.",
+                    "strict": False,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                        "additionalProperties": False,
+                    },
+                },
+            ],
+        }
+    ]
+    anthropic_tools, _ = config._map_tools(tools)
+    assert len(anthropic_tools) == 1
+    assert anthropic_tools[0]["name"] == "close_agent"
+
+
+def test_namespace_tool_nested_tools_are_extracted():
+    """Codex sends type='namespace' wrapping nested tools in Anthropic format.
+    The namespace container must be dropped and its nested tools extracted individually.
+    """
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "Tools for spawning and managing sub-agents.",
+            "tools": [
+                {
+                    "name": "close_agent",
+                    "type": "custom",
+                    "description": "Close an agent.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                    },
+                },
+                {
+                    "name": "resume_agent",
+                    "type": "custom",
+                    "description": "Resume a closed agent.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                        "required": ["id"],
+                    },
+                },
+            ],
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "exec_command",
+                "description": "Run a command.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"],
+                },
+            },
+        },
+    ]
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+    names = [t["name"] for t in anthropic_tools]
+    assert "close_agent" in names
+    assert "resume_agent" in names
+    assert "exec_command" in names
+    assert "multi_agent_v1" not in names
+    assert len(anthropic_tools) == 3
+    assert mcp_servers == []
+
+
+def test_client_metadata_stripped_from_anthropic_request():
+    """client_metadata passed by codex must not reach the Anthropic (or Vertex Anthropic) payload."""
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-3-5-haiku-20241022",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "client_metadata": {"originator": "codex"}},
+        litellm_params={},
+        headers={},
+    )
+    assert "client_metadata" not in result

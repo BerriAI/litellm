@@ -20,6 +20,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     response_format: Optional[Literal["url", "b64_json"]]
     size: Optional[str]
     user: Optional[str]
+    imageConfig: Optional[Dict[str, Any]]
 
 
 class ImageEditRequestParams(ImageEditOptionalRequestParams, total=False):

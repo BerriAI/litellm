@@ -526,9 +526,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
               <TabPanel>
                 {publicPage == false && canModify && (
                   <div className="flex justify-end mb-4">
-                    <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>
-                      Select Skills to Make Public
-                    </Button>
+                    <Button onClick={() => setIsMakeSkillPublicModalVisible(true)}>Select Skills to Make Public</Button>
                   </div>
                 )}
                 <SkillHubDashboard
