@@ -478,6 +478,147 @@ async def test_should_reserve_team_member_and_org_budget_counters(spend_counter_
 
 
 @pytest.mark.asyncio
+async def test_should_reserve_user_budget_limit_window_counter(spend_counter_state):
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-user-window-budget",
+        user_id="user-window-budget",
+    )
+    user_object = LiteLLM_UserTable(
+        user_id="user-window-budget",
+        spend=0.0,
+        budget_limits=[
+            {
+                "budget_duration": "1h",
+                "max_budget": 1.0,
+            }
+        ],
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(return_value=[])
+    original_prisma_client = ps.prisma_client
+    ps.prisma_client = fake_prisma
+
+    try:
+        with patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=0.4,
+        ):
+            reservation = await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=None,
+                user_object=user_object,
+                prisma_client=fake_prisma,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    finally:
+        ps.prisma_client = original_prisma_client
+
+    assert reservation is not None
+    assert reservation["entries"] == [
+        {
+            "counter_key": "spend:user:user-window-budget:window:1h",
+            "entity_type": "User",
+            "entity_id": "user-window-budget:1h",
+            "reserved_cost": 0.4,
+            "applied_adjustment": 0.0,
+        }
+    ]
+    assert counter_cache.in_memory_cache.get_cache(
+        key="spend:user:user-window-budget:window:1h"
+    ) == pytest.approx(0.4)
+
+    await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
+async def test_should_not_reserve_user_budget_limit_window_counter_for_team_keys(
+    spend_counter_state,
+):
+    """
+    Regression: a team key must not pre-reserve against a user's personal
+    budget-window counter. The user multi-budget check is also skipped in
+    common_checks for team keys, so reserving here would inflate the user's
+    window spend with traffic that the enforcement path will never read.
+    """
+    counter_cache, key_cache = spend_counter_state
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
+    valid_token = UserAPIKeyAuth(
+        token="key-team-route",
+        user_id="user-window-team-route",
+        team_id="team-route",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-route",
+        spend=0.0,
+        max_budget=None,
+    )
+    user_object = LiteLLM_UserTable(
+        user_id="user-window-team-route",
+        spend=0.0,
+        budget_limits=[
+            {
+                "budget_duration": "1h",
+                "max_budget": 1.0,
+            }
+        ],
+    )
+
+    import litellm.proxy.proxy_server as ps
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_spendlogs.group_by = AsyncMock(return_value=[])
+    original_prisma_client = ps.prisma_client
+    ps.prisma_client = fake_prisma
+
+    try:
+        with patch(
+            "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
+            return_value=0.4,
+        ):
+            reservation = await reserve_budget_for_request(
+                request_body=_request_body(),
+                route="/chat/completions",
+                llm_router=None,
+                valid_token=valid_token,
+                team_object=team_object,
+                user_object=user_object,
+                prisma_client=fake_prisma,
+                user_api_key_cache=key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+    finally:
+        ps.prisma_client = original_prisma_client
+
+    user_window_keys = [
+        e["counter_key"]
+        for e in (reservation["entries"] if reservation else [])
+        if e["counter_key"].startswith("spend:user:")
+    ]
+    assert user_window_keys == [], (
+        f"team-key request must not reserve personal user-window counters, "
+        f"got {user_window_keys}"
+    )
+    assert (
+        counter_cache.in_memory_cache.get_cache(
+            key="spend:user:user-window-team-route:window:1h"
+        )
+        is None
+    )
+
+    if reservation is not None:
+        await release_budget_reservation(reservation)
+
+
+@pytest.mark.asyncio
 async def test_should_seed_org_counter_from_with_budget_cache(spend_counter_state):
     counter_cache, key_cache = spend_counter_state
     await key_cache.async_set_cache(

@@ -282,6 +282,24 @@ async def _get_budget_counters(
                 entity_id=user_object.user_id,
             )
         )
+    # Mirror the user max_budget block above: only reserve personal user
+    # budget-window counters for personal keys. Team keys must not bump
+    # the user's window counters, since the user multi-budget check is
+    # also skipped in that case (see common_checks).
+    if (
+        (team_object is None or team_object.team_id is None)
+        and user_object is not None
+        and user_object.user_id is not None
+    ):
+        counters.extend(
+            _get_budget_limit_counters(
+                entity_prefix=f"spend:user:{user_object.user_id}",
+                entity_type="User",
+                entity_id=user_object.user_id,
+                budget_limits=user_object.budget_limits,
+                fallback_spend=float(user_object.spend or 0.0),
+            )
+        )
 
     end_user_counter = await _get_end_user_budget_counter(
         valid_token=valid_token,
