@@ -12,15 +12,18 @@ class GovernedRoute:
     id_fields: List[str] = field(default_factory=list)
 
 
-# Governs the model and team management planes. Every other route is
-# intentionally left ungoverned (loud-open) until later slices wire it in. Team
-# membership/permission routes (member_add, etc.) are deferred with the recursive
-# `manage` action.
+# Control-plane management resources governed by RBAC. Every route not listed
+# here (and not an inference route) is loud-open until a later slice wires it in;
+# non-uniform surfaces (guardrails, mcp servers, credentials) are deferred
+# because their verbs don't map cleanly onto read/write/delete/manage.
 _MODEL_ID_FIELDS = ["model_id", "id"]
 _TEAM_ID_FIELDS = ["team_id", "id"]
 _KEY_ID_FIELDS = ["key", "token", "key_name"]
 _USER_ID_FIELDS = ["user_id"]
 _ORG_ID_FIELDS = ["organization_id"]
+_VECTOR_STORE_ID_FIELDS = ["vector_store_id", "id"]
+_BUDGET_ID_FIELDS = ["budget_id", "id"]
+_CUSTOMER_ID_FIELDS = ["user_id"]
 
 _GOVERNED: Dict[str, GovernedRoute] = {
     "/model/new": GovernedRoute("model", "write"),
@@ -60,11 +63,35 @@ _GOVERNED: Dict[str, GovernedRoute] = {
     "/auth/v2/policy/assignment/add": GovernedRoute("policy", "write"),
     "/auth/v2/policy/assignment/remove": GovernedRoute("policy", "delete"),
     "/auth/v2/policy/list": GovernedRoute("policy", "read"),
+    "/vector_store/new": GovernedRoute("vector_store", "write"),
+    "/vector_store/update": GovernedRoute(
+        "vector_store", "write", _VECTOR_STORE_ID_FIELDS
+    ),
+    "/vector_store/delete": GovernedRoute(
+        "vector_store", "delete", _VECTOR_STORE_ID_FIELDS
+    ),
+    "/vector_store/info": GovernedRoute(
+        "vector_store", "read", _VECTOR_STORE_ID_FIELDS
+    ),
+    "/vector_store/list": GovernedRoute("vector_store", "read"),
+    "/budget/new": GovernedRoute("budget", "write"),
+    "/budget/update": GovernedRoute("budget", "write", _BUDGET_ID_FIELDS),
+    "/budget/delete": GovernedRoute("budget", "delete", _BUDGET_ID_FIELDS),
+    "/budget/info": GovernedRoute("budget", "read", _BUDGET_ID_FIELDS),
+    "/budget/list": GovernedRoute("budget", "read"),
+    "/budget/settings": GovernedRoute("budget", "read"),
+    "/customer/new": GovernedRoute("customer", "write"),
+    "/customer/update": GovernedRoute("customer", "write", _CUSTOMER_ID_FIELDS),
+    "/customer/delete": GovernedRoute("customer", "delete", _CUSTOMER_ID_FIELDS),
+    "/customer/info": GovernedRoute("customer", "read", _CUSTOMER_ID_FIELDS),
+    "/customer/list": GovernedRoute("customer", "read"),
+    "/customer/block": GovernedRoute("customer", "write", _CUSTOMER_ID_FIELDS),
+    "/customer/unblock": GovernedRoute("customer", "write", _CUSTOMER_ID_FIELDS),
 }
 
 
 # Inference routes carry a `model` in the body and are authorized on the data
-# plane (casbin ABAC over the principal's allowed-model attribute), not the
+# plane (a plain allowed-model predicate over the principal's key), not the
 # control-plane RBAC map.
 _INFERENCE_ROUTES = {
     "/chat/completions",
