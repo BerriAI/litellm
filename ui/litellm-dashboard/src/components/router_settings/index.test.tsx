@@ -9,19 +9,13 @@ vi.mock("antd", async (importOriginal) => {
     ...actual,
     Select: Object.assign(
       ({ value, onChange, children }: any) => (
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
+        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
           {children}
         </select>
       ),
       {
-        Option: ({ value, children }: any) => (
-          <option value={value}>{children}</option>
-        ),
-      }
+        Option: ({ value, children }: any) => <option value={value}>{children}</option>,
+      },
     ),
   };
 });
@@ -32,11 +26,7 @@ vi.mock("@/components/networking", () => ({
   setCallbacksCall: vi.fn(),
 }));
 
-import {
-  getCallbacksCall,
-  getRouterSettingsCall,
-  setCallbacksCall,
-} from "@/components/networking";
+import { getCallbacksCall, getRouterSettingsCall, setCallbacksCall } from "@/components/networking";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 
 const mockCallbacksResponse = {
@@ -86,9 +76,7 @@ describe("RouterSettings", () => {
   });
 
   it("should render nothing when accessToken is null", () => {
-    const { container } = renderWithProviders(
-      <RouterSettings {...defaultProps} accessToken={null} />
-    );
+    const { container } = renderWithProviders(<RouterSettings {...defaultProps} accessToken={null} />);
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -108,9 +96,7 @@ describe("RouterSettings", () => {
   });
 
   it("should not fetch data when any required prop is missing", () => {
-    renderWithProviders(
-      <RouterSettings {...defaultProps} userRole={null} />
-    );
+    renderWithProviders(<RouterSettings {...defaultProps} userRole={null} />);
     expect(getCallbacksCall).not.toHaveBeenCalled();
   });
 
@@ -144,7 +130,7 @@ describe("RouterSettings", () => {
         router_settings: expect.objectContaining({
           routing_strategy: "simple-shuffle",
         }),
-      })
+      }),
     );
   });
 
@@ -158,8 +144,6 @@ describe("RouterSettings", () => {
     });
     await user.click(screen.getByRole("button", { name: /save changes/i }));
 
-    expect(NotificationsManager.success).toHaveBeenCalledWith(
-      "router settings updated successfully"
-    );
+    expect(NotificationsManager.success).toHaveBeenCalledWith("router settings updated successfully");
   });
 });

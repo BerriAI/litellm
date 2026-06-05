@@ -410,10 +410,7 @@ describe("useKeys", () => {
       }),
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { projectID: "project-1" }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { projectID: "project-1" }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -436,10 +433,7 @@ describe("useKeys", () => {
       }),
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { projectID: "project-1", teamID: "team-1" }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { projectID: "project-1", teamID: "team-1" }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
@@ -456,10 +450,7 @@ describe("useKeys", () => {
       json: async () => mockKeysResponse,
     });
 
-    const { result } = renderHook(
-      () => useKeys(1, 10, { projectID: null }),
-      { wrapper },
-    );
+    const { result } = renderHook(() => useKeys(1, 10, { projectID: null }), { wrapper });
 
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);

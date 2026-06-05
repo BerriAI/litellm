@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.litellm_core_utils.llm_response_utils.get_headers import (
     get_response_headers,
 )
@@ -169,11 +170,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
                         is_response_format_supported=False,
                         enforce_tool_choice=False,  # tools and response_format are both set, don't enforce tool_choice
                     )
-                elif "json_schema" in value:
-                    optional_params["response_format"] = {
-                        "type": "json_object",
-                        "schema": value["json_schema"]["schema"],
-                    }
                 else:
                     optional_params["response_format"] = value
             elif param == "max_completion_tokens":
@@ -216,8 +212,13 @@ class FireworksAIConfig(OpenAIGPTConfig):
         self, tools: List[OpenAIChatCompletionToolParam]
     ) -> List[OpenAIChatCompletionToolParam]:
         for tool in tools:
-            if tool.get("type") == "function":
-                tool["function"].pop("strict", None)
+            if tool.get("type") != "function":
+                continue
+            function = tool["function"]
+            function.pop("strict", None)
+            params = function.get("parameters")
+            if isinstance(params, dict):
+                unpack_legacy_defs(params)
         return tools
 
     def _transform_messages_helper(

@@ -322,9 +322,11 @@ model LiteLLM_MCPServerTable {
   authorization_url  String?
   token_url          String?
   registration_url   String?
+  oauth2_flow        String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
   delegate_auth_to_upstream Boolean @default(false)
+  oauth_passthrough Boolean @default(false)
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?

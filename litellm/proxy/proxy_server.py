@@ -417,6 +417,7 @@ from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMi
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
 )
+from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     router as openai_files_router,
@@ -825,6 +826,37 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
             if isinstance(worker_config, dict):
                 await initialize(**worker_config)
 
+    ## V2 OTEL: now that config (and therefore the callbacks) is loaded, publish
+    ## the chosen V2 logger's TracerProvider as the OTel global. The FastAPI
+    ## instrumentation mounted at app-creation binds to the global provider, so
+    ## this is what makes server spans and gen-ai spans share one provider and
+    ## land in the same trace. Prefer an already-registered preset logger
+    ## (arize, langfuse, …) so server spans export to that backend too; otherwise
+    ## build a generic one from OTEL_* envs. ``set_tracer_provider`` only takes
+    ## effect once, so the first configured logger wins.
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            from opentelemetry import trace as _otel_trace
+
+            from litellm.integrations.otel.logger import OpenTelemetryV2
+
+            _otel_v2_logger = (
+                next(
+                    (
+                        cb
+                        for cb in litellm.service_callback
+                        if isinstance(cb, OpenTelemetryV2)
+                    ),
+                    None,
+                )
+                or OpenTelemetryV2()
+            )
+            _otel_trace.set_tracer_provider(_otel_v2_logger._tracer_provider)
+    except Exception as e:
+        verbose_proxy_logger.debug("Skipping OTel V2 provider setup: %s", e)
+
     # check if DATABASE_URL in environment - load from there
     if prisma_client is None:
         _db_url: Optional[str] = get_secret("DATABASE_URL", None)  # type: ignore
@@ -941,6 +973,11 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     # End of startup event
     yield
+
+    # Shutdown event - drain in-flight requests before tearing down dependencies
+    # so SIGTERM (rolling update, scale-down, liveness kill) doesn't drop them.
+    GracefulShutdownManager.start_shutdown()
+    await GracefulShutdownManager.wait_for_drain()
 
     # Shutdown event - close shared aiohttp session
     if shared_aiohttp_session is not None:
@@ -1071,7 +1108,18 @@ app = FastAPI(
     root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
     generate_unique_id_function=_generate_stable_operation_id,
+    strict_content_type=False,
 )
+
+## V2 OTEL: instrument the FastAPI app for server spans (gated by
+## LITELLM_OTEL_V2). This MUST run at app-creation time — once the lifespan runs,
+## the middleware stack is frozen and ``instrument_app`` raises "Cannot add
+## middleware after an application has started". See
+## ``litellm.integrations.otel.mount`` for the full rationale; the call is a safe
+## no-op when the gate is off or the instrumentation package is unavailable.
+from litellm.integrations.otel.mount import instrument_fastapi_app
+
+instrument_fastapi_app(app)
 
 vertex_live_passthrough_vertex_base = VertexBase()
 
@@ -1223,7 +1271,7 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     headers = exc.headers
     error_dict = exc.to_dict()
     status_code = int(exc.code) if exc.code else status.HTTP_500_INTERNAL_SERVER_ERROR
-    _close_dangling_otel_server_span(request, status_code)
+    _close_dangling_otel_server_span(request, status_code, exc=exc)
     return JSONResponse(
         status_code=status_code,
         content={"error": error_dict},
@@ -1231,18 +1279,35 @@ async def openai_exception_handler(request: Request, exc: ProxyException):
     )
 
 
-def _close_dangling_otel_server_span(request: Request, status_code: int) -> None:
+def _close_dangling_otel_server_span(
+    request: Request, status_code: int, exc: Optional[Exception] = None
+) -> None:
     parent_otel_span = getattr(request.state, "parent_otel_span", None)
     if parent_otel_span is None:
         return
     if open_telemetry_logger is None:
         return
+    # Under OTel V2 the FastAPI instrumentor owns the server span (parent_otel_span
+    # is that same span), and it records the error + ends it itself. Ending it here
+    # would end it early — losing the http.* attributes the instrumentor stamps on
+    # completion — and double-end it. Leave it to the instrumentor.
+    try:
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+        if is_otel_v2_enabled():
+            return
+    except Exception:
+        pass
     try:
         from opentelemetry.trace import Status, StatusCode
 
         open_telemetry_logger.set_response_status_code_attribute(
             parent_otel_span, status_code
         )
+        if status_code >= 400:
+            open_telemetry_logger.record_error_attributes_on_span(
+                parent_otel_span, exc, status_code
+            )
         parent_otel_span.set_status(
             Status(StatusCode.ERROR if status_code >= 400 else StatusCode.OK)
         )
@@ -1259,7 +1324,7 @@ def _close_dangling_otel_server_span(request: Request, status_code: int) -> None
 async def otel_request_validation_exception_handler(
     request: Request, exc: RequestValidationError
 ):
-    _close_dangling_otel_server_span(request, 422)
+    _close_dangling_otel_server_span(request, 422, exc=exc)
     return JSONResponse(
         status_code=422,
         content={"detail": jsonable_encoder(exc.errors())},
@@ -1273,7 +1338,7 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     verbose_proxy_logger.exception(
         "Unhandled exception in request: %s", type(exc).__name__
     )
-    _close_dangling_otel_server_span(request, 500)
+    _close_dangling_otel_server_span(request, 500, exc=exc)
     return JSONResponse(
         status_code=500,
         content={
@@ -1845,7 +1910,7 @@ prompt_injection_detection_obj: Optional[_OPTIONAL_PromptInjectionDetection] = N
 store_model_in_db: bool = False
 open_telemetry_logger: Optional[OpenTelemetry] = None
 ### INITIALIZE GLOBAL LOGGING OBJECT ###
-proxy_logging_obj = ProxyLogging(
+proxy_logging_obj: ProxyLogging = ProxyLogging(
     user_api_key_cache=user_api_key_cache, premium_user=premium_user
 )
 ### REDIS QUEUE ###
@@ -7019,11 +7084,12 @@ async def async_data_generator(  # noqa: PLR0915
             # still flush their post-stream logging.
             ProxyLogging._fire_deferred_stream_logging(request_data)
 
-        # Streaming is done, yield the [DONE] chunk
         if error_message is not None:
             yield error_message
-        done_message = "[DONE]"
-        yield f"data: {done_message}\n\n"
+        # OpenAI-compatible streams terminate with data: [DONE]; Google GenAI (?alt=sse) does not.
+        if not request_data.get("_litellm_skip_openai_stream_done"):
+            done_message = "[DONE]"
+            yield f"data: {done_message}\n\n"
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
@@ -11822,6 +11888,9 @@ async def model_info_v2(
     # Update total count to include agents
     search_total_count = len(all_models)
 
+    # Translate `model_name` to the public name for team-scoped rows.
+    all_models = [_translate_model_name_for_response(m) for m in all_models]
+
     return _paginate_models_response(
         all_models=all_models,
         page=page,
@@ -12256,6 +12325,33 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
+def _translate_model_name_for_response(model: dict) -> dict:
+    """For team-scoped DB rows, replace `model_name` with the public name
+    in `model_info.team_public_model_name` before returning. The DB column
+    and the in-memory router index keep the internal mangled name
+    (`model_name_{team_id}_{uuid}`) as the routing key -- this swap is a
+    presentation-layer concern. Returns a shallow copy; never mutates.
+
+    Without this swap the internal name leaks into `/v1/model/info` and
+    `/v2/model/info`, the dashboard binds its edit form to it, and a
+    non-rename save round-trips the internal name back -- corrupting
+    `team_public_model_name` and the team ACL (see issue #28382).
+    """
+    if not isinstance(model, dict):
+        return model
+    model_info = model.get("model_info") or {}
+    if not isinstance(model_info, dict):
+        return model
+    team_public = model_info.get("team_public_model_name")
+    team_id = model_info.get("team_id")
+    if not team_public or not team_id:
+        return model
+    current = model.get("model_name") or ""
+    if not current.startswith(f"model_name_{team_id}_"):
+        return model
+    return {**model, "model_name": team_public}
+
+
 def _get_proxy_model_info(model: dict) -> dict:
     # provided model_info in config.yaml
     model_info = model.get("model_info", {})
@@ -12296,7 +12392,7 @@ def _get_proxy_model_info(model: dict) -> dict:
         deployment_dict=model, excluded_keys={"litellm_credential_name"}
     )
 
-    return model
+    return _translate_model_name_for_response(model)
 
 
 @router.get(
@@ -12436,8 +12532,11 @@ async def model_info_v1(  # noqa: PLR0915
         else:
             all_models = []
 
-    for in_place_model in all_models:
-        in_place_model = _get_proxy_model_info(model=in_place_model)
+    # Reassign each entry: _get_proxy_model_info returns a (possibly new)
+    # dict via _translate_model_name_for_response, which does NOT mutate in
+    # place. Binding only the loop variable would drop the public-name swap
+    # for team-scoped rows and leak the internal routing key (#28382).
+    all_models = [_get_proxy_model_info(model=model) for model in all_models]
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
@@ -15591,7 +15690,6 @@ async def get_routes():
 
 app.include_router(router)
 app.include_router(response_router)
-app.include_router(batches_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
@@ -15604,6 +15702,7 @@ app.include_router(fine_tuning_router)
 app.include_router(credential_router)
 app.include_router(llm_passthrough_router)
 app.include_router(pass_through_router)
+app.include_router(batches_router)
 app.include_router(health_router)
 app.include_router(key_management_router)
 app.include_router(internal_user_router)
@@ -15778,10 +15877,10 @@ async def toolset_mcp_route(toolset_name: str, request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error handling toolset MCP route for {toolset_name}: {str(e)}"
+        verbose_proxy_logger.exception(
+            "Error handling toolset MCP route for %s: %s", toolset_name, str(e)
         )
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def _mcp_forward_as_path(path_segment: str, request: Request):
@@ -15791,6 +15890,8 @@ async def _mcp_forward_as_path(path_segment: str, request: Request):
     )
 
     scope = dict(request.scope)
+    # Preserve the public request path for OAuth challenge URL selection.
+    scope["_original_path"] = scope.get("path", "")
     scope["path"] = f"/mcp/{path_segment}"
     return await _stream_mcp_asgi_response(
         handle_streamable_http_mcp, scope, request.receive
@@ -15938,6 +16039,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
             )
             if toolset is not None:
                 scope = dict(request.scope)
+                scope["_original_path"] = scope.get("path", "")
                 scope["path"] = "/mcp"
                 token = _mcp_active_toolset_id.set(toolset.toolset_id)
                 try:
@@ -15959,7 +16061,7 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
     except HTTPException as e:
         raise e
     except Exception as e:
-        verbose_proxy_logger.error(
-            f"Error handling dynamic MCP route for {mcp_server_name}: {str(e)}"
+        verbose_proxy_logger.exception(
+            "Error handling dynamic MCP route for %s: %s", mcp_server_name, str(e)
         )
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")

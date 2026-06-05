@@ -68,15 +68,18 @@ export default function HashicorpVault() {
 
   const handleClearField = () => {
     if (!clearingField) return;
-    updateConfig({ [clearingField]: "" }, {
-      onSuccess: () => {
-        NotificationManager.success(`${FIELD_LABELS[clearingField] ?? clearingField} cleared`);
-        setClearingField(null);
+    updateConfig(
+      { [clearingField]: "" },
+      {
+        onSuccess: () => {
+          NotificationManager.success(`${FIELD_LABELS[clearingField] ?? clearingField} cleared`);
+          setClearingField(null);
+        },
+        onError: (err) => {
+          NotificationManager.fromBackend(err);
+        },
       },
-      onError: (err) => {
-        NotificationManager.fromBackend(err);
-      },
-    });
+    );
   };
 
   const renderValue = (key: string) => {
@@ -103,9 +106,7 @@ export default function HashicorpVault() {
 
   const renderSettings = () => {
     // Only show fields that have values, plus auth method
-    const fieldsToShow = Object.entries(rawValues).filter(
-      ([_, value]) => value != null && value !== ""
-    );
+    const fieldsToShow = Object.entries(rawValues).filter(([_, value]) => value != null && value !== "");
 
     if (fieldsToShow.length === 0) return null;
 
@@ -145,7 +146,9 @@ export default function HashicorpVault() {
               <Flex align="center" gap={12}>
                 <KeyRound className="w-6 h-6 text-gray-400" />
                 <div>
-                  <Title level={3} style={{ marginBottom: 0 }}>Hashicorp Vault</Title>
+                  <Title level={3} style={{ marginBottom: 0 }}>
+                    Hashicorp Vault
+                  </Title>
                   <Text type="secondary">Manage secret manager configuration</Text>
                 </div>
               </Flex>
@@ -153,24 +156,13 @@ export default function HashicorpVault() {
               <Space>
                 {isConfigured && (
                   <>
-                    <Button
-                      icon={<PlugZap className="w-4 h-4" />}
-                      loading={isTesting}
-                      onClick={handleTestConnection}
-                    >
+                    <Button icon={<PlugZap className="w-4 h-4" />} loading={isTesting} onClick={handleTestConnection}>
                       Test Connection
                     </Button>
-                    <Button
-                      icon={<Edit className="w-4 h-4" />}
-                      onClick={() => setIsEditModalVisible(true)}
-                    >
+                    <Button icon={<Edit className="w-4 h-4" />} onClick={() => setIsEditModalVisible(true)}>
                       Edit Configuration
                     </Button>
-                    <Button
-                      danger
-                      icon={<Trash2 className="w-4 h-4" />}
-                      onClick={() => setIsDeleteModalOpen(true)}
-                    >
+                    <Button danger icon={<Trash2 className="w-4 h-4" />} onClick={() => setIsDeleteModalOpen(true)}>
                       Delete Configuration
                     </Button>
                   </>
@@ -218,9 +210,7 @@ export default function HashicorpVault() {
         title="Delete Hashicorp Vault Configuration?"
         message="Models using Vault secrets will lose access to their API keys until a new configuration is saved."
         resourceInformationTitle="Vault Configuration"
-        resourceInformation={[
-          { label: "Vault Address", value: rawValues.vault_addr },
-        ]}
+        resourceInformation={[{ label: "Vault Address", value: rawValues.vault_addr }]}
         onCancel={() => setIsDeleteModalOpen(false)}
         onOk={handleDelete}
         confirmLoading={isDeleting}
@@ -228,11 +218,11 @@ export default function HashicorpVault() {
 
       <DeleteResourceModal
         isOpen={clearingField !== null}
-        title={`Clear ${clearingField ? (FIELD_LABELS[clearingField] ?? clearingField) : ""}?`}
+        title={`Clear ${clearingField ? FIELD_LABELS[clearingField] ?? clearingField : ""}?`}
         message="This will remove the stored value."
         resourceInformationTitle="Field"
         resourceInformation={[
-          { label: "Field", value: clearingField ? (FIELD_LABELS[clearingField] ?? clearingField) : "" },
+          { label: "Field", value: clearingField ? FIELD_LABELS[clearingField] ?? clearingField : "" },
         ]}
         onCancel={() => setClearingField(null)}
         onOk={handleClearField}

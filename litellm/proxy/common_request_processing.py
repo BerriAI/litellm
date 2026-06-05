@@ -249,6 +249,13 @@ async def create_response(  # noqa: PLR0915
     If the first chunk is an error, return a standard JSON error response.
     Otherwise, return StreamingResponse and stream all content.
     """
+    # Tell buffering reverse proxies (nginx, ingress-nginx, Envoy) to flush SSE
+    # immediately instead of releasing the whole stream in one batch (issue #28384).
+    streaming_headers = {
+        **headers,
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
     first_chunk_value: Optional[str] = None
     final_status_code = default_status_code
 
@@ -300,7 +307,7 @@ async def create_response(  # noqa: PLR0915
         return StreamingResponse(
             empty_gen(),
             media_type=media_type,
-            headers=headers,
+            headers=streaming_headers,
             status_code=default_status_code,
         )
     except Exception as e:
@@ -338,7 +345,7 @@ async def create_response(  # noqa: PLR0915
         return StreamingResponse(
             error_gen_message(),
             media_type=media_type,
-            headers=headers,
+            headers=streaming_headers,
             status_code=error_status,
         )
 
@@ -360,7 +367,7 @@ async def create_response(  # noqa: PLR0915
     return StreamingResponse(
         combined_generator(),
         media_type=media_type,
-        headers=headers,
+        headers=streaming_headers,
         status_code=final_status_code,
     )
 
@@ -1291,7 +1298,7 @@ class ProxyBaseLLMRequestProcessing:
                 # (ProxyLogging._fire_deferred_stream_logging) fires the
                 # closure after the full streaming pipeline finishes.
                 # The closure runs non-apply_guardrail hooks on the
-                # assembled response, then fires both logging handlers.
+                # assembled response, then fires success logging.
                 # Only for CustomStreamWrapper — raw async generators from
                 # passthrough routes bypass CSW and would orphan the closure.
                 from litellm.litellm_core_utils.streaming_handler import (
@@ -1427,32 +1434,17 @@ class ProxyBaseLLMRequestProcessing:
                     logging_obj._on_deferred_stream_complete = None  # type: ignore[union-attr]
                     try:
                         asyncio.create_task(
-                            logging_obj.async_success_handler(
+                            logging_obj.dispatch_success_handlers(
                                 response,
                                 cache_hit=None,
                                 start_time=None,
                                 end_time=None,
+                                prefer_async_handlers=True,
                             )
                         )
                     except Exception as e:
                         verbose_proxy_logger.exception(
                             "Error in orphaned streaming async logging: %s", e
-                        )
-                    try:
-                        from litellm.litellm_core_utils.thread_pool_executor import (
-                            executor as _exc,
-                        )
-
-                        _exc.submit(
-                            logging_obj.success_handler,
-                            response,
-                            cache_hit=None,
-                            start_time=None,
-                            end_time=None,
-                        )
-                    except Exception as e:
-                        verbose_proxy_logger.exception(
-                            "Error in orphaned streaming sync logging: %s", e
                         )
 
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
@@ -1740,7 +1732,7 @@ class ProxyBaseLLMRequestProcessing:
     ) -> None:
         """
         Run non-streaming post-call guardrail hooks on an assembled streaming
-        response, then fire both async and sync logging handlers.
+        response, then fire success logging via ``dispatch_success_handlers``.
 
         Called by ProxyLogging._fire_deferred_stream_logging after the full
         streaming pipeline (including unified_guardrail end-of-stream blocks)
@@ -1756,8 +1748,6 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can call the production
         implementation directly rather than reimplementing the closure.
         """
-        from litellm.litellm_core_utils.thread_pool_executor import executor
-
         _response = assembled_response
         try:
             from litellm.proxy.proxy_server import llm_router as _global_llm_router
@@ -1816,31 +1806,23 @@ class ProxyBaseLLMRequestProcessing:
             )
         finally:
             try:
+                # Proxy streaming always runs in async context and proxy spend
+                # logging is async-only; force async dispatch so DB/spend
+                # callbacks fire regardless of the call-type heuristic in
+                # _is_sync_litellm_request (which only recognizes a subset of
+                # async markers stored in litellm_params).
                 asyncio.create_task(
-                    captured_logging_obj.async_success_handler(
+                    captured_logging_obj.dispatch_success_handlers(
                         _response,
                         cache_hit=cache_hit,
                         start_time=None,
                         end_time=None,
+                        prefer_async_handlers=True,
                     )
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(
-                    "Error in deferred streaming async logging: %s",
-                    e,
-                )
-
-            try:
-                executor.submit(
-                    captured_logging_obj.success_handler,
-                    _response,
-                    cache_hit=cache_hit,
-                    start_time=None,
-                    end_time=None,
-                )
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    "Error in deferred streaming sync logging: %s",
+                    "Error in deferred streaming success logging: %s",
                     e,
                 )
 
