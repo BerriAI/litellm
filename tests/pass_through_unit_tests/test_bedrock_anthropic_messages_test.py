@@ -136,3 +136,84 @@ async def test_should_not_fail_with_forwarded_headers_bedrock_invoke_messages():
     print("INVOKE API RESPONSE: ", response)
 
     INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST._validate_response(response)
+
+
+def test_bedrock_anthropic_messages_system_role_transformation():
+    """
+    Test that system messages in the messages array are correctly extracted and moved
+    to the top-level system parameter for Bedrock.
+    """
+    config = litellm.AmazonAnthropicClaudeMessagesConfig()
+    
+    # 1. Test case: System message in messages array, no existing system param
+    req = config.transform_anthropic_messages_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant"},
+            {"role": "user", "content": "Hello"}
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 100},
+        litellm_params={},
+        headers={}
+    )
+    
+    assert req["messages"] == [{"role": "user", "content": "Hello"}]
+    assert req["system"] == [{"type": "text", "text": "You are a helpful assistant"}]
+    
+    # 2. Test case: System message in messages array, and existing system param
+    req = config.transform_anthropic_messages_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {"role": "system", "content": "System message in messages array"},
+            {"role": "user", "content": "Hello"}
+        ],
+        anthropic_messages_optional_request_params={
+            "max_tokens": 100,
+            "system": "Existing top-level system message"
+        },
+        litellm_params={},
+        headers={}
+    )
+    
+    assert req["messages"] == [{"role": "user", "content": "Hello"}]
+    assert req["system"] == [
+        {"type": "text", "text": "Existing top-level system message"},
+        {"type": "text", "text": "System message in messages array"}
+    ]
+    
+    # 3. Test case: Empty system message content (should remove system message from messages, system param unaffected)
+    req = config.transform_anthropic_messages_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {"role": "system", "content": ""},
+            {"role": "user", "content": "Hello"}
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 100},
+        litellm_params={},
+        headers={}
+    )
+    
+    assert req["messages"] == [{"role": "user", "content": "Hello"}]
+    assert "system" not in req
+    
+    # 4. Test case: Non-text items in list content (should only extract text items, ignore non-text)
+    req = config.transform_anthropic_messages_request(
+        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=[
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "This is text"},
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "abc"}}
+                ]
+            },
+            {"role": "user", "content": "Hello"}
+        ],
+        anthropic_messages_optional_request_params={"max_tokens": 100},
+        litellm_params={},
+        headers={}
+    )
+    
+    assert req["messages"] == [{"role": "user", "content": "Hello"}]
+    assert req["system"] == [{"type": "text", "text": "This is text"}]
+
