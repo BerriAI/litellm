@@ -7,7 +7,9 @@ from typing import Any, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
-from litellm.litellm_core_utils.cloud_storage_security import encode_gcs_object_name_for_url
+from litellm.litellm_core_utils.cloud_storage_security import (
+    encode_gcs_object_name_for_url,
+)
 
 from .base import FocusDestination, FocusTimeWindow
 
@@ -48,7 +50,9 @@ class FocusGCSDestination(GCSBucketBase, FocusDestination):
             f"https://storage.googleapis.com/upload/storage/v1/b/"
             f"{self.BUCKET_NAME}/o?uploadType=media&name={encoded_name}"
         )
-        response = await self.async_httpx_client.post(url=url, headers=headers, data=content)
+        response = await self.async_httpx_client.post(
+            url=url, headers=headers, data=content
+        )
         if response.status_code != 200:
             raise RuntimeError(
                 f"GCS upload failed: status={response.status_code} body={response.text}"

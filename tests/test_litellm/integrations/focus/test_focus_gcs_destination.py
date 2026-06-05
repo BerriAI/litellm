@@ -21,7 +21,9 @@ def _make_window(frequency: str = "hourly") -> FocusTimeWindow:
 @pytest.mark.asyncio
 async def test_deliver_posts_to_gcs_upload_endpoint():
     """deliver() must POST raw bytes to the GCS upload endpoint."""
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     dest = FocusGCSDestination(
         prefix="focus_exports",
@@ -58,7 +60,9 @@ async def test_deliver_posts_to_gcs_upload_endpoint():
 @pytest.mark.asyncio
 async def test_deliver_raises_on_gcs_error():
     """deliver() must raise RuntimeError when GCS returns non-200."""
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     dest = FocusGCSDestination(
         prefix="focus_exports",
@@ -88,17 +92,23 @@ async def test_deliver_raises_on_gcs_error():
 
 def test_build_object_key_hourly():
     """Hourly key must include date= and hour= components."""
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     dest = FocusGCSDestination(prefix="focus_exports", config={"bucket_name": "b"})
-    key = dest._build_object_key(time_window=_make_window("hourly"), filename="usage.parquet")
+    key = dest._build_object_key(
+        time_window=_make_window("hourly"), filename="usage.parquet"
+    )
 
     assert key == "focus_exports/date=2026-01-01/hour=10/usage.parquet"
 
 
 def test_build_object_key_daily():
     """Daily key must include date= but not hour=."""
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     dest = FocusGCSDestination(prefix="focus_exports", config={"bucket_name": "b"})
     window = FocusTimeWindow(
@@ -113,7 +123,9 @@ def test_build_object_key_daily():
 
 def test_missing_bucket_name_raises():
     """Constructing without bucket_name must raise ValueError."""
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     with pytest.raises(ValueError, match="bucket_name"):
         FocusGCSDestination(prefix="focus_exports", config={})
@@ -128,7 +140,9 @@ def test_global_gcs_service_account_not_overwritten_when_absent(monkeypatch):
     """
     monkeypatch.setenv("GCS_PATH_SERVICE_ACCOUNT", "/global/sa.json")
 
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     dest = FocusGCSDestination(prefix="focus_exports", config={"bucket_name": "b"})
 
@@ -139,7 +153,9 @@ def test_explicit_service_account_overrides_global(monkeypatch):
     """Explicit service_account_json in config must take precedence over GCS_PATH_SERVICE_ACCOUNT."""
     monkeypatch.setenv("GCS_PATH_SERVICE_ACCOUNT", "/global/sa.json")
 
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     dest = FocusGCSDestination(
         prefix="focus_exports",
@@ -154,7 +170,9 @@ def test_factory_creates_gcs_destination(monkeypatch):
     monkeypatch.setenv("FOCUS_GCS_BUCKET_NAME", "env-bucket")
 
     from litellm.integrations.focus.destinations.factory import FocusDestinationFactory
-    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+    from litellm.integrations.focus.destinations.gcs_destination import (
+        FocusGCSDestination,
+    )
 
     dest = FocusDestinationFactory.create(provider="gcs", prefix="focus_exports")
 
