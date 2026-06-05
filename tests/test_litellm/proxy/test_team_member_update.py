@@ -50,10 +50,10 @@ async def test_ateam_member_update_admin_requires_premium(monkeypatch):
     assert exc_info.value.detail == expected_msg
 
 
-@pytest.mark.asyncio
-async def test_team_member_update_passes_budget_duration_to_upsert(monkeypatch):
-    """budget_duration from the request must reach _upsert_budget_and_membership,
-    otherwise the member budget is created without a reset period and never resets."""
+@pytest.fixture
+def happy_path_upsert(monkeypatch):
+    """Stub out the DB and the budget upsert so a team_member_update call reaches
+    _upsert_budget_and_membership, and hand back that mock to inspect the patch."""
     team_row = LiteLLM_TeamTable(
         team_id="team-1234",
         members_with_roles=[Member(user_id="user-1", role="user")],
@@ -89,19 +89,92 @@ async def test_team_member_update_passes_budget_duration_to_upsert(monkeypatch):
     )
     upsert_mock = AsyncMock()
     monkeypatch.setattr(team_endpoints, "_upsert_budget_and_membership", upsert_mock)
+    return upsert_mock
+
+
+def _member_update_request(**overrides):
+    data = TeamMemberUpdateRequest(
+        team_id="team-1234", user_id="user-1", role="user", **overrides
+    )
+    request = Request({"type": "http", "method": "POST", "path": "/team/member_update"})
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin")
+    return data, request, auth
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_sends_provided_fields_as_patch(happy_path_upsert):
+    """Fields the request sets must reach _upsert_budget_and_membership as a
+    budget patch, otherwise the member budget is never written/reset."""
+    data, request, auth = _member_update_request(
+        max_budget_in_team=10.0, budget_duration="30d"
+    )
+
+    response = await team_member_update(data, request, auth)
+
+    happy_path_upsert.assert_awaited_once()
+    assert happy_path_upsert.await_args.kwargs["budget_patch"] == {
+        "max_budget": 10.0,
+        "budget_duration": "30d",
+    }
+    assert response.budget_duration == "30d"
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_explicit_null_clears_field(happy_path_upsert):
+    """An explicitly-null field must be forwarded as None so the column is
+    cleared, rather than silently dropped."""
+    data, request, auth = _member_update_request(budget_duration=None)
+
+    await team_member_update(data, request, auth)
+
+    assert happy_path_upsert.await_args.kwargs["budget_patch"] == {
+        "budget_duration": None
+    }
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_omits_unset_fields_from_patch(happy_path_upsert):
+    """A request that touches no budget fields must produce an empty patch so the
+    member's existing budget is left untouched."""
+    data, request, auth = _member_update_request()
+
+    await team_member_update(data, request, auth)
+
+    assert happy_path_upsert.await_args.kwargs["budget_patch"] == {}
+
+
+@pytest.mark.parametrize(
+    "bad_duration",
+    [
+        "not-a-duration",  # unparseable garbage
+        "10x",  # unsupported unit
+        "0d",  # zero-length window
+        "999999999999999999999999d",  # overflows datetime math
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_member_update_rejects_invalid_budget_duration(
+    monkeypatch, bad_duration
+):
+    """An invalid budget_duration must be rejected with a 400 before any DB
+    write, so it can never be persisted and later break the budget reset job."""
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(proxy_server, "premium_user", False)
+    upsert_mock = AsyncMock()
+    monkeypatch.setattr(team_endpoints, "_upsert_budget_and_membership", upsert_mock)
 
     data = TeamMemberUpdateRequest(
         team_id="team-1234",
         user_id="user-1",
         role="user",
-        max_budget_in_team=10.0,
-        budget_duration="30d",
+        budget_duration=bad_duration,
     )
     request = Request({"type": "http", "method": "POST", "path": "/team/member_update"})
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin")
 
-    response = await team_member_update(data, request, auth)
+    with pytest.raises(HTTPException) as exc_info:
+        await team_member_update(data, request, auth)
 
-    upsert_mock.assert_awaited_once()
-    assert upsert_mock.await_args.kwargs["budget_duration"] == "30d"
-    assert response.budget_duration == "30d"
+    assert exc_info.value.status_code == 400
+    assert "budget_duration" in str(exc_info.value.detail)
+    upsert_mock.assert_not_called()
