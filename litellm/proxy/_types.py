@@ -2536,7 +2536,21 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     disable_budget_reservation: Optional[bool] = Field(
         None,
-        description="If True, disables the optimistic per-request budget reservation added in v1.84.0 and reverts to read-time budget enforcement only (the pre-v1.84.0 behavior). Budgets are still checked on every request, but without the reservation a burst of concurrent requests can each pass the spend check before their cost is recorded, so a budget can be briefly exceeded under high concurrency. Intended as an opt-out for operators hit by phantom BudgetExceededError from leaked reservations.",
+        description=(
+            "If True, disables the optimistic per-request budget reservation "
+            "introduced in v1.84.0. "
+            "WARNING: This weakens hard budget enforcement. Without the reservation, "
+            "a burst of concurrent requests from a single key can each pass the "
+            "read-time spend check before any of them is charged, allowing a "
+            "configured budget to be exceeded under high concurrency. "
+            "Budgets are still evaluated on every request at read time, so "
+            "an already-exhausted budget is still rejected. "
+            "Enable only if your deployment is experiencing phantom "
+            "BudgetExceededError responses caused by leaked reservations "
+            "(see GitHub issue #27639). "
+            "A proxy-level WARNING is logged on every request while this flag "
+            "is active as a reminder that hard enforcement is relaxed."
+        ),
     )
 
 

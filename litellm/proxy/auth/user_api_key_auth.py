@@ -2132,6 +2132,14 @@ async def _reserve_budget_after_common_checks(
     if skip_budget_checks:
         return
     if general_settings.get("disable_budget_reservation") is True:
+        verbose_proxy_logger.warning(
+            "disable_budget_reservation is enabled: skipping optimistic budget "
+            "reservation. Budget enforcement is read-time only — concurrent "
+            "requests can each pass the spend check before their cost is recorded, "
+            "so a configured budget may be briefly exceeded under high concurrency. "
+            "Set disable_budget_reservation to False or remove it to restore "
+            "hard per-request budget enforcement."
+        )
         return
 
     from litellm.proxy.spend_tracking.budget_reservation import (
