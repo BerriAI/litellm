@@ -76,6 +76,10 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
+import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
+
+export { deriveErrorMessage };
+export { ApiError } from "@/lib/http/client";
 
 const isLocal = process.env.NODE_ENV === "development";
 // In dev, if NEXT_PUBLIC_USE_REWRITES=true the Next.js dev server proxies API calls
@@ -417,6 +421,12 @@ export function getGlobalLitellmHeaderName(): string {
   return globalLitellmHeaderName;
 }
 
+const apiClient = createApiClient({
+  getBaseUrl: getProxyBaseUrl,
+  getAuthHeaderName: getGlobalLitellmHeaderName,
+  onError: handleError,
+});
+
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;
   const response = await fetch(url, {
@@ -595,26 +605,12 @@ export const getModelCostMapReloadStatus = async (accessToken: string) => {
 };
 export const modelCreateCall = async (accessToken: string, formValues: Model) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/new` : `/model/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/model/new`, {
+      accessToken,
+      body: {
         ...formValues,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
 
     // Close any existing messages before showing new ones
@@ -633,26 +629,12 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
 export const modelDeleteCall = async (accessToken: string, model_id: string) => {
   console.log(`model_id in model delete call: ${model_id}`);
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model/delete` : `/model/delete`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/model/delete`, {
+      accessToken,
+      body: {
         id: model_id,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
   } catch (error) {
@@ -669,26 +651,12 @@ export const budgetDeleteCall = async (accessToken: string | null, budget_id: st
   }
 
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/delete` : `/budget/delete`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/budget/delete`, {
+      accessToken,
+      body: {
         id: budget_id,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
   } catch (error) {
@@ -705,26 +673,12 @@ export const budgetCreateCall = async (
     console.log("Form Values in budgetCreateCall:", formValues); // Log the form values before making the API call
 
     console.log("Form Values after check:", formValues);
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/new` : `/budget/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/budget/new`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -742,26 +696,12 @@ export const budgetUpdateCall = async (
     console.log("Form Values in budgetUpdateCall:", formValues); // Log the form values before making the API call
 
     console.log("Form Values after check:", formValues);
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/budget/update` : `/budget/update`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/budget/update`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -776,26 +716,12 @@ export const invitationCreateCall = async (
   userID: string, // Assuming formValues is an object
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/invitation/new` : `/invitation/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/invitation/new`, {
+      accessToken,
+      body: {
         user_id: userID, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -1671,26 +1597,12 @@ export const organizationCreateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/new` : `/organization/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/organization/new`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -1707,26 +1619,12 @@ export const organizationUpdateCall = async (
   try {
     console.log("Form Values in organizationUpdateCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/organization/update` : `/organization/update`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.patch(`/organization/update`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("Update Team Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -2423,23 +2321,10 @@ export const updateUsefulLinksCall = async (
   useful_links: Record<string, string | { url: string; index: number }>,
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ useful_links: useful_links }),
+    return await apiClient.post(`/model_hub/update_useful_links`, {
+      accessToken,
+      body: { useful_links: useful_links },
     });
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -3422,26 +3307,12 @@ export const teamCreateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/new` : `/team/new`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/team/new`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -3467,26 +3338,12 @@ export const credentialCreateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials` : `/credentials`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/credentials`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -3612,26 +3469,12 @@ export const credentialUpdateCall = async (
       }
     }
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/credentials/${credentialName}` : `/credentials/${credentialName}`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.patch(`/credentials/${credentialName}`, {
+      accessToken,
+      body: {
         ...formValues, // Include formValues in the request body
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -3970,14 +3813,9 @@ export const teamMemberDeleteCall = async (
   try {
     console.log("Form Values in teamMemberAddCall:", formValues); // Log the form values before making the API call
 
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_delete` : `/team/member_delete`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    const data = await apiClient.post(`/team/member_delete`, {
+      accessToken,
+      body: {
         team_id: teamId,
         ...(formValues.user_email !== undefined && {
           user_email: formValues.user_email,
@@ -3985,17 +3823,8 @@ export const teamMemberDeleteCall = async (
         ...(formValues.user_id !== undefined && {
           user_id: formValues.user_id,
         }),
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     console.log("API Response:", data);
     return data;
     // Handle success - you might want to update some state or UI based on the created key
@@ -4877,23 +4706,7 @@ export const getMCPSemanticFilterSettings = async (accessToken: string) => {
    * Get MCP semantic filter configuration
    */
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/mcp_semantic_filter_settings` : `/get/mcp_semantic_filter_settings`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/get/mcp_semantic_filter_settings`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get MCP semantic filter settings:", error);
@@ -5245,23 +5058,7 @@ export const getGuardrailsUsageLogs = async (
 
 export const getPoliciesList = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/list` : `/policies/list`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policies/list`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policies list:", error);
@@ -5358,23 +5155,7 @@ export const testPoliciesAndGuardrails = async (
 
 export const getPolicyInfoWithGuardrails = async (accessToken: string, policyName: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/info/${policyName}` : `/policy/info/${policyName}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policy/info/${policyName}`, { accessToken });
     return data;
   } catch (error) {
     console.error(`Failed to get policy info for ${policyName}:`, error);
@@ -5384,23 +5165,7 @@ export const getPolicyInfoWithGuardrails = async (accessToken: string, policyNam
 
 export const getPolicyTemplates = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/templates` : `/policy/templates`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policy/templates`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policy templates:", error);
@@ -5451,28 +5216,14 @@ export const suggestPolicyTemplates = async (
   model: string,
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/templates/suggest` : `/policy/templates/suggest`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    return await apiClient.post(`/policy/templates/suggest`, {
+      accessToken,
+      body: {
         attack_examples: attackExamples.filter((e) => e.trim()),
         description,
         model,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return response.json();
   } catch (error) {
     console.error("Failed to suggest policy templates:", error);
     throw error;
@@ -5481,27 +5232,13 @@ export const suggestPolicyTemplates = async (
 
 export const testPolicyTemplate = async (accessToken: string, guardrailDefinitions: any[], text: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/templates/test` : `/policy/templates/test`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
+    return await apiClient.post(`/policy/templates/test`, {
+      accessToken,
+      body: {
         guardrail_definitions: guardrailDefinitions,
         text,
-      }),
+      },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return response.json();
   } catch (error) {
     console.error("Failed to test policy template:", error);
     throw error;
@@ -5656,24 +5393,7 @@ export const usageAiChatStream = async (
 
 export const createPolicyCall = async (accessToken: string, policyData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies` : `/policies`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(policyData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.post(`/policies`, { accessToken, body: policyData });
     return data;
   } catch (error) {
     console.error("Failed to create policy:", error);
@@ -5683,24 +5403,7 @@ export const createPolicyCall = async (accessToken: string, policyData: any) => 
 
 export const updatePolicyCall = async (accessToken: string, policyId: string, policyData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(policyData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.put(`/policies/${policyId}`, { accessToken, body: policyData });
     return data;
   } catch (error) {
     console.error("Failed to update policy:", error);
@@ -5778,24 +5481,10 @@ export const updatePolicyVersionStatus = async (
   versionStatus: "published" | "production",
 ): Promise<any> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}/status` : `/policies/${policyId}/status`;
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ version_status: versionStatus }),
+    return await apiClient.put(`/policies/${policyId}/status`, {
+      accessToken,
+      body: { version_status: versionStatus },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
   } catch (error) {
     console.error("Failed to update policy version status:", error);
     throw error;
@@ -5804,23 +5493,7 @@ export const updatePolicyVersionStatus = async (
 
 export const deletePolicyCall = async (accessToken: string, policyId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
-    const response = await fetch(url, {
-      method: "DELETE",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.delete(`/policies/${policyId}`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to delete policy:", error);
@@ -5830,23 +5503,7 @@ export const deletePolicyCall = async (accessToken: string, policyId: string) =>
 
 export const getPolicyInfo = async (accessToken: string, policyId: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policies/${policyId}`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policy info:", error);
@@ -5858,23 +5515,7 @@ export const getPolicyInfo = async (accessToken: string, policyId: string) => {
 
 export const getPolicyAttachmentsList = async (accessToken: string) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments/list` : `/policies/attachments/list`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/policies/attachments/list`, { accessToken });
     return data;
   } catch (error) {
     console.error("Failed to get policy attachments list:", error);
@@ -5884,24 +5525,7 @@ export const getPolicyAttachmentsList = async (accessToken: string) => {
 
 export const createPolicyAttachmentCall = async (accessToken: string, attachmentData: any) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments` : `/policies/attachments`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(attachmentData),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.post(`/policies/attachments`, { accessToken, body: attachmentData });
     return data;
   } catch (error) {
     console.error("Failed to create policy attachment:", error);
@@ -5943,24 +5567,10 @@ export const testPipelineCall = async (
   testMessages: Array<{ role: string; content: string }>,
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/test-pipeline` : `/policies/test-pipeline`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ pipeline, test_messages: testMessages }),
+    const data = await apiClient.post(`/policies/test-pipeline`, {
+      accessToken,
+      body: { pipeline, test_messages: testMessages },
     });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
     return data;
   } catch (error) {
     console.error("Failed to test pipeline:", error);
@@ -6001,24 +5611,7 @@ export const resolvePoliciesCall = async (
   context: { team_alias?: string; key_alias?: string; model?: string; tags?: string[] },
 ) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/resolve` : `/policies/resolve`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(context),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
+    return await apiClient.post(`/policies/resolve`, { accessToken, body: context });
   } catch (error) {
     console.error("Failed to resolve policies:", error);
     throw error;
@@ -6711,24 +6304,7 @@ export const createMCPServer = async (
 
 export const updateMCPServer = async (accessToken: string, formValues: Record<string, any>) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server` : `/v1/mcp/server`;
-    const response = await fetch(url, {
-      method: "PUT",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(formValues),
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    return await response.json();
+    return await apiClient.put(`/v1/mcp/server`, { accessToken, body: formValues });
   } catch (error) {
     console.error("Failed to update MCP server:", error);
     throw error;
@@ -9301,22 +8877,6 @@ export const perUserAnalyticsCall = async (
     console.error("Failed to fetch per-user analytics:", error);
     throw error;
   }
-};
-
-export const deriveErrorMessage = (errorData: any): string => {
-  const detail = errorData?.detail;
-  const detailStr = Array.isArray(detail)
-    ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join("; ")
-    : typeof detail === "string"
-      ? detail
-      : undefined;
-  return (
-    (errorData?.error &&
-      (errorData.error.message || (typeof errorData.error === "string" ? errorData.error : undefined))) ||
-    errorData?.message ||
-    detailStr ||
-    JSON.stringify(errorData)
-  );
 };
 
 export interface LoginRequest {
