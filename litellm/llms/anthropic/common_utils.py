@@ -24,7 +24,7 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import AllMessageValues
 
 _CLAUDE_FAMILY_VERSION_RE = re.compile(
-    r"(?:opus|sonnet|haiku)[._-](\d+)[._-](\d+)", re.IGNORECASE
+    r"(?:opus|sonnet|haiku)[._-](\d+)[._-](\d{1,2})(?!\d)", re.IGNORECASE
 )
 
 
@@ -246,13 +246,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _claude_version_at_least(model: str, major: int, minor: int) -> bool:
-        """Whether ``model`` is a Claude family model of version >= ``major.minor``.
+        """Whether ``model`` names a Claude family model of version >= ``major.minor``.
 
         Parses the modern ``<family>-<major>-<minor>`` naming (``-``/``_``/``.``
-        separators, with optional provider prefixes and date suffixes), e.g.
-        ``vertex_ai/claude-opus-4-6@default`` or ``claude-sonnet-4.6``. Legacy
-        ``claude-<major>-<minor>-<family>`` names (3.x) and anything without a
-        parseable family version return False.
+        separators, optional provider prefixes), e.g. ``us.anthropic.claude-opus-4-6``
+        or ``claude-sonnet-4.6``. A ``minor`` is at most two digits, so an eight-digit
+        date suffix (``claude-opus-4-20250514``, the non-adaptive Opus 4.0) is not
+        misread as a minor version. Legacy ``claude-<major>-<minor>-<family>`` names
+        (3.x) and anything without a parseable family version return False.
         """
         match = _CLAUDE_FAMILY_VERSION_RE.search(model)
         if match is None:
@@ -261,7 +262,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
-        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``."""
+        """Whether ``model`` uses adaptive thinking (``output_config.effort``).
+
+        The model cost map is authoritative: an explicit ``supports_adaptive_thinking``
+        entry, or the ``fallback_generalizations`` rule for unknown Claude models. As a
+        graceful fallback for provider-prefixed names that resolve to no mapped entry
+        (e.g. ``bedrock/invoke/us.anthropic.claude-opus-4-6``), a Claude family version
+        of >= 4.6 also qualifies.
+        """
         from litellm.utils import _supports_factory
 
         try:

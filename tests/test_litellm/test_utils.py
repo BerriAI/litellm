@@ -45,6 +45,22 @@ def local_model_cost_map(monkeypatch):
         litellm.get_model_info.cache_clear()
 
 
+def test_get_model_info_surfaces_supports_adaptive_thinking(local_model_cost_map):
+    """supports_adaptive_thinking must flow through get_model_info like every other
+    capability flag: both from an explicit cost-map entry and from a
+    fallback-generalization rule for an unmapped model. Regression: the field shipped
+    in the JSON but was never declared on ModelInfo nor copied during construction, so
+    get_model_info (and _supports_factory) silently dropped it for any provider-prefixed
+    or unmapped name."""
+    explicit = litellm.get_model_info(model="claude-opus-4-8")
+    assert explicit["supports_adaptive_thinking"] is True
+
+    generalized = litellm.get_model_info(
+        model="claude-opus-4-9", custom_llm_provider="anthropic"
+    )
+    assert generalized["supports_adaptive_thinking"] is True
+
+
 def test_check_provider_match_azure_ai_allows_openai_and_azure():
     """
     Test that azure_ai provider can match openai and azure models.

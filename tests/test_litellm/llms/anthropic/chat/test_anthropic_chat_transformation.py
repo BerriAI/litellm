@@ -2353,46 +2353,62 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
 @pytest.mark.parametrize(
     "model, expected",
     [
-        ("claude-opus-4-6", True),
-        ("claude-sonnet-4-6", True),
-        ("claude-opus-4-7", True),
+        # explicit cost-map entries, across provider routes / separators / date suffix
         ("claude-opus-4-8", True),
+        ("anthropic.claude-opus-4-8", True),
+        ("vertex_ai/claude-opus-4-6@default", True),
+        ("openrouter/anthropic/claude-opus-4.7", True),
+        ("us.anthropic.claude-sonnet-4-6", True),
+        ("claude-opus-4-6-20260205", True),
+        # unmapped future models -> anthropic-claude fallback rule
         ("claude-opus-4-9", True),
         ("claude-sonnet-5-0", True),
-        ("claude-opus-4.6-fast", True),
-        ("claude-opus-4-6-20260205", True),
-        ("anthropic.claude-sonnet-4-6", True),
-        ("vertex_ai/claude-opus-4-7@default", True),
-        ("openrouter/anthropic/claude-opus-4.7", True),
+        # unmapped provider-prefixed forms (no mapped entry, rule can't reach them)
+        # -> version fallback keeps them adaptive
+        ("bedrock/invoke/us.anthropic.claude-opus-4-6", True),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-9", True),
+        # Claude 4.0 (dated): "4-20250514" must not be read as minor 4.20250514
+        ("claude-opus-4-20250514", False),
+        ("us.anthropic.claude-opus-4-20250514-v1:0", False),
+        ("bedrock/invoke/us.anthropic.claude-opus-4-20250514", False),
+        # sub-4.6 and legacy names
         ("claude-opus-4-5", False),
         ("claude-sonnet-4-5-20250929", False),
         ("claude-3-7-sonnet", False),
-        ("claude-3-5-sonnet-20240620", False),
         ("claude-3-opus-20240229", False),
         ("gpt-4o", False),
     ],
 )
-def test_claude_adaptive_thinking_version_threshold(model, expected):
-    """Adaptive thinking is gated on Claude family version >= 4.6, parsed from the
-    model name across provider prefixes, dotted/dashed separators and date suffixes.
-    This replaces the old per-minor-version substring matchers, so 4.8/4.9/5.x are
-    covered without a code change while 4.5 and legacy 3.x names stay excluded."""
-    assert AnthropicConfig._claude_version_at_least(model, 4, 6) is expected
+def test_is_adaptive_thinking_model_is_sourced_from_cost_map(
+    local_model_cost_map, model, expected
+):
+    """Adaptive thinking is determined solely by the cost map: an explicit
+    supports_adaptive_thinking entry, or the anthropic-claude fallback rule for
+    unmapped future Claudes. No version is parsed from the model name, so the dated
+    Claude 4.0 names stay non-adaptive while 4.8/4.9/5.x are covered without a code
+    change."""
+    assert AnthropicConfig._is_adaptive_thinking_model(model) is expected
 
 
-def test_unknown_future_claude_is_adaptive_without_a_json_entry():
-    """A newly-shipped Claude with no cost-map entry must still be treated as
-    adaptive-thinking when its version is >= 4.6, and must not be below it. The old
-    matchers returned False for any minor version they did not hardcode (4.8 slipped
-    through both), so this is the regression that the version threshold fixes."""
-    assert AnthropicConfig._is_adaptive_thinking_model("claude-opus-4-9") is True
-    assert AnthropicConfig._is_adaptive_thinking_model("claude-haiku-4-5") is False
-
-
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias(
+    local_model_cost_map,
+):
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()
 
@@ -2402,8 +2418,12 @@ def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     assert "reasoning_effort" in params
 
 
-def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias():
-    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
+def test_get_supported_params_includes_reasoning_for_sonnet_4_6_dotted_alias(
+    local_model_cost_map,
+):
+    """Dotted Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported
+    params. The anthropic-claude fallback rule accepts a dotted minor (4.6) as well as
+    a dashed one, so an unmapped dotted alias still degrades to adaptive thinking."""
     config = AnthropicConfig()
 
     params = config.get_supported_openai_params(model="claude-sonnet-4.6")

@@ -139,3 +139,35 @@ def test_shipped_backup_carries_the_anthropic_claude_rule():
         assert matched is not None and matched["litellm_provider"] == "anthropic"
     finally:
         set_fallback_generalizations(previous)
+
+
+def test_shipped_backup_marks_claude_4_6_plus_adaptive_not_4_0():
+    """Adaptive thinking is data, not code. The bundled backup must carry
+    supports_adaptive_thinking on genuine Claude >= 4.6 entries (every provider
+    route) and on the anthropic-claude fallback rule for unmapped future Claudes,
+    while leaving the dated Claude 4.0 names ("...-4-20250514") unflagged so a date
+    can never be mistaken for a 4.6+ minor version."""
+    backup = GetModelCostMap.load_local_model_cost_map()
+
+    rule = next(
+        r
+        for r in backup[FALLBACK_GENERALIZATIONS_KEY]["rules"]
+        if r.get("name") == "anthropic-claude"
+    )
+    assert rule["model_info"]["supports_adaptive_thinking"] is True
+
+    for adaptive in [
+        "anthropic.claude-opus-4-8",
+        "vertex_ai/claude-opus-4-6@default",
+        "us.anthropic.claude-sonnet-4-6",
+        "openrouter/anthropic/claude-opus-4.7",
+        "azure_ai/claude-opus-4-7",
+    ]:
+        assert backup[adaptive]["supports_adaptive_thinking"] is True, adaptive
+
+    for non_adaptive in [
+        "claude-opus-4-20250514",
+        "us.anthropic.claude-opus-4-20250514-v1:0",
+        "claude-opus-4-5",
+    ]:
+        assert "supports_adaptive_thinking" not in backup[non_adaptive], non_adaptive
