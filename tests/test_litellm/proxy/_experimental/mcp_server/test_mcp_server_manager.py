@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import logging
 import os
@@ -501,7 +502,12 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -554,7 +560,12 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -610,7 +621,12 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -3065,6 +3081,121 @@ class TestMCPServerTimestamps:
 
         rebuilt_table = manager._build_mcp_server_table(mcp_server)
         assert rebuilt_table.source_url == "https://github.com/org/mcp-server"
+
+    @pytest.mark.asyncio
+    async def test_round_trip_timeout_preserved(self):
+        """timeout survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
+        manager = MCPServerManager()
+        table_record = LiteLLM_MCPServerTable(
+            server_id="timeout-server",
+            server_name="timeout_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=120.0,
+        )
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+        assert mcp_server.timeout == 120.0
+
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+        assert rebuilt_table.timeout == 120.0
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_uses_server_timeout(self):
+        """_create_mcp_client must pass server.timeout to MCPClient when set."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="timeout-client-server",
+            name="timeout_client_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=180.0,
+        )
+        client = await manager._create_mcp_client(server)
+        assert client.timeout == 180.0
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_falls_back_to_global_timeout(self):
+        """_create_mcp_client must fall back to MCP_CLIENT_TIMEOUT when server.timeout is None."""
+        from litellm.constants import MCP_CLIENT_TIMEOUT
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="default-timeout-server",
+            name="default_timeout_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+        )
+        client = await manager._create_mcp_client(server)
+        assert client.timeout == MCP_CLIENT_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_zero_timeout_not_treated_as_falsy(self):
+        """server.timeout=0.0 must be passed through, not fall back to MCP_CLIENT_TIMEOUT."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="zero-timeout-server",
+            name="zero_timeout_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=0.0,
+        )
+        client = await manager._create_mcp_client(server)
+        assert client.timeout == 0.0
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_preserves_timeout(self):
+        """timeout from proxy config is loaded into MCPServer."""
+        manager = MCPServerManager()
+        config = {
+            "my_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "timeout": 90.0,
+            }
+        }
+        await manager.load_servers_from_config(config)
+        servers = list(manager.config_mcp_servers.values())
+        assert len(servers) == 1
+        assert servers[0].timeout == 90.0
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_timeout_returns_504(self):
+        """When the MCP client call is cancelled (timeout), _call_regular_mcp_tool raises HTTPException 504."""
+        from unittest.mock import AsyncMock, patch
+
+        manager = MCPServerManager()
+
+        async def _slow_call(*args, **kwargs):
+            await asyncio.sleep(999)
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = _slow_call
+
+        server = MCPServer(
+            server_id="timeout-tool-server",
+            name="timeout_tool_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=0.01,
+        )
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+            with pytest.raises(HTTPException) as exc_info:
+                await manager._call_regular_mcp_tool(
+                    mcp_server=server,
+                    original_tool_name="some_tool",
+                    arguments={},
+                    tasks=[],
+                    mcp_auth_header=None,
+                    mcp_server_auth_headers=None,
+                    oauth2_headers=None,
+                    raw_headers=None,
+                    proxy_logging_obj=None,
+                )
+
+        assert exc_info.value.status_code == 504
+        assert exc_info.value.detail["error"] == "timeout"
+        assert "0.01s" in exc_info.value.detail["message"]
 
 
 class TestInternalDelegatePkceWarningLog:
