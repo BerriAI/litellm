@@ -7,6 +7,7 @@ import pytest
 from litellm.llms.base_llm.managed_resources.isolation import (
     build_owner_filter,
     can_access_resource,
+    get_managed_resource_owner_id,
 )
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
@@ -54,6 +55,47 @@ def test_owner_filter_no_identity_returns_none():
     assert build_owner_filter(UserAPIKeyAuth()) is None
 
 
+def test_owner_filter_falls_back_to_end_user_id():
+    """Custom-auth callers (only end_user_id set) scope to their end-user id,
+    matching the ownership stamped at create time."""
+    end_user = UserAPIKeyAuth(end_user_id="customer-1")
+    assert build_owner_filter(end_user) == {"created_by": "customer-1"}
+
+
+def test_owner_filter_user_id_takes_precedence_over_end_user_id():
+    user = UserAPIKeyAuth(user_id="alice", end_user_id="customer-1")
+    assert build_owner_filter(user) == {"created_by": "alice"}
+
+
+def test_owner_filter_end_user_with_team_returns_or_filter():
+    end_user = UserAPIKeyAuth(end_user_id="customer-1", team_id="team-eng")
+    assert build_owner_filter(end_user) == {
+        "OR": [
+            {"created_by": "customer-1"},
+            {"team_id": "team-eng"},
+        ]
+    }
+
+
+# ---------------------------------------------------------------------------
+# get_managed_resource_owner_id
+# ---------------------------------------------------------------------------
+
+
+def test_owner_id_prefers_user_id():
+    auth = UserAPIKeyAuth(user_id="alice", end_user_id="customer-1")
+    assert get_managed_resource_owner_id(auth) == "alice"
+
+
+def test_owner_id_falls_back_to_end_user_id():
+    auth = UserAPIKeyAuth(end_user_id="customer-1")
+    assert get_managed_resource_owner_id(auth) == "customer-1"
+
+
+def test_owner_id_none_when_no_identity():
+    assert get_managed_resource_owner_id(UserAPIKeyAuth()) is None
+
+
 # ---------------------------------------------------------------------------
 # can_access_resource
 # ---------------------------------------------------------------------------
@@ -90,6 +132,34 @@ def test_access_user_id_match(user_id, created_by, expected):
     assert (
         can_access_resource(user, created_by=created_by, resource_team_id=None)
         is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "end_user_id,created_by,expected",
+    [
+        ("customer-1", "customer-1", True),
+        ("customer-1", "customer-2", False),
+        ("customer-1", None, False),
+    ],
+)
+def test_access_end_user_id_match_when_no_user_id(end_user_id, created_by, expected):
+    """Custom-auth callers (only end_user_id) can read resources they
+    created (created_by == end_user_id), but not others' or ownerless rows."""
+    caller = UserAPIKeyAuth(end_user_id=end_user_id)
+    assert (
+        can_access_resource(caller, created_by=created_by, resource_team_id=None)
+        is expected
+    )
+
+
+def test_access_user_id_match_ignores_end_user_id():
+    """When user_id is set it is the owner identity; a created_by that only
+    matches end_user_id must NOT grant access."""
+    caller = UserAPIKeyAuth(user_id="alice", end_user_id="customer-1")
+    assert (
+        can_access_resource(caller, created_by="customer-1", resource_team_id=None)
+        is False
     )
 
 

@@ -19,6 +19,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
     can_access_resource,
+    get_managed_resource_owner_id,
 )
 from litellm.proxy._types import (
     CallTypes,
@@ -97,15 +98,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         verbose_logger.info(
             f"Storing LiteLLM Managed File object with id={file_id} in cache"
         )
+        owner_id = get_managed_resource_owner_id(user_api_key_dict)
         if file_object is not None:
             litellm_managed_file_object = LiteLLM_ManagedFileTable(
                 unified_file_id=file_id,
                 file_object=file_object,
                 model_mappings=model_mappings,
                 flat_model_file_ids=list(model_mappings.values()),
-                created_by=user_api_key_dict.user_id,
+                created_by=owner_id,
                 team_id=user_api_key_dict.team_id,
-                updated_by=user_api_key_dict.user_id,
+                updated_by=owner_id,
             )
             await self.internal_usage_cache.async_set_cache(
                 key=file_id,
@@ -119,9 +121,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "unified_file_id": file_id,
             "model_mappings": json.dumps(model_mappings),
             "flat_model_file_ids": list(model_mappings.values()),
-            "created_by": user_api_key_dict.user_id,
+            "created_by": owner_id,
             "team_id": user_api_key_dict.team_id,
-            "updated_by": user_api_key_dict.user_id,
+            "updated_by": owner_id,
         }
 
         if file_object is not None:
@@ -169,6 +171,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             litellm_parent_otel_span=litellm_parent_otel_span,
         )
 
+        owner_id = get_managed_resource_owner_id(user_api_key_dict)
         await self.prisma_client.db.litellm_managedobjecttable.upsert(
             where={"unified_object_id": unified_object_id},
             data={
@@ -177,15 +180,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     "file_object": file_object.model_dump_json(),
                     "model_object_id": model_object_id,
                     "file_purpose": file_purpose,
-                    "created_by": user_api_key_dict.user_id,
+                    "created_by": owner_id,
                     "team_id": user_api_key_dict.team_id,
-                    "updated_by": user_api_key_dict.user_id,
+                    "updated_by": owner_id,
                     "status": file_object.status,
                 },
                 "update": {
                     "file_object": file_object.model_dump_json(),
                     "status": file_object.status,
-                    "updated_by": user_api_key_dict.user_id,
+                    "updated_by": owner_id,
                 },  # FIX: Update status and file_object on every operation to keep state in sync
             },
         )

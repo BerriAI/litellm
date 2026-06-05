@@ -22,6 +22,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     build_list_page,
     build_owner_filter,
     can_access_resource,
+    get_managed_resource_owner_id,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.utils import SpecialEnums
@@ -168,14 +169,15 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
         )
 
         # Prepare cache data
+        owner_id = get_managed_resource_owner_id(user_api_key_dict)
         cache_data = {
             "unified_resource_id": unified_resource_id,
             "resource_object": resource_object,
             "model_mappings": model_mappings,
             "flat_model_resource_ids": list(model_mappings.values()),
-            "created_by": user_api_key_dict.user_id,
+            "created_by": owner_id,
             "team_id": user_api_key_dict.team_id,
-            "updated_by": user_api_key_dict.user_id,
+            "updated_by": owner_id,
         }
 
         # Add additional fields if provided
@@ -195,9 +197,9 @@ class BaseManagedResource(ABC, Generic[ResourceObjectType]):
             "unified_resource_id": unified_resource_id,
             "model_mappings": json.dumps(model_mappings),
             "flat_model_resource_ids": list(model_mappings.values()),
-            "created_by": user_api_key_dict.user_id,
+            "created_by": owner_id,
             "team_id": user_api_key_dict.team_id,
-            "updated_by": user_api_key_dict.user_id,
+            "updated_by": owner_id,
         }
 
         # Add resource object if available
