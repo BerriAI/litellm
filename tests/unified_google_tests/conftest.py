@@ -94,8 +94,10 @@ def google_genai_proxy_url() -> Iterator[str]:
             "DIRECT_URL",
             "LITELLM_MASTER_KEY",
             "STORE_MODEL_IN_DB",
+            "GOOGLE_APPLICATION_CREDENTIALS",
         )
     }
+    temp_credentials_path: str | None = None
     os.environ.pop("DATABASE_URL", None)
     os.environ.pop("DIRECT_URL", None)
     os.environ["LITELLM_MASTER_KEY"] = PROXY_MASTER_KEY
@@ -107,6 +109,7 @@ def google_genai_proxy_url() -> Iterator[str]:
             model="vertex_ai/gemini-2.5-flash-lite"
         )
         if vertex_credentials_path:
+            temp_credentials_path = vertex_credentials_path
             os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = vertex_credentials_path
 
     server_url, server, thread, sock = _start_proxy_server(str(PROXY_CONFIG_PATH))
@@ -116,6 +119,11 @@ def google_genai_proxy_url() -> Iterator[str]:
         server.should_exit = True
         thread.join(timeout=10)
         sock.close()
+        if temp_credentials_path:
+            try:
+                os.unlink(temp_credentials_path)
+            except OSError:
+                pass
         for key, value in saved_env.items():
             if value is None:
                 os.environ.pop(key, None)
@@ -134,7 +142,7 @@ def event_loop():
 
 
 @pytest.fixture(scope="function", autouse=True)
-def setup_and_teardown():
+def setup_and_teardown(request):
     """
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
@@ -144,7 +152,8 @@ def setup_and_teardown():
 
     import litellm
 
-    importlib.reload(litellm)
+    if "proxy_genai_sdk" not in request.node.name:
+        importlib.reload(litellm)
 
     loop = asyncio.get_event_loop_policy().new_event_loop()
     asyncio.set_event_loop(loop)

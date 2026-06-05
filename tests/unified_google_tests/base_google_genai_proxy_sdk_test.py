@@ -44,6 +44,12 @@ class BaseGoogleGenAIProxySDKTest(ABC):
     @abstractmethod
     def proxy_model_name(self) -> str: ...
 
+    @property
+    def _proxy_sdk_temp_files(self) -> List[str]:
+        if not hasattr(self, "_proxy_sdk_temp_files_list"):
+            self._proxy_sdk_temp_files_list: List[str] = []
+        return self._proxy_sdk_temp_files_list
+
     def _skip_reason_if_credentials_missing(self) -> Optional[str]:
         model = self.model_config.get("model", "")
         if model.startswith("gemini/"):
@@ -78,7 +84,7 @@ class BaseGoogleGenAIProxySDKTest(ABC):
             return
         temp_file_path = load_vertex_ai_credentials(model=self.model_config["model"])
         if temp_file_path:
-            self._temp_files_to_cleanup.append(temp_file_path)
+            self._proxy_sdk_temp_files.append(temp_file_path)
 
     def test_proxy_genai_sdk_non_streaming(self, google_genai_proxy_url: str) -> None:
         self._require_proxy_sdk()
