@@ -619,8 +619,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         team_object = None
         if (
-            SpecialModelNames.all_team_models.value
-            in (user_api_key_dict.models or [])
+            SpecialModelNames.all_team_models.value in (user_api_key_dict.models or [])
             and user_api_key_dict.team_id is not None
             and prisma_client is not None
         ):
