@@ -37,9 +37,9 @@ from typing import Optional, cast
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Imported as a module (not `from ... import generate_iam_auth_token`) so the
-# AWS-touching token mint stays patchable at its canonical location in tests.
-from litellm.proxy.auth import rds_iam_token
+# Imported as a module (not `from ... import <fn>`) so the provider-specific
+# token mint stays patchable at its canonical location in tests.
+from litellm.proxy.db import db_iam_token
 
 _IAM_ENV_KEY = "IAM_TOKEN_DB_AUTH"
 _DEFAULT_PG_PORT = "5432"
@@ -132,15 +132,17 @@ class DatabaseURLSettings(BaseSettings):
             host = cast(str, self.database_host)
             user = cast(str, self.database_user)
             name = cast(str, self.database_name)
-            # IAM token is already URL-quoted by generate_iam_auth_token;
-            # user/name embedded raw (parity with proxy_cli.py / IAMEndpoint).
-            token = rds_iam_token.generate_iam_auth_token(
+            token = db_iam_token.generate_db_iam_token(
                 db_host=host, db_port=self.database_port, db_user=user
             )
-            url = f"postgresql://{user}:{token}@{host}:{self.database_port}/{name}"
-            if self.database_schema:
-                url += f"?schema={self.database_schema}"
-            return url
+            return db_iam_token.build_postgres_url(
+                user=user,
+                token=token,
+                host=host,
+                port=self.database_port,
+                name=name,
+                schema=self.database_schema,
+            )
 
         # Password auth: an operator-pinned DATABASE_URL always wins.
         if self.database_url:
@@ -194,13 +196,17 @@ class DatabaseURLSettings(BaseSettings):
                 )
             user = cast(str, user)
             name = cast(str, name)
-            token = rds_iam_token.generate_iam_auth_token(
+            token = db_iam_token.generate_db_iam_token(
                 db_host=host, db_port=port, db_user=user
             )
-            url = f"postgresql://{user}:{token}@{host}:{port}/{name}"
-            if schema:
-                url += f"?schema={schema}"
-            return url
+            return db_iam_token.build_postgres_url(
+                user=user,
+                token=token,
+                host=host,
+                port=port,
+                name=name,
+                schema=schema,
+            )
 
         if user and name:
             return self._password_url(
