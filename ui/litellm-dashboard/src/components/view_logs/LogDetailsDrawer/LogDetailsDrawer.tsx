@@ -129,7 +129,6 @@ export function LogDetailsDrawer({
       // than one page of logs are shown in full (capped for safety).
       const firstPage = await sessionSpendLogsCall(accessToken, sessionId, 1, SESSION_PAGE_SIZE);
       let rows: LogEntry[] = firstPage.data || firstPage || [];
-      const total: number = firstPage.total ?? rows.length;
       const pagesToFetch = Math.min(firstPage.total_pages ?? 1, MAX_SESSION_PAGES);
 
       if (pagesToFetch > 1) {
@@ -148,6 +147,10 @@ export function LogDetailsDrawer({
           rows = rows.concat(page.data || []);
         }
       }
+
+      // Fall back to the accumulated row count (not just the first page) when the
+      // backend omits total, so the truncation note reflects what was fetched.
+      const total: number = firstPage.total ?? rows.length;
 
       const logs = rows
         .map((row) => ({
