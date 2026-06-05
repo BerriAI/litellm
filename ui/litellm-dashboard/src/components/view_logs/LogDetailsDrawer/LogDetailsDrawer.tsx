@@ -152,7 +152,9 @@ export function LogDetailsDrawer({
           const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
           const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
           if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
-          return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+          // Newest first, matching the all-sessions logs overview. MCP calls
+          // stay grouped last (above), newest-first within that group too.
+          return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
         });
 
       return { logs, total };
@@ -166,18 +168,33 @@ export function LogDetailsDrawer({
   const sessionTotalCount = sessionData?.total ?? sessionLogs.length;
   const sessionTruncated = sessionTotalCount > sessionLogs.length;
 
+  // Default selection for a freshly opened session: the most recent log (latest
+  // startTime). The list is sorted newest-first, but MCP calls are grouped last,
+  // so the latest log by time is not necessarily sessionLogs[0]; compute it
+  // explicitly. A clicked/remembered log still wins over this default.
+  const mostRecentLog = useMemo<LogEntry | null>(
+    () =>
+      sessionLogs.reduce<LogEntry | null>(
+        (latest, row) =>
+          !latest || new Date(row.startTime).getTime() > new Date(latest.startTime).getTime() ? row : latest,
+        null,
+      ),
+    [sessionLogs],
+  );
+
   const currentLog = useMemo(() => {
     if (!isSessionMode) return logEntry;
     if (!sessionLogs.length) return null;
+    const fallbackLog = mostRecentLog ?? sessionLogs[0];
     if (selectedSessionRequestId) {
-      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || sessionLogs[0];
+      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || fallbackLog;
     }
     if (logEntry?.request_id) {
       const clickedLog = sessionLogs.find((row) => row.request_id === logEntry.request_id);
-      return clickedLog || sessionLogs[0];
+      return clickedLog || fallbackLog;
     }
-    return sessionLogs[0];
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+    return fallbackLog;
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   useEffect(() => {
     if (!isSessionMode || !sessionLogs.length) return;
@@ -185,10 +202,10 @@ export function LogDetailsDrawer({
       const fallbackRequestId =
         logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
           ? logEntry.request_id
-          : sessionLogs[0].request_id;
+          : (mostRecentLog ?? sessionLogs[0]).request_id;
       setSelectedSessionRequestId(fallbackRequestId);
     }
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
