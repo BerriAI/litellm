@@ -15,6 +15,7 @@ from litellm.types.realtime import (
     RealtimeExpiresAfter,
     RealtimeQueryParams,
     RealtimeSessionConfig,
+    RealtimeTranscriptionSessionRequest,
 )
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -146,6 +147,72 @@ async def acreate_realtime_client_secret(
     )
     request_data = req.model_dump(exclude_none=True, exclude={"model"})
     return await base_llm_http_handler.async_realtime_client_secret_handler(
+        api_base=resolved_api_base,
+        api_key=resolved_api_key,
+        request_data=request_data,
+        logging_obj=litellm_logging_obj,
+        timeout=timeout or request_timeout,
+        provider_config=provider_config,
+        model=model_name,
+        extra_headers=kwargs.get("extra_headers"),
+        client=kwargs.get("client"),
+        api_version=litellm_params.api_version,
+    )
+
+
+@wrapper_client
+async def acreate_realtime_transcription_session(
+    model: Optional[str] = None,
+    transcription_session: Optional[Dict[str, Any]] = None,
+    timeout: Optional[float] = None,
+    **kwargs,
+):
+    """
+    Create an ephemeral transcription session via POST
+    /v1/realtime/transcription_sessions.
+
+    ``transcription_session`` is the upstream request body (input_audio_format,
+    input_audio_transcription, turn_detection, …). ``model`` is a LiteLLM-only
+    routing hint; the provider model lives in
+    ``transcription_session.input_audio_transcription.model``.
+    """
+    req = RealtimeTranscriptionSessionRequest(
+        model=model,
+        **(transcription_session or {}),
+    )
+    model_name = req.resolved_model() or "gpt-realtime-whisper"
+    litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
+    litellm_params = GenericLiteLLMParams(**kwargs)
+
+    (
+        model_name,
+        custom_llm_provider,
+        dynamic_api_key,
+        dynamic_api_base,
+    ) = get_llm_provider(
+        model=model_name,
+        api_base=litellm_params.api_base,
+        api_key=litellm_params.api_key,
+    )
+    (
+        provider_config,
+        resolved_api_base,
+        resolved_api_key,
+    ) = _get_realtime_http_provider_config(
+        custom_llm_provider=custom_llm_provider,
+        dynamic_api_base=dynamic_api_base,
+        dynamic_api_key=dynamic_api_key,
+        litellm_params=litellm_params,
+    )
+    litellm_logging_obj.update_from_kwargs(
+        kwargs=kwargs,
+        model=model_name,
+        optional_params={"transcription_session": transcription_session},
+        litellm_params={"api_base": resolved_api_base},
+        custom_llm_provider=custom_llm_provider,
+    )
+    request_data = req.model_dump(exclude_none=True, exclude={"model"})
+    return await base_llm_http_handler.async_realtime_transcription_session_handler(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         request_data=request_data,
@@ -313,6 +380,7 @@ async def _arealtime(  # noqa: PLR0915
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
+            query_params=query_params,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
         )

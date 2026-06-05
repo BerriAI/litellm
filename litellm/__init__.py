@@ -1350,6 +1350,7 @@ from .search.main import *
 from .realtime_api.main import (
     _arealtime,
     acreate_realtime_client_secret,
+    acreate_realtime_transcription_session,
     arealtime_calls,
 )
 from .responses.main import _aresponses_websocket

@@ -311,3 +311,191 @@ async def test_realtime_calls_success_with_valid_encrypted_token(
     assert response.status_code == 201
     assert response.content.startswith(b"v=0")
     assert b"application/sdp" in response.headers.get("content-type", "").encode()
+
+
+def test_token_payload_carries_session_type():
+    """The encrypted token records the session kind so /realtime/calls can replay it."""
+    payload = _encode_realtime_token_payload(
+        ephemeral_key="epk",
+        model_id="gpt-realtime-whisper",
+        user_id=None,
+        team_id=None,
+        expires_at=None,
+        session_type="transcription",
+    )
+    decoded = _decode_realtime_token_payload(payload)
+    assert decoded is not None
+    assert decoded["session_type"] == "transcription"
+
+
+@pytest.mark.asyncio
+async def test_realtime_calls_replays_transcription_session_type(
+    proxy_app,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+):
+    """
+    A token minted for a transcription session must drive /realtime/calls to send
+    session.type == "transcription" upstream, not the default "realtime".
+    """
+    captured = {}
+
+    async def _capturing_route(*args, **kwargs):
+        captured["session"] = kwargs.get("data", {}).get("session")
+
+        async def _inner():
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 201
+            resp.content = b"v=0\r\n"
+            resp.headers = {"content-type": "application/sdp"}
+            return resp
+
+        return _inner()
+
+    token_payload = _encode_realtime_token_payload(
+        ephemeral_key="epk",
+        model_id="gpt-realtime-whisper",
+        user_id=None,
+        team_id=None,
+        expires_at=int(time.time()) + 3600,
+        session_type="transcription",
+    )
+    encrypted_token = encrypt_value_helper(token_payload)
+
+    client = TestClient(proxy_app)
+    with (
+        patch(
+            "litellm.proxy.proxy_server.route_request",
+            side_effect=_capturing_route,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.add_litellm_data_to_request",
+            side_effect=mock_add_litellm_data,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+    ):
+        mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+        mock_logging.post_call_failure_hook = AsyncMock()
+
+        client.post(
+            "/v1/realtime/calls",
+            headers={"Authorization": f"Bearer {encrypted_token}"},
+            content=b"v=0\r\n",
+        )
+
+    assert captured["session"]["type"] == "transcription"
+
+
+# --- transcription_sessions endpoint ---
+
+
+@pytest.fixture
+def mock_route_request_transcription_sessions():
+    """Mock route_request to return a fake transcription_sessions upstream response."""
+    future_expires_at = int(time.time()) + 3600
+    body = {
+        "id": "sess_abc",
+        "object": "realtime.transcription_session",
+        "client_secret": {
+            "value": "upstream_ephemeral_key",
+            "expires_at": future_expires_at,
+        },
+    }
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 200
+    mock_resp.text = json.dumps(body)
+    mock_resp.content = json.dumps(body).encode()
+    mock_resp.headers = {}
+    mock_resp.json.return_value = body
+
+    async def _mock_route(*args, **kwargs):
+        async def _inner():
+            return mock_resp
+
+        return _inner()
+
+    return _mock_route
+
+
+def test_transcription_sessions_requires_auth(proxy_app):
+    """POST /v1/realtime/transcription_sessions returns 401 without Authorization."""
+    from fastapi import HTTPException
+
+    def _raise_401():
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    proxy_app.dependency_overrides[user_api_key_auth] = _raise_401
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        response = client.post(
+            "/v1/realtime/transcription_sessions",
+            json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+        )
+        assert response.status_code == 401
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_transcription_sessions_encrypts_client_secret(
+    proxy_app,
+    mock_route_request_transcription_sessions,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+):
+    """
+    POST /v1/realtime/transcription_sessions returns 200 and the ephemeral key
+    under client_secret.value must be encrypted (never the raw upstream key).
+    """
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user", team_id="test-team"
+    )
+    captured_route_type = {}
+
+    async def _capturing_route(*args, **kwargs):
+        captured_route_type["route_type"] = kwargs.get("route_type")
+        return await mock_route_request_transcription_sessions(*args, **kwargs)
+
+    try:
+        client = TestClient(proxy_app)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.route_request",
+                side_effect=_capturing_route,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={
+                    "input_audio_format": "pcm16",
+                    "input_audio_transcription": {"model": "gpt-realtime-whisper"},
+                },
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["client_secret"]["value"] != "upstream_ephemeral_key"
+        # The encrypted value must decrypt back to a payload carrying the raw key.
+        decrypted = decrypt_value_helper(
+            data["client_secret"]["value"],
+            key="client_secret.value",
+            exception_type="debug",
+        )
+        assert decrypted is not None
+        assert "upstream_ephemeral_key" in decrypted
+        # Routed through the dedicated transcription_sessions route type.
+        assert (
+            captured_route_type["route_type"]
+            == "acreate_realtime_transcription_session"
+        )
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)

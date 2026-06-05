@@ -5,6 +5,7 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 from typing import Any, Optional, cast
+from urllib.parse import quote
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -35,6 +36,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         model: str,
         api_version: Optional[str],
         realtime_protocol: Optional[str] = None,
+        query_params: Optional[dict] = None,
     ) -> str:
         """
         Construct Azure realtime WebSocket URL.
@@ -46,6 +48,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             realtime_protocol: Protocol version to use:
                 - "GA" or "v1": Uses /openai/v1/realtime (GA path)
                 - "beta" or None: Uses /openai/realtime (beta path, default)
+            query_params: Extra query params to forward (e.g. intent=transcription).
 
         Returns:
             WebSocket URL string
@@ -63,11 +66,16 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         )
         if _is_ga:
             path = "/openai/v1/realtime"
-            return f"{api_base}{path}?model={model}"
+            url = f"{api_base}{path}?model={model}"
         else:
             # Default to beta path for backwards compatibility
             path = "/openai/realtime"
-            return f"{api_base}{path}?api-version={api_version}&deployment={model}"
+            url = f"{api_base}{path}?api-version={api_version}&deployment={model}"
+
+        intent = (query_params or {}).get("intent")
+        if intent:
+            url = f"{url}&intent={quote(str(intent), safe='')}"
+        return url
 
     async def async_realtime(
         self,
@@ -81,6 +89,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
         realtime_protocol: Optional[str] = None,
+        query_params: Optional[dict] = None,
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[dict] = None,
     ):
@@ -96,7 +105,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             raise ValueError("api_version is required for Azure OpenAI calls")
 
         url = self._construct_url(
-            api_base, model, api_version, realtime_protocol=realtime_protocol
+            api_base,
+            model,
+            api_version,
+            realtime_protocol=realtime_protocol,
+            query_params=query_params,
         )
 
         try:

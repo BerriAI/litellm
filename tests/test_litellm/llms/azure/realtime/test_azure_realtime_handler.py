@@ -148,6 +148,78 @@ async def test_construct_url_ga_protocol():
 
 
 @pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_ga():
+    """
+    Transcription sessions connect with intent=transcription. The Azure handler
+    must forward that query param so gpt-realtime-whisper opens a transcription
+    session instead of a normal realtime session.
+    """
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"model": "gpt-realtime-whisper", "intent": "transcription"},
+    )
+
+    assert "/openai/v1/realtime?" in url
+    assert "intent=transcription" in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_forwards_transcription_intent_beta():
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="whisper-deploy",
+        api_version="2024-10-01-preview",
+        query_params={"intent": "transcription"},
+    )
+
+    assert "/openai/realtime?" in url
+    assert "deployment=whisper-deploy" in url
+    assert "intent=transcription" in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_encodes_intent_value():
+    """A crafted intent value must be URL-encoded, not injected as raw query params."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-realtime-whisper",
+        api_version="2025-04-01-preview",
+        realtime_protocol="GA",
+        query_params={"intent": "transcription&foo=bar"},
+    )
+    assert "intent=transcription%26foo%3Dbar" in url
+    assert "&foo=bar" not in url
+
+
+@pytest.mark.asyncio
+async def test_construct_url_no_intent_when_absent():
+    """No intent param leaks into the URL when not provided."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    handler = AzureOpenAIRealtime()
+    url = handler._construct_url(
+        api_base="https://my-endpoint.openai.azure.com",
+        model="gpt-4o-realtime-preview",
+        api_version="2024-10-01-preview",
+        realtime_protocol="GA",
+        query_params={"model": "gpt-4o-realtime-preview"},
+    )
+    assert "intent=" not in url
+
+
+@pytest.mark.asyncio
 async def test_construct_url_v1_protocol():
     """
     Test that realtime_protocol='v1' also uses /openai/v1/realtime.

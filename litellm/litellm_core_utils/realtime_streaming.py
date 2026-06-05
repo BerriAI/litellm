@@ -100,6 +100,10 @@ class RealTimeStreaming:
         self._flushing_pending_messages_until_setup: bool = False
         self._pending_messages_until_setup: List[str] = []
         self._pending_messages_byte_total: int = 0
+        # Whether this is a transcription-only session (session.type == "transcription",
+        # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
+        # their input_audio_transcription.completed usage drives duration-based cost.
+        self._is_transcription_session: bool = False
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -209,6 +213,8 @@ class RealTimeStreaming:
                     self.session_tools = tools
                 # GA: session.type is required; log it for traceability but no action needed
                 verbose_logger.debug(f"Realtime session.type: {session.get('type')}")
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
         except (json.JSONDecodeError, AttributeError, TypeError):
             pass
 
@@ -222,6 +228,55 @@ class RealTimeStreaming:
                 transcript = cast(str, event_obj.get("transcript", ""))
                 if transcript:
                     self.input_messages.append({"role": "user", "content": transcript})
+        except (AttributeError, TypeError):
+            pass
+
+    def _detect_transcription_session_from_backend(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """Flag transcription-only sessions from backend session events."""
+        try:
+            event_type = event_obj.get("type", "")
+            if event_type in (
+                "transcription_session.created",
+                "transcription_session.updated",
+            ):
+                self._is_transcription_session = True
+            elif event_type in ("session.created", "session.updated"):
+                session = cast(dict, event_obj).get("session", {}) or {}
+                if session.get("type") == "transcription":
+                    self._is_transcription_session = True
+        except (AttributeError, TypeError):
+            pass
+
+    def _capture_transcription_usage(
+        self, event_obj: Union[dict, OpenAIRealtimeEvents]
+    ) -> None:
+        """
+        Append a usage-only transcription completed event to the logged results so
+        the cost calculator can bill it by audio duration. The default logged event
+        types exclude this event, so it is captured here directly for transcription
+        sessions rather than widening logging for every realtime session. Only the
+        type and usage are kept — the transcript is already captured separately in
+        input_messages, so it is not duplicated into the response log here.
+        """
+        try:
+            usage = event_obj.get("usage")
+            if usage is None:
+                return
+            # If this event type is already captured by store_message (e.g. the user
+            # logs all realtime events), don't append a second copy.
+            if self._should_store_message(event_obj):
+                return
+            self.messages.append(
+                cast(
+                    OpenAIRealtimeEvents,
+                    {
+                        "type": "conversation.item.input_audio_transcription.completed",
+                        "usage": usage,
+                    },
+                )
+            )
         except (AttributeError, TypeError):
             pass
 
@@ -713,6 +768,8 @@ class RealTimeStreaming:
         try:
             event_obj = json.loads(raw_response)
 
+            self._detect_transcription_session_from_backend(event_obj)
+
             # For audio/VAD guardrail path: once the session is ready, tell the backend
             # not to auto-respond after VAD detects end-of-speech.  We send the
             # session.created to the client FIRST so the client is always in sync, then
@@ -731,12 +788,20 @@ class RealTimeStreaming:
                 event_obj.get("type")
                 == "conversation.item.input_audio_transcription.completed"
             ):
-                transcript = event_obj.get("transcript", "")
                 self._collect_user_input_from_backend_event(event_obj)
                 ## LOGGING — must happen before continue below
                 self.store_message(raw_response)
                 # Forward transcript to client so user sees what they said
                 await self.websocket.send_text(raw_response)
+
+                # Transcription-only sessions (e.g. gpt-realtime-whisper) have no
+                # assistant turn: capture audio-duration usage for cost and never
+                # trigger response.create.
+                if self._is_transcription_session:
+                    self._capture_transcription_usage(event_obj)
+                    return True
+
+                transcript = event_obj.get("transcript", "")
                 blocked = await self.run_realtime_guardrails(
                     transcript,
                     item_id=event_obj.get("item_id"),
