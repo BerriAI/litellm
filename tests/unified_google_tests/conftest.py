@@ -42,19 +42,16 @@ PROXY_MASTER_KEY = "sk-1234"
 PROXY_START_TIMEOUT_S = 30.0
 
 
-def _initialize_proxy(config_path: str) -> None:
-    from litellm.proxy.proxy_server import cleanup_router_config_variables, initialize
-
-    cleanup_router_config_variables()
-    asyncio.run(initialize(config=config_path, debug=True))
-
-
 def _start_proxy_server(
     config_path: str,
 ) -> Tuple[str, uvicorn.Server, threading.Thread, socket.socket]:
-    from litellm.proxy.proxy_server import app as proxy_app
+    from litellm.proxy.proxy_server import (
+        app as proxy_app,
+        cleanup_router_config_variables,
+        initialize,
+    )
 
-    _initialize_proxy(config_path)
+    cleanup_router_config_variables()
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -67,6 +64,7 @@ def _start_proxy_server(
     def _run() -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        loop.run_until_complete(initialize(config=config_path, debug=True))
         loop.run_until_complete(server.serve(sockets=[sock]))
 
     thread = threading.Thread(target=_run, daemon=True)
