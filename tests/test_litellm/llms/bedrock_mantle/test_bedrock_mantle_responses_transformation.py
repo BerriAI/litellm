@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
+from botocore.exceptions import PartialCredentialsError, ProfileNotFound
 
 import litellm
 from litellm.llms.bedrock_mantle.responses.transformation import (
@@ -564,6 +565,36 @@ class TestBedrockMantleResponsesSigV4:
 
         signer = BaseAWSLLM()
         signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        with pytest.raises(ValueError) as exc:
+            cfg.sign_request(
+                headers={},
+                optional_params={"aws_region_name": "us-east-2"},
+                request_data={"input": "hi"},
+                api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+                api_key=None,
+            )
+        msg = str(exc.value)
+        assert "Bearer" in msg
+        assert "SigV4" in msg or "IAM" in msg
+
+    @pytest.mark.parametrize(
+        "cred_error",
+        [
+            PartialCredentialsError(provider="env", cred_var="aws_secret_access_key"),
+            ProfileNotFound(profile="missing-profile"),
+        ],
+    )
+    def test_partial_credentials_raises_both_paths(self, monkeypatch, cred_error):
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(side_effect=cred_error)
         cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
 
         with pytest.raises(ValueError) as exc:
