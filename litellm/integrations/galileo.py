@@ -135,9 +135,13 @@ class GalileoObserve(CustomLogger):
 
     @staticmethod
     def _galileo_input_messages(
-        messages: Optional[List[Any]], input_text: str
+        messages: Optional[Any], input_text: str
     ) -> List[Dict[str, str]]:
+        if isinstance(messages, dict):
+            messages = messages.get("messages")
         if not messages:
+            return [{"role": "user", "content": input_text}]
+        if not isinstance(messages, list):
             return [{"role": "user", "content": input_text}]
 
         galileo_messages: List[Dict[str, str]] = []
@@ -187,13 +191,13 @@ class GalileoObserve(CustomLogger):
     def _token_metrics_from_record(record: Dict[str, Any]) -> Dict[str, Any]:
         num_input_tokens = int(record.get("num_input_tokens") or 0)
         num_output_tokens = int(record.get("num_output_tokens") or 0)
-        num_total_tokens = record.get("num_total_tokens")
-        if num_total_tokens is None:
+        num_total_tokens = int(record.get("num_total_tokens") or 0)
+        if num_total_tokens == 0 and (num_input_tokens or num_output_tokens):
             num_total_tokens = num_input_tokens + num_output_tokens
         metrics: Dict[str, Any] = {
             "num_input_tokens": num_input_tokens,
             "num_output_tokens": num_output_tokens,
-            "num_total_tokens": int(num_total_tokens),
+            "num_total_tokens": num_total_tokens,
         }
         cost = record.get("cost")
         if cost is not None:
@@ -684,6 +688,11 @@ class GalileoObserve(CustomLogger):
             start_ts = datetime.fromtimestamp(float(raw_start), tz=timezone.utc)
             end_ts = datetime.fromtimestamp(float(raw_end), tz=timezone.utc)
         _latency_ms = max(0, int((end_ts - start_ts).total_seconds() * 1000))
+        num_input_tokens = int(slo.get("prompt_tokens") or 0)
+        num_output_tokens = int(slo.get("completion_tokens") or 0)
+        num_total_tokens = int(slo.get("total_tokens") or 0)
+        if num_total_tokens == 0 and (num_input_tokens or num_output_tokens):
+            num_total_tokens = num_input_tokens + num_output_tokens
 
         request_record = LLMResponse(
             latency_ms=_latency_ms,
@@ -692,17 +701,17 @@ class GalileoObserve(CustomLogger):
             output_text=output_text,
             node_type=_call_type,
             model=str(slo.get("model") or kwargs.get("model") or "-"),
-            num_input_tokens=int(slo.get("prompt_tokens") or 0),
-            num_output_tokens=int(slo.get("completion_tokens") or 0),
-            num_total_tokens=int(slo.get("total_tokens") or 0),
+            num_input_tokens=num_input_tokens,
+            num_output_tokens=num_output_tokens,
+            num_total_tokens=num_total_tokens,
             cost=slo.get("response_cost"),
             created_at=GalileoObserve._format_created_at(start_ts),
         )
 
         request_dict = request_record.model_dump()
+        if isinstance(messages, dict):
+            messages = messages.get("messages")
         if isinstance(messages, list) and messages:
-            request_dict["messages"] = messages
-        elif isinstance(messages, dict) and messages:
             request_dict["messages"] = messages
         self.in_memory_records.append(request_dict)
         verbose_logger.debug(

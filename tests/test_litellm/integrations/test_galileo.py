@@ -78,6 +78,17 @@ def test_galileo_token_metrics_from_record_falls_back_to_sum():
     }
 
 
+def test_galileo_token_metrics_from_record_sums_zero_total():
+    metrics = GalileoObserve._token_metrics_from_record(
+        {"num_input_tokens": 5, "num_output_tokens": 7, "num_total_tokens": 0}
+    )
+    assert metrics == {
+        "num_input_tokens": 5,
+        "num_output_tokens": 7,
+        "num_total_tokens": 12,
+    }
+
+
 def test_galileo_token_metrics_from_record_includes_cost():
     metrics = GalileoObserve._token_metrics_from_record(
         {
@@ -145,6 +156,33 @@ def test_galileo_v2_span_preserves_message_roles(galileo_v2_env):
             {"role": "system", "content": "be helpful"},
             {"role": "user", "content": "hello"},
         ],
+    }
+    span = GalileoObserve._record_to_v2_span(
+        record, trace_id="trace-id", span_id="span-id"
+    )
+    assert span["input"] == [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "hello"},
+    ]
+
+
+def test_galileo_v2_span_unwraps_prompt_messages(galileo_v2_env):
+    record = {
+        "latency_ms": 1,
+        "status_code": 200,
+        "input_text": "fallback",
+        "output_text": "ok",
+        "node_type": "pass_through_endpoint",
+        "model": "gpt-5.2",
+        "num_input_tokens": 0,
+        "num_output_tokens": 0,
+        "created_at": "2026-05-25T12:00:00",
+        "messages": {
+            "messages": [
+                {"role": "system", "content": "be helpful"},
+                {"role": "user", "content": "hello"},
+            ]
+        },
     }
     span = GalileoObserve._record_to_v2_span(
         record, trace_id="trace-id", span_id="span-id"
@@ -577,6 +615,48 @@ async def test_galileo_flush_resets_headers_on_401(monkeypatch):
 
     assert logger.headers is None
     assert logger.in_memory_records == [{"records": "x"}]
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_log_success_preserves_passthrough_messages(
+    galileo_v2_env,
+):
+    import datetime
+
+    logger = GalileoObserve()
+    logger.batch_size = 2
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "hi"},
+    ]
+
+    await logger.async_log_success_event(
+        kwargs={
+            "call_type": "pass_through_endpoint",
+            "model": "gpt",
+            "messages": messages,
+            "standard_logging_object": {
+                "call_type": "pass_through_endpoint",
+                "model": "gpt",
+                "prompt_tokens": 1,
+                "completion_tokens": 2,
+                "total_tokens": 0,
+                "response_cost": 0.001,
+                "startTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                ).timestamp(),
+                "endTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                ).timestamp(),
+            },
+        },
+        response_obj={"response": "ok"},
+        start_time=datetime.datetime(2026, 5, 25, 12, 0, 0),
+        end_time=datetime.datetime(2026, 5, 25, 12, 0, 1),
+    )
+
+    assert logger.in_memory_records[0]["messages"] == messages
+    assert logger.in_memory_records[0]["num_total_tokens"] == 3
 
 
 @pytest.mark.asyncio
