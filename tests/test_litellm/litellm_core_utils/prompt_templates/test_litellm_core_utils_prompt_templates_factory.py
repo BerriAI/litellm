@@ -899,11 +899,12 @@ def test_bedrock_tools_unpack_defs():
 
 
 def test_bedrock_tools_pt_strict_parameter():
-    """Regression for strict tools silently dropped on the Bedrock Converse path.
+    """Regression for strict tools on the Bedrock Converse path.
 
-    Bedrock Converse supports strict in toolSpec since 2026-02; without forwarding
-    strict (and additionalProperties, which Bedrock requires alongside strict) the
-    model ignores the enum constraint the caller asked for.
+    Claude on Bedrock honours strict in toolSpec (with additionalProperties, which
+    Bedrock requires alongside strict); without forwarding it the model ignores the
+    enum constraint the caller asked for. Every other Bedrock family (Nova, Llama,
+    GPT-OSS) rejects the strict field, so it must only be forwarded for Claude.
     """
     tools_with_strict = [
         {
@@ -921,9 +922,15 @@ def test_bedrock_tools_pt_strict_parameter():
             },
         }
     ]
-    result = _bedrock_tools_pt(tools_with_strict)
+    result = _bedrock_tools_pt(
+        tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
     assert result[0]["toolSpec"]["strict"] is True
     assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
+
+    result = _bedrock_tools_pt(tools_with_strict, model="us.amazon.nova-micro-v1:0")
+    assert "strict" not in result[0]["toolSpec"]
+    assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
 
     tools_without_strict = [
         {
@@ -939,7 +946,9 @@ def test_bedrock_tools_pt_strict_parameter():
             },
         }
     ]
-    result = _bedrock_tools_pt(tools_without_strict)
+    result = _bedrock_tools_pt(
+        tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
     assert "strict" not in result[0]["toolSpec"]
     assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
 
