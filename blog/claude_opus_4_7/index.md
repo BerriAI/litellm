@@ -221,7 +221,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ### Adaptive Thinking
 
 :::note
-When using `reasoning_effort` with Claude Opus 4.7, all values (`low`, `medium`, `high`, `xhigh`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets with `type: "enabled"`, pass the native `thinking` parameter directly.
+When using `reasoning_effort` with Claude Opus 4.7, all values (`low`, `medium`, `high`, `xhigh`, `max`) are mapped to `thinking: {type: "adaptive"}`. Opus 4.7 only supports adaptive thinking; explicit budgets via `thinking: {type: "enabled", budget_tokens: ...}` are rejected by the Anthropic API with a 400 error. To control thinking depth, pair adaptive thinking with `output_config.effort` (see [Effort Levels](#effort-levels) below) rather than a fixed budget.
 :::
 
 <Tabs>
@@ -274,9 +274,9 @@ curl --location 'http://0.0.0.0:4000/v1/messages' \
 
 ### Effort Levels
 
-Claude Opus 4.7 supports four effort levels: `low`, `medium`, `high` (default), and `xhigh`. These give you finer-grained control over how much reasoning the model applies to a task. Pass the effort level via the `output_config` parameter.
+Claude Opus 4.7 supports five effort levels: `low`, `medium`, `high` (default), `xhigh`, and `max`. These give you finer-grained control over how much reasoning the model applies to a task. Pass the effort level via the `output_config` parameter.
 
-`xhigh` is a new effort level introduced with Opus 4.7 that sits above `high`. The `max` effort level is Claude Opus 4.6 only and is not available on 4.7.
+`xhigh` is a new effort level introduced with Opus 4.7 that sits above `high` and is the recommended starting point for coding and agentic work. `max` sits above `xhigh` for the absolute highest capability; reserve it for genuinely frontier problems, since on most workloads it adds significant token cost for relatively small quality gains.
 
 <Tabs>
 <TabItem value="completions" label="/chat/completions">

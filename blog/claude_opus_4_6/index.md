@@ -383,7 +383,7 @@ Compaction blocks are also supported in streaming mode. You'll receive:
 ### Adaptive Thinking
 
 :::note
-When using `reasoning_effort` with Claude Opus 4.6, all values (`low`, `medium`, `high`) are mapped to `thinking: {type: "adaptive"}`. To use explicit thinking budgets with `type: "enabled"`, pass the native `thinking` parameter directly (see "Native thinking param" tab below).
+When using `reasoning_effort` with Claude Opus 4.6, all values (`low`, `medium`, `high`, `max`) are mapped to `thinking: {type: "adaptive"}`. Explicit budgets via `thinking: {type: "enabled", budget_tokens: ...}` still work on Opus 4.6 but are deprecated and no longer recommended; prefer adaptive thinking with `output_config.effort` (see [Effort Levels](#effort-levels) below) to control thinking depth.
 :::
 
 <Tabs>
