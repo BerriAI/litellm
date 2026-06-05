@@ -3008,6 +3008,162 @@ class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
         self.assertEqual(parsed[0]["parts"][0]["content"], "Hello back!")
         self.assertEqual(parsed[0]["finish_reason"], "stop")
 
+    def test_input_messages_with_array_content_normalizes_text_key_to_content(self):
+        """#29756: when /v1/messages clients send `content` as an array of
+        content blocks (Anthropic spec), each block's inner `text` key must
+        be normalized to `content` so the OTel part shape stays consistent
+        with the plain-string path and with `gen_ai.output.messages`."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "claude-sonnet-4-6",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": "hello"}],
+                }
+            ],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "anthropic"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+        response_obj = {
+            "id": "test-response-id",
+            "model": "claude-sonnet-4-6",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "hi"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 1,
+                "total_tokens": 6,
+            },
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        input_calls = [
+            c
+            for c in mock_span.set_attribute.call_args_list
+            if c[0][0] == "gen_ai.input.messages"
+        ]
+        self.assertEqual(len(input_calls), 1)
+        parsed = json.loads(input_calls[0][0][1])
+        part = parsed[0]["parts"][0]
+        self.assertEqual(part["type"], "text")
+        self.assertEqual(part["content"], "hello")
+        self.assertNotIn("text", part)
+
+    def test_anthropic_system_blocks_hoisted_into_single_system_role(self):
+        """#29756: Anthropic Messages `system` is a list of content blocks
+        like [{"type": "text", "text": "..."}] with no `role`. Before the
+        fix the OTel serializer treated each block as a separate message,
+        defaulting role=user and dropping `content` (lookups missed the
+        `text` key). Now the blocks must be hoisted under a single system
+        role with the actual text preserved."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hello"}],
+            "system": [
+                {"type": "text", "text": "You are helpful."},
+                {"type": "text", "text": "Be concise."},
+            ],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "anthropic"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+        response_obj = {
+            "id": "test-response-id",
+            "model": "claude-sonnet-4-6",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "hi"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 1,
+                "total_tokens": 6,
+            },
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        sys_calls = [
+            c
+            for c in mock_span.set_attribute.call_args_list
+            if c[0][0] == "gen_ai.system_instructions"
+        ]
+        self.assertEqual(len(sys_calls), 1)
+        parsed = json.loads(sys_calls[0][0][1])
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["role"], "system")
+        self.assertEqual(len(parsed[0]["parts"]), 2)
+        self.assertEqual(parsed[0]["parts"][0]["content"], "You are helpful.")
+        self.assertEqual(parsed[0]["parts"][1]["content"], "Be concise.")
+
+    def test_system_instructions_string_path_unchanged(self):
+        """Plain-string system_instructions (Vertex AI Gemini etc.) still
+        passes through unchanged — guard against the new list-of-blocks
+        path accidentally catching the string case."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gemini-2.5-pro",
+            "messages": [{"role": "user", "content": "hello"}],
+            "system_instructions": "You are helpful.",
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "vertex_ai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gemini-2.5-pro",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "hi"},
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 1,
+                "total_tokens": 6,
+            },
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        sys_calls = [
+            c
+            for c in mock_span.set_attribute.call_args_list
+            if c[0][0] == "gen_ai.system_instructions"
+        ]
+        self.assertEqual(len(sys_calls), 1)
+        # Plain string, NOT JSON-serialised.
+        self.assertEqual(sys_calls[0][0][1], "You are helpful.")
+
     def test_usage_tokens_use_new_naming_convention(self):
         """
         Test that token usage uses the OTEL 1.38 naming convention:
