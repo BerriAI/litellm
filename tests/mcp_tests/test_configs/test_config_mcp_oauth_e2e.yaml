@@ -1,0 +1,48 @@
+general_settings:
+  master_key: sk-1234
+
+litellm_settings:
+  drop_params: true
+
+mcp_servers:
+  oauth_m2m_primary:
+    transport: http
+    url: http://127.0.0.1:0/mcp
+    auth_type: oauth2
+    oauth2_flow: client_credentials
+    client_id: litellm-test-client
+    client_secret: litellm-test-secret
+    token_url: http://127.0.0.1:0/token
+    scopes:
+      - read
+      - call
+    allow_all_keys: true
+    static_headers:
+      x-litellm-tenant: acme-internal
+    extra_headers:
+      - x-trace-id
+  oauth_m2m_secondary:
+    transport: http
+    url: http://127.0.0.1:0/mcp
+    auth_type: oauth2
+    oauth2_flow: client_credentials
+    client_id: litellm-test-client
+    client_secret: litellm-test-secret
+    token_url: http://127.0.0.1:0/token
+    scopes:
+      - read
+    allow_all_keys: true
+  oauth_interactive:
+    transport: http
+    url: http://127.0.0.1:0/mcp
+    auth_type: oauth2
+    oauth2_flow: authorization_code
+    client_id: litellm-test-client
+    client_secret: litellm-test-secret
+    authorization_url: http://127.0.0.1:0/authorize
+    token_url: http://127.0.0.1:0/token
+    registration_url: http://127.0.0.1:0/register
+    scopes:
+      - read
+      - call
+    allow_all_keys: true
