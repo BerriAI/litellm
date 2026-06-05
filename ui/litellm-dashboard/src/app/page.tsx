@@ -10,6 +10,7 @@ import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
@@ -89,6 +90,9 @@ function CreateKeyPageContent() {
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [createClicked, setCreateClicked] = useState<boolean>(false);
+
+  const { data: uiSettingsData } = useUISettings();
+  const nudgesDisabled = Boolean(uiSettingsData?.values?.disable_ui_nudges);
 
   // Survey state - always show by default
   const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
@@ -265,6 +269,9 @@ function CreateKeyPageContent() {
 
   // Fetch in-product nudges configuration from backend
   useEffect(() => {
+    if (nudgesDisabled) {
+      return;
+    }
     if (accessToken && token) {
       (async () => {
         try {
@@ -284,7 +291,7 @@ function CreateKeyPageContent() {
         }
       })();
     }
-  }, [accessToken, token]);
+  }, [accessToken, token, nudgesDisabled]);
 
   // Auto-dismiss survey prompt after 15 seconds
   useEffect(() => {
@@ -550,7 +557,7 @@ function CreateKeyPageContent() {
 
               {/* Survey Components */}
               <SurveyPrompt
-                isVisible={showSurveyPrompt}
+                isVisible={showSurveyPrompt && !nudgesDisabled}
                 onOpen={handleOpenSurvey}
                 onDismiss={handleDismissSurveyPrompt}
               />
@@ -562,7 +569,7 @@ function CreateKeyPageContent() {
 
               {/* Claude Code Components */}
               <ClaudeCodePrompt
-                isVisible={showClaudeCodePrompt}
+                isVisible={showClaudeCodePrompt && !nudgesDisabled}
                 onOpen={handleOpenClaudeCode}
                 onDismiss={handleDismissClaudeCodePrompt}
               />
