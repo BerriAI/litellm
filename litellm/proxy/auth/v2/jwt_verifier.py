@@ -1,9 +1,6 @@
 import time
 from typing import Any, Dict, List, Optional
 
-from authlib.jose import JsonWebKey, JsonWebToken
-from authlib.jose.errors import JoseError
-
 
 class JWTVerificationError(Exception):
     """Raised when a token fails signature or standard-claim validation."""
@@ -55,6 +52,9 @@ def verify(
     network). Raises :class:`JWTVerificationError` on any failure so callers
     never branch on authlib's internal exception types.
     """
+    from authlib.jose import JsonWebToken
+    from authlib.jose.errors import JoseError
+
     decoder = JsonWebToken(algorithms or _DEFAULT_ALGORITHMS)
     try:
         claims = decoder.decode(
@@ -83,6 +83,7 @@ class JWKSProvider:
             return self._key_set
 
         import httpx
+        from authlib.jose import JsonWebKey
 
         async with httpx.AsyncClient() as client:
             response = await client.get(self.jwks_uri)

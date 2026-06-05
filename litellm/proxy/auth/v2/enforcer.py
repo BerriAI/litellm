@@ -1,8 +1,6 @@
 import os
 from typing import List, Optional, Sequence
 
-import casbin
-
 _MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.conf")
 
 Rule = Sequence[str]
@@ -24,6 +22,11 @@ class CasbinEnforcer:
         resource_groupings: Optional[List[Rule]] = None,
         domain_groupings: Optional[List[Rule]] = None,
     ):
+        # Imported lazily so merely importing the proxy (or this package, e.g. to
+        # register the policy-admin router) never requires casbin. The dependency
+        # is only needed once auth_v2 is actually enabled and builds an enforcer.
+        import casbin
+
         self._enforcer = casbin.Enforcer(_MODEL_PATH)
         self._enforcer.enable_auto_save(False)
         for rule in policies:
