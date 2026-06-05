@@ -25024,6 +25024,7 @@
         "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
@@ -25040,6 +25041,7 @@
         "source": "https://platform.kimi.ai/docs/pricing/chat-k26",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
@@ -25152,6 +25154,7 @@
         "output_cost_per_token": 5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-128k-0430": {
@@ -25176,6 +25179,7 @@
         "output_cost_per_token": 5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -25189,6 +25193,7 @@
         "output_cost_per_token": 3e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-32k-0430": {
@@ -25213,6 +25218,7 @@
         "output_cost_per_token": 3e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -25226,6 +25232,7 @@
         "output_cost_per_token": 2e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-8k-0430": {
@@ -25250,6 +25257,7 @@
         "output_cost_per_token": 2e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -25263,6 +25271,7 @@
         "output_cost_per_token": 5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "morph/morph-v3-fast": {
