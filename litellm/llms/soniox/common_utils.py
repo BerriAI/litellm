@@ -58,12 +58,10 @@ def get_soniox_api_key(api_key: Optional[str] = None) -> Optional[str]:
 
 
 def get_soniox_api_base(api_base: Optional[str] = None) -> str:
-    """Resolve the Soniox API base URL (defaults to public API)."""
+    """Resolve the Soniox API base URL from arg or env var (defaults to public API)."""
     from litellm.secret_managers.main import get_secret_str
 
-    # Env var takes precedence over caller-supplied value to prevent
-    # request-controlled redirection of authenticated requests.
-    base = get_secret_str("SONIOX_API_BASE") or api_base or SONIOX_API_BASE
+    base = api_base or get_secret_str("SONIOX_API_BASE") or SONIOX_API_BASE
     return base.rstrip("/")
 
 
