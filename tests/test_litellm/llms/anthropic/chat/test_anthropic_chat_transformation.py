@@ -5261,3 +5261,99 @@ def test_should_strip_billing_metadata_by_provider(
 
     config_cls = getattr(importlib.import_module(module_path), class_name)
     assert config_cls().should_strip_billing_metadata() is expected_strip
+def test_namespace_tool_flat_nested_tools_are_extracted():
+    """Codex sends nested tools in flat format {type, name, description, parameters} with no 'function' wrapper.
+    These must be normalized and mapped without raising KeyError: 'function'."""
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "close_agent",
+                    "description": "Close an agent.",
+                    "strict": False,
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                        "additionalProperties": False,
+                    },
+                },
+            ],
+        }
+    ]
+    anthropic_tools, _ = config._map_tools(tools)
+    assert len(anthropic_tools) == 1
+    assert anthropic_tools[0]["name"] == "close_agent"
+
+
+def test_namespace_tool_nested_tools_are_extracted():
+    """Codex sends type='namespace' wrapping nested tools in Anthropic format.
+    The namespace container must be dropped and its nested tools extracted individually.
+    """
+    config = AnthropicConfig()
+    tools = [
+        {
+            "type": "namespace",
+            "name": "multi_agent_v1",
+            "description": "Tools for spawning and managing sub-agents.",
+            "tools": [
+                {
+                    "name": "close_agent",
+                    "type": "custom",
+                    "description": "Close an agent.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                    },
+                },
+                {
+                    "name": "resume_agent",
+                    "type": "custom",
+                    "description": "Resume a closed agent.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"id": {"type": "string"}},
+                        "required": ["id"],
+                    },
+                },
+            ],
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "exec_command",
+                "description": "Run a command.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"cmd": {"type": "string"}},
+                    "required": ["cmd"],
+                },
+            },
+        },
+    ]
+    anthropic_tools, mcp_servers = config._map_tools(tools)
+    names = [t["name"] for t in anthropic_tools]
+    assert "close_agent" in names
+    assert "resume_agent" in names
+    assert "exec_command" in names
+    assert "multi_agent_v1" not in names
+    assert len(anthropic_tools) == 3
+    assert mcp_servers == []
+
+
+def test_client_metadata_stripped_from_anthropic_request():
+    """client_metadata passed by codex must not reach the Anthropic (or Vertex Anthropic) payload."""
+    config = AnthropicConfig()
+    result = config.transform_request(
+        model="claude-3-5-haiku-20241022",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"max_tokens": 10, "client_metadata": {"originator": "codex"}},
+        litellm_params={},
+        headers={},
+    )
+    assert "client_metadata" not in result

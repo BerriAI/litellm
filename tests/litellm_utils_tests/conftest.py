@@ -28,32 +28,9 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 
 _verbose_state = VerboseReporterState()
 
+_VCR_INCOMPATIBLE_FILES = frozenset()
 
-# Files where VCR replay breaks the test:
-# - ``test_litellm_overhead.py``: asserts overhead/total < 40%, which
-#   inverts when cached replay collapses the upstream time to microseconds.
-_VCR_INCOMPATIBLE_FILES = frozenset(
-    {
-        "test_litellm_overhead.py",
-    }
-)
-
-# AWS Secrets Manager resource-lifecycle tests. Each run creates a secret
-# under a per-run unique name (``litellm_test_<uuid>``) and either asserts the
-# API response echoes that exact unique name or reads it straight back. The
-# name *must* be unique per run because AWS enforces a >=7-day deletion
-# recovery window — a fixed name can't be re-created on the daily VCR
-# re-record. Deterministic replay returns the previously-recorded (different)
-# name, so the unique-name round-trip cannot be reproduced offline. The
-# config-parsing tests in the same file (settings / STS endpoint) make no such
-# unique-resource calls and stay VCR-cached.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = (
-    "::test_write_and_read_simple_secret",
-    "::test_write_and_read_json_secret",
-    "::test_read_nonexistent_secret",
-    "::test_primary_secret_functionality",
-    "::test_write_secret_with_description_and_tags",
-)
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 @pytest.fixture(scope="function", autouse=True)

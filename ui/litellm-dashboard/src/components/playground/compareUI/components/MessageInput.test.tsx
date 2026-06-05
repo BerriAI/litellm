@@ -27,7 +27,13 @@ describe("MessageInput", () => {
     const onSend = vi.fn();
     const uploadComponent = <div data-testid="upload-component">Upload</div>;
     const { container, getByTestId } = render(
-      <MessageInput value="" onChange={onChange} onSend={onSend} hasAttachment={true} uploadComponent={uploadComponent} />,
+      <MessageInput
+        value=""
+        onChange={onChange}
+        onSend={onSend}
+        hasAttachment={true}
+        uploadComponent={uploadComponent}
+      />,
     );
     const button = container.querySelector("button") as HTMLButtonElement;
     expect(getByTestId("upload-component")).toBeInTheDocument();

@@ -59,7 +59,16 @@ const ModePicker: React.FC<ModePicker> = ({ selected, onSelect }) => (
           marginBottom: 16,
         }}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={selected === "simple" ? "#4f46e5" : "#6b7280"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={selected === "simple" ? "#4f46e5" : "#6b7280"}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <rect x="3" y="3" width="18" height="18" rx="2" />
           <path d="M8 7h8M8 12h8M8 17h5" />
         </svg>
@@ -111,7 +120,16 @@ const ModePicker: React.FC<ModePicker> = ({ selected, onSelect }) => (
           marginBottom: 16,
         }}
       >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke={selected === "flow_builder" ? "#4f46e5" : "#6b7280"} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke={selected === "flow_builder" ? "#4f46e5" : "#6b7280"}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
         </svg>
       </div>
@@ -233,10 +251,10 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
     let resolved = new Set<string>();
 
     if (inheritFrom) {
-      const parentPolicy = existingPolicies.find(p => p.policy_name === inheritFrom);
+      const parentPolicy = existingPolicies.find((p) => p.policy_name === inheritFrom);
       if (parentPolicy) {
         const parentResolved = resolveParentGuardrails(parentPolicy);
-        parentResolved.forEach(g => resolved.add(g));
+        parentResolved.forEach((g) => resolved.add(g));
       }
     }
 
@@ -250,16 +268,16 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
     let resolved = new Set<string>();
 
     if (policy.inherit) {
-      const grandparent = existingPolicies.find(p => p.policy_name === policy.inherit);
+      const grandparent = existingPolicies.find((p) => p.policy_name === policy.inherit);
       if (grandparent) {
-        resolveParentGuardrails(grandparent).forEach(g => resolved.add(g));
+        resolveParentGuardrails(grandparent).forEach((g) => resolved.add(g));
       }
     }
     if (policy.guardrails_add) {
-      policy.guardrails_add.forEach(g => resolved.add(g));
+      policy.guardrails_add.forEach((g) => resolved.add(g));
     }
     if (policy.guardrails_remove) {
-      policy.guardrails_remove.forEach(g => resolved.delete(g));
+      policy.guardrails_remove.forEach((g) => resolved.delete(g));
     }
     return Array.from(resolved);
   };
@@ -304,9 +322,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
         inherit: values.inherit || undefined,
         guardrails_add: values.guardrails_add || [],
         guardrails_remove: values.guardrails_remove || [],
-        condition: values.model_condition
-          ? { model: values.model_condition }
-          : undefined,
+        condition: values.model_condition ? { model: values.model_condition } : undefined,
       };
 
       if (isEditing && editingPolicy) {
@@ -323,7 +339,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
     } catch (error) {
       console.error("Failed to save policy:", error);
       NotificationsManager.fromBackend(
-        "Failed to save policy: " + (error instanceof Error ? error.message : String(error))
+        "Failed to save policy: " + (error instanceof Error ? error.message : String(error)),
       );
     } finally {
       setIsSubmitting(false);
@@ -345,13 +361,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   // ── Mode Picker Step ──────────────────────────────────────────────────────
   if (step === "pick_mode") {
     return (
-      <Modal
-        title="Create New Policy"
-        open={visible}
-        onCancel={handleClose}
-        footer={null}
-        width={620}
-      >
+      <Modal title="Create New Policy" open={visible} onCancel={handleClose} footer={null} width={620}>
         <ModePicker selected={selectedMode} onSelect={setSelectedMode} />
 
         {selectedMode === "flow_builder" && (
@@ -410,22 +420,15 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             { required: true, message: "Please enter a policy name" },
             {
               pattern: /^[a-zA-Z0-9_-]+$/,
-              message:
-                "Policy name can only contain letters, numbers, hyphens, and underscores",
+              message: "Policy name can only contain letters, numbers, hyphens, and underscores",
             },
           ]}
         >
-          <TextInput
-            placeholder="e.g., global-baseline, healthcare-compliance"
-            disabled={isEditing}
-          />
+          <TextInput placeholder="e.g., global-baseline, healthcare-compliance" disabled={isEditing} />
         </Form.Item>
 
         <Form.Item name="description" label="Description">
-          <Textarea
-            rows={2}
-            placeholder="Describe what this policy does..."
-          />
+          <Textarea rows={2} placeholder="Describe what this policy does..." />
         </Form.Item>
 
         <Divider orientation="left">
@@ -543,9 +546,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
                 label: model,
                 value: model,
               }))}
-              filterOption={(input, option) =>
-                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-              }
+              filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
               style={{ width: "100%" }}
             />
           ) : (
