@@ -1,4 +1,5 @@
 from .audit import AuthzDecision, Decision, register_sink, reset_sinks
+from .metrics import MetricsSnapshot, metrics
 from .context import (
     AuthMethod,
     RequestAuthContext,
@@ -25,4 +26,6 @@ __all__ = [
     "Decision",
     "register_sink",
     "reset_sinks",
+    "metrics",
+    "MetricsSnapshot",
 ]

@@ -1,7 +1,9 @@
 import logging
+import time
 from typing import Any, Dict, Optional
 
 from ..audit import AuthzDecision, Decision, record
+from ..metrics import metrics
 from ..principal import Principal
 from ..protocols import SupportsEnforce
 from .route_map import GovernedRoute, match_route
@@ -65,13 +67,18 @@ def authorize(
                 auth_method=auth_method,
             )
         )
+        metrics.observe_decision(Decision.LOUD_OPEN, "route", "*")
         return
 
     obj = _build_object(rule, request_data)
+    start = time.perf_counter()
     allowed = enforcer.enforce(principal.subject, principal.domain, obj, rule.action)
+    metrics.observe_latency(time.perf_counter() - start)
+    decision = Decision.ALLOW if allowed else Decision.DENY
+    metrics.observe_decision(decision, rule.resource, rule.action)
     record(
         AuthzDecision(
-            decision=Decision.ALLOW if allowed else Decision.DENY,
+            decision=decision,
             subject=principal.subject,
             domain=principal.domain,
             obj=obj,

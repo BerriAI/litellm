@@ -1,6 +1,7 @@
 import time
 from typing import List, Optional, Tuple
 
+from ..metrics import metrics
 from ..protocols import CasbinRuleRow, PolicyDB
 
 # Always-present bootstrap: principals carrying the proxy_admin role keep full
@@ -68,8 +69,10 @@ async def load_policy_snapshot(
     global _cache
     now = time.monotonic()
     if _cache is not None and (now - _cache[0]) < _CACHE_TTL_SECONDS:
+        metrics.record_cache(hit=True)
         return _cache[1], _cache[2], _cache[3], _cache[4]
 
+    metrics.record_cache(hit=False)
     rows: List[CasbinRuleRow] = []
     if prisma_client is not None:
         rows = await prisma_client.db.litellm_casbinrule.find_many()

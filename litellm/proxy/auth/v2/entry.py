@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from typing import TYPE_CHECKING, Optional, Tuple, cast
 
 from fastapi import HTTPException, Request, status
@@ -7,6 +8,7 @@ from fastapi import HTTPException, Request, status
 from litellm.integrations.otel.runtime import seed_request_identity
 
 from .audit import AuthzDecision, Decision, record
+from .metrics import metrics
 from .authn.authenticators import AuthContext, AuthResult, authenticate
 from .authz.authorizer import AuthorizationDenied, authorize
 from .authz.enforcer import CasbinEnforcer
@@ -198,10 +200,14 @@ async def user_api_key_auth_v2(
         if requested_model:
             enforcer = await _build_enforcer(principal, prisma_client)
             obj = f"model:{requested_model}"
+            start = time.perf_counter()
             allowed = enforcer.enforce(principal.subject, principal.domain, obj, "call")
+            metrics.observe_latency(time.perf_counter() - start)
+            decision = Decision.ALLOW if allowed else Decision.DENY
+            metrics.observe_decision(decision, "model", "call")
             record(
                 AuthzDecision(
-                    decision=Decision.ALLOW if allowed else Decision.DENY,
+                    decision=decision,
                     subject=principal.subject,
                     domain=principal.domain,
                     obj=obj,
