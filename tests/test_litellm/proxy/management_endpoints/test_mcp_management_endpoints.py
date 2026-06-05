@@ -3317,3 +3317,237 @@ def test_sanitize_mcp_server_for_non_admin_clears_credential_fields():
     # server without exposing secrets.
     assert sanitized.server_id == server.server_id
     assert sanitized.alias == server.alias
+
+
+NON_ADMIN_ROLES = [
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+]
+
+
+class TestMCPServerCRUDRBACByUserRole:
+    """User-role RBAC for MCP server CRUD mutations.
+
+    Creating, updating and deleting MCP servers is restricted to PROXY_ADMIN.
+    Every other role (internal_user, proxy_admin_viewer, internal_user_viewer)
+    must be rejected with 403, and a proxy admin must pass the gate.
+    """
+
+    @staticmethod
+    def _new_request() -> NewMCPServerRequest:
+        return NewMCPServerRequest(
+            server_name="rbac-server",
+            url="https://rbac.example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+
+    @staticmethod
+    def _update_request() -> UpdateMCPServerRequest:
+        return UpdateMCPServerRequest(
+            server_id="rbac-server-id",
+            alias="rbac-updated",
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", NON_ADMIN_ROLES)
+    async def test_create_rejected_for_non_admin(self, role):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=_make_prisma_client(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+                AsyncMock(),
+            ) as create_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await add_mcp_server(
+                    payload=self._new_request(),
+                    user_api_key_dict=generate_mock_user_api_key_auth(user_role=role),
+                )
+
+        assert exc_info.value.status_code == 403
+        create_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", NON_ADMIN_ROLES)
+    async def test_update_rejected_for_non_admin(self, role):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            edit_mcp_server,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=_make_prisma_client(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+                AsyncMock(),
+            ) as update_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await edit_mcp_server(
+                    payload=self._update_request(),
+                    user_api_key_dict=generate_mock_user_api_key_auth(user_role=role),
+                )
+
+        assert exc_info.value.status_code == 403
+        update_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", NON_ADMIN_ROLES)
+    async def test_delete_rejected_for_non_admin(self, role):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            remove_mcp_server,
+        )
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=_make_prisma_client(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_mcp_server",
+                AsyncMock(),
+            ) as delete_mock,
+        ):
+            with pytest.raises(HTTPException) as exc_info:
+                await remove_mcp_server(
+                    server_id="rbac-server-id",
+                    user_api_key_dict=generate_mock_user_api_key_auth(user_role=role),
+                )
+
+        assert exc_info.value.status_code == 403
+        delete_mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_create_allowed_for_proxy_admin(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            add_mcp_server,
+        )
+
+        created = generate_mock_mcp_server_db_record(server_id="rbac-created")
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=_make_prisma_client(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.create_mcp_server",
+                AsyncMock(return_value=created),
+            ) as create_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+                AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
+                AsyncMock(),
+            ),
+        ):
+            result = await add_mcp_server(
+                payload=self._new_request(),
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        create_mock.assert_awaited_once()
+        assert result.server_id == "rbac-created"
+
+    @pytest.mark.asyncio
+    async def test_update_allowed_for_proxy_admin(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            edit_mcp_server,
+        )
+
+        updated = generate_mock_mcp_server_db_record(server_id="rbac-server-id")
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=_make_prisma_client(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.validate_and_normalize_mcp_server_payload",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.update_mcp_server",
+                AsyncMock(return_value=updated),
+            ) as update_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.add_server",
+                AsyncMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
+                AsyncMock(),
+            ),
+        ):
+            result = await edit_mcp_server(
+                payload=self._update_request(),
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        update_mock.assert_awaited_once()
+        assert result.server_id == "rbac-server-id"
+
+    @pytest.mark.asyncio
+    async def test_delete_allowed_for_proxy_admin(self):
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            remove_mcp_server,
+        )
+
+        deleted = generate_mock_mcp_server_db_record(server_id="rbac-server-id")
+
+        with (
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=_make_prisma_client(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.delete_mcp_server",
+                AsyncMock(return_value=deleted),
+            ) as delete_mock,
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.remove_server",
+                MagicMock(),
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager.reload_servers_from_database",
+                AsyncMock(),
+            ),
+        ):
+            result = await remove_mcp_server(
+                server_id="rbac-server-id",
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_role=LitellmUserRoles.PROXY_ADMIN
+                ),
+            )
+
+        delete_mock.assert_awaited_once()
+        assert result.status_code == 202

@@ -343,7 +343,6 @@ def build_app() -> Starlette:
     app.add_middleware(BearerAuthMiddleware)
     return app
 
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="OAuth-protected MCP test server")
     parser.add_argument("--host", default=os.getenv("MCP_HOST", "127.0.0.1"))

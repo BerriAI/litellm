@@ -1629,3 +1629,93 @@ class TestPreviewOpenAPITools:
             "order is out of sync, so collision suffixes (_2, _3, ...) "
             "land on different operations"
         )
+
+
+class TestToolListingRBACByUserRole:
+    """Listing/calling tools is NOT gated on user_role.
+
+    Unlike the CRUD mutations (PROXY_ADMIN only), tool access is authorized by
+    the per-key MCP server allowlist / object permissions, so every role -
+    including non-admins - reaches the tool fetch once a server is allowed.
+    This pins that contract: a role gate added to ``list_tool_rest_api`` would
+    flip these to an empty/``access_denied`` result and fail.
+    """
+
+    pytestmark = pytest.mark.asyncio
+
+    @pytest.mark.parametrize(
+        "role",
+        [
+            "proxy_admin",
+            "internal_user",
+            "proxy_admin_viewer",
+            "internal_user_viewer",
+        ],
+    )
+    async def test_all_roles_can_list_tools_for_allowed_server(self, monkeypatch, role):
+        from litellm.proxy._types import LitellmUserRoles
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = None
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_get_tools(
+            server,
+            server_auth_header,
+            raw_headers=None,
+            user_api_key_auth=None,
+            extra_headers=None,
+        ):
+            return ["tool-1"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        result = await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles(role),
+                user_id=f"{role}_user",
+                api_key="sk-test",
+            ),
+        )
+
+        assert result["tools"] == ["tool-1"]
+        assert result["error"] is None
+        assert result["message"] == "Successfully retrieved tools"

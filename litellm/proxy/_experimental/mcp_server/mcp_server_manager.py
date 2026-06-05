@@ -3746,8 +3746,9 @@ class MCPServerManager:
         # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
         if server.requires_per_user_auth:
             should_skip_health_check = True
-        # Skip if auth_type is not none and authentication_token is missing
-        # (except aws_sigv4 which uses its own credential fields)
+        # Skip if auth_type needs a credential we don't have. aws_sigv4 uses its
+        # own credential fields and client_credentials servers self-authenticate
+        # via the M2M token fetch, so neither needs a static authentication_token.
         elif (
             server.auth_type
             and server.auth_type != MCPAuth.none

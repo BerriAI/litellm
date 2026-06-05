@@ -2978,3 +2978,139 @@ async def test_call_mcp_tool_resolves_unprefixed_tool_name_and_checks_permission
     assert mock_get_server.call_args_list[0][0][0] == "gmail_send_email"
     # Permissions check should be invoked with the resolved server name
     mock_is_allowed.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_cross_team_member_cannot_see_other_teams_mcp_servers(monkeypatch):
+    """Multi-team registry: each team's user must only see their own team's
+    servers (plus shared ones), and must NOT see the other team's exclusive
+    server. Drives the real team-DB-resolution path
+    (``MCPRequestHandler._get_allowed_mcp_servers_for_team``) by patching the
+    DB seam (``prisma_client``, ``get_team_object``) rather than stubbing the
+    function itself: each team's record carries an
+    ``object_permission.mcp_servers`` list and the handler must expand and
+    intersect it correctly against a real ``MCPServerManager`` registry.
+    A regression that read the wrong team's record, unioned across teams, or
+    leaked the full registry to non-admins would flip Alice's result to
+    include team-B's private server and fail."""
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+        MCPRequestHandler,
+    )
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+    manager = MCPServerManager()
+    await manager.load_servers_from_config(
+        {
+            "team_a_private": {
+                "url": "https://team-a.invalid/mcp",
+                "transport": MCPTransport.http,
+            },
+            "team_b_private": {
+                "url": "https://team-b.invalid/mcp",
+                "transport": MCPTransport.http,
+            },
+            "shared": {
+                "url": "https://shared.invalid/mcp",
+                "transport": MCPTransport.http,
+            },
+        }
+    )
+
+    registry = manager.get_registry()
+    a_id = next(sid for sid, s in registry.items() if s.name == "team_a_private")
+    b_id = next(sid for sid, s in registry.items() if s.name == "team_b_private")
+    shared_id = next(sid for sid, s in registry.items() if s.name == "shared")
+
+    alice = UserAPIKeyAuth(
+        api_key="sk-alice",
+        user_id="alice",
+        team_id="team-a",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+    bob = UserAPIKeyAuth(
+        api_key="sk-bob",
+        user_id="bob",
+        team_id="team-b",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+    )
+
+    team_records: dict[str, MagicMock] = {
+        "team-a": MagicMock(
+            team_id="team-a",
+            access_group_ids=[],
+            object_permission=MagicMock(
+                mcp_servers=[a_id, shared_id],
+                mcp_access_groups=[],
+                mcp_tool_permissions=None,
+            ),
+        ),
+        "team-b": MagicMock(
+            team_id="team-b",
+            access_group_ids=[],
+            object_permission=MagicMock(
+                mcp_servers=[b_id, shared_id],
+                mcp_access_groups=[],
+                mcp_tool_permissions=None,
+            ),
+        ),
+    }
+
+    async def fake_get_team_object(*, team_id, **_kwargs):
+        return team_records.get(team_id)
+
+    async def fake_access_group_servers(**_kwargs):
+        return []
+
+    async def fake_empty(user_api_key_auth):
+        return []
+
+    # Drive the real _get_allowed_mcp_servers_for_team path: it pulls
+    # prisma_client + get_team_object from proxy_server, then calls
+    # global_mcp_server_manager.expand_permission_list against the registry.
+    # Point that registry at our local manager so the test is hermetic.
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.prisma_client",
+        MagicMock(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_team_object",
+        fake_get_team_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks._get_mcp_server_ids_from_access_groups",
+        fake_access_group_servers,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+        manager,
+    )
+
+    with (
+        patch.object(
+            MCPRequestHandler,
+            "_get_allowed_mcp_servers_for_key",
+            side_effect=fake_empty,
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_key_access_group_mcp_server_extras",
+            side_effect=fake_empty,
+        ),
+        patch.object(
+            MCPRequestHandler,
+            "_get_mcp_servers_from_access_groups",
+            new=AsyncMock(return_value=[]),
+        ),
+    ):
+        allowed_alice = set(await manager.get_allowed_mcp_servers(alice))
+        allowed_bob = set(await manager.get_allowed_mcp_servers(bob))
+
+    assert allowed_alice == {a_id, shared_id}, allowed_alice
+    assert allowed_bob == {b_id, shared_id}, allowed_bob
+    assert b_id not in allowed_alice, (
+        f"team-a member can see team-b's private MCP server; allowed={allowed_alice}"
+    )
+    assert a_id not in allowed_bob, (
+        f"team-b member can see team-a's private MCP server; allowed={allowed_bob}"
+    )
