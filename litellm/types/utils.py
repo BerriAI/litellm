@@ -91,6 +91,16 @@ class SafeAttributeModel:
     """
 
     def __delattr__(self, name):
+        # Dropping an unset optional field stored in __dict__ goes straight to
+        # object.__delattr__, skipping pydantic's __delattr__ whose per-call
+        # class getattr lookup and _check_frozen dominate response construction.
+        if (
+            name in type(self).__pydantic_fields__
+            and name in self.__dict__
+            and not type(self).model_config.get("frozen")
+        ):
+            object.__delattr__(self, name)
+            return
         try:
             super().__delattr__(name)
         except AttributeError:

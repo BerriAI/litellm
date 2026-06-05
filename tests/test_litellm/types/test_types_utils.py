@@ -348,3 +348,37 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When neither is present, reasoning_content is not set (OpenAI spec)
     delta4 = Delta(content="hello")
     assert not hasattr(delta4, "reasoning_content")
+
+
+def test_safe_attribute_model_delattr():
+    """
+    SafeAttributeModel.__delattr__ must remove a field from the instance so it
+    is omitted from model_dump (OpenAI spec), whether the field is a declared
+    model field or an extra, and deleting a missing attribute must be a no-op.
+    """
+    from litellm.types.utils import Message
+
+    # Unset optional declared fields are dropped during __init__ -> absent from dump
+    msg = Message(content="hi", role="assistant")
+    assert not hasattr(msg, "audio")
+    assert not hasattr(msg, "reasoning_content")
+    assert "audio" not in msg.model_dump()
+    assert "reasoning_content" not in msg.model_dump()
+
+    # Explicitly deleting a present declared field removes it from the dump
+    msg2 = Message(content="hi", role="assistant", reasoning_content="because")
+    assert msg2.reasoning_content == "because"
+    del msg2.reasoning_content
+    assert not hasattr(msg2, "reasoning_content")
+    assert "reasoning_content" not in msg2.model_dump()
+
+    # Extra fields (extra='allow') are still deletable via the fallback path
+    msg3 = Message(content="hi", role="assistant", custom_field=123)
+    assert msg3.custom_field == 123
+    del msg3.custom_field
+    assert not hasattr(msg3, "custom_field")
+    assert "custom_field" not in msg3.model_dump()
+
+    # Deleting a non-existent attribute is a silent no-op
+    msg4 = Message(content="hi", role="assistant")
+    del msg4.does_not_exist
