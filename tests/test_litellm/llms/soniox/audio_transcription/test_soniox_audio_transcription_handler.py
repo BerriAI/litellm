@@ -1032,3 +1032,68 @@ class TestAsyncFlow:
         with pytest.raises(SonioxException) as exc_info:
             asyncio.new_event_loop().run_until_complete(coro)
         assert exc_info.value.status_code == 400
+
+
+class TestSpendTracking:
+    """Soniox transcriptions must be billed by audio duration.
+
+    The handler stores ``audio_transcription_duration`` and the model is
+    priced per second; if either is missing the cost collapses to $0 and an
+    authenticated caller transcribes for free.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _use_local_model_cost_map(self, monkeypatch):
+        import litellm
+
+        original_model_cost = litellm.model_cost
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        try:
+            yield
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm.get_model_info.cache_clear()
+
+    def test_should_charge_by_audio_duration(self, monkeypatch):
+        import litellm
+
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        responses = {
+            "POST https://api.soniox.com/v1/transcriptions": [
+                _make_response({"id": "tx_1", "status": "queued"})
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response(
+                    {"id": "tx_1", "status": "completed", "audio_duration_ms": 600000}
+                ),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                _make_response({"text": "hello world", "tokens": []}),
+            ],
+            "DELETE https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response({"deleted": True}),
+            ],
+        }
+
+        resp = SonioxAudioTranscriptionHandler().audio_transcriptions(
+            audio_file=None,
+            optional_params={"audio_url": "https://example.com/a.wav"},
+            litellm_params={},
+            atranscription=False,
+            **_common_call_kwargs(_MockSyncClient(responses)),
+        )
+
+        assert resp._hidden_params["audio_transcription_duration"] == pytest.approx(
+            600.0
+        )
+
+        cost = litellm.completion_cost(
+            completion_response=resp,
+            model="soniox/stt-async-v4",
+            call_type="transcription",
+        )
+        # 10 minutes of audio billed at Soniox's ~$0.10/hour async rate.
+        assert cost > 0
+        assert cost == pytest.approx((0.10 / 3600) * 600.0, rel=1e-3)
