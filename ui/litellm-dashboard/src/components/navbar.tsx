@@ -11,8 +11,10 @@ import { DownOutlined, MenuFoldOutlined, MenuUnfoldOutlined } from "@ant-design/
 import { Tag } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { BlogDropdown } from "./Navbar/BlogDropdown/BlogDropdown";
 import { CommunityEngagementButtons } from "./Navbar/CommunityEngagementButtons/CommunityEngagementButtons";
+import LanguageSelector from "./Navbar/LanguageSelector/LanguageSelector";
 import { NAV_PRODUCT_LINK_CLASS } from "./Navbar/navProductLinkClass";
 import { NotificationsBell } from "./Navbar/NotificationsBell/NotificationsBell";
 import UserDropdown from "./Navbar/UserDropdown/UserDropdown";
@@ -35,6 +37,7 @@ const Navbar: React.FC<NavbarProps> = ({
   sidebarCollapsed = false,
   onToggleSidebar,
 }) => {
+  const { t } = useTranslation();
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
   const { logoUrl } = useTheme();
@@ -89,7 +92,7 @@ const Navbar: React.FC<NavbarProps> = ({
               <button
                 onClick={onToggleSidebar}
                 className="mr-2 flex h-9 w-9 items-center justify-center rounded-md text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
-                title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+                title={sidebarCollapsed ? t("navbar.expandSidebar") : t("navbar.collapseSidebar")}
               >
                 <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
               </button>
@@ -113,7 +116,7 @@ const Navbar: React.FC<NavbarProps> = ({
                     <span
                       className="absolute -left-2 -top-1 animate-bounce text-lg"
                       style={{ animationDuration: "2s" }}
-                      title="Thanks for using LiteLLM!"
+                      title={t("navbar.thanksForUsing")}
                     >
                       🌑
                     </span>
@@ -150,12 +153,16 @@ const Navbar: React.FC<NavbarProps> = ({
                 rel="noopener noreferrer"
                 className={NAV_PRODUCT_LINK_CLASS}
               >
-                Docs
+                {t("navbar.docs")}
                 {/* Layout parity with Blog chevron — intentional single-level link */}
                 <DownOutlined className="pointer-events-none text-[10px] opacity-0" aria-hidden />
               </a>
               <BlogDropdown />
             </nav>
+
+            <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">
+              <LanguageSelector />
+            </div>
 
             {!hideCommunityLinks && (
               <div className="flex shrink-0 items-center border-l border-gray-200 pl-4">

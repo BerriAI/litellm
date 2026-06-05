@@ -5,12 +5,13 @@ import { DownOutlined, LoadingOutlined } from "@ant-design/icons";
 import { Button, Dropdown, Space, Typography } from "antd";
 import type { MenuProps } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 const { Text, Title, Paragraph } = Typography;
 
-function formatDate(dateStr: string): string {
+function formatDate(dateStr: string, locale: string): string {
   const date = new Date(dateStr + "T00:00:00");
-  return date.toLocaleDateString("en-US", {
+  return date.toLocaleDateString(locale, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -18,6 +19,7 @@ function formatDate(dateStr: string): string {
 }
 
 export const BlogDropdown: React.FC = () => {
+  const { t, i18n } = useTranslation();
   const disableBlogPosts = useDisableBlogPosts();
 
   const { data, isLoading, isError, refetch } = useBlogPosts();
@@ -36,9 +38,9 @@ export const BlogDropdown: React.FC = () => {
         key: "error",
         label: (
           <Space>
-            <Text type="danger">Failed to load posts</Text>
+            <Text type="danger">{t("navbar.failedToLoadPosts")}</Text>
             <Button size="small" onClick={() => refetch()}>
-              Retry
+              {t("navbar.retry")}
             </Button>
           </Space>
         ),
@@ -46,7 +48,7 @@ export const BlogDropdown: React.FC = () => {
       },
     ];
   } else if (!data || data.posts.length === 0) {
-    items = [{ key: "empty", label: <Text type="secondary">No posts available</Text>, disabled: true }];
+    items = [{ key: "empty", label: <Text type="secondary">{t("navbar.noPostsAvailable")}</Text>, disabled: true }];
   } else {
     items = [
       ...data.posts.slice(0, 5).map((post: BlogPost) => ({
@@ -57,7 +59,7 @@ export const BlogDropdown: React.FC = () => {
               {post.title}
             </Title>
             <Text type="secondary" style={{ fontSize: 11 }}>
-              {formatDate(post.date)}
+              {formatDate(post.date, i18n.language)}
             </Text>
             <Paragraph ellipsis={{ rows: 2 }}>{post.description}</Paragraph>
           </a>
@@ -68,7 +70,7 @@ export const BlogDropdown: React.FC = () => {
         key: "view-all",
         label: (
           <a href="https://docs.litellm.ai/blog" target="_blank" rel="noopener noreferrer">
-            View all posts
+            {t("navbar.viewAllPosts")}
           </a>
         ),
       },
@@ -79,7 +81,7 @@ export const BlogDropdown: React.FC = () => {
   return (
     <Dropdown menu={{ items }} trigger={["hover"]} placement="bottomRight">
       <Button type="text" className={`${NAV_PRODUCT_LINK_CLASS} !border-0 !bg-transparent`}>
-        Blog
+        {t("navbar.blog")}
         <DownOutlined className="text-[10px] text-gray-500" aria-hidden />
       </Button>
     </Dropdown>

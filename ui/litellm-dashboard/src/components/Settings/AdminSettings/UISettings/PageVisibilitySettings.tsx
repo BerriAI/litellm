@@ -3,6 +3,7 @@
 import { getAvailablePages } from "@/components/page_utils";
 import { Button, Checkbox, Collapse, Space, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 interface PageVisibilitySettingsProps {
   enabledPagesInternalUsers: string[] | null | undefined;
@@ -17,11 +18,13 @@ export default function PageVisibilitySettings({
   isUpdating,
   onUpdate,
 }: PageVisibilitySettingsProps) {
+  const { t } = useTranslation();
+
   // Check if page visibility is set (null/undefined means "not set" = all pages visible)
   const isPageVisibilitySet = enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined;
 
   // Get available pages from leftnav configuration
-  const availablePages = useMemo(() => getAvailablePages(), []);
+  const availablePages = useMemo(() => getAvailablePages(t), [t]);
 
   // Group pages by their group for better UI
   const pagesByGroup = useMemo(() => {

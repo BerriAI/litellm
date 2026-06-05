@@ -4,10 +4,14 @@
  */
 
 import { describe, it, expect } from "vitest";
+import i18n from "@/lib/i18n";
 import { getAvailablePages } from "./page_utils";
-import { menuGroups } from "./leftnav";
+import { getMenuGroups } from "./leftnav";
 import { pageDescriptions } from "./page_metadata";
 import { internalUserRoles } from "@/utils/roles";
+
+const t = i18n.t;
+const menuGroups = getMenuGroups(t);
 
 /**
  * Check if a page is accessible to internal users
@@ -26,7 +30,7 @@ const isPageAccessibleToInternalUsers = (pageRoles?: string[]): boolean => {
 
 describe("Page Utils - LeftNav Sync", () => {
   it("should return all pages from leftnav configuration", () => {
-    const availablePages = getAvailablePages();
+    const availablePages = getAvailablePages(t);
 
     // Should have pages
     expect(availablePages.length).toBeGreaterThan(0);
@@ -45,7 +49,7 @@ describe("Page Utils - LeftNav Sync", () => {
   });
 
   it("should include all navigable pages from menuGroups", () => {
-    const availablePages = getAvailablePages();
+    const availablePages = getAvailablePages(t);
     const availablePageKeys = availablePages.map((p) => p.page);
 
     // Collect all page keys from menuGroups (excluding parent containers and pages not accessible to internal users)
@@ -71,14 +75,14 @@ describe("Page Utils - LeftNav Sync", () => {
 
     // Every menu page accessible to internal users should be in available pages
     menuPageKeys.forEach((pageKey) => {
-      expect(availablePageKeys, `Page "${pageKey}" from menuGroups should be in getAvailablePages() output`).toContain(
+      expect(availablePageKeys, `Page "${pageKey}" from menuGroups should be in getAvailablePages(t) output`).toContain(
         pageKey,
       );
     });
   });
 
   it("should not include parent container pages (tools, experimental, settings)", () => {
-    const availablePages = getAvailablePages();
+    const availablePages = getAvailablePages(t);
     const availablePageKeys = availablePages.map((p) => p.page);
 
     const excludedParents = ["tools", "experimental", "settings"];
@@ -89,7 +93,7 @@ describe("Page Utils - LeftNav Sync", () => {
   });
 
   it("should have descriptions for all pages", () => {
-    const availablePages = getAvailablePages();
+    const availablePages = getAvailablePages(t);
 
     availablePages.forEach((page) => {
       expect(page.description, `Page "${page.page}" should have a description`).toBeTruthy();
@@ -167,7 +171,7 @@ describe("Page Utils - LeftNav Sync", () => {
   });
 
   it("should have proper group hierarchy for nested pages", () => {
-    const availablePages = getAvailablePages();
+    const availablePages = getAvailablePages(t);
 
     // Find pages that should be nested (children of Tools, Experimental, Settings)
     const nestedPages = availablePages.filter((page) => page.group.includes(" > "));
@@ -188,7 +192,7 @@ describe("Page Utils - LeftNav Sync", () => {
   });
 
   it("should have unique page keys", () => {
-    const availablePages = getAvailablePages();
+    const availablePages = getAvailablePages(t);
     const pageKeys = availablePages.map((p) => p.page);
     const uniquePageKeys = new Set(pageKeys);
 
@@ -196,7 +200,7 @@ describe("Page Utils - LeftNav Sync", () => {
   });
 
   it("should match the structure expected by PageVisibilitySettings component", () => {
-    const availablePages = getAvailablePages();
+    const availablePages = getAvailablePages(t);
 
     // Group pages by their group (same logic as in PageVisibilitySettings)
     const grouped: Record<string, typeof availablePages> = {};
