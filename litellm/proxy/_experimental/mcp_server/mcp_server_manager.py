@@ -684,6 +684,7 @@ class MCPServerManager:
                 ),
                 allow_sampling=bool(server_config.get("allow_sampling", False)),
                 allow_elicitation=bool(server_config.get("allow_elicitation", False)),
+                timeout=server_config.get("timeout", None),
             )
             self._assign_unique_short_prefix(new_server)
             _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
@@ -1096,6 +1097,7 @@ class MCPServerManager:
                 credentials_dict.get("subject_token_type") if credentials_dict else None
             )
             or "urn:ietf:params:oauth:token-type:access_token",
+            timeout=getattr(mcp_server, "timeout", None),
         )
         _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
         return new_server
@@ -1662,7 +1664,9 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=MCP_CLIENT_TIMEOUT,
+                timeout=(
+                    server.timeout if server.timeout is not None else MCP_CLIENT_TIMEOUT
+                ),
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
                 sampling_callback=sampling_cb,
@@ -1690,7 +1694,9 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=MCP_CLIENT_TIMEOUT,
+                timeout=(
+                    server.timeout if server.timeout is not None else MCP_CLIENT_TIMEOUT
+                ),
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
                 sampling_callback=sampling_cb,
@@ -3160,12 +3166,24 @@ class MCPServerManager:
 
         try:
             mcp_responses = await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            timeout = (
+                mcp_server.timeout
+                if mcp_server.timeout is not None
+                else MCP_CLIENT_TIMEOUT
+            )
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "error": "timeout",
+                    "message": f"MCP tool call timed out after {timeout}s",
+                },
+            )
         except (
             BlockedPiiEntityError,
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error(
                 f"Guardrail blocked MCP tool call during result check: {str(e)}"
             )
@@ -3953,6 +3971,7 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
+            timeout=server.timeout,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -4052,6 +4071,7 @@ class MCPServerManager:
             byok_api_key_help_url=server.byok_api_key_help_url,
             source_url=server.source_url,
             instructions=server.instructions,
+            timeout=server.timeout,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:
