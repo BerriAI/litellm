@@ -3068,7 +3068,7 @@ class TestMCPServerTimestamps:
 
     @pytest.mark.asyncio
     async def test_round_trip_timeout_preserved(self):
-        """timeout survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer."""
+        """timeout survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable."""
         manager = MCPServerManager()
         table_record = LiteLLM_MCPServerTable(
             server_id="timeout-server",
@@ -3079,6 +3079,9 @@ class TestMCPServerTimestamps:
         )
         mcp_server = await manager.build_mcp_server_from_table(table_record)
         assert mcp_server.timeout == 120.0
+
+        rebuilt_table = manager._build_mcp_server_table(mcp_server)
+        assert rebuilt_table.timeout == 120.0
 
     @pytest.mark.asyncio
     async def test_create_mcp_client_uses_server_timeout(self):
@@ -3108,6 +3111,20 @@ class TestMCPServerTimestamps:
         )
         client = await manager._create_mcp_client(server)
         assert client.timeout == MCP_CLIENT_TIMEOUT
+
+    @pytest.mark.asyncio
+    async def test_create_mcp_client_zero_timeout_not_treated_as_falsy(self):
+        """server.timeout=0.0 must be passed through, not fall back to MCP_CLIENT_TIMEOUT."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="zero-timeout-server",
+            name="zero_timeout_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=0.0,
+        )
+        client = await manager._create_mcp_client(server)
+        assert client.timeout == 0.0
 
     @pytest.mark.asyncio
     async def test_load_servers_from_config_preserves_timeout(self):

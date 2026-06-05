@@ -1664,7 +1664,9 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=server.timeout or MCP_CLIENT_TIMEOUT,
+                timeout=(
+                    server.timeout if server.timeout is not None else MCP_CLIENT_TIMEOUT
+                ),
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
                 sampling_callback=sampling_cb,
@@ -1692,7 +1694,9 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=server.timeout or MCP_CLIENT_TIMEOUT,
+                timeout=(
+                    server.timeout if server.timeout is not None else MCP_CLIENT_TIMEOUT
+                ),
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
                 sampling_callback=sampling_cb,
@@ -3955,6 +3959,7 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
+            timeout=server.timeout,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -4054,6 +4059,7 @@ class MCPServerManager:
             byok_api_key_help_url=server.byok_api_key_help_url,
             source_url=server.source_url,
             instructions=server.instructions,
+            timeout=server.timeout,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:
