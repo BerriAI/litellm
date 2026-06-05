@@ -172,3 +172,52 @@ async def test_sdk_fn_routes_openai_transcription_session(monkeypatch):
     assert kwargs["json"]["input_audio_transcription"] == {
         "model": "gpt-realtime-whisper"
     }
+
+
+def test_append_query_params_skips_existing_keys():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    url = "wss://example.com/v1/realtime?model=gpt-4o"
+    result = BaseLLMHTTPHandler._append_query_params(
+        url, {"model": "ignored", "intent": "transcription"}
+    )
+    assert "model=ignored" not in result
+    assert "intent=transcription" in result
+
+
+def test_append_query_params_no_params_returns_unchanged():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    url = "wss://example.com/v1/realtime?model=gpt-4o"
+    assert BaseLLMHTTPHandler._append_query_params(url, None) == url
+    assert BaseLLMHTTPHandler._append_query_params(url, {}) == url
+
+
+def test_append_query_params_encodes_special_chars():
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+    url = "wss://example.com/v1/realtime"
+    result = BaseLLMHTTPHandler._append_query_params(url, {"intent": "a&b=c"})
+    assert "intent=a%26b%3Dc" in result
+    assert "&b=c" not in result
+
+
+def test_azure_construct_url_encodes_model_and_api_version():
+    """model and api-version must be URL-encoded to prevent query-string injection."""
+    from litellm.llms.azure.realtime.handler import AzureOpenAIRealtime
+
+    h = AzureOpenAIRealtime()
+    url = h._construct_url(
+        "https://x.openai.azure.com",
+        "deploy&evil=1",
+        "2024-10-01-preview",
+    )
+    assert "evil=1" not in url.split("?", 1)[1]
+
+    url_ga = h._construct_url(
+        "https://x.openai.azure.com",
+        "deploy&evil=1",
+        None,
+        realtime_protocol="GA",
+    )
+    assert "evil=1" not in url_ga.split("?", 1)[1]

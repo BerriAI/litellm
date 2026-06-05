@@ -345,6 +345,7 @@ async def _arealtime(  # noqa: PLR0915
             headers=headers,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
+            query_params=query_params,
         )
     elif _custom_llm_provider == "azure":
         api_base = (
@@ -518,6 +519,7 @@ async def _arealtime(  # noqa: PLR0915
             headers=headers,
             user_api_key_dict=kwargs.get("user_api_key_dict"),
             litellm_metadata=_build_litellm_metadata(kwargs),
+            query_params=query_params,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

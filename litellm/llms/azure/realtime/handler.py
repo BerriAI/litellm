@@ -5,7 +5,6 @@ This requires websockets, and is currently only supported on LiteLLM Proxy.
 """
 
 from typing import Any, Optional, cast
-from urllib.parse import quote
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
@@ -57,6 +56,8 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             beta/default: "wss://.../openai/realtime?api-version=2024-10-01-preview&deployment=gpt-4o-realtime-preview"
             GA/v1:        "wss://.../openai/v1/realtime?model=gpt-realtime-deployment"
         """
+        from urllib.parse import urlencode
+
         api_base = api_base.replace("https://", "wss://")
 
         # Determine path based on realtime_protocol (case-insensitive)
@@ -66,16 +67,17 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         )
         if _is_ga:
             path = "/openai/v1/realtime"
-            url = f"{api_base}{path}?model={model}"
+            qs = urlencode({"model": model})
         else:
             # Default to beta path for backwards compatibility
             path = "/openai/realtime"
-            url = f"{api_base}{path}?api-version={api_version}&deployment={model}"
+            qs = urlencode({"api-version": api_version, "deployment": model})
 
         intent = (query_params or {}).get("intent")
         if intent:
-            url = f"{url}&intent={quote(str(intent), safe='')}"
-        return url
+            qs = f"{qs}&{urlencode({'intent': intent})}"
+
+        return f"{api_base}{path}?{qs}"
 
     async def async_realtime(
         self,

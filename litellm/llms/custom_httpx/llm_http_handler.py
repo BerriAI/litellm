@@ -5260,6 +5260,21 @@ class BaseLLMHTTPHandler:
             headers=error_headers,
         )
 
+    @staticmethod
+    def _append_query_params(url: str, query_params: Optional[Dict[str, Any]]) -> str:
+        """Append query_params to url, skipping keys already present in the URL."""
+        if not query_params:
+            return url
+        from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+        parsed = urlparse(url)
+        existing = dict(parse_qsl(parsed.query))
+        extras = {k: v for k, v in query_params.items() if k not in existing}
+        if not extras:
+            return url
+        new_query = parsed.query + ("&" if parsed.query else "") + urlencode(extras)
+        return urlunparse(parsed._replace(query=new_query))
+
     async def async_realtime(
         self,
         model: str,
@@ -5273,11 +5288,14 @@ class BaseLLMHTTPHandler:
         timeout: Optional[float] = None,
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[Dict[str, Any]] = None,
+        query_params: Optional[Dict[str, Any]] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
 
-        url = provider_config.get_complete_url(api_base, model, api_key)
+        url = self._append_query_params(
+            provider_config.get_complete_url(api_base, model, api_key), query_params
+        )
         headers = provider_config.validate_environment(
             headers=headers,
             model=model,
