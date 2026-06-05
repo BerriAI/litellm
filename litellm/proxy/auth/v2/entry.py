@@ -51,7 +51,7 @@ async def user_api_key_auth_v2(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    rule = match_route(route)
+    rule = match_route(route, request.method)
     if rule is not None:
         # Control plane: RBAC policy rows.
         identity = await authenticate(token, ctx)
@@ -72,7 +72,7 @@ async def user_api_key_auth_v2(
         )
 
         try:
-            authorize(principal, route, request_data, enforcer)
+            authorize(principal, route, request_data, enforcer, request.method)
         except AuthorizationDenied as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
@@ -80,7 +80,7 @@ async def user_api_key_auth_v2(
         return identity
 
     if is_inference_route(route):
-        # Data plane: casbin ABAC over the principal's allowed-model attribute.
+        # Data plane: plain allowed-model predicate over the principal's key.
         identity = await authenticate(token, ctx)
         request_data = await _read_request_body(request=request)
         requested_model = (
@@ -98,7 +98,7 @@ async def user_api_key_auth_v2(
 
     # Loud-open: route v2 doesn't yet govern. No identity required.
     identity = await _best_effort_identity(token, ctx)
-    authorize(build_principal(identity), route, None, _DENY_ALL)
+    authorize(build_principal(identity), route, None, _DENY_ALL, request.method)
     identity.request_route = route
     return identity
 

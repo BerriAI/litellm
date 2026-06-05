@@ -55,3 +55,18 @@ def test_ungoverned_route_is_loud_open_and_never_enforces(caplog):
         authorize(PRINCIPAL, "/chat/completions", {}, _Exploding())
     assert "not yet protected" in caplog.text
     assert "/chat/completions" in caplog.text
+
+
+def test_rest_route_is_enforced_when_method_is_threaded():
+    # Regression: a REST route (credentials) only resolves with the HTTP method.
+    # If authorize() dropped the method it would loud-open and bypass enforcement.
+    enforcer = _Enforcer(ret=True)
+    authorize(PRINCIPAL, "/credentials", {}, enforcer, "POST")
+    assert enforcer.calls == [("user:u1", "*", "credential:*", "write")]
+
+
+def test_rest_route_without_method_is_not_silently_enforced(caplog):
+    # Without the method the REST route can't resolve; it must loud-open, not 500.
+    with caplog.at_level(logging.WARNING, logger="litellm.proxy.auth.v2"):
+        authorize(PRINCIPAL, "/credentials", {}, _Exploding())
+    assert "not yet protected" in caplog.text

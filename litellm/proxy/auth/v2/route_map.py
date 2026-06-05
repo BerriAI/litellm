@@ -115,10 +115,48 @@ _INFERENCE_ROUTES = {
 }
 
 
-def match_route(route: str) -> Optional[GovernedRoute]:
-    """Return the governance rule for ``route``, or None if v2 doesn't yet own it."""
+@dataclass(frozen=True)
+class _RestRule:
+    method: str
+    path: str
+    is_prefix: bool
+    route: GovernedRoute
+
+
+# REST-style resources encode the verb in the HTTP method (POST /credentials =
+# create, GET /credentials = list) and the id in the path, so they need
+# method-aware, prefix-capable matching rather than the verb-in-path lookup the
+# RPC routes above use. Path-param ids are not extracted yet, so objects stay at
+# "<resource>:*" (per-id credential policies are a follow-up).
+_REST_RULES: List[_RestRule] = [
+    _RestRule("POST", "/credentials", False, GovernedRoute("credential", "write")),
+    _RestRule("GET", "/credentials", False, GovernedRoute("credential", "read")),
+    _RestRule("GET", "/credentials/", True, GovernedRoute("credential", "read")),
+    _RestRule("DELETE", "/credentials/", True, GovernedRoute("credential", "delete")),
+]
+
+
+def match_route(route: str, method: Optional[str] = None) -> Optional[GovernedRoute]:
+    """Return the governance rule for ``route``, or None if v2 doesn't yet own it.
+
+    ``method`` is required to resolve REST resources whose verb is the HTTP
+    method; the verb-in-path RPC routes are method-agnostic and match without it.
+    """
     normalized = route.rstrip("/") or "/"
-    return _GOVERNED.get(normalized)
+    rule = _GOVERNED.get(normalized)
+    if rule is not None:
+        return rule
+    if method is not None:
+        verb = method.upper()
+        for rest in _REST_RULES:
+            if rest.method != verb:
+                continue
+            if rest.is_prefix:
+                if route.startswith(rest.path):
+                    return rest.route
+            elif normalized == rest.path:
+                return rest.route
+    return None
 
 
 def is_inference_route(route: str) -> bool:

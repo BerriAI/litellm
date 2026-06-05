@@ -33,13 +33,16 @@ def authorize(
     route: str,
     request_data: Optional[Dict[str, Any]],
     enforcer: Any,
+    method: Optional[str] = None,
 ) -> None:
     """Enforce policy for ``route``. No-op (loud) for routes v2 doesn't yet govern.
 
     Raises :class:`AuthorizationDenied` when a governed route is denied.
     ``enforcer`` is anything exposing ``enforce(subject, domain, obj, action)``.
+    ``method`` is required to resolve REST resources (e.g. credentials) whose verb
+    is the HTTP method; without it those routes would be treated as loud-open.
     """
-    rule = match_route(route)
+    rule = match_route(route, method)
     if rule is None:
         logger.warning(
             "auth_v2: route '%s' is not yet protected by auth_v2; allowing. "

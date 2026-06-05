@@ -119,7 +119,35 @@ def test_runtime_guardrail_verbs_stay_loud_open():
         assert match_route(route) is None
 
 
+def test_credentials_are_method_aware():
+    # Same path, different verb -> different action.
+    assert match_route("/credentials", "POST").action == "write"
+    assert match_route("/credentials", "GET").action == "read"
+    assert match_route("/credentials", "POST").resource == "credential"
+
+
+def test_credentials_path_params_match_by_prefix():
+    assert match_route("/credentials/by_name/openai-creds", "GET").action == "read"
+    assert match_route("/credentials/by_model/gpt-4o", "GET").action == "read"
+    assert match_route("/credentials/openai-creds", "DELETE").action == "delete"
+
+
+def test_credentials_require_method_and_reject_wrong_verb():
+    # Without a method the REST resource cannot be resolved.
+    assert match_route("/credentials") is None
+    # A verb with no rule (PUT) is not governed.
+    assert match_route("/credentials", "PUT") is None
+
+
+def test_rpc_routes_remain_method_agnostic():
+    # Verb-in-path routes match with or without a method passed.
+    assert match_route("/model/new").action == "write"
+    assert match_route("/model/new", "POST").action == "write"
+    assert match_route("/model/new", "GET").action == "write"
+
+
 def test_ungoverned_routes_return_none():
     # Genuinely not yet owned by v2: loud-open.
     for route in ("/v1/models", "/health", "/"):
         assert match_route(route) is None
+        assert match_route(route, "GET") is None
