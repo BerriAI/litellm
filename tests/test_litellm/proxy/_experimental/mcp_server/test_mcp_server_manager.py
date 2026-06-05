@@ -3157,8 +3157,19 @@ class TestMCPServerTimestamps:
             timeout=2.0,
         )
 
+        async def _slow_call(*args, **kwargs):
+            await asyncio.sleep(999)
+
         mock_client = AsyncMock()
-        mock_client.call_tool = AsyncMock(side_effect=asyncio.CancelledError())
+        mock_client.call_tool = _slow_call
+
+        server = MCPServer(
+            server_id="timeout-tool-server",
+            name="timeout_tool_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=0.01,
+        )
 
         with patch.object(manager, "_create_mcp_client", return_value=mock_client):
             with pytest.raises(HTTPException) as exc_info:
@@ -3176,7 +3187,7 @@ class TestMCPServerTimestamps:
 
         assert exc_info.value.status_code == 504
         assert exc_info.value.detail["error"] == "timeout"
-        assert "2.0s" in exc_info.value.detail["message"]
+        assert "0.01s" in exc_info.value.detail["message"]
 
 
 class TestInternalDelegatePkceWarningLog:

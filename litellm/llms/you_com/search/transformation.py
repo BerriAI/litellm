@@ -93,7 +93,7 @@ class YouComSearchConfig(BaseSearchConfig):
             api_base = get_secret_str("YOUCOM_API_BASE")
 
         if api_base is None:
-            api_key = get_secret_str("YOUCOM_API_KEY")
+            api_key = kwargs.get("api_key") or get_secret_str("YOUCOM_API_KEY")
             if api_key:
                 api_base = self.YOU_COM_API_BASE
             else:
