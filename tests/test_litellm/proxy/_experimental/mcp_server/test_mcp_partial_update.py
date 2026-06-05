@@ -69,6 +69,34 @@ async def test_partial_update_omits_unset_defaultful_fields():
 
 
 @pytest.mark.asyncio
+async def test_partial_update_null_tool_name_maps_clear_to_empty_json():
+    """Explicit null on Json map fields must clear overrides (UI legacy)."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        tool_name_to_display_name=None,
+        tool_name_to_description=None,
+    )
+
+    data_dict = await _run_update(data)
+
+    assert data_dict["tool_name_to_display_name"] == "{}"
+    assert data_dict["tool_name_to_description"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_partial_update_null_allowed_tools_clears_whitelist():
+    """Explicit null must clear the whitelist (UI legacy); Prisma requires []."""
+    data = UpdateMCPServerRequest(
+        server_id="my-test-server",
+        allowed_tools=None,
+    )
+
+    data_dict = await _run_update(data)
+
+    assert data_dict["allowed_tools"] == []
+
+
+@pytest.mark.asyncio
 async def test_partial_update_preserves_http_transport():
     """The reported prod incident: a PUT without transport must not flip http->sse."""
     data = UpdateMCPServerRequest(

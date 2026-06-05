@@ -46,7 +46,9 @@ export function SearchResultsDisplay({ searchResults }: SearchResultsDisplayProp
                   <span className="font-medium">Query:</span>
                   <span className="italic">&quot;{resultPage.search_query}&quot;</span>
                   <span className="text-gray-400">•</span>
-                  <span className="text-gray-500">{resultPage.data.length} result{resultPage.data.length !== 1 ? 's' : ''}</span>
+                  <span className="text-gray-500">
+                    {resultPage.data.length} result{resultPage.data.length !== 1 ? "s" : ""}
+                  </span>
                 </div>
 
                 <div className="space-y-2">
@@ -117,4 +119,3 @@ export function SearchResultsDisplay({ searchResults }: SearchResultsDisplayProp
     </div>
   );
 }
-

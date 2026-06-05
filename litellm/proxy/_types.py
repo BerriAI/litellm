@@ -419,6 +419,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/milvus",
+        "/watsonx",
     ]
 
     #########################################################
@@ -700,6 +701,10 @@ class LiteLLMRoutes(enum.Enum):
             "/v2/guardrails/list",
             "/project/list",
             "/project/info",
+            # Read-only search tool routes power the Search Tools UI page.
+            # Create/update/delete and test_connection stay admin-only.
+            "/search_tools/list",
+            "/search_tools/ui/available_providers",
         ]
         + spend_tracking_routes
         + key_management_routes
@@ -1049,6 +1054,7 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
+    mcp_rpm_limit: Optional[Dict[str, int]] = None
     guardrails: Optional[List[str]] = None
     policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
@@ -1289,6 +1295,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
+    oauth_passthrough: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1372,6 +1379,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
+    oauth_passthrough: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1444,6 +1452,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
+    oauth_passthrough: bool = False
     is_byok: bool = False
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
@@ -1850,6 +1859,7 @@ class NewTeamRequest(TeamBase):
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
 
     model_tpm_limit: Optional[Dict[str, int]] = None
+    mcp_rpm_limit: Optional[Dict[str, int]] = None
     team_member_budget: Optional[float] = (
         None  # allow user to set a budget for all team members
     )
@@ -1919,6 +1929,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     prompts: Optional[List[str]] = None
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
+    mcp_rpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     enforced_batch_output_expires_after: Optional[dict] = None
     enforced_file_expires_after: Optional[dict] = None
@@ -2515,7 +2526,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     )
     mcp_trusted_proxy_ranges: Optional[List[str]] = Field(
         None,
-        description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For headers are only trusted from these IPs.",
+        description="CIDR ranges of trusted reverse proxies. When set, X-Forwarded-For and X-Forwarded-* origin headers are only trusted from these IPs.",
     )
     trusted_proxy_ranges: Optional[List[str]] = Field(
         None,
@@ -3666,6 +3677,7 @@ class ProxyException(Exception):
         provider_specific_fields: Optional[dict] = None,
     ):
         self.message = str(message)
+        super().__init__(self.message)
         self.type = type
         self.param = param
         self.openai_code = openai_code or code
@@ -3901,7 +3913,9 @@ class LiteLLM_TeamMembership(LiteLLMPydanticObjectBase):
     # Union so Pydantic picks Full when data has server-managed fields
     # (/team/info) and Base when callers/tests construct with only
     # user-settable fields.
-    litellm_budget_table: Optional[Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]]
+    litellm_budget_table: Optional[
+        Union[LiteLLM_BudgetTableFull, LiteLLM_BudgetTable]
+    ] = None
 
     def safe_get_team_member_rpm_limit(self) -> Optional[int]:
         if self.litellm_budget_table is not None:
@@ -4282,6 +4296,7 @@ class PassThroughEndpointLoggingTypedDict(TypedDict):
 LiteLLM_ManagementEndpoint_MetadataFields = [
     "model_rpm_limit",
     "model_tpm_limit",
+    "mcp_rpm_limit",
     "rpm_limit_type",
     "tpm_limit_type",
     "enforced_params",
@@ -4433,6 +4448,91 @@ class JWTRoutingOverride(BaseModel):
     }
 
 
+class UnregisteredJWTClientBehavior(str, enum.Enum):
+    """
+    Controls what happens when `virtual_key_claim_field` is configured but the
+    JWT claim value has no registered mapping in `litellm_jwtkeymapping`.
+
+    - fallback_team_mapping: Fall through to standard team-based JWT auth (default,
+      backward-compatible).
+    - reject: Immediately return HTTP 403. Use this when every valid JWT client
+      must have a pre-registered virtual key — unknown callers are denied.
+    - auto_register: Automatically create a new virtual key and mapping on first
+      encounter. The new key has no budget/model restrictions; admins can tighten
+      it later via /jwt_client/update.
+    """
+
+    FALLBACK_TEAM_MAPPING = "fallback_team_mapping"
+    REJECT = "reject"
+    AUTO_REGISTER = "auto_register"
+
+
+class JWTIssuerConfig(BaseModel):
+    """
+    Issuer-bound JWT validation configuration.
+
+    When a token's unverified `iss` claim matches an entry in
+    ``LiteLLM_JWTAuth.issuers``, LiteLLM validates it only against that
+    issuer's JWKS and audience. Tokens whose `iss` does not match any
+    configured issuer fall back to the global JWT_AUDIENCE/JWT_ISSUER
+    validation path; `issuers` is additive routing, not an allow-list.
+    """
+
+    issuer: str = Field(description="Exact expected JWT issuer (`iss`) value.")
+    jwks_url: Optional[str] = Field(
+        default=None,
+        description="Issuer JWKS URL. If omitted, LiteLLM uses the issuer's OIDC discovery document.",
+    )
+    audience: Optional[Union[str, List[str]]] = Field(
+        default=None,
+        description="Expected token audience for this issuer.",
+    )
+    disable_audience_validation: bool = Field(
+        default=False,
+        description="Explicitly disable audience validation for this issuer. Use only when the issuer cannot provide an audience suitable for LiteLLM.",
+    )
+    user_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's user id.",
+    )
+    user_email_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's user email.",
+    )
+    team_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's team id.",
+    )
+    team_ids_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's team ids.",
+    )
+    org_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's organization id.",
+    )
+    end_user_id_jwt_field: Optional[str] = Field(
+        default=None,
+        description="Issuer-specific claim path to normalize into LiteLLM's end-user id.",
+    )
+
+    model_config = {
+        "extra": "forbid",
+    }
+
+    @model_validator(mode="after")
+    def validate_audience_configured(self) -> "JWTIssuerConfig":
+        if self.audience is None and not self.disable_audience_validation:
+            raise ValueError(
+                f"JWT issuer {self.issuer} must configure audience or set disable_audience_validation=True"
+            )
+        if self.audience is not None and self.disable_audience_validation:
+            raise ValueError(
+                f"JWT issuer {self.issuer} cannot set audience and disable_audience_validation=True together"
+            )
+        return self
+
+
 class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     """
     A class to define the roles and permissions for a LiteLLM Proxy w/ JWT Auth.
@@ -4533,9 +4633,22 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
     )
+    unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior = Field(
+        default=UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING,
+        description=(
+            "What to do when virtual_key_claim_field is set but the JWT claim value "
+            "has no registered mapping. 'fallback_team_mapping' (default): fall through "
+            "to team-based JWT auth. 'reject': return HTTP 403. "
+            "'auto_register': auto-create a virtual key and mapping on first encounter."
+        ),
+    )
     routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
+    )
+    issuers: Optional[List[JWTIssuerConfig]] = Field(
+        default=None,
+        description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
     )
     #########################################################
 
@@ -4547,6 +4660,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         # check; the runtime gate in ``get_instance_fn`` refuses
         # ``s3://`` / ``gcs://`` when this is None.
         config_file_path = kwargs.pop("config_file_path", None)
+
+        # Backward-compat: jwt_client_id_field was renamed to virtual_key_claim_field
+        if "jwt_client_id_field" in kwargs:
+            if "virtual_key_claim_field" not in kwargs:
+                kwargs["virtual_key_claim_field"] = kwargs.pop("jwt_client_id_field")
+            else:
+                kwargs.pop("jwt_client_id_field")
 
         # get the attribute names for this Pydantic model
         allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()

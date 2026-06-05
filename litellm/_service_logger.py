@@ -371,6 +371,8 @@ class ServiceLogging(CustomLogger):
                 service=ServiceTypes.LITELLM,
                 duration=_duration,
                 call_type=kwargs.get("call_type", "unknown"),
+                start_time=start_time,
+                end_time=end_time,
             )
         except Exception as e:
             raise e

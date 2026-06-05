@@ -120,13 +120,7 @@ describe("UserDataTable", () => {
   it("should render the user-row Status cell as Active when scim_active is not set to false", () => {
     const possibleUIRoles = { admin: { ui_label: "Admin" } };
     const handlers = { edit: vi.fn(), del: vi.fn(), reset: vi.fn(), click: vi.fn() };
-    const cols = columns(
-      possibleUIRoles,
-      handlers.edit,
-      handlers.del,
-      handlers.reset,
-      handlers.click,
-    );
+    const cols = columns(possibleUIRoles, handlers.edit, handlers.del, handlers.reset, handlers.click);
     const statusCol = cols.find((c) => (c as { id?: string }).id === "status");
     expect(statusCol).toBeDefined();
 

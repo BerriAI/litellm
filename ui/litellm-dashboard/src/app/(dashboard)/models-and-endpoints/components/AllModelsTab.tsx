@@ -68,7 +68,7 @@ const AllModelsTab = ({
         setCurrentPage(1);
         setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
       }, 200),
-    []
+    [],
   );
 
   useEffect(() => {
@@ -100,15 +100,11 @@ const AllModelsTab = ({
     return sort.desc ? "desc" : "asc";
   }, [sorting]);
 
-  const { data: rawModelData, isLoading: isLoadingModelsInfo, refetch: refetchModels } = useModelsInfo(
-    currentPage,
-    pageSize,
-    debouncedSearch || undefined,
-    undefined,
-    teamIdForQuery,
-    sortBy,
-    sortOrder
-  );
+  const {
+    data: rawModelData,
+    isLoading: isLoadingModelsInfo,
+    refetch: refetchModels,
+  } = useModelsInfo(currentPage, pageSize, debouncedSearch || undefined, undefined, teamIdForQuery, sortBy, sortOrder);
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = (model: string) => {
@@ -494,7 +490,7 @@ const AllModelsTab = ({
                   ) : (
                     <span data-testid="models-results-count" className="text-sm text-gray-700">
                       {paginationMeta.total_count > 0
-                        ? `Showing ${((currentPage - 1) * pageSize) + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
+                        ? `Showing ${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
                         : "Showing 0 results"}
                     </span>
                   )}
@@ -510,10 +506,9 @@ const AllModelsTab = ({
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         }}
                         disabled={currentPage === 1}
-                        className={`px-3 py-1 text-sm border rounded-md ${currentPage === 1
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "hover:bg-gray-50"
-                          }`}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          currentPage === 1 ? "bg-gray-100 text-gray-400 cursor-not-allowed" : "hover:bg-gray-50"
+                        }`}
                       >
                         Previous
                       </button>
@@ -529,10 +524,11 @@ const AllModelsTab = ({
                           setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         }}
                         disabled={currentPage >= paginationMeta.total_pages}
-                        className={`px-3 py-1 text-sm border rounded-md ${currentPage >= paginationMeta.total_pages
-                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                          : "hover:bg-gray-50"
-                          }`}
+                        className={`px-3 py-1 text-sm border rounded-md ${
+                          currentPage >= paginationMeta.total_pages
+                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                            : "hover:bg-gray-50"
+                        }`}
                       >
                         Next
                       </button>
@@ -550,8 +546,8 @@ const AllModelsTab = ({
                 setSelectedModelId,
                 setSelectedTeamId,
                 getDisplayModelName,
-                () => { },
-                () => { },
+                () => {},
+                () => {},
                 expandedRows,
                 setExpandedRows,
                 setDeleteModalModelId,
@@ -577,24 +573,28 @@ const AllModelsTab = ({
         alertMessage="This action cannot be undone."
         message="Are you sure you want to delete this model?"
         resourceInformationTitle="Model Information"
-        resourceInformation={modelToDelete ? [
-          {
-            label: "Model Name",
-            value: modelToDelete.model_name || "Not Set",
-          },
-          {
-            label: "LiteLLM Model Name",
-            value: modelToDelete.litellm_model_name || "Not Set",
-          },
-          {
-            label: "Provider",
-            value: modelToDelete.provider || "Not Set",
-          },
-          {
-            label: "Created By",
-            value: modelToDelete.model_info?.created_by || "Not Set",
-          },
-        ] : []}
+        resourceInformation={
+          modelToDelete
+            ? [
+                {
+                  label: "Model Name",
+                  value: modelToDelete.model_name || "Not Set",
+                },
+                {
+                  label: "LiteLLM Model Name",
+                  value: modelToDelete.litellm_model_name || "Not Set",
+                },
+                {
+                  label: "Provider",
+                  value: modelToDelete.provider || "Not Set",
+                },
+                {
+                  label: "Created By",
+                  value: modelToDelete.model_info?.created_by || "Not Set",
+                },
+              ]
+            : []
+        }
         onCancel={() => setDeleteModalModelId(null)}
         onOk={handleDeleteModel}
         confirmLoading={deleteLoading}

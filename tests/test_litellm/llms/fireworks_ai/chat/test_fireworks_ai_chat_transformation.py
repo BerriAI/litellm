@@ -496,3 +496,59 @@ def test_transform_tools_skips_non_function_tools():
         "type": "object",
         "properties": {"id": {"type": "string"}},
     }
+
+
+def test_map_response_format_passes_json_schema_through_unchanged():
+    """
+    json_schema response_format must reach Fireworks unchanged.
+
+    Regression guard for the prior downgrade to {type: json_object, schema: ...}
+    which silently dropped `strict` and `name` and disabled grammar-guided
+    decoding on the Fireworks side.
+    """
+    config = FireworksAIConfig()
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "priority_classification",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "priority": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                    }
+                },
+                "required": ["priority"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+    result = config.map_openai_params(
+        {"response_format": response_format},
+        {},
+        "fireworks_ai/accounts/fireworks/models/qwen3-32b",
+        drop_params=False,
+    )
+
+    rf = result["response_format"]
+    assert rf["type"] == "json_schema"
+    assert rf["json_schema"]["name"] == "priority_classification"
+    assert rf["json_schema"]["strict"] is True
+    assert rf["json_schema"]["schema"] == response_format["json_schema"]["schema"]
+
+
+def test_map_response_format_json_object_unchanged():
+    """
+    The plain json_object form keeps working as before.
+    """
+    config = FireworksAIConfig()
+    result = config.map_openai_params(
+        {"response_format": {"type": "json_object"}},
+        {},
+        "fireworks_ai/accounts/fireworks/models/qwen3-32b",
+        drop_params=False,
+    )
+    assert result == {"response_format": {"type": "json_object"}}

@@ -116,9 +116,7 @@ export async function makeInteractionsRequest(
       console.log("Interactions request was cancelled");
       throw error;
     }
-    NotificationManager.fromBackend(
-      `Error occurred while making Interactions API request. Error: ${error}`,
-    );
+    NotificationManager.fromBackend(`Error occurred while making Interactions API request. Error: ${error}`);
     throw error;
   }
 }

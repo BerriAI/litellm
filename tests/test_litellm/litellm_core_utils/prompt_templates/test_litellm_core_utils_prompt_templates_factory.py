@@ -22,6 +22,18 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.types.llms.openai import ChatCompletionToolMessage
 
 
+def _get_gemini_function_response_inline_data_parts(result):
+    assert isinstance(result, list), "expected Gemini parts list"
+    assert len(result) == 1, "multimodal function responses should stay in one part"
+    function_response_part = result[0]
+    assert (
+        "inline_data" not in function_response_part
+    ), "inline_data should be nested under function_response.parts"
+    function_response = function_response_part["function_response"]
+    nested_parts = function_response["parts"]
+    return [part["inline_data"] for part in nested_parts if "inline_data" in part]
+
+
 def test_ollama_pt_simple_messages():
     """Test basic functionality with simple text messages"""
     messages = [
@@ -615,8 +627,8 @@ def test_convert_gemini_tool_call_result_with_image_url():
         message=message_str_format,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    # Should have inline_data for the image
-    assert isinstance(result, list) and any("inline_data" in p for p in result)
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
+    assert len(inline_parts) == 1
 
     # Test with dict image_url format (OpenAI standard)
     message_dict_format = ChatCompletionToolMessage(
@@ -635,7 +647,8 @@ def test_convert_gemini_tool_call_result_with_image_url():
         message=message_dict_format,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result2, list) and any("inline_data" in p for p in result2)
+    inline_parts = _get_gemini_function_response_inline_data_parts(result2)
+    assert len(inline_parts) == 1
 
 
 def test_convert_gemini_tool_call_result_with_anthropic_image_block():
@@ -677,11 +690,10 @@ def test_convert_gemini_tool_call_result_with_anthropic_image_block():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1, "expected exactly one inline_data part"
-    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
-    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+    assert inline_parts[0]["mime_type"] == "image/png"
+    assert inline_parts[0]["data"] == tiny_png_b64
 
 
 def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
@@ -734,12 +746,11 @@ def test_convert_gemini_tool_call_result_with_multiple_anthropic_image_blocks():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert (
         len(inline_parts) == 2
     ), f"expected 2 inline_data parts, got {len(inline_parts)}"
-    mime_types = {p["inline_data"]["mime_type"] for p in inline_parts}
+    mime_types = {p["mime_type"] for p in inline_parts}
     assert mime_types == {"image/png", "image/jpeg"}
 
 
@@ -773,13 +784,12 @@ def test_convert_gemini_tool_call_result_with_data_url_string():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert (
         len(inline_parts) == 1
     ), "data-URL image string was not converted to inline_data"
-    assert inline_parts[0]["inline_data"]["mime_type"] == "image/png"
-    assert inline_parts[0]["inline_data"]["data"] == tiny_png_b64
+    assert inline_parts[0]["mime_type"] == "image/png"
+    assert inline_parts[0]["data"] == tiny_png_b64
 
 
 def test_convert_gemini_tool_call_result_with_data_url_extra_params():
@@ -811,12 +821,11 @@ def test_convert_gemini_tool_call_result_with_data_url_extra_params():
         message=message,
         last_message_with_tool_calls=last_message_with_tool_calls,
     )
-    assert isinstance(result, list), "expected a list of parts"
-    inline_parts = [p for p in result if "inline_data" in p]
+    inline_parts = _get_gemini_function_response_inline_data_parts(result)
     assert len(inline_parts) == 1
     assert (
-        inline_parts[0]["inline_data"]["mime_type"] == "image/png"
-    ), f"expected clean 'image/png', got '{inline_parts[0]['inline_data']['mime_type']}'"
+        inline_parts[0]["mime_type"] == "image/png"
+    ), f"expected clean 'image/png', got '{inline_parts[0]['mime_type']}'"
 
 
 def test_bedrock_tools_unpack_defs():

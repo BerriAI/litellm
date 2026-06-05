@@ -34,6 +34,14 @@ _IMAGE_RESPONSE_CALL_TYPES = frozenset(
 _VALID_DATA_RESIDENCIES = frozenset(r.value for r in DataResidency)
 
 
+def _get_token_detail_value(details: object, key: str) -> Optional[int]:
+    if isinstance(details, dict):
+        value = details.get(key)
+    else:
+        value = getattr(details, key, None)
+    return value if isinstance(value, int) else None
+
+
 def _is_above_128k(tokens: float) -> bool:
     if tokens > 128000:
         return True
@@ -870,17 +878,47 @@ def calculate_image_response_cost_from_usage(
             cached_tokens=0,
         )
 
+    output_tokens_details = getattr(usage, "completion_tokens_details", None)
+    if output_tokens_details is None:
+        output_tokens_details = getattr(usage, "output_tokens_details", None)
+
+    if output_tokens_details is None:
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=0,
+            image_tokens=completion_tokens,
+            reasoning_tokens=0,
+            audio_tokens=0,
+        )
+    else:
+        text_tokens = _get_token_detail_value(output_tokens_details, "text_tokens") or 0
+        image_tokens = (
+            _get_token_detail_value(output_tokens_details, "image_tokens") or 0
+        )
+        audio_tokens = (
+            _get_token_detail_value(output_tokens_details, "audio_tokens") or 0
+        )
+        reasoning_tokens = (
+            _get_token_detail_value(output_tokens_details, "reasoning_tokens") or 0
+        )
+        known_output_tokens = (
+            text_tokens + image_tokens + audio_tokens + reasoning_tokens
+        )
+        if completion_tokens > known_output_tokens:
+            text_tokens += completion_tokens - known_output_tokens
+
+        completion_tokens_details = CompletionTokensDetailsWrapper(
+            text_tokens=text_tokens,
+            image_tokens=image_tokens,
+            reasoning_tokens=reasoning_tokens,
+            audio_tokens=audio_tokens,
+        )
+
     normalized_usage = Usage(
         prompt_tokens=prompt_tokens,
         completion_tokens=completion_tokens,
         total_tokens=total_tokens,
         prompt_tokens_details=prompt_tokens_details,
-        completion_tokens_details=CompletionTokensDetailsWrapper(
-            text_tokens=0,
-            image_tokens=completion_tokens,
-            reasoning_tokens=0,
-            audio_tokens=0,
-        ),
+        completion_tokens_details=completion_tokens_details,
     )
 
     prompt_cost, completion_cost = generic_cost_per_token(

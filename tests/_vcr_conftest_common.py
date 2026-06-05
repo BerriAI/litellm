@@ -53,6 +53,7 @@ CASSETTE_CACHE_HIGH_WATER_FRACTION = 0.85
 SAFE_BODY_MATCHER_NAME = "safe_body"
 KEY_FINGERPRINT_MATCHER_NAME = "key_fingerprint"
 TOLERANT_QUERY_MATCHER_NAME = "tolerant_query"
+TOLERANT_PATH_MATCHER_NAME = "tolerant_path"
 KEY_FINGERPRINT_HEADER = "x-litellm-key-fp"
 
 VCR_DIAG_DIR_ENV = "LITELLM_VCR_DIAG_DIR"
@@ -411,6 +412,7 @@ def _canonical_body(request) -> tuple[bytes, str]:
 _VCR_UUID_RE = re.compile(
     rb"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
+_VCR_LITELLM_BATCH_JOB_RE = re.compile(rb"litellm-batch-[0-9a-fA-F]{8}")
 # ISO-8601 timestamps, e.g. ``2026-05-25T03:40:37.262045Z`` /
 # ``2026-05-25T03:40:37+00:00``.
 _VCR_ISO_TS_RE = re.compile(
@@ -436,6 +438,7 @@ def _normalize_volatile_tokens(body: bytes) -> bytes:
     if not body:
         return body
     body = _VCR_UUID_RE.sub(b"<vcr-uuid>", body)
+    body = _VCR_LITELLM_BATCH_JOB_RE.sub(b"litellm-batch-<vcr-id>", body)
     body = _VCR_ISO_TS_RE.sub(b"<vcr-iso-ts>", body)
     body = _VCR_UNIX_MS_RE.sub(b"<vcr-unix-ms>", body)
     body = _VCR_UNIX_FLOAT_RE.sub(b"<vcr-unix-float>", body)
@@ -1059,6 +1062,54 @@ def _tolerant_query_matcher(r1, r2) -> None:
     _vcr_matchers.query(r1, r2)
 
 
+_BEDROCK_MANAGED_S3_PATH_RE = re.compile(
+    r"(?P<prefix>(?:^|/)(?:litellm-bedrock-files/[^/?#]+-|litellm-bedrock-files-[^/?#]+-))"
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+    r"(?P<suffix>\.jsonl)"
+)
+
+
+def _request_path_for_matcher(request) -> str:
+    path = getattr(request, "path", None)
+    if path is not None:
+        return str(path)
+
+    uri = getattr(request, "uri", None) or getattr(request, "url", "") or ""
+    uri = str(uri)
+    if not uri:
+        return ""
+    if "//" in uri:
+        rest = uri.split("//", 1)[1]
+        path_part = "/" + rest.split("/", 1)[1] if "/" in rest else "/"
+    else:
+        path_part = uri
+    return path_part.split("?", 1)[0]
+
+
+def _normalize_volatile_path(path: str) -> str:
+    return _BEDROCK_MANAGED_S3_PATH_RE.sub(
+        lambda match: f"{match.group('prefix')}<vcr-uuid>{match.group('suffix')}",
+        path,
+    )
+
+
+def _tolerant_path_matcher(r1, r2) -> None:
+    """vcrpy's ``path`` matcher, plus LiteLLM-managed Bedrock S3 upload UUIDs.
+
+    Bedrock batch file uploads use object keys like
+    ``litellm-bedrock-files-{model}-{uuid}.jsonl`` (and older cassettes may
+    contain ``litellm-bedrock-files/{model}-{uuid}.jsonl``). The UUID is
+    generated client-side before the S3 PUT, so strict path matching makes
+    every replay miss even when the JSONL body and all provider semantics are
+    identical.
+    """
+    path1 = _normalize_volatile_path(_request_path_for_matcher(r1))
+    path2 = _normalize_volatile_path(_request_path_for_matcher(r2))
+    if path1 == path2:
+        return
+    _vcr_matchers.path(r1, r2)
+
+
 def vcr_config_dict() -> dict:
     return {
         "decode_compressed_response": True,
@@ -1069,7 +1120,7 @@ def vcr_config_dict() -> dict:
             "scheme",
             "host",
             "port",
-            "path",
+            TOLERANT_PATH_MATCHER_NAME,
             TOLERANT_QUERY_MATCHER_NAME,
             KEY_FINGERPRINT_MATCHER_NAME,
             SAFE_BODY_MATCHER_NAME,
@@ -1136,6 +1187,7 @@ def register_persister_if_enabled(vcr) -> None:
     vcr.register_matcher(SAFE_BODY_MATCHER_NAME, _safe_body_matcher)
     vcr.register_matcher(KEY_FINGERPRINT_MATCHER_NAME, _key_fingerprint_matcher)
     vcr.register_matcher(TOLERANT_QUERY_MATCHER_NAME, _tolerant_query_matcher)
+    vcr.register_matcher(TOLERANT_PATH_MATCHER_NAME, _tolerant_path_matcher)
     patch_vcrpy_aiohttp_record_path()
     patch_vcrpy_cassette_load_guard()
     global _atexit_banner_registered
@@ -1647,13 +1699,18 @@ def _is_live_call_host(host: str) -> bool:
         return False
     if any(host.endswith(suffix) for suffix in _LIVE_CALL_HOST_SUFFIXES):
         return True
-    # AWS Bedrock endpoints are ``bedrock-runtime[-fips].{region}.amazonaws.com``
-    # (region between ``bedrock-runtime`` and ``amazonaws.com``), so plain
-    # suffix matching can't catch them.
-    if host.endswith(".amazonaws.com") and host.split(".", 1)[0].startswith(
-        "bedrock-runtime"
-    ):
-        return True
+    if host.endswith(".amazonaws.com"):
+        first_label = host.split(".", 1)[0]
+        # AWS Bedrock control/runtime endpoints are
+        # ``bedrock[-runtime][-fips].{region}.amazonaws.com`` (region between
+        # the service label and ``amazonaws.com``), so plain suffix matching
+        # can't catch them.
+        if first_label.startswith("bedrock"):
+            return True
+        # Bedrock batch file upload/download uses real S3. Treat those as part
+        # of the paid provider path so unmarked batch tests surface as leaks.
+        if first_label in {"s3", "s3-fips"} or ".s3." in host or ".s3-" in host:
+            return True
     return False
 
 
@@ -1872,6 +1929,25 @@ def emit_vcr_classification_summary(terminalreporter) -> None:
         if not n:
             continue
         terminalreporter.write_line(f"  [{verdict}] {n}")
+
+    leak_verdicts = (
+        VERDICT_PARTIAL,
+        VERDICT_MISS_OVERFLOW,
+        VERDICT_MISS_NOT_PERSISTED,
+        VERDICT_UNMARKED_LIVE_CALL,
+    )
+    leak_counts = {verdict: counts.get(verdict, 0) for verdict in leak_verdicts}
+    total_leaks = sum(leak_counts.values())
+    terminalreporter.write_sep("-", "VCR COST LEAK CHECK", bold=True)
+    if total_leaks:
+        rendered = ", ".join(
+            f"{verdict}={count}" for verdict, count in leak_counts.items() if count
+        )
+        terminalreporter.write_line(f"  FAIL: {rendered}")
+    else:
+        terminalreporter.write_line(
+            "  PASS: no overflow, partial, not-persisted, or unmarked live-call verdicts"
+        )
 
     overflow = snapshot["overflow_tests"]
     if overflow:

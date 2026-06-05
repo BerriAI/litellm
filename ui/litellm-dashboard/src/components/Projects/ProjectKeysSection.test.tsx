@@ -56,7 +56,7 @@ describe("ProjectKeysSection", () => {
     expect(mockUseKeys).toHaveBeenCalledWith(
       expect.any(Number),
       expect.any(Number),
-      expect.objectContaining({ projectID: "proj-abc" })
+      expect.objectContaining({ projectID: "proj-abc" }),
     );
   });
 
@@ -66,7 +66,7 @@ describe("ProjectKeysSection", () => {
     expect(mockUseKeys).toHaveBeenCalledWith(
       expect.any(Number),
       expect.any(Number),
-      expect.objectContaining({ selectedKeyAlias: null })
+      expect.objectContaining({ selectedKeyAlias: null }),
     );
   });
 });

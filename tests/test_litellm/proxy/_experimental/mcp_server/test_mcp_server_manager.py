@@ -320,9 +320,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -375,9 +373,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -414,9 +410,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -457,7 +451,7 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None
+            server, mcp_auth_header, extra_headers, stdio_env, **kwargs
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -479,6 +473,167 @@ class TestMCPServerManager:
 
         assert captured_extra_headers == {"Authorization": "Bearer token"}
         assert isinstance(result, CallToolResult)
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_strips_authorization_when_admission_consumed_litellm_key(
+        self,
+    ):
+        """OAuth pass-through must not forward the caller's Authorization to upstream
+        when LiteLLM admission consumed the bearer as its API key — otherwise the
+        LiteLLM key the caller used for admission would leak upstream."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization", "x-request-id"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "authorization": "Bearer sk-litellm-key",
+                "x-request-id": "req-123",
+            },
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        assert captured_extra_headers == {"x-request-id": "req-123"}
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_forwards_authorization_with_admission_header(
+        self,
+    ):
+        """OAuth pass-through forwards Authorization upstream when x-litellm-api-key
+        provides admission — in that case Authorization carries the upstream OAuth
+        bearer, not the LiteLLM key."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call-admission",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={
+                "x-litellm-api-key": "Bearer sk-litellm-key",
+                "authorization": "Bearer upstream-oauth-bearer",
+            },
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-key"),
+        )
+
+        assert captured_extra_headers == {
+            "Authorization": "Bearer upstream-oauth-bearer"
+        }
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_passthrough_forwards_authorization_for_anonymous_admission(
+        self,
+    ):
+        """OAuth pass-through cold-start return (RFC 9728): the caller's only
+        credential is the upstream bearer in Authorization, and LiteLLM admission
+        is anonymous (no api_key on user_api_key_auth). Authorization must be
+        forwarded so the delegated flow can complete."""
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-passthrough-call-anon",
+            name="passthrough-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            extra_headers=["Authorization"],
+            oauth_passthrough=True,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        async def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
+
+        await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"authorization": "Bearer upstream-oauth-bearer"},
+            proxy_logging_obj=None,
+            user_api_key_auth=UserAPIKeyAuth(api_key=None),
+        )
+
+        assert captured_extra_headers == {
+            "Authorization": "Bearer upstream-oauth-bearer"
+        }
 
     @pytest.mark.asyncio
     async def test_get_prompts_from_server_success(self):
@@ -1005,9 +1160,7 @@ class TestMCPServerManager:
         async def mock_get_tools_from_server(
             server,
             mcp_auth_header=None,
-            mcp_protocol_version=None,
-            raw_headers=None,
-            user_api_key_auth=None,
+            **kwargs,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -3821,6 +3974,141 @@ class TestApprovalStatusGate:
             self._make_server("never-seen", MCPApprovalStatus.pending_review)
         )
         assert "never-seen" not in manager.registry
+
+
+class TestGetPublicMCPServers:
+    """
+    /public/mcp_hub strict-whitelist semantics — mirrors /public/model_hub
+    and /public/agent_hub. Regression test for the PR #20607 OR-with-default
+    behavior that made `litellm.public_mcp_servers` ignored by the hub.
+    """
+
+    def _make_server(self, server_id, available_on_public_internet=True):
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            available_on_public_internet=available_on_public_internet,
+        )
+
+    def _make_manager(self, servers):
+        manager = MCPServerManager()
+        for s in servers:
+            manager.config_mcp_servers[s.server_id] = s
+        return manager
+
+    @patch("litellm.public_mcp_servers", None)
+    def test_returns_empty_when_whitelist_is_none(self):
+        """No /make_public call yet → hub returns nothing, regardless of
+        per-server flags."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+    @patch("litellm.public_mcp_servers", [])
+    def test_returns_empty_when_whitelist_is_empty(self):
+        """Explicit empty whitelist → hub returns nothing."""
+        manager = self._make_manager(
+            [self._make_server("a", available_on_public_internet=True)]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+    @patch("litellm.public_mcp_servers", ["a"])
+    def test_returns_only_whitelisted_when_flag_defaults_to_true(self):
+        """
+        Regression: prior to the fix, every server with
+        available_on_public_internet=True (the default) leaked into the hub
+        regardless of the whitelist. Whitelist must be authoritative.
+        """
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_servers", ["a"])
+    def test_does_not_leak_servers_via_internal_flag(self):
+        """
+        available_on_public_internet is an IP-gating flag, not a hub flag.
+        A server with the flag True that is not in the whitelist must not
+        appear in the hub.
+        """
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=False),
+                self._make_server("b", available_on_public_internet=True),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_servers", ["does-not-exist"])
+    def test_stale_whitelist_id_returns_empty(self):
+        """Whitelist references an unknown server_id → no spurious results."""
+        manager = self._make_manager(
+            [self._make_server("a", available_on_public_internet=True)]
+        )
+        assert manager.get_public_mcp_servers() == []
+
+
+class TestGetPublicMCPServersLegacyMode:
+    """
+    Legacy migration knob: litellm.public_mcp_hub_strict_whitelist=False
+    preserves the pre-fix OR-with-default semantics for one release so
+    operators that relied on the old behavior have a window to call
+    /v1/mcp/make_public before /public/mcp_hub goes empty.
+    """
+
+    def _make_server(self, server_id, available_on_public_internet=True):
+        return MCPServer(
+            server_id=server_id,
+            name=server_id,
+            server_name=server_id,
+            transport=MCPTransport.http,
+            available_on_public_internet=available_on_public_internet,
+        )
+
+    def _make_manager(self, servers):
+        manager = MCPServerManager()
+        for s in servers:
+            manager.config_mcp_servers[s.server_id] = s
+        return manager
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", None)
+    def test_legacy_returns_default_flag_servers_when_whitelist_is_none(self):
+        """Legacy mode + no whitelist → every server with the default
+        available_on_public_internet=True appears (old behavior)."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert [s.server_id for s in result] == ["a"]
+
+    @patch("litellm.public_mcp_hub_strict_whitelist", False)
+    @patch("litellm.public_mcp_servers", ["b"])
+    def test_legacy_unions_whitelist_and_default_flag(self):
+        """Legacy mode unions the whitelist with any
+        available_on_public_internet=True server."""
+        manager = self._make_manager(
+            [
+                self._make_server("a", available_on_public_internet=True),
+                self._make_server("b", available_on_public_internet=False),
+            ]
+        )
+        result = manager.get_public_mcp_servers()
+        assert sorted(s.server_id for s in result) == ["a", "b"]
 
 
 if __name__ == "__main__":
