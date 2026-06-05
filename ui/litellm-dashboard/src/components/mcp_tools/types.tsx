@@ -47,6 +47,28 @@ export const OAUTH_FLOW = {
   M2M: "m2m",
 };
 
+// Backend value of `oauth2_flow` that marks a machine-to-machine server. Distinct
+// from the UI-local OAUTH_FLOW.M2M ("m2m"); this is what the API actually returns.
+export const MCP_OAUTH2_FLOW_M2M = "client_credentials";
+
+export type McpOAuthMode = "m2m" | "passthrough" | "obo";
+
+// Classify an OAuth2 MCP server into the mode that decides how the tool list is
+// authenticated: M2M (backend service token), PKCE passthrough (browser-held
+// session token), or OBO (backend-stored per-user token). `token_url` is
+// intentionally not consulted: every OAuth2 grant that exchanges for a token
+// carries one (interactive PKCE and client_credentials alike), so it cannot
+// distinguish the modes; `oauth2_flow` is the authoritative M2M signal.
+export function getMcpOAuthMode(s: {
+  auth_type?: string | null;
+  oauth2_flow?: string | null;
+  delegate_auth_to_upstream?: boolean | null;
+}): McpOAuthMode | null {
+  if (s.auth_type !== AUTH_TYPE.OAUTH2) return null;
+  if (s.oauth2_flow === MCP_OAUTH2_FLOW_M2M) return "m2m";
+  return s.delegate_auth_to_upstream ? "passthrough" : "obo";
+}
+
 export const TRANSPORT = {
   SSE: "sse",
   HTTP: "http",
@@ -163,11 +185,14 @@ export interface MCPToolsViewerProps {
   serverId: string;
   accessToken: string | null;
   auth_type?: string | null;
+  /** Backend OAuth2 grant; `client_credentials` marks an M2M server. */
+  oauth2_flow?: string | null;
+  /** When true (interactive OAuth2), the server uses PKCE passthrough. */
+  delegate_auth_to_upstream?: boolean | null;
   /**
-   * When set, indicates the server uses the OAuth2 M2M (client_credentials)
-   * flow — the backend handles token acquisition internally, so the UI must
-   * not gate tool listing behind an interactive PKCE authorization. Mirrors
-   * the heuristic used in `mcp_server_edit.tsx` (`token_url` set => M2M).
+   * Connection field present on every OAuth2 flow (interactive and M2M alike),
+   * so it does not indicate the mode. Retained for callers/other uses; not read
+   * for mode detection — see getMcpOAuthMode.
    */
   tokenUrl?: string | null;
   userRole: string | null;
@@ -189,6 +214,7 @@ export interface MCPServer {
   spec_path?: string | null;
   transport?: string | null;
   auth_type?: string | null;
+  oauth2_flow?: string | null;
   authorization_url?: string | null;
   token_url?: string | null;
   registration_url?: string | null;
