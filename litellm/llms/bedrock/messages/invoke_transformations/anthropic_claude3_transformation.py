@@ -605,11 +605,15 @@ class AmazonAnthropicClaudeMessagesConfig(
                     anthropic_messages_request["system"] = system_messages_to_add
                 elif isinstance(existing_system, str):
                     if existing_system:
-                        anthropic_messages_request["system"] = [{"type": "text", "text": existing_system}] + system_messages_to_add
+                        anthropic_messages_request["system"] = [
+                            {"type": "text", "text": existing_system}
+                        ] + system_messages_to_add
                     else:
                         anthropic_messages_request["system"] = system_messages_to_add
                 elif isinstance(existing_system, list):
-                    anthropic_messages_request["system"] = list(existing_system) + system_messages_to_add
+                    anthropic_messages_request["system"] = (
+                        list(existing_system) + system_messages_to_add
+                    )
 
     def transform_anthropic_messages_request(
         self,
