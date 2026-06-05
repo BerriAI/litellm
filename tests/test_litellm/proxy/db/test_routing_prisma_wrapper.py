@@ -649,7 +649,7 @@ def test_writer_get_rds_iam_token_defaults_port_when_unset(monkeypatch):
 
     fake_module = MagicMock()
     fake_module.generate_iam_auth_token = fake_generate
-    monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_module)
+    monkeypatch.setitem(sys.modules, "litellm.auth.rds_iam_token", fake_module)
 
     writer = PrismaWrapper(
         original_prisma=MagicMock(),
@@ -685,7 +685,7 @@ def test_writer_get_rds_iam_token_uses_database_host_env_vars(monkeypatch):
 
     fake_module = MagicMock()
     fake_module.generate_iam_auth_token = fake_generate
-    monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_module)
+    monkeypatch.setitem(sys.modules, "litellm.auth.rds_iam_token", fake_module)
 
     writer = PrismaWrapper(
         original_prisma=MagicMock(),
@@ -725,7 +725,7 @@ def test_reader_iam_refresh_uses_parsed_endpoint(monkeypatch):
 
     fake_module = MagicMock()
     fake_module.generate_iam_auth_token = fake_generate
-    monkeypatch.setitem(sys.modules, "litellm.proxy.auth.rds_iam_token", fake_module)
+    monkeypatch.setitem(sys.modules, "litellm.auth.rds_iam_token", fake_module)
 
     endpoint = IAMEndpoint(
         host="reader.aurora.local",
@@ -864,9 +864,7 @@ def test_prisma_client_init_falls_back_to_writer_when_reader_iam_token_fails(
         raise RuntimeError("simulated AWS STS hiccup")
 
     fake_iam_module.generate_iam_auth_token = boom
-    monkeypatch.setitem(
-        sys.modules, "litellm.proxy.auth.rds_iam_token", fake_iam_module
-    )
+    monkeypatch.setitem(sys.modules, "litellm.auth.rds_iam_token", fake_iam_module)
 
     from litellm.proxy.utils import PrismaClient
 
