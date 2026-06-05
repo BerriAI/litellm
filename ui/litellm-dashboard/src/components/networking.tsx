@@ -975,76 +975,22 @@ export const userListCall = async (
    * Get all available teams on proxy
    */
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/list` : `/user/list`;
-    console.log("in userListCall");
-    const queryParams = new URLSearchParams();
-
-    if (userIDs && userIDs.length > 0) {
-      // Convert array to comma-separated string
-      const userIDsString = userIDs.join(",");
-      queryParams.append("user_ids", userIDsString);
-    }
-
-    if (page) {
-      queryParams.append("page", page.toString());
-    }
-
-    if (page_size) {
-      queryParams.append("page_size", page_size.toString());
-    }
-
-    if (userEmail) {
-      queryParams.append("user_email", userEmail);
-    }
-
-    if (userRole) {
-      queryParams.append("role", userRole);
-    }
-
-    if (team) {
-      queryParams.append("team", team);
-    }
-
-    if (sso_user_id) {
-      queryParams.append("sso_user_ids", sso_user_id);
-    }
-
-    if (sortBy) {
-      queryParams.append("sort_by", sortBy);
-    }
-
-    if (sortOrder) {
-      queryParams.append("sort_order", sortOrder);
-    }
-
-    if (organizationIds && organizationIds.length > 0) {
-      queryParams.append("organization_ids", organizationIds.join(","));
-    }
-
-    const queryString = queryParams.toString();
-    if (queryString) {
-      url += `?${queryString}`;
-    }
-
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
+    const data = (await apiClient.get(`/user/list`, {
+      accessToken,
+      query: {
+        user_ids: userIDs && userIDs.length > 0 ? userIDs.join(",") : undefined,
+        page: page || undefined,
+        page_size: page_size || undefined,
+        user_email: userEmail || undefined,
+        role: userRole || undefined,
+        team: team || undefined,
+        sso_user_ids: sso_user_id || undefined,
+        sort_by: sortBy || undefined,
+        sort_order: sortOrder || undefined,
+        organization_ids: organizationIds && organizationIds.length > 0 ? organizationIds.join(",") : undefined,
       },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = (await response.json()) as UserListResponse;
-    console.log("/user/list API Response:", data);
+    })) as UserListResponse;
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1164,30 +1110,7 @@ export const userInfoCall = async (
 
 export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/team/info` : `/team/info`;
-    if (teamID) {
-      url = `${url}?team_id=${encodeURIComponent(teamID)}`;
-    }
-    console.log("in teamInfoCall");
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
-    console.log("API Response:", data);
-    return data;
-    // Handle success - you might want to update some state or UI based on the created key
+    return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
