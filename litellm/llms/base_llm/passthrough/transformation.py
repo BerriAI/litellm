@@ -1,6 +1,8 @@
 from abc import abstractmethod
 from typing import TYPE_CHECKING, List, Optional, Tuple, Union
 
+from litellm.passthrough.utils import collect_lines_from_chunk
+
 from ..base_utils import BaseLLMModelInfo
 
 if TYPE_CHECKING:
@@ -10,6 +12,39 @@ if TYPE_CHECKING:
     from litellm.types.utils import CostResponseTypes
 
     from ..chat.transformation import BaseLLMException
+
+
+class PassthroughStreamingChunkProcessor:
+    """
+    Stateful processor that converts a stream of raw bytes into parsed string
+    chunks incrementally. Lets streaming pass-through avoid buffering the full
+    raw response in memory for logging — providers parse on the fly and only
+    retain the small parsed messages.
+    """
+
+    def process(self, chunk: bytes) -> List[str]:
+        """Feed a chunk and return any newly-available parsed lines/messages."""
+        raise NotImplementedError
+
+    def finalize(self) -> List[str]:
+        """Flush any remaining state after the stream ends. Default: nothing."""
+        return []
+
+
+class _LineBufferedChunkProcessor(PassthroughStreamingChunkProcessor):
+    """Default text/SSE processor: buffers partial lines, emits complete \\n-delimited lines."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def process(self, chunk: bytes) -> List[str]:
+        lines, self._buffer = collect_lines_from_chunk(self._buffer, chunk)
+        return lines
+
+    def finalize(self) -> List[str]:
+        if self._buffer.strip():
+            return [self._buffer.strip()]
+        return []
 
 
 class BasePassthroughConfig(BaseLLMModelInfo):
@@ -120,20 +155,11 @@ class BasePassthroughConfig(BaseLLMModelInfo):
     ) -> Optional["CostResponseTypes"]:
         return None
 
-    def _convert_raw_bytes_to_str_lines(self, raw_bytes: List[bytes]) -> List[str]:
+    def create_streaming_chunk_processor(self) -> PassthroughStreamingChunkProcessor:
         """
-        Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
-
-        Args:
-            raw_bytes: List of bytes chunks from aiter.bytes()
-
-        Returns:
-            List of string lines, with each line being a complete data: {} chunk
+        Returns a stateful processor that incrementally converts raw response
+        bytes into parsed string chunks for logging. Override for providers
+        whose streaming wire format isn't newline-delimited UTF-8 (e.g. Bedrock
+        AWS event-stream). Default is suitable for SSE/text providers.
         """
-        # Combine all bytes and decode to string
-        combined_str = b"".join(raw_bytes).decode("utf-8")
-
-        # Split by newlines and filter out empty lines
-        lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
-
-        return lines
+        return _LineBufferedChunkProcessor()

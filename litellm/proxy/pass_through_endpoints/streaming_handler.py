@@ -22,6 +22,8 @@ from .llm_provider_handlers.openai_passthrough_logging_handler import (
 from .llm_provider_handlers.vertex_passthrough_logging_handler import (
     VertexPassthroughLoggingHandler,
 )
+from litellm.passthrough.utils import collect_lines_from_chunk
+
 from .success_handler import PassThroughEndpointLogging
 
 
@@ -42,7 +44,8 @@ class PassThroughStreamingHandler:
         - Inject cost into chunks if include_cost_in_streaming_usage is enabled
         """
         try:
-            raw_bytes: List[bytes] = []
+            all_chunks: List[str] = []
+            line_buffer = ""
             # Extract model name for cost injection
             model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
                 request_body=request_body,
@@ -52,7 +55,10 @@ class PassThroughStreamingHandler:
             )
 
             async for chunk in response.aiter_bytes():
-                raw_bytes.append(chunk)
+                # Decode incrementally to avoid accumulating raw bytes for logging
+                lines, line_buffer = collect_lines_from_chunk(line_buffer, chunk)
+                all_chunks.extend(lines)
+
                 if (
                     getattr(litellm, "include_cost_in_streaming_usage", False)
                     and model_name
@@ -74,6 +80,10 @@ class PassThroughStreamingHandler:
 
                 yield chunk
 
+            # Flush any remaining partial line
+            if line_buffer.strip():
+                all_chunks.append(line_buffer.strip())
+
             # After all chunks are processed, handle post-processing
             end_time = datetime.now()
 
@@ -85,7 +95,7 @@ class PassThroughStreamingHandler:
                     request_body=request_body or {},
                     endpoint_type=endpoint_type,
                     start_time=start_time,
-                    raw_bytes=raw_bytes,
+                    all_chunks=all_chunks,
                     end_time=end_time,
                 )
             )
@@ -101,7 +111,7 @@ class PassThroughStreamingHandler:
         request_body: dict,
         endpoint_type: EndpointType,
         start_time: datetime,
-        raw_bytes: List[bytes],
+        all_chunks: List[str],
         end_time: datetime,
         model: Optional[str] = None,
     ):
@@ -114,9 +124,6 @@ class PassThroughStreamingHandler:
         - OpenAI
         """
         try:
-            all_chunks = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(
-                raw_bytes
-            )
             standard_logging_response_object: Optional[
                 PassThroughEndpointLoggingResultValues
             ] = None
@@ -228,21 +235,3 @@ class PassThroughStreamingHandler:
 
         return None
 
-    @staticmethod
-    def _convert_raw_bytes_to_str_lines(raw_bytes: List[bytes]) -> List[str]:
-        """
-        Converts a list of raw bytes into a list of string lines, similar to aiter_lines()
-
-        Args:
-            raw_bytes: List of bytes chunks from aiter.bytes()
-
-        Returns:
-            List of string lines, with each line being a complete data: {} chunk
-        """
-        # Combine all bytes and decode to string
-        combined_str = b"".join(raw_bytes).decode("utf-8")
-
-        # Split by newlines and filter out empty lines
-        lines = [line.strip() for line in combined_str.split("\n") if line.strip()]
-
-        return lines

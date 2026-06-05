@@ -1898,10 +1898,9 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _flush_passthrough_collected_chunks_helper(
         self,
-        raw_bytes: List[bytes],
+        all_chunks: List[str],
         provider_config: "BasePassthroughConfig",
     ) -> Optional["CostResponseTypes"]:
-        all_chunks = provider_config._convert_raw_bytes_to_str_lines(raw_bytes)
         complete_streaming_response = provider_config.handle_logging_collected_chunks(
             all_chunks=all_chunks,
             litellm_logging_obj=self,
@@ -1913,20 +1912,18 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def flush_passthrough_collected_chunks(
         self,
-        raw_bytes: List[bytes],
+        all_chunks: List[str],
         provider_config: "BasePassthroughConfig",
     ):
         """
-        Flush collected chunks from the logging object
-        This is used to log the collected chunks once streaming is done on passthrough endpoints
+        Flush collected chunks from the logging object once streaming is done.
 
-        1. Decode the raw bytes to string lines
-        2. Get the complete streaming response from the provider config
-        3. Log the complete streaming response (trigger success handler)
-        This is used for passthrough endpoints
+        Callers parse provider bytes incrementally during the stream (via
+        provider_config.create_streaming_chunk_processor()) and pass the parsed
+        string chunks here.
         """
         complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
+            all_chunks=all_chunks,
             provider_config=provider_config,
         )
 
@@ -1936,11 +1933,11 @@ class Logging(LiteLLMLoggingBaseClass):
 
     async def async_flush_passthrough_collected_chunks(
         self,
-        raw_bytes: List[bytes],
+        all_chunks: List[str],
         provider_config: "BasePassthroughConfig",
     ):
         complete_streaming_response = self._flush_passthrough_collected_chunks_helper(
-            raw_bytes=raw_bytes,
+            all_chunks=all_chunks,
             provider_config=provider_config,
         )
 

@@ -1,9 +1,28 @@
-from typing import Dict, List, Mapping, Optional, Union
+from typing import Dict, List, Mapping, Optional, Tuple, Union
 from urllib.parse import parse_qs
 
 import httpx
 
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
+
+
+def collect_lines_from_chunk(
+    line_buffer: str, chunk: bytes
+) -> Tuple[List[str], str]:
+    """
+    Decode chunk and extract complete newline-delimited lines from the running buffer.
+
+    Returns (complete_stripped_lines, remaining_buffer). The caller is responsible
+    for flushing any non-empty remainder after the stream ends.
+    """
+    line_buffer += chunk.decode("utf-8", errors="replace")
+    complete_lines: List[str] = []
+    while "\n" in line_buffer:
+        line, line_buffer = line_buffer.split("\n", 1)
+        stripped = line.strip()
+        if stripped:
+            complete_lines.append(stripped)
+    return complete_lines, line_buffer
 
 
 class BasePassthroughUtils:

@@ -1,12 +1,15 @@
 import os
 import sys
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.llms.bedrock.passthrough.transformation import BedrockPassthroughConfig
+from litellm.llms.bedrock.passthrough.transformation import (
+    BedrockPassthroughConfig,
+    _BedrockEventStreamChunkProcessor,
+)
 
 
 def test_bedrock_passthrough_get_complete_url_default_endpoint():
@@ -425,7 +428,87 @@ def test_bedrock_passthrough_model_id_without_arn():
         # Regular model ID should be used as-is (no encoding needed)
         assert model_id in url_str
         assert "%2F" not in url_str, "Non-ARN model IDs should not be encoded"
-        
+
         expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model_id}/converse"
         assert url_str == expected_url
+
+
+def test_bedrock_chunk_processor_parses_incrementally():
+    """
+    Verify that _BedrockEventStreamChunkProcessor feeds each chunk to the
+    EventStreamBuffer as it arrives (not all at once at the end) and emits
+    parsed messages incrementally — so peak memory is not O(full stream).
+    """
+    # One MagicMock event per "chunk arrival". Identity-based parser maps
+    # each event to a known message string.
+    event_a = MagicMock(name="event_a")
+    event_b = MagicMock(name="event_b")
+    event_c = MagicMock(name="event_c")
+
+    parsed_by_event = {
+        id(event_a): '{"token": "Hello"}',
+        id(event_b): '{"token": "World"}',
+        id(event_c): '{"token": "!"}',
+    }
+
+    def parse_message(event):
+        return parsed_by_event.get(id(event))
+
+    # Track add_data calls and yield the corresponding event each time.
+    add_data_calls = []
+    pending_events = [[event_a], [event_b], [event_c]]
+
+    mock_buffer = MagicMock()
+
+    def fake_add_data(chunk):
+        add_data_calls.append(chunk)
+
+    mock_buffer.add_data.side_effect = fake_add_data
+    # Each iteration of the buffer yields the events queued for the most recent add_data.
+    mock_buffer.__iter__.side_effect = lambda: iter(
+        pending_events.pop(0) if pending_events else []
+    )
+
+    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
+        processor = _BedrockEventStreamChunkProcessor(parse_message=parse_message)
+
+        # Feed three chunks one at a time
+        result_1 = processor.process(b"chunk-1-bytes")
+        result_2 = processor.process(b"chunk-2-bytes")
+        result_3 = processor.process(b"chunk-3-bytes")
+
+    # Each chunk produced its event's parsed message — incrementally.
+    assert result_1 == ['{"token": "Hello"}']
+    assert result_2 == ['{"token": "World"}']
+    assert result_3 == ['{"token": "!"}']
+
+    # Each chunk was added to the buffer separately (no end-of-stream batch).
+    assert add_data_calls == [b"chunk-1-bytes", b"chunk-2-bytes", b"chunk-3-bytes"]
+
+
+def test_bedrock_chunk_processor_skips_unparseable_events():
+    """Events that parse_message returns None for are dropped, not retained."""
+    event_real = MagicMock(name="real")
+    event_skip = MagicMock(name="skip")
+
+    def parse_message(event):
+        if event is event_real:
+            return '{"token": "ok"}'
+        return None
+
+    mock_buffer = MagicMock()
+    mock_buffer.__iter__.return_value = [event_real, event_skip]
+
+    with patch("botocore.eventstream.EventStreamBuffer", return_value=mock_buffer):
+        processor = _BedrockEventStreamChunkProcessor(parse_message=parse_message)
+        result = processor.process(b"some-bytes")
+
+    assert result == ['{"token": "ok"}']
+
+
+def test_bedrock_passthrough_config_create_streaming_chunk_processor():
+    """BedrockPassthroughConfig wires up the event-stream processor, not the default."""
+    config = BedrockPassthroughConfig()
+    processor = config.create_streaming_chunk_processor()
+    assert isinstance(processor, _BedrockEventStreamChunkProcessor)
 

@@ -1,10 +1,13 @@
 import json
-from typing import TYPE_CHECKING, List, Optional, Tuple, cast
+from typing import TYPE_CHECKING, Callable, List, Optional, Tuple, cast
 
 from httpx import Response
 
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+from litellm.llms.base_llm.passthrough.transformation import (
+    BasePassthroughConfig,
+    PassthroughStreamingChunkProcessor,
+)
 
 from ..base_aws_llm import BaseAWSLLM
 from ..common_utils import BedrockEventStreamDecoderBase, BedrockModelInfo
@@ -161,19 +164,10 @@ class BedrockPassthroughConfig(
 
         return litellm_model_response
 
-    def _convert_raw_bytes_to_str_lines(self, raw_bytes: List[bytes]) -> List[str]:
-        from botocore.eventstream import EventStreamBuffer
-
-        all_chunks = []
-        event_stream_buffer = EventStreamBuffer()
-        for chunk in raw_bytes:
-            event_stream_buffer.add_data(chunk)
-            for event in event_stream_buffer:
-                message = self._parse_message_from_event(event)
-                if message is not None:
-                    all_chunks.append(message)
-
-        return all_chunks
+    def create_streaming_chunk_processor(self) -> PassthroughStreamingChunkProcessor:
+        return _BedrockEventStreamChunkProcessor(
+            parse_message=self._parse_message_from_event,
+        )
 
     def handle_logging_collected_chunks(
         self,
@@ -247,3 +241,27 @@ class BedrockPassthroughConfig(
             )
             return model_response
         return None
+
+
+class _BedrockEventStreamChunkProcessor(PassthroughStreamingChunkProcessor):
+    """
+    Incrementally parses AWS Bedrock event-stream framed bytes. botocore's
+    EventStreamBuffer holds only the partial in-flight frame internally — once
+    a frame is parsed and yielded, its bytes are released. Peak memory is
+    O(largest frame + parsed messages) instead of O(full stream).
+    """
+
+    def __init__(self, parse_message: Callable[[object], Optional[str]]) -> None:
+        from botocore.eventstream import EventStreamBuffer
+
+        self._buffer = EventStreamBuffer()
+        self._parse_message = parse_message
+
+    def process(self, chunk: bytes) -> List[str]:
+        self._buffer.add_data(chunk)
+        results: List[str] = []
+        for event in self._buffer:
+            message = self._parse_message(event)
+            if message is not None:
+                results.append(message)
+        return results

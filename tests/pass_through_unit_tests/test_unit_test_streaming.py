@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -95,26 +96,105 @@ async def test_chunk_processor_yields_raw_bytes(endpoint_type, url_route):
     ), "Collected chunks do not match raw chunks"
 
 
-def test_convert_raw_bytes_to_str_lines():
+@pytest.mark.asyncio
+async def test_chunk_processor_collects_lines_incrementally():
     """
-    Test that the _convert_raw_bytes_to_str_lines method correctly converts raw bytes to a list of strings
+    Verify that chunk_processor passes correctly split lines to the logging handler
+    without accumulating raw bytes in memory.
     """
-    # Test case 1: Single chunk
-    raw_bytes = [b'data: {"content": "Hello"}\n']
-    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
-    assert result == ['data: {"content": "Hello"}']
+    response = AsyncMock(spec=httpx.Response)
+    raw_chunks = [
+        b'data: {"content": "Hello"}\n',
+        b'data: {"content": "World"}\n',
+        b'\ndata: {"content": "!"}\n',  # leading empty line should be filtered
+    ]
 
-    # Test case 2: Multiple chunks
-    raw_bytes = [b'data: {"content": "Hello"}\n', b'data: {"content": "World"}\n']
-    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
-    assert result == ['data: {"content": "Hello"}', 'data: {"content": "World"}']
+    async def mock_aiter_bytes():
+        for chunk in raw_chunks:
+            yield chunk
 
-    # Test case 3: Empty input
-    raw_bytes = []
-    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
-    assert result == []
+    response.aiter_bytes = mock_aiter_bytes
 
-    # Test case 4: Chunks with empty lines
-    raw_bytes = [b'data: {"content": "Hello"}\n\n', b'\ndata: {"content": "World"}\n']
-    result = PassThroughStreamingHandler._convert_raw_bytes_to_str_lines(raw_bytes)
-    assert result == ['data: {"content": "Hello"}', 'data: {"content": "World"}']
+    captured: dict = {}
+
+    async def fake_route_handler(**kwargs):
+        captured["all_chunks"] = kwargs["all_chunks"]
+
+    litellm_logging_obj = MagicMock()
+    litellm_logging_obj.async_success_handler = AsyncMock()
+    passthrough_success_handler_obj = MagicMock()
+
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=fake_route_handler,
+    ):
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={},
+            litellm_logging_obj=litellm_logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route="/v1/messages",
+        ):
+            pass
+        # Let the create_task-scheduled coroutine run
+        await asyncio.sleep(0)
+
+    assert captured["all_chunks"] == [
+        'data: {"content": "Hello"}',
+        'data: {"content": "World"}',
+        'data: {"content": "!"}',
+    ]
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_reassembles_line_split_across_chunks():
+    """
+    Verify that a single SSE line delivered in two separate aiter_bytes chunks
+    is correctly reassembled before being passed to the logging handler.
+    """
+    response = AsyncMock(spec=httpx.Response)
+    raw_chunks = [
+        b'data: {"content":',   # partial line — no newline yet
+        b' "Hello"}\n',         # rest of first line + newline
+        b'data: {"content": "!"}\n',  # complete second line
+    ]
+
+    async def mock_aiter_bytes():
+        for chunk in raw_chunks:
+            yield chunk
+
+    response.aiter_bytes = mock_aiter_bytes
+
+    captured: dict = {}
+
+    async def fake_route_handler(**kwargs):
+        captured["all_chunks"] = kwargs["all_chunks"]
+
+    litellm_logging_obj = MagicMock()
+    litellm_logging_obj.async_success_handler = AsyncMock()
+    passthrough_success_handler_obj = MagicMock()
+
+    with patch.object(
+        PassThroughStreamingHandler,
+        "_route_streaming_logging_to_handler",
+        new=fake_route_handler,
+    ):
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={},
+            litellm_logging_obj=litellm_logging_obj,
+            endpoint_type=EndpointType.ANTHROPIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=passthrough_success_handler_obj,
+            url_route="/v1/messages",
+        ):
+            pass
+        await asyncio.sleep(0)
+
+    assert captured["all_chunks"] == [
+        'data: {"content": "Hello"}',
+        'data: {"content": "!"}',
+    ]

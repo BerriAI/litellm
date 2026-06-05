@@ -391,14 +391,16 @@ def _sync_streaming(
     from litellm.utils import executor
 
     try:
-        raw_bytes: List[bytes] = []
+        chunk_processor = provider_config.create_streaming_chunk_processor()
+        all_chunks: List[str] = []
         for chunk in response.iter_bytes():  # type: ignore
-            raw_bytes.append(chunk)
+            all_chunks.extend(chunk_processor.process(chunk))
             yield chunk
+        all_chunks.extend(chunk_processor.finalize())
 
         executor.submit(
             litellm_logging_obj.flush_passthrough_collected_chunks,
-            raw_bytes=raw_bytes,
+            all_chunks=all_chunks,
             provider_config=provider_config,
         )
     except Exception as e:
@@ -413,15 +415,17 @@ async def _async_streaming(
     iter_response = await response
     try:
         iter_response.raise_for_status()
-        raw_bytes: List[bytes] = []
+        chunk_processor = provider_config.create_streaming_chunk_processor()
+        all_chunks: List[str] = []
 
         async for chunk in iter_response.aiter_bytes():  # type: ignore
-            raw_bytes.append(chunk)
+            all_chunks.extend(chunk_processor.process(chunk))
             yield chunk
+        all_chunks.extend(chunk_processor.finalize())
 
         asyncio.create_task(
             litellm_logging_obj.async_flush_passthrough_collected_chunks(
-                raw_bytes=raw_bytes,
+                all_chunks=all_chunks,
                 provider_config=provider_config,
             )
         )
