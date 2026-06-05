@@ -21,6 +21,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
@@ -3140,16 +3141,43 @@ def _serve_app(app: FastAPI):
         sock.close()
 
 
+class _FakeUpstreamResponse:
+    """Stands in for the httpx upstream response the passthrough finalizer
+    reads. Only the attributes the finalizer touches are implemented."""
+
+    def __init__(self, body: bytes, headers: httpx.Headers, status_code: int = 200):
+        self._body = body
+        self.headers = headers
+        self.status_code = status_code
+
+    async def aread(self) -> bytes:
+        return self._body
+
+
+class _StubPassthroughProcessing(ProxyBaseLLMRequestProcessing):
+    """Drives the real ``base_passthrough_process_llm_request`` finalizer while
+    short-circuiting the upstream call via override (no monkeypatching)."""
+
+    def __init__(self, upstream: _FakeUpstreamResponse):
+        super().__init__(data={})
+        self._upstream = upstream
+
+    async def base_process_llm_request(self, *args, **kwargs):  # type: ignore[override]
+        return self._upstream
+
+
 def test_bedrock_passthrough_nonempty_body_survives_real_http_serialization():
     """Regression for the v1.85.0 Bedrock passthrough Content-Length bug.
 
-    The non-streaming finalizer merges dict(fastapi_response.headers) into the
-    response, and the placeholder Response carries content-length: 0. If that
-    leaks past get_response_headers it overrides the real upstream length, and
-    uvicorn/h11 aborts any non-empty body with 'Response content longer than
-    Content-Length', so the client sees a 200 with an empty/truncated body. Unit
-    assertions on the response object miss this because it only surfaces once the
-    ASGI server serializes over a socket, so this drives a real server."""
+    Drives the real ``base_passthrough_process_llm_request`` finalizer, which
+    merges ``dict(fastapi_response.headers)`` into the response. The placeholder
+    FastAPI Response carries a default content-length: 0; if that leaks past
+    ``get_response_headers`` it overrides the real upstream length and uvicorn/h11
+    aborts any non-empty body, so the client sees a 200 with an empty/truncated
+    body. The symptom only surfaces once the ASGI server serializes over a
+    socket, so the finalizer's output is served through a real server. Asserting
+    on the finalizer output in-process would miss it, which is how the bug
+    shipped; reproducing it requires both the real finalizer and a real socket."""
     upstream_body = json.dumps(
         {
             "output": {
@@ -3161,27 +3189,37 @@ def test_bedrock_passthrough_nonempty_body_survives_real_http_serialization():
         }
     ).encode()
 
-    placeholder = Response()
-    placeholder.headers["x-litellm-call-id"] = "test-call-id"
+    upstream = _FakeUpstreamResponse(
+        body=upstream_body,
+        headers=httpx.Headers(
+            {
+                "content-type": "application/json",
+                "content-length": str(len(upstream_body)),
+                "x-amzn-requestid": "bedrock-request-id",
+            }
+        ),
+    )
+
+    fastapi_response = Response()
+    fastapi_response.headers["x-litellm-call-id"] = "test-call-id"
+
+    final_response = asyncio.run(
+        _StubPassthroughProcessing(upstream).base_passthrough_process_llm_request(
+            request=MagicMock(),
+            fastapi_response=fastapi_response,
+            user_api_key_dict=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            general_settings={},
+            proxy_config=MagicMock(),
+            select_data_generator=MagicMock(),
+        )
+    )
 
     app = FastAPI()
 
     @app.get("/bedrock/passthrough")
     async def _bedrock_passthrough() -> Response:
-        return Response(
-            content=upstream_body,
-            status_code=200,
-            headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=httpx.Headers(
-                    {
-                        "content-type": "application/json",
-                        "content-length": str(len(upstream_body)),
-                        "x-amzn-requestid": "bedrock-request-id",
-                    }
-                ),
-                custom_headers=dict(placeholder.headers),
-            ),
-        )
+        return final_response
 
     with _serve_app(app) as base_url:
         response = httpx.get(f"{base_url}/bedrock/passthrough", timeout=10)
