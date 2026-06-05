@@ -6,6 +6,7 @@ from litellm.integrations.otel.runtime import seed_request_identity
 
 from .authenticators import AuthContext, AuthResult, authenticate
 from .authorizer import AuthorizationDenied, authorize
+from .budgets import enforce_hierarchy_budgets
 from .context import AuthMethod, RequestAuthContext, set_auth_context
 from .end_user import resolve_end_user
 from .enforcer import CasbinEnforcer
@@ -67,6 +68,23 @@ async def _enrich_for_limits(identity: Any, ctx: AuthContext) -> None:
         )
 
     await enrich_identity(identity, load_user=load_user, load_team=load_team)
+
+
+async def _enforce_budgets(identity: Any, route: str, ctx: AuthContext) -> None:
+    """Enforce team/org/global budgets (reusing v1's functions) and surface a
+    breach as the same ProxyException v1 raises."""
+    import litellm
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+
+    try:
+        await enforce_hierarchy_budgets(identity, route, ctx)
+    except litellm.BudgetExceededError as e:
+        raise ProxyException(
+            message=e.message,
+            type=ProxyErrorTypes.budget_exceeded,
+            param=None,
+            code=getattr(e, "status_code", status.HTTP_429_TOO_MANY_REQUESTS),
+        )
 
 
 async def _best_effort_identity(api_key: Optional[str], ctx: AuthContext) -> AuthResult:
@@ -160,6 +178,7 @@ async def user_api_key_auth_v2(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail=f"auth_v2: not permitted to call model '{requested_model}'",
                 )
+        await _enforce_budgets(identity, route, ctx)
         await resolve_end_user(request, request_data, dict(request.headers))
         seed_request_identity(identity, model=requested_model)
         identity.request_route = route
