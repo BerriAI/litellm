@@ -4,10 +4,13 @@ Amazon Bedrock Mantle - Responses API backend.
 gpt-5.5 / gpt-5.4 on Mantle are exposed ONLY on the `/openai/v1/responses`
 path (not the standard `/v1/responses`). Payloads and SSE follow the OpenAI
 Responses spec, so this config inherits OpenAIResponsesAPIConfig and overrides
-only the endpoint URL and Bearer authentication.
+only the endpoint URL and authentication.
 
-Auth: AWS Bedrock API key as Bearer token (BEDROCK_MANTLE_API_KEY or the
-standard AWS_BEARER_TOKEN_BEDROCK), NOT SigV4.
+Auth: Bearer token (BEDROCK_MANTLE_API_KEY or the standard
+AWS_BEARER_TOKEN_BEDROCK, or litellm_params.api_key) when present; otherwise
+AWS SigV4 (service name "bedrock") using the standard credential chain (IAM
+role / access key / profile / web identity), signed via the shared
+BaseAWSLLM._sign_request after the request body is finalized.
 """
 
 import re
