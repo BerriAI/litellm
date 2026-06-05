@@ -60,12 +60,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         # recorded without re-deriving it from a model price table.
         # (`langfuse.observation.cost_details` is not ingested over OTEL:
         # https://github.com/langfuse/langfuse/issues/11030)
-        from litellm.integrations.arize._utils import safe_set_attribute
-
         standard_logging_payload = kwargs.get("standard_logging_object") or {}
         response_cost = standard_logging_payload.get("response_cost")
         if response_cost is not None:
-            safe_set_attribute(span, "gen_ai.usage.cost", float(response_cost))
+            _utils.safe_set_attribute(span, "gen_ai.usage.cost", float(response_cost))
         return
 
     @staticmethod
