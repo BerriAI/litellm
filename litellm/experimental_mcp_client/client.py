@@ -556,7 +556,9 @@ class MCPClient:
             )
             return tool_result
         except asyncio.CancelledError:
-            verbose_logger.warning("MCP client tool call was cancelled")
+            verbose_logger.warning(
+                f"MCP client tool call timed out after {self.timeout}s for {self.server_url}"
+            )
             raise
         except Exception as e:
             import traceback

@@ -1463,6 +1463,36 @@
         "supports_output_config": true,
         "bedrock_output_config_effort_ceiling": "xhigh"
     },
+    "jp.anthropic.claude-opus-4-7": {
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_read_input_token_cost": 5.5e-07,
+        "input_cost_per_token": 5.5e-06,
+        "litellm_provider": "bedrock_converse",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 2.75e-05,
+        "search_context_cost_per_query": {
+            "search_context_size_high": 0.01,
+            "search_context_size_low": 0.01,
+            "search_context_size_medium": 0.01
+        },
+        "supports_assistant_prefill": false,
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true,
+        "supports_xhigh_reasoning_effort": true,
+        "tool_use_system_prompt_tokens": 346,
+        "supports_native_structured_output": true,
+        "supports_max_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": true
+    },
     "anthropic.claude-sonnet-4-6": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_creation_input_token_cost_above_1hr": 6e-06,
@@ -24096,6 +24126,21 @@
         "max_input_tokens": 200000,
         "max_output_tokens": 8192
     },
+    "minimax/MiniMax-M3": {
+        "input_cost_per_token": 6e-07,
+        "output_cost_per_token": 2.4e-06,
+        "cache_read_input_token_cost": 1.2e-07,
+        "litellm_provider": "minimax",
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_system_messages": true,
+        "supports_vision": true,
+        "max_input_tokens": 512000,
+        "max_output_tokens": 128000
+    },
     "mistral.devstral-2-123b": {
         "input_cost_per_token": 4e-07,
         "litellm_provider": "bedrock_converse",
@@ -24978,6 +25023,7 @@
     },
     "moonshot/kimi-k2-0711-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -24992,6 +25038,7 @@
     },
     "moonshot/kimi-k2-0905-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25006,6 +25053,7 @@
     },
     "moonshot/kimi-k2-turbo-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 1.15e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25030,6 +25078,7 @@
         "source": "https://platform.moonshot.ai/docs/guide/kimi-k2-5-quickstart",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
@@ -25046,12 +25095,14 @@
         "source": "https://platform.kimi.ai/docs/pricing/chat-k26",
         "supports_function_calling": true,
         "supports_reasoning": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_video_input": true,
         "supports_vision": true
     },
     "moonshot/kimi-latest": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25066,6 +25117,7 @@
     },
     "moonshot/kimi-latest-128k": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25080,6 +25132,7 @@
     },
     "moonshot/kimi-latest-32k": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 32768,
@@ -25094,6 +25147,7 @@
     },
     "moonshot/kimi-latest-8k": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-01-28",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 8192,
@@ -25108,6 +25162,7 @@
     },
     "moonshot/kimi-thinking-preview": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2025-11-11",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25120,6 +25175,7 @@
     },
     "moonshot/kimi-k2-thinking": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 6e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25135,6 +25191,7 @@
     },
     "moonshot/kimi-k2-thinking-turbo": {
         "cache_read_input_token_cost": 1.5e-07,
+        "deprecation_date": "2026-05-25",
         "input_cost_per_token": 1.15e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 262144,
@@ -25158,9 +25215,11 @@
         "output_cost_per_token": 5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-128k-0430": {
+        "deprecation_date": "2024-04-30",
         "input_cost_per_token": 2e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 131072,
@@ -25182,6 +25241,7 @@
         "output_cost_per_token": 5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -25195,9 +25255,11 @@
         "output_cost_per_token": 3e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-32k-0430": {
+        "deprecation_date": "2024-04-30",
         "input_cost_per_token": 1e-06,
         "litellm_provider": "moonshot",
         "max_input_tokens": 32768,
@@ -25219,6 +25281,7 @@
         "output_cost_per_token": 3e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -25232,9 +25295,11 @@
         "output_cost_per_token": 2e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "moonshot/moonshot-v1-8k-0430": {
+        "deprecation_date": "2024-04-30",
         "input_cost_per_token": 2e-07,
         "litellm_provider": "moonshot",
         "max_input_tokens": 8192,
@@ -25256,6 +25321,7 @@
         "output_cost_per_token": 2e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true
     },
@@ -25269,6 +25335,7 @@
         "output_cost_per_token": 5e-06,
         "source": "https://platform.moonshot.ai/docs/pricing",
         "supports_function_calling": true,
+        "supports_response_schema": true,
         "supports_tool_choice": true
     },
     "morph/morph-v3-fast": {
@@ -36012,7 +36079,8 @@
         "supports_prompt_caching": true,
         "supports_response_schema": false,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-3-beta": {
         "cache_read_input_token_cost": 7.5e-07,
@@ -36211,7 +36279,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-fast-non-reasoning": {
         "cache_read_input_token_cost": 5e-08,
@@ -36228,7 +36297,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-0709": {
         "input_cost_per_token": 3e-06,
@@ -36244,7 +36314,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_tool_choice": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-latest": {
         "input_cost_per_token": 3e-06,
@@ -36302,7 +36373,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-1-fast-reasoning-latest": {
         "cache_read_input_token_cost": 5e-08,
@@ -36323,7 +36395,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-1-fast-non-reasoning": {
         "cache_read_input_token_cost": 5e-08,
@@ -36343,7 +36416,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4-1-fast-non-reasoning-latest": {
         "cache_read_input_token_cost": 5e-08,
@@ -36363,7 +36437,8 @@
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-4.20-multi-agent-beta-0309": {
         "cache_read_input_token_cost": 2e-07,
@@ -36514,7 +36589,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-code-fast-1-0825": {
         "cache_read_input_token_cost": 2e-08,
@@ -36529,7 +36605,8 @@
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "deprecation_date": "2026-05-15"
     },
     "xai/grok-vision-beta": {
         "input_cost_per_image": 5e-06,
@@ -41547,5 +41624,18 @@
         "supports_vision": true,
         "supports_native_structured_output": true,
         "supports_pdf_input": true
+    },
+    "soniox/stt-async-v4": {
+        "litellm_provider": "soniox",
+        "max_output_tokens": 8000,
+        "max_tokens": 8000,
+        "input_cost_per_second": 0.0,
+        "output_cost_per_second": 0.0000277778,
+        "mode": "audio_transcription",
+        "source": "https://soniox.com/pricing",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ],
+        "supports_audio_input": true
     }
 }
