@@ -16,7 +16,12 @@ BaseAWSLLM._sign_request after the request body is finalized.
 import re
 from typing import Optional, Tuple
 
-from botocore.exceptions import BotoCoreError
+from botocore.exceptions import (
+    CredentialRetrievalError,
+    NoCredentialsError,
+    PartialCredentialsError,
+    ProfileNotFound,
+)
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -152,7 +157,12 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 stream=stream,
                 fake_stream=fake_stream,
             )
-        except BotoCoreError as e:
+        except (
+            NoCredentialsError,
+            PartialCredentialsError,
+            ProfileNotFound,
+            CredentialRetrievalError,
+        ) as e:
             raise ValueError(
                 "Bedrock Mantle auth failed: no Bearer token and no usable AWS "
                 "credentials. Set BEDROCK_MANTLE_API_KEY (or AWS_BEARER_TOKEN_BEDROCK) "

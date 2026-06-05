@@ -12,7 +12,11 @@ import sys
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
-from botocore.exceptions import PartialCredentialsError, ProfileNotFound
+from botocore.exceptions import (
+    ConnectTimeoutError,
+    PartialCredentialsError,
+    ProfileNotFound,
+)
 
 import litellm
 from litellm.llms.bedrock_mantle.responses.transformation import (
@@ -608,6 +612,37 @@ class TestBedrockMantleResponsesSigV4:
         msg = str(exc.value)
         assert "Bearer" in msg
         assert "SigV4" in msg or "IAM" in msg
+
+    def test_sts_transport_error_is_not_masked_as_credentials(self, monkeypatch):
+        # An AssumeRole / web-identity flow hits STS over the network, so a transient
+        # connection error must surface as itself, not be rewritten into the
+        # "no usable AWS credentials" message that would send the user to fix the
+        # wrong thing.
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=ConnectTimeoutError(
+                endpoint_url="https://sts.us-east-2.amazonaws.com"
+            )
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        with pytest.raises(ConnectTimeoutError):
+            cfg.sign_request(
+                headers={},
+                optional_params={
+                    "aws_role_name": "arn:aws:iam::000000000000:role/test-role",
+                    "aws_region_name": "us-east-2",
+                },
+                request_data={"input": "hi"},
+                api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+                api_key=None,
+            )
 
 
 class TestBedrockMantleResponsesPricing:
