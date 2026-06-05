@@ -379,37 +379,6 @@ def test_galileo_get_output_str_variants(galileo_v2_env):
     assert logger.get_output_str_from_response("not-a-supported-type", {}) is None
 
 
-def test_galileo_redact_payload_for_debug_logging(galileo_v2_env):
-    payload = {
-        "traces": [
-            {
-                "id": "trace-1",
-                "input": "secret prompt",
-                "output": "secret response",
-                "spans": [
-                    {
-                        "id": "span-1",
-                        "input": [{"role": "user", "content": "hello"}],
-                        "output": {"role": "assistant", "content": "world"},
-                        "model": "gpt-4",
-                    }
-                ],
-            }
-        ],
-        "logging_method": "api_direct",
-    }
-
-    redacted = GalileoObserve._redact_payload_for_debug_logging(payload)
-    redacted_str = str(redacted)
-
-    assert "secret prompt" not in redacted_str
-    assert "secret response" not in redacted_str
-    assert "hello" not in redacted_str
-    assert "world" not in redacted_str
-    assert "<redacted" in redacted_str
-    assert redacted["traces"][0]["spans"][0]["model"] == "gpt-4"
-
-
 def test_galileo_get_input_output_error_status_message(galileo_v2_env):
     logger = GalileoObserve()
     input_text, output_text, _ = logger._get_galileo_input_output_content(

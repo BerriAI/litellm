@@ -293,36 +293,6 @@ class GalileoObserve(CustomLogger):
             payload,
         )
 
-    _SENSITIVE_PAYLOAD_KEYS = frozenset(
-        {"input", "output", "input_text", "output_text", "messages", "content"}
-    )
-
-    @classmethod
-    def _redact_payload_for_debug_logging(
-        cls, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        def _redact_value(key: str, value: Any) -> Any:
-            if key in cls._SENSITIVE_PAYLOAD_KEYS:
-                if isinstance(value, str):
-                    return f"<redacted len={len(value)}>"
-                if isinstance(value, list):
-                    return f"<redacted list len={len(value)}>"
-                if isinstance(value, dict):
-                    return "<redacted dict>"
-                return "<redacted>"
-            if isinstance(value, dict):
-                return {k: _redact_value(k, v) for k, v in value.items()}
-            if isinstance(value, list):
-                return [_redact_nested_item(item) for item in value]
-            return value
-
-        def _redact_nested_item(item: Any) -> Any:
-            if isinstance(item, dict):
-                return {k: _redact_value(k, v) for k, v in item.items()}
-            return item
-
-        return {k: _redact_value(k, v) for k, v in payload.items()}
-
     @staticmethod
     def _redact_headers(headers: Optional[Dict[str, str]]) -> Dict[str, str]:
         if not headers:
@@ -390,10 +360,6 @@ class GalileoObserve(CustomLogger):
             "Galileo Logger flush URL: %s trace_count=%s",
             url,
             len(traces) if isinstance(traces, list) else 0,
-        )
-        verbose_logger.debug(
-            "Galileo Logger flush payload (redacted): %s",
-            json.dumps(self._redact_payload_for_debug_logging(payload), default=str),
         )
         if self.use_v2_api and "/ingest/traces/" in url:
             self._log_v2_payload_validation(payload)
