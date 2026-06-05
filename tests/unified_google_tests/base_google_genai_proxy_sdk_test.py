@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from abc import ABC, abstractmethod
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import pytest
 
@@ -51,6 +51,10 @@ class BaseGoogleGenAIProxySDKTest(ABC):
     @property
     @abstractmethod
     def proxy_model_name(self) -> str: ...
+
+    @property
+    @abstractmethod
+    def model_config(self) -> Dict[str, Any]: ...
 
     def _skip_reason_if_credentials_missing(self) -> Optional[str]:
         model = self.model_config.get("model", "")
