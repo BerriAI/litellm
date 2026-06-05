@@ -14,12 +14,7 @@ const makeServer = (overrides: Partial<MCPServer> = {}): MCPServer => ({
 describe("FIELD_GROUPS", () => {
   it("should contain four groups", () => {
     expect(FIELD_GROUPS).toHaveLength(4);
-    expect(FIELD_GROUPS.map((g) => g.label)).toEqual([
-      "Documentation",
-      "Source",
-      "Connection",
-      "Security",
-    ]);
+    expect(FIELD_GROUPS.map((g) => g.label)).toEqual(["Documentation", "Source", "Connection", "Security"]);
   });
 });
 
@@ -31,8 +26,7 @@ describe("MCP_REQUIRED_FIELD_DEFS", () => {
 });
 
 describe("field check functions", () => {
-  const findCheck = (key: string) =>
-    MCP_REQUIRED_FIELD_DEFS.find((f) => f.key === key)!.check;
+  const findCheck = (key: string) => MCP_REQUIRED_FIELD_DEFS.find((f) => f.key === key)!.check;
 
   it("should pass description check when description is present", () => {
     expect(findCheck("description")(makeServer({ description: "A service" }))).toBe(true);

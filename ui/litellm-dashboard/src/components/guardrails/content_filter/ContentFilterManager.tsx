@@ -4,7 +4,7 @@ import ContentFilterConfiguration from "./ContentFilterConfiguration";
 import ContentFilterDisplay from "./ContentFilterDisplay";
 import type { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
 
-const { Text } = Typography
+const { Text } = Typography;
 
 interface Pattern {
   id: string;
@@ -61,7 +61,7 @@ interface ContentFilterManagerProps {
     blockedWords: BlockedWord[],
     categories: SelectedContentCategory[],
     competitorIntentEnabled?: boolean,
-    competitorIntentConfig?: CompetitorIntentConfig | null
+    competitorIntentConfig?: CompetitorIntentConfig | null,
   ) => void;
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
@@ -83,7 +83,9 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
   const [competitorIntentEnabled, setCompetitorIntentEnabled] = useState(false);
   const [competitorIntentConfig, setCompetitorIntentConfig] = useState<CompetitorIntentConfig | null>(null);
   const [originalCompetitorIntentEnabled, setOriginalCompetitorIntentEnabled] = useState(false);
-  const [originalCompetitorIntentConfig, setOriginalCompetitorIntentConfig] = useState<CompetitorIntentConfig | null>(null);
+  const [originalCompetitorIntentConfig, setOriginalCompetitorIntentConfig] = useState<CompetitorIntentConfig | null>(
+    null,
+  );
 
   // Load data from guardrail on mount or when guardrailData changes
   useEffect(() => {
@@ -119,9 +121,7 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
 
     if (guardrailData?.litellm_params?.categories?.length > 0) {
       const contentCategoriesMap = guardrailSettings?.content_filter_settings?.content_categories
-        ? Object.fromEntries(
-          guardrailSettings.content_filter_settings.content_categories.map((c) => [c.name, c])
-        )
+        ? Object.fromEntries(guardrailSettings.content_filter_settings.content_categories.map((c) => [c.name, c]))
         : {};
       const categories = guardrailData.litellm_params.categories.map((c: any, index: number) => {
         const meta = contentCategoriesMap[c.category];
@@ -173,7 +173,7 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
         blockedWords,
         selectedContentCategories,
         competitorIntentEnabled,
-        competitorIntentConfig
+        competitorIntentConfig,
       );
     }
   }, [
@@ -270,15 +270,13 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
             accessToken={accessToken}
             contentCategories={guardrailSettings.content_filter_settings.content_categories || []}
             selectedContentCategories={selectedContentCategories}
-            onContentCategoryAdd={(category) =>
-              setSelectedContentCategories([...selectedContentCategories, category])
-            }
+            onContentCategoryAdd={(category) => setSelectedContentCategories([...selectedContentCategories, category])}
             onContentCategoryRemove={(id) =>
               setSelectedContentCategories(selectedContentCategories.filter((c) => c.id !== id))
             }
             onContentCategoryUpdate={(id, field, value) =>
               setSelectedContentCategories(
-                selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c))
+                selectedContentCategories.map((c) => (c.id === id ? { ...c, [field]: value } : c)),
               )
             }
             competitorIntentEnabled={competitorIntentEnabled}
@@ -302,7 +300,7 @@ export const formatContentFilterDataForAPI = (
   blockedWords: BlockedWord[],
   categories?: SelectedContentCategory[],
   competitorIntentEnabled?: boolean,
-  competitorIntentConfig?: CompetitorIntentConfig | null
+  competitorIntentConfig?: CompetitorIntentConfig | null,
 ) => {
   const result: {
     patterns: any[];
@@ -335,12 +333,9 @@ export const formatContentFilterDataForAPI = (
     result.competitor_intent_config = {
       competitor_intent_type: competitorIntentConfig.competitor_intent_type,
       brand_self: competitorIntentConfig.brand_self,
-      locations: competitorIntentConfig.locations?.length
-        ? competitorIntentConfig.locations
-        : undefined,
+      locations: competitorIntentConfig.locations?.length ? competitorIntentConfig.locations : undefined,
       competitors:
-        competitorIntentConfig.competitor_intent_type === "generic" &&
-        competitorIntentConfig.competitors?.length
+        competitorIntentConfig.competitor_intent_type === "generic" && competitorIntentConfig.competitors?.length
           ? competitorIntentConfig.competitors
           : undefined,
       policy: competitorIntentConfig.policy,

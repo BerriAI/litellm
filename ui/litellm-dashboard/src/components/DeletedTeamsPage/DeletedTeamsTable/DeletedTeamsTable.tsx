@@ -9,16 +9,7 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-  Badge,
-  Text,
-} from "@tremor/react";
+import { Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Badge, Text } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
 import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -30,11 +21,7 @@ interface DeletedTeamsTableProps {
   isFetching: boolean;
 }
 
-export function DeletedTeamsTable({
-  teams,
-  isLoading,
-  isFetching,
-}: DeletedTeamsTableProps) {
+export function DeletedTeamsTable({ teams, isLoading, isFetching }: DeletedTeamsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([
     {
       id: "deleted_at",
@@ -53,9 +40,7 @@ export function DeletedTeamsTable({
         const value = info.getValue() as string;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[200px]">
-              {value || "-"}
-            </span>
+            <span className="truncate block max-w-[200px]">{value || "-"}</span>
           </Tooltip>
         );
       },
@@ -70,9 +55,7 @@ export function DeletedTeamsTable({
         const value = info.getValue() as string;
         return (
           <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">
-              {value || "-"}
-            </span>
+            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">{value || "-"}</span>
           </Tooltip>
         );
       },
@@ -86,9 +69,7 @@ export function DeletedTeamsTable({
       cell: (info) => {
         const value = info.getValue();
         return (
-          <span className="block max-w-[140px]">
-            {value ? new Date(value as string).toLocaleDateString() : "-"}
-          </span>
+          <span className="block max-w-[140px]">{value ? new Date(value as string).toLocaleDateString() : "-"}</span>
         );
       },
     },
@@ -101,9 +82,7 @@ export function DeletedTeamsTable({
       cell: (info) => {
         const spend = (info.row.original as any).spend as number | undefined;
         return (
-          <span className="block max-w-[140px]">
-            {spend !== undefined ? formatNumberWithCommas(spend, 4) : "-"}
-          </span>
+          <span className="block max-w-[140px]">{spend !== undefined ? formatNumberWithCommas(spend, 4) : "-"}</span>
         );
       },
     },
@@ -147,9 +126,7 @@ export function DeletedTeamsTable({
               ) : (
                 <Badge key={index} size={"xs"} color="blue">
                   <Text>
-                    {model.length > 30
-                      ? `${getModelDisplayName(model).slice(0, 30)}...`
-                      : getModelDisplayName(model)}
+                    {model.length > 30 ? `${getModelDisplayName(model).slice(0, 30)}...` : getModelDisplayName(model)}
                   </Text>
                 </Badge>
               ),
@@ -175,9 +152,7 @@ export function DeletedTeamsTable({
         const value = info.getValue() as string;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[200px]">
-              {value || "-"}
-            </span>
+            <span className="truncate block max-w-[200px]">{value || "-"}</span>
           </Tooltip>
         );
       },
@@ -190,11 +165,7 @@ export function DeletedTeamsTable({
       maxSize: 140,
       cell: (info) => {
         const value = (info.row.original as any).deleted_at as string | null | undefined;
-        return (
-          <span className="block max-w-[140px]">
-            {value ? new Date(value).toLocaleDateString() : "-"}
-          </span>
-        );
+        return <span className="block max-w-[140px]">{value ? new Date(value).toLocaleDateString() : "-"}</span>;
       },
     },
     {
@@ -207,9 +178,7 @@ export function DeletedTeamsTable({
         const value = (info.row.original as any).deleted_by as string | null | undefined;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
-              {value || "-"}
-            </span>
+            <span className="truncate block max-w-[180px]">{value || "-"}</span>
           </Tooltip>
         );
       },
