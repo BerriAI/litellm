@@ -67,9 +67,7 @@ def _canonical_body(body: bytes) -> bytes:
     if not body:
         return b""
     try:
-        return json.dumps(
-            json.loads(body), sort_keys=True, separators=(",", ":")
-        ).encode("utf-8")
+        return json.dumps(json.loads(body), sort_keys=True, separators=(",", ":")).encode("utf-8")
     except (ValueError, TypeError):
         return body
 
@@ -110,9 +108,7 @@ class OpenAIRecordReplay:
         ).hexdigest()
         return f"{RECORD_KEY_PREFIX}{digest}"
 
-    async def handle(
-        self, method: str, path: str, body: bytes, fetch_upstream: FetchUpstream
-    ) -> UpstreamResult:
+    async def handle(self, method: str, path: str, body: bytes, fetch_upstream: FetchUpstream) -> UpstreamResult:
         key = self.record_key(method, path, body)
         cached = self._cache_get(key)
         if cached is not None:
@@ -173,6 +169,8 @@ def _build_default_redis_client():
 
 
 def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
+    import contextlib
+
     import httpx
     from starlette.applications import Starlette
     from starlette.responses import PlainTextResponse, Response
@@ -181,11 +179,18 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
     if recorder is None:
         recorder = OpenAIRecordReplay(
             redis_client=_build_default_redis_client(),
-            upstream_base_url=os.environ.get(
-                UPSTREAM_BASE_URL_ENV, DEFAULT_UPSTREAM_BASE_URL
-            ),
+            upstream_base_url=os.environ.get(UPSTREAM_BASE_URL_ENV, DEFAULT_UPSTREAM_BASE_URL),
         )
+    owns_client = http_client is None
     client = http_client or httpx.AsyncClient(timeout=httpx.Timeout(120.0))
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app):
+        try:
+            yield
+        finally:
+            if owns_client:
+                await client.aclose()
 
     async def health(_request):
         return PlainTextResponse("ok")
@@ -196,9 +201,7 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
         full_path = f"{path}?{request.url.query}" if request.url.query else path
 
         async def fetch_upstream() -> UpstreamResult:
-            fwd_headers = {
-                k: v for k, v in request.headers.items() if k.lower() != "host"
-            }
+            fwd_headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
             upstream = await client.request(
                 request.method,
                 f"{recorder.upstream_base_url}{full_path}",
@@ -211,18 +214,15 @@ def create_app(recorder: Optional[OpenAIRecordReplay] = None, http_client=None):
                 upstream.content,
             )
 
-        status, headers, resp_body = await recorder.handle(
-            request.method, full_path, body, fetch_upstream
-        )
+        status, headers, resp_body = await recorder.handle(request.method, full_path, body, fetch_upstream)
         return Response(content=resp_body, status_code=status, headers=dict(headers))
 
     return Starlette(
         routes=[
             Route("/__recorder_health", health, methods=["GET"]),
-            Route(
-                "/{path:path}", proxy, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]
-            ),
-        ]
+            Route("/{path:path}", proxy, methods=["GET", "POST", "PUT", "PATCH", "DELETE"]),
+        ],
+        lifespan=lifespan,
     )
 
 

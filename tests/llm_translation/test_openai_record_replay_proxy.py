@@ -23,9 +23,7 @@ class _Upstream:
     def __init__(self, status=200, headers=None, body=_OK_BODY):
         self.calls = 0
         self._status = status
-        self._headers = (
-            headers if headers is not None else [("content-type", "application/json")]
-        )
+        self._headers = headers if headers is not None else [("content-type", "application/json")]
         self._body = body
 
     async def __call__(self):
@@ -34,9 +32,7 @@ class _Upstream:
 
 
 def _recorder(client=None):
-    return OpenAIRecordReplay(
-        client if client is not None else fakeredis.FakeStrictRedis()
-    )
+    return OpenAIRecordReplay(client if client is not None else fakeredis.FakeStrictRedis())
 
 
 def _run(coro):
@@ -49,17 +45,13 @@ def test_miss_forwards_to_upstream_and_records():
     upstream = _Upstream()
 
     status, headers, body = _run(
-        recorder.handle(
-            "POST", "/v1/images/generations", b'{"model":"gpt-image-1"}', upstream
-        )
+        recorder.handle("POST", "/v1/images/generations", b'{"model":"gpt-image-1"}', upstream)
     )
 
     assert upstream.calls == 1
     assert status == 200
     assert body == _OK_BODY
-    key = OpenAIRecordReplay.record_key(
-        "POST", "/v1/images/generations", b'{"model":"gpt-image-1"}'
-    )
+    key = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", b'{"model":"gpt-image-1"}')
     assert key.startswith(RECORD_KEY_PREFIX)
     assert fake.get(key) is not None
 
@@ -81,27 +73,15 @@ def test_different_body_is_a_separate_recording():
     recorder = _recorder()
     upstream = _Upstream()
 
-    _run(
-        recorder.handle(
-            "POST", "/v1/images/generations", b'{"prompt":"otter"}', upstream
-        )
-    )
-    _run(
-        recorder.handle(
-            "POST", "/v1/images/generations", b'{"prompt":"seal"}', upstream
-        )
-    )
+    _run(recorder.handle("POST", "/v1/images/generations", b'{"prompt":"otter"}', upstream))
+    _run(recorder.handle("POST", "/v1/images/generations", b'{"prompt":"seal"}', upstream))
 
     assert upstream.calls == 2
 
 
 def test_record_key_ignores_json_key_order():
-    a = OpenAIRecordReplay.record_key(
-        "POST", "/v1/images/generations", b'{"model":"x","prompt":"y"}'
-    )
-    b = OpenAIRecordReplay.record_key(
-        "POST", "/v1/images/generations", b'{"prompt":"y","model":"x"}'
-    )
+    a = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", b'{"model":"x","prompt":"y"}')
+    b = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", b'{"prompt":"y","model":"x"}')
     assert a == b
 
 
@@ -145,12 +125,8 @@ def test_replay_drops_framing_headers_so_server_recomputes():
     )
     body_in = b'{"model":"gpt-image-1"}'
 
-    _, live_headers, _ = _run(
-        recorder.handle("POST", "/v1/images/generations", body_in, upstream)
-    )
-    _, replay_headers, _ = _run(
-        recorder.handle("POST", "/v1/images/generations", body_in, upstream)
-    )
+    _, live_headers, _ = _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
+    _, replay_headers, _ = _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
 
     for headers in (live_headers, replay_headers):
         names = {k.lower() for k, _ in headers}
@@ -174,9 +150,7 @@ def test_non_2xx_response_is_not_cached():
     body_in = b'{"model":"gpt-image-1"}'
     key = OpenAIRecordReplay.record_key("POST", "/v1/images/generations", body_in)
 
-    status, _, _ = _run(
-        recorder.handle("POST", "/v1/images/generations", body_in, upstream)
-    )
+    status, _, _ = _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
     assert status == 500
     assert fake.get(key) is None
 
@@ -213,3 +187,30 @@ def test_passthrough_when_no_redis_client_configured():
     _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
 
     assert upstream.calls == 2
+
+
+class _StubClient:
+    def __init__(self):
+        self.closed = False
+
+    async def aclose(self):
+        self.closed = True
+
+
+def test_app_lifespan_leaves_injected_http_client_open():
+    """The app must only close the client it created, never a caller's.
+
+    A caller that injects its own client owns that client's lifecycle; the
+    app closing it would break reuse across multiple ``create_app`` calls.
+    """
+    from starlette.testclient import TestClient
+
+    from tests._openai_record_replay_proxy import create_app
+
+    client = _StubClient()
+    app = create_app(recorder=_recorder(), http_client=client)
+
+    with TestClient(app):
+        pass
+
+    assert client.closed is False
