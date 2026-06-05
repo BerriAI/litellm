@@ -410,6 +410,7 @@ async def _upsert_budget_and_membership(
     user_api_key_dict: UserAPIKeyAuth,
     tpm_limit: Optional[int] = None,
     rpm_limit: Optional[int] = None,
+    budget_duration: Optional[str] = None,
     allowed_models: Optional[List[str]] = None,
     team_default_budget_id: Optional[str] = None,
 ):
@@ -431,13 +432,14 @@ async def _upsert_budget_and_membership(
             member's budget does not mutate the shared default (and therefore
             every other member who still points at it).
 
-    If max_budget, tpm_limit, rpm_limit, and allowed_models are all None, the user's budget is removed from the team membership.
+    If max_budget, tpm_limit, rpm_limit, budget_duration, and allowed_models are all None, the user's budget is removed from the team membership.
     If any of these values exist, a budget is updated or created and linked to the team membership.
     """
     if (
         max_budget is None
         and tpm_limit is None
         and rpm_limit is None
+        and budget_duration is None
         and allowed_models is None
     ):
         # disconnect the budget since all limits are None
@@ -465,6 +467,8 @@ async def _upsert_budget_and_membership(
             update_data["tpm_limit"] = tpm_limit
         if rpm_limit is not None:
             update_data["rpm_limit"] = rpm_limit
+        if budget_duration is not None:
+            update_data["budget_duration"] = budget_duration
         if allowed_models is not None:
             update_data["allowed_models"] = allowed_models
         await tx.litellm_budgettable.update(
@@ -513,6 +517,8 @@ async def _upsert_budget_and_membership(
         create_data["tpm_limit"] = tpm_limit
     if rpm_limit is not None:
         create_data["rpm_limit"] = rpm_limit
+    if budget_duration is not None:
+        create_data["budget_duration"] = budget_duration
     if allowed_models is not None:
         create_data["allowed_models"] = allowed_models
 

@@ -1,9 +1,19 @@
+import types
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
 import litellm.proxy.proxy_server as proxy_server
-from litellm.proxy._types import TeamMemberUpdateRequest
+import litellm.proxy.management_endpoints.team_endpoints as team_endpoints
+from litellm.proxy._types import (
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+    Member,
+    TeamMemberUpdateRequest,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.management_endpoints.team_endpoints import team_member_update
 
 
@@ -38,3 +48,60 @@ async def test_ateam_member_update_admin_requires_premium(monkeypatch):
         "Pricing: https://www.litellm.ai/#pricing"
     )
     assert exc_info.value.detail == expected_msg
+
+
+@pytest.mark.asyncio
+async def test_team_member_update_passes_budget_duration_to_upsert(monkeypatch):
+    """budget_duration from the request must reach _upsert_budget_and_membership,
+    otherwise the member budget is created without a reset period and never resets."""
+    team_row = LiteLLM_TeamTable(
+        team_id="team-1234",
+        members_with_roles=[Member(user_id="user-1", role="user")],
+        metadata={},
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+    prisma_client.db.litellm_teamtable.update = AsyncMock()
+
+    class _FakeTx:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+    prisma_client.db.tx = MagicMock(return_value=_FakeTx())
+
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "premium_user", False)
+    monkeypatch.setattr(
+        team_endpoints,
+        "team_info",
+        AsyncMock(
+            return_value={
+                "team_info": team_row,
+                "team_memberships": [
+                    types.SimpleNamespace(user_id="user-1", budget_id="bud-1")
+                ],
+            }
+        ),
+    )
+    upsert_mock = AsyncMock()
+    monkeypatch.setattr(team_endpoints, "_upsert_budget_and_membership", upsert_mock)
+
+    data = TeamMemberUpdateRequest(
+        team_id="team-1234",
+        user_id="user-1",
+        role="user",
+        max_budget_in_team=10.0,
+        budget_duration="30d",
+    )
+    request = Request({"type": "http", "method": "POST", "path": "/team/member_update"})
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN.value, user_id="admin")
+
+    response = await team_member_update(data, request, auth)
+
+    upsert_mock.assert_awaited_once()
+    assert upsert_mock.await_args.kwargs["budget_duration"] == "30d"
+    assert response.budget_duration == "30d"

@@ -3781,6 +3781,7 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  budget_duration?: string | null;
   allowed_models?: string[] | null;
 }
 
@@ -3920,6 +3921,9 @@ export const teamMemberUpdateCall = async (
     }
     if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
       requestBody.rpm_limit = formValues.rpm_limit;
+    }
+    if (formValues.budget_duration !== undefined && formValues.budget_duration !== null) {
+      requestBody.budget_duration = formValues.budget_duration;
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;

@@ -2853,6 +2853,7 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             tpm_limit=data.tpm_limit,
             rpm_limit=data.rpm_limit,
+            budget_duration=data.budget_duration,
             allowed_models=data.allowed_models,
             team_default_budget_id=team_default_budget_id,
         )
@@ -2887,6 +2888,7 @@ async def team_member_update(
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
+        budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
     )
 

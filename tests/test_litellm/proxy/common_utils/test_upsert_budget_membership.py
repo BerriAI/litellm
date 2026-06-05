@@ -369,3 +369,51 @@ async def test_upsert_updates_in_place_when_member_has_private_budget(
     )
     mock_tx.litellm_budgettable.create.assert_not_called()
     mock_tx.litellm_teammembership.upsert.assert_not_called()
+
+
+# TEST: budget_duration is written when updating an existing member budget in-place
+@pytest.mark.asyncio
+async def test_upsert_writes_budget_duration_in_place(mock_tx, fake_user):
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-dur",
+        user_id="user-dur",
+        max_budget=20.0,
+        existing_budget_id="bud-dur",
+        user_api_key_dict=fake_user,
+        budget_duration="30d",
+    )
+
+    mock_tx.litellm_budgettable.update.assert_awaited_once_with(
+        where={"budget_id": "bud-dur"},
+        data={
+            "max_budget": 20.0,
+            "budget_duration": "30d",
+            "updated_by": fake_user.user_id,
+        },
+    )
+    mock_tx.litellm_budgettable.create.assert_not_called()
+
+
+# TEST: setting only budget_duration creates a budget carrying the duration
+@pytest.mark.asyncio
+async def test_upsert_budget_duration_only_creates_budget(mock_tx, fake_user):
+    await _upsert_budget_and_membership(
+        mock_tx,
+        team_id="team-dur-only",
+        user_id="user-dur-only",
+        max_budget=None,
+        existing_budget_id=None,
+        user_api_key_dict=fake_user,
+        budget_duration="7d",
+    )
+
+    mock_tx.litellm_budgettable.create.assert_awaited_once_with(
+        data={
+            "budget_duration": "7d",
+            "created_by": fake_user.user_id,
+            "updated_by": fake_user.user_id,
+        },
+        include={"team_membership": True},
+    )
+    mock_tx.litellm_teammembership.update.assert_not_called()
