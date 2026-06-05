@@ -27,24 +27,23 @@ Authentication is a chain dispatched by credential shape:
 - JWT (3-part bearer) -> authlib: JWKS fetch/cache, signature + exp/iss/aud
 - opaque token -> authlib RFC 7662 introspection (when configured)
 
-Authorization splits by plane:
+Authorization is one role system for everything, management and inference alike:
 
-- control plane (management routes): a casbin engine with RBAC policy rows over
-  resources `model`, `team`, `key`, `user`, `organization`, `policy`, with
-  actions `read` / `write` / `delete` / `manage`. Supports per-resource ids,
-  resource groups (casbin `g2`, mapping to access groups), and roles that are
+- management routes: RBAC over resources `model`, `team`, `key`, `user`,
+  `organization`, `policy`, `vector_store`, `budget`, `customer`, `mcp_server`,
+  `guardrail`, `credential`, with actions `read` / `write` / `delete` / `manage`.
+  Supports per-resource ids, resource groups (casbin `g2`), and roles that are
   either global or scoped to a domain (casbin `g3`, e.g. "admin within
   team:eng").
-- data plane (inference: chat/completions, completions, embeddings, responses):
-  a plain membership/pattern predicate over the principal's allowed-model list,
-  read from the already-loaded key. It is not a policy engine: on the hot path a
-  casbin evaluation of a list check is pure overhead. Exact names and wildcard
-  patterns (`bedrock/*`, `openai/*`, v1 semantics) match; empty list / `*` /
-  `all-proxy-models` are unrestricted, matching existing key semantics.
+- calling a model (inference: chat/completions, completions, embeddings,
+  responses) is the `call` action on the `model:<id>` object, decided by the
+  same engine. Grant it with a role (e.g. "call `gpt-*`", via wildcard objects or
+  `g2` groups) or directly to a key/user. The legacy `key.models` field and
+  access-group expansion are not consulted; the role system is the only
+  authority, so with no grant a key calls nothing (clean-slate default-deny).
 
-Control-plane policies live in `LiteLLM_CasbinRule`, loaded on cold routes with a
-short TTL cache; the inference path reads no policy store. A bootstrap policy
-keeps `proxy_admin` fully authorized.
+Policies live in `LiteLLM_CasbinRule`, loaded with a short TTL cache. A bootstrap
+policy keeps `proxy_admin` fully authorized.
 
 ## Configuration
 

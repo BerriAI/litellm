@@ -100,9 +100,9 @@ _GOVERNED: Dict[str, GovernedRoute] = {
 }
 
 
-# Inference routes carry a `model` in the body and are authorized on the data
-# plane (a plain allowed-model predicate over the principal's key), not the
-# control-plane RBAC map.
+# Inference routes carry a `model` in the body and are authorized by the same
+# role system: the `call` action on the `model:<id>` object. They are matched
+# here (by body, not path) rather than in the RPC route map above.
 _INFERENCE_ROUTES = {
     "/chat/completions",
     "/v1/chat/completions",

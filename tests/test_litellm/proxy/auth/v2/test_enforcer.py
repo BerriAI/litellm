@@ -61,6 +61,39 @@ def test_empty_policy_denies_everything():
     assert e.enforce("user:anyone", "*", "model:gpt4", "read") is False
 
 
+def test_model_call_permission_via_role_with_wildcard():
+    # Calling a model is the `call` action on `model:<id>`, granted by a role.
+    e = _enforcer(
+        [["role:gpt_caller", "*", "model:gpt-*", "call", "allow"]],
+        [["user:alice", "role:gpt_caller"]],
+    )
+    assert e.enforce("user:alice", "*", "model:gpt-4o", "call") is True
+    assert e.enforce("user:alice", "*", "model:gpt-4o-mini", "call") is True
+    # A model outside the wildcard is denied.
+    assert e.enforce("user:alice", "*", "model:claude-3", "call") is False
+
+
+def test_model_call_can_be_granted_directly_to_a_subject():
+    # No role needed: grant the `call` permission straight to the key/user.
+    e = _enforcer(
+        [["user:svc-key", "*", "model:o1", "call", "allow"]],
+        [],
+    )
+    assert e.enforce("user:svc-key", "*", "model:o1", "call") is True
+    assert e.enforce("user:svc-key", "*", "model:o3", "call") is False
+
+
+def test_model_call_denied_without_any_policy():
+    # Clean slate: with no grant, a key cannot call any model.
+    e = _enforcer([], [])
+    assert e.enforce("user:anyone", "*", "model:gpt-4o", "call") is False
+
+
+def test_proxy_admin_can_call_any_model():
+    e = _enforcer([ADMIN_POLICY], [["user:root", "role:proxy_admin"]])
+    assert e.enforce("user:root", "*", "model:anything", "call") is True
+
+
 def test_resource_grouping_grants_access_to_a_named_group():
     e = CasbinEnforcer(
         policies=[["role:grp_mgr", "*", "group:prod", "write", "allow"]],

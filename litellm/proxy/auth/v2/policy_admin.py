@@ -1,6 +1,6 @@
 from typing import List, Optional
 
-VALID_ACTIONS = {"read", "write", "delete", "manage"}
+VALID_ACTIONS = {"read", "write", "delete", "manage", "call"}
 VALID_EFFECTS = {"allow", "deny"}
 VALID_SUBJECT_TYPES = {"user", "team"}
 

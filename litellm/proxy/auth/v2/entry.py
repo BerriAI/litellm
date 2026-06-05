@@ -4,10 +4,9 @@ from fastapi import HTTPException, Request, status
 
 from .authenticators import AuthContext, authenticate
 from .authorizer import AuthorizationDenied, authorize
-from .data_plane import can_call_model
 from .enforcer import CasbinEnforcer
 from .policy_store import load_policy_snapshot
-from .principal import build_principal
+from .principal import Principal, build_principal
 from .route_map import is_inference_route, match_route
 
 
@@ -17,20 +16,24 @@ async def _anonymous_identity(api_key: Optional[str]) -> Any:
     return UserAPIKeyAuth(api_key=api_key)
 
 
-def _model_access_groups(requested_model: str) -> Any:
-    """Access-group names the requested model belongs to, via the router.
+async def _build_enforcer(principal: Principal, prisma_client: Any) -> CasbinEnforcer:
+    """Build the casbin engine for this principal from the current policy snapshot.
 
-    Returns an empty tuple when no router is configured so the caller degrades to
-    plain name/pattern matching.
+    The principal's identity-to-role bridges are added on top of the stored
+    groupings. One engine authorizes both the control plane and model calls.
     """
-    from litellm.proxy.proxy_server import llm_router
-
-    if llm_router is None:
-        return ()
-    try:
-        return llm_router.get_model_access_groups(model_name=requested_model)
-    except Exception:
-        return ()
+    (
+        policies,
+        groupings,
+        resource_groupings,
+        domain_groupings,
+    ) = await load_policy_snapshot(prisma_client)
+    return CasbinEnforcer(
+        policies,
+        groupings + principal.groupings,
+        resource_groupings,
+        domain_groupings,
+    )
 
 
 async def _best_effort_identity(api_key: Optional[str], ctx: AuthContext) -> Any:
@@ -69,23 +72,11 @@ async def user_api_key_auth_v2(
 
     rule = match_route(route, request.method)
     if rule is not None:
-        # Control plane: RBAC policy rows.
+        # Control plane: RBAC over management resources.
         identity = await authenticate(token, ctx)
         request_data = await _read_request_body(request=request)
         principal = build_principal(identity)
-
-        (
-            policies,
-            groupings,
-            resource_groupings,
-            domain_groupings,
-        ) = await load_policy_snapshot(prisma_client)
-        enforcer = CasbinEnforcer(
-            policies,
-            groupings + principal.groupings,
-            resource_groupings,
-            domain_groupings,
-        )
+        enforcer = await _build_enforcer(principal, prisma_client)
 
         try:
             authorize(principal, route, request_data, enforcer, request.method)
@@ -96,22 +87,24 @@ async def user_api_key_auth_v2(
         return identity
 
     if is_inference_route(route):
-        # Data plane: plain allowed-model predicate over the principal's key,
-        # with access-group expansion resolved from the router.
+        # Model calls are a permission like any other: the `call` action on the
+        # `model:<id>` object, decided by the same role system. The legacy
+        # key.models / access-group mechanism is intentionally not consulted.
         identity = await authenticate(token, ctx)
         request_data = await _read_request_body(request=request)
         requested_model = (
             request_data.get("model") if isinstance(request_data, dict) else None
         )
-        if requested_model and not can_call_model(
-            getattr(identity, "models", None),
-            requested_model,
-            _model_access_groups(requested_model),
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"auth_v2: not permitted to call model '{requested_model}'",
-            )
+        if requested_model:
+            principal = build_principal(identity)
+            enforcer = await _build_enforcer(principal, prisma_client)
+            if not enforcer.enforce(
+                principal.subject, principal.domain, f"model:{requested_model}", "call"
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"auth_v2: not permitted to call model '{requested_model}'",
+                )
         identity.request_route = route
         return identity
 
