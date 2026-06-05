@@ -12,6 +12,11 @@ Precedence: rules are evaluated in file order and the first match wins. They are
 consulted only after exact and case-insensitive lookups miss, so an exact entry
 always takes precedence over a rule.
 
+Patterns are matched case-insensitively with ``re.search`` and are not implicitly
+anchored: a rule must include ``^`` and ``$`` (as the shipped rules do) to bind to
+the whole model name, otherwise it matches as a substring. Keeping anchoring in the
+regex makes the rule the single, self-contained source of truth for what it matches.
+
 The compiled-regex list is built once and cached. ``match_fallback_generalization``
 is O(number of rules); callers must only invoke it on a cache miss.
 """
@@ -83,5 +88,5 @@ def match_fallback_generalization(model: str) -> Optional[Dict]:
         _compiled_rules = _compile_rules()
     for pattern, model_info in _compiled_rules:
         if pattern.search(model) is not None:
-            return model_info
+            return dict(model_info)
     return None

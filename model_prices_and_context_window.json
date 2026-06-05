@@ -41749,29 +41749,29 @@
     "litellm_provider": "snowflake",
     "mode": "embedding"
   },
-    "fallback_generalizations": {
-        "rules": [
-            {
-                "name": "anthropic-claude",
-                "pattern": "^claude-[a-z]+-\\d+-\\d+(?:-\\d{8})?$",
-                "model_info": {
-                    "litellm_provider": "anthropic",
-                    "mode": "chat",
-                    "max_input_tokens": 200000,
-                    "max_output_tokens": 64000,
-                    "max_tokens": 64000,
-                    "supports_function_calling": true,
-                    "supports_parallel_function_calling": true,
-                    "supports_vision": true,
-                    "supports_tool_choice": true,
-                    "supports_assistant_prefill": true,
-                    "supports_prompt_caching": true,
-                    "supports_response_schema": true,
-                    "supports_reasoning": true,
-                    "supports_pdf_input": true,
-                    "supports_system_messages": true
-                }
-            }
-        ]
-    }
+  "fallback_generalizations": {
+    "rules": [
+      {
+        "name": "anthropic-claude",
+        "pattern": "^claude-[a-z]+-\\d+-\\d+(?:-\\d{8})?$",
+        "model_info": {
+          "litellm_provider": "anthropic",
+          "mode": "chat",
+          "max_input_tokens": 200000,
+          "max_output_tokens": 64000,
+          "max_tokens": 64000,
+          "supports_function_calling": true,
+          "supports_parallel_function_calling": true,
+          "supports_vision": true,
+          "supports_tool_choice": true,
+          "supports_assistant_prefill": true,
+          "supports_prompt_caching": true,
+          "supports_response_schema": true,
+          "supports_reasoning": true,
+          "supports_pdf_input": true,
+          "supports_system_messages": true
+        }
+      }
+    ]
+  }
 }

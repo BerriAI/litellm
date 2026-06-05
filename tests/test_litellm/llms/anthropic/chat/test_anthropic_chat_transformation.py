@@ -2353,6 +2353,45 @@ def test_reasoning_effort_maps_to_adaptive_thinking_for_claude_4_6_models():
             assert result["output_config"]["effort"] == effort_map[effort]
 
 
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("claude-opus-4-6", True),
+        ("claude-sonnet-4-6", True),
+        ("claude-opus-4-7", True),
+        ("claude-opus-4-8", True),
+        ("claude-opus-4-9", True),
+        ("claude-sonnet-5-0", True),
+        ("claude-opus-4.6-fast", True),
+        ("claude-opus-4-6-20260205", True),
+        ("anthropic.claude-sonnet-4-6", True),
+        ("vertex_ai/claude-opus-4-7@default", True),
+        ("openrouter/anthropic/claude-opus-4.7", True),
+        ("claude-opus-4-5", False),
+        ("claude-sonnet-4-5-20250929", False),
+        ("claude-3-7-sonnet", False),
+        ("claude-3-5-sonnet-20240620", False),
+        ("claude-3-opus-20240229", False),
+        ("gpt-4o", False),
+    ],
+)
+def test_claude_adaptive_thinking_version_threshold(model, expected):
+    """Adaptive thinking is gated on Claude family version >= 4.6, parsed from the
+    model name across provider prefixes, dotted/dashed separators and date suffixes.
+    This replaces the old per-minor-version substring matchers, so 4.8/4.9/5.x are
+    covered without a code change while 4.5 and legacy 3.x names stay excluded."""
+    assert AnthropicConfig._claude_version_at_least(model, 4, 6) is expected
+
+
+def test_unknown_future_claude_is_adaptive_without_a_json_entry():
+    """A newly-shipped Claude with no cost-map entry must still be treated as
+    adaptive-thinking when its version is >= 4.6, and must not be below it. The old
+    matchers returned False for any minor version they did not hardcode (4.8 slipped
+    through both), so this is the regression that the version threshold fixes."""
+    assert AnthropicConfig._is_adaptive_thinking_model("claude-opus-4-9") is True
+    assert AnthropicConfig._is_adaptive_thinking_model("claude-haiku-4-5") is False
+
+
 def test_get_supported_params_includes_reasoning_for_sonnet_4_6_alias():
     """Sonnet 4.6 aliases should expose thinking + reasoning_effort in supported params."""
     config = AnthropicConfig()

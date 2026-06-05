@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -21,6 +22,10 @@ from litellm.types.llms.anthropic import (
     AnthropicMcpServerTool,
 )
 from litellm.types.llms.openai import AllMessageValues
+
+_CLAUDE_FAMILY_VERSION_RE = re.compile(
+    r"(?:opus|sonnet|haiku)[._-](\d+)[._-](\d+)", re.IGNORECASE
+)
 
 
 def is_anthropic_oauth_key(value: Optional[str]) -> bool:
@@ -240,36 +245,19 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return False
 
     @staticmethod
-    def _is_claude_4_6_model(model: str) -> bool:
-        """Check if the model is a Claude 4.6 model (Opus 4.6 or Sonnet 4.6)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-6",
-                "opus_4_6",
-                "opus-4.6",
-                "opus_4.6",
-                "sonnet-4-6",
-                "sonnet_4_6",
-                "sonnet-4.6",
-                "sonnet_4.6",
-            )
-        )
+    def _claude_version_at_least(model: str, major: int, minor: int) -> bool:
+        """Whether ``model`` is a Claude family model of version >= ``major.minor``.
 
-    @staticmethod
-    def _is_claude_4_7_model(model: str) -> bool:
-        """Check if the model is a Claude 4.7 model (Opus 4.7)."""
-        model_lower = model.lower()
-        return any(
-            v in model_lower
-            for v in (
-                "opus-4-7",
-                "opus_4_7",
-                "opus-4.7",
-                "opus_4.7",
-            )
-        )
+        Parses the modern ``<family>-<major>-<minor>`` naming (``-``/``_``/``.``
+        separators, with optional provider prefixes and date suffixes), e.g.
+        ``vertex_ai/claude-opus-4-6@default`` or ``claude-sonnet-4.6``. Legacy
+        ``claude-<major>-<minor>-<family>`` names (3.x) and anything without a
+        parseable family version return False.
+        """
+        match = _CLAUDE_FAMILY_VERSION_RE.search(model)
+        if match is None:
+            return False
+        return (int(match.group(1)), int(match.group(2))) >= (major, minor)
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
@@ -285,9 +273,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         except Exception:
             pass
-        return AnthropicModelInfo._is_claude_4_6_model(
-            model
-        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+        return AnthropicModelInfo._claude_version_at_least(model, 4, 6)
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
