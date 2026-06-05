@@ -50,6 +50,20 @@ class LangfuseOtelLogger(OpenTelemetry):
         LangfuseOtelLogger._set_langfuse_specific_attributes(
             span=span, kwargs=kwargs, response_obj=response_obj
         )
+
+        #########################################################
+        # Set cost on the span
+        #########################################################
+        # LiteLLM computes the request cost but emits it only as the
+        # `gen_ai.client.token.cost` metric, which a trace consumer like Langfuse
+        # does not ingest. Set it on the span as `gen_ai.usage.cost` so cost is
+        # recorded without re-deriving it from a model price table.
+        # (`langfuse.observation.cost_details` is not ingested over OTEL:
+        # https://github.com/langfuse/langfuse/issues/11030)
+        standard_logging_payload = kwargs.get("standard_logging_object") or {}
+        response_cost = standard_logging_payload.get("response_cost")
+        if response_cost is not None:
+            _utils.safe_set_attribute(span, "gen_ai.usage.cost", float(response_cost))
         return
 
     @staticmethod
