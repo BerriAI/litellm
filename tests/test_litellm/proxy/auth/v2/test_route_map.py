@@ -53,14 +53,24 @@ def test_inference_routes_are_not_control_plane_governed():
     assert match_route("/chat/completions") is None
 
 
+def test_key_user_org_resources_are_governed():
+    assert match_route("/key/generate") == match_route("/key/generate")
+    assert match_route("/key/generate").resource == "key"
+    assert match_route("/key/delete").action == "delete"
+    assert match_route("/key/info").action == "read"
+    assert match_route("/user/new").resource == "user"
+    assert match_route("/user/delete").action == "delete"
+    assert match_route("/organization/update").resource == "organization"
+
+
+def test_membership_changes_are_the_manage_action():
+    assert match_route("/team/member_add").resource == "team"
+    assert match_route("/team/member_add").action == "manage"
+    assert match_route("/team/member_delete").action == "manage"
+    assert match_route("/organization/member_add").action == "manage"
+
+
 def test_ungoverned_routes_return_none():
-    # These are loud-open in this slice and must not be governed yet.
-    # /team/member_add is deferred with the recursive `manage` action.
-    for route in (
-        "/chat/completions",
-        "/key/generate",
-        "/team/member_add",
-        "/v1/models",
-        "/",
-    ):
+    # Genuinely not yet owned by v2: loud-open.
+    for route in ("/v1/models", "/health", "/"):
         assert match_route(route) is None

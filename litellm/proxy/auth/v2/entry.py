@@ -58,8 +58,12 @@ async def user_api_key_auth_v2(
         request_data = await _read_request_body(request=request)
         principal = build_principal(identity)
 
-        policies, groupings = await load_policy_snapshot(prisma_client)
-        enforcer = CasbinEnforcer(policies, groupings + principal.groupings)
+        policies, groupings, resource_groupings = await load_policy_snapshot(
+            prisma_client
+        )
+        enforcer = CasbinEnforcer(
+            policies, groupings + principal.groupings, resource_groupings
+        )
 
         try:
             authorize(principal, route, request_data, enforcer)

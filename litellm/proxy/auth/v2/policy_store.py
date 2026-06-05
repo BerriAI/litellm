@@ -12,7 +12,9 @@ DEFAULT_POLICIES: List[List[str]] = [
 # to absorb bursts while keeping policy edits visible within seconds across pods.
 _CACHE_TTL_SECONDS = 5.0
 
-_cache: Optional[Tuple[float, List[List[str]], List[List[str]]]] = None
+_cache: Optional[
+    Tuple[float, List[List[str]], List[List[str]], List[List[str]]]
+] = None
 
 
 def _row_values(row: Any) -> List[str]:
@@ -27,17 +29,22 @@ def _row_values(row: Any) -> List[str]:
     return [v for v in values if v is not None and v != ""]
 
 
-def _split_rules(rows: List[Any]) -> Tuple[List[List[str]], List[List[str]]]:
+def _split_rules(
+    rows: List[Any],
+) -> Tuple[List[List[str]], List[List[str]], List[List[str]]]:
     policies: List[List[str]] = [list(p) for p in DEFAULT_POLICIES]
     groupings: List[List[str]] = []
+    resource_groupings: List[List[str]] = []
     for row in rows:
         ptype = getattr(row, "ptype", None)
         values = _row_values(row)
         if ptype == "p":
             policies.append(values)
+        elif ptype == "g2":
+            resource_groupings.append(values)
         elif ptype is not None and ptype.startswith("g"):
             groupings.append(values)
-    return policies, groupings
+    return policies, groupings, resource_groupings
 
 
 def reset_cache() -> None:
@@ -47,8 +54,9 @@ def reset_cache() -> None:
 
 async def load_policy_snapshot(
     prisma_client: Any,
-) -> Tuple[List[List[str]], List[List[str]]]:
-    """Load (policies, groupings) from LiteLLM_CasbinRule, with a short TTL cache.
+) -> Tuple[List[List[str]], List[List[str]], List[List[str]]]:
+    """Load (policies, groupings, resource_groupings) from LiteLLM_CasbinRule,
+    with a short TTL cache.
 
     Returns only the bootstrap defaults when no DB is connected, so the engine is
     always constructible.
@@ -56,12 +64,12 @@ async def load_policy_snapshot(
     global _cache
     now = time.monotonic()
     if _cache is not None and (now - _cache[0]) < _CACHE_TTL_SECONDS:
-        return _cache[1], _cache[2]
+        return _cache[1], _cache[2], _cache[3]
 
     rows: List[Any] = []
     if prisma_client is not None:
         rows = await prisma_client.db.litellm_casbinrule.find_many()
 
-    policies, groupings = _split_rules(rows)
-    _cache = (now, policies, groupings)
-    return policies, groupings
+    policies, groupings, resource_groupings = _split_rules(rows)
+    _cache = (now, policies, groupings, resource_groupings)
+    return policies, groupings, resource_groupings

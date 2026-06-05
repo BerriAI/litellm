@@ -59,3 +59,25 @@ def test_explicit_deny_overrides_allow():
 def test_empty_policy_denies_everything():
     e = _enforcer([], [])
     assert e.enforce("user:anyone", "*", "model:gpt4", "read") is False
+
+
+def test_resource_grouping_grants_access_to_a_named_group():
+    e = CasbinEnforcer(
+        policies=[["role:grp_mgr", "*", "group:prod", "write", "allow"]],
+        groupings=[["user:al", "role:grp_mgr"]],
+        resource_groupings=[
+            ["model:gpt-4o", "group:prod"],
+            ["model:claude", "group:prod"],
+        ],
+    )
+    assert e.enforce("user:al", "*", "model:gpt-4o", "write") is True
+    assert e.enforce("user:al", "*", "model:claude", "write") is True
+    # A model not in the group is denied even with the same action.
+    assert e.enforce("user:al", "*", "model:o1", "write") is False
+
+
+def test_direct_object_matching_still_works_with_grouping_enabled():
+    # No g2 rules: keyMatch / exact behavior must be unchanged.
+    e = _enforcer([READER_POLICY], [["user:alice", "role:model_reader"]])
+    assert e.enforce("user:alice", "*", "model:gpt4", "read") is True
+    assert e.enforce("user:alice", "*", "model:gpt4", "write") is False
