@@ -97,9 +97,11 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         litellm_params: dict,
         stream: Optional[bool] = None,
     ) -> str:
-        return (
-            api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
-        )
+        base = api_base or get_secret_str("DASHSCOPE_API_BASE_IMAGE") or DEFAULT_API_BASE
+        cleaned = base.rstrip("/")
+        if cleaned.endswith("/v1"):
+            return f"{cleaned}/services/aigc/multimodal-generation/generation"
+        return cleaned
 
     def validate_environment(
         self,
