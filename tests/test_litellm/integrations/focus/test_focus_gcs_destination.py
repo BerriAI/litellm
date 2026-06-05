@@ -119,6 +119,36 @@ def test_missing_bucket_name_raises():
         FocusGCSDestination(prefix="focus_exports", config={})
 
 
+def test_global_gcs_service_account_not_overwritten_when_absent(monkeypatch):
+    """service_account_json absent from config must not overwrite GCS_PATH_SERVICE_ACCOUNT.
+
+    GCSBucketBase sets self.path_service_account_json from GCS_PATH_SERVICE_ACCOUNT.
+    If config has no service_account_json key, we must leave the parent value intact
+    so deployments using the global credential don't silently fall back to ADC.
+    """
+    monkeypatch.setenv("GCS_PATH_SERVICE_ACCOUNT", "/global/sa.json")
+
+    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+
+    dest = FocusGCSDestination(prefix="focus_exports", config={"bucket_name": "b"})
+
+    assert dest.path_service_account_json == "/global/sa.json"
+
+
+def test_explicit_service_account_overrides_global(monkeypatch):
+    """Explicit service_account_json in config must take precedence over GCS_PATH_SERVICE_ACCOUNT."""
+    monkeypatch.setenv("GCS_PATH_SERVICE_ACCOUNT", "/global/sa.json")
+
+    from litellm.integrations.focus.destinations.gcs_destination import FocusGCSDestination
+
+    dest = FocusGCSDestination(
+        prefix="focus_exports",
+        config={"bucket_name": "b", "service_account_json": "/focus/sa.json"},
+    )
+
+    assert dest.path_service_account_json == "/focus/sa.json"
+
+
 def test_factory_creates_gcs_destination(monkeypatch):
     """FocusDestinationFactory.create(provider='gcs') must return FocusGCSDestination."""
     monkeypatch.setenv("FOCUS_GCS_BUCKET_NAME", "env-bucket")

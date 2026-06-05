@@ -26,7 +26,9 @@ class FocusGCSDestination(GCSBucketBase, FocusDestination):
         if not bucket_name:
             raise ValueError("bucket_name must be provided for GCS destination")
         super().__init__(bucket_name=bucket_name)
-        self.path_service_account_json = config.get("service_account_json")
+        service_account_json = config.get("service_account_json")
+        if service_account_json is not None:
+            self.path_service_account_json = service_account_json
         self.prefix = prefix.rstrip("/")
 
     async def deliver(
