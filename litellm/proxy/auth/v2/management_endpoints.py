@@ -29,6 +29,8 @@ class AssignmentRequest(BaseModel):
     subject_type: str
     subject_id: str
     role: str
+    # When set (e.g. "team:eng"), the role applies only within that domain.
+    domain: Optional[str] = None
 
 
 def rule_to_row_data(rule: List[str]) -> Dict[str, str]:
@@ -129,7 +131,9 @@ async def add_assignment(
 ):
     _require_admin(user_api_key_dict)
     try:
-        rule = make_assignment_rule(body.subject_type, body.subject_id, body.role)
+        rule = make_assignment_rule(
+            body.subject_type, body.subject_id, body.role, body.domain
+        )
     except PolicyValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     await _add_rule(rule)
@@ -143,7 +147,9 @@ async def remove_assignment(
 ):
     _require_admin(user_api_key_dict)
     try:
-        rule = make_assignment_rule(body.subject_type, body.subject_id, body.role)
+        rule = make_assignment_rule(
+            body.subject_type, body.subject_id, body.role, body.domain
+        )
     except PolicyValidationError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
     removed = await _remove_rule(rule)

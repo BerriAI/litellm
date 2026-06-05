@@ -42,8 +42,17 @@ def make_permission_rule(
     return ["p", _role_token(role), domain or "*", obj, action, effect]
 
 
-def make_assignment_rule(subject_type: str, subject_id: str, role: str) -> List[str]:
-    """Build a casbin ``g`` rule row binding a user/team subject to a role."""
+def make_assignment_rule(
+    subject_type: str,
+    subject_id: str,
+    role: str,
+    domain: Optional[str] = None,
+) -> List[str]:
+    """Build a casbin role-assignment rule binding a subject to a role.
+
+    A global assignment is a ``g`` row; a domain-scoped one (the role only
+    applies within ``domain``, e.g. ``team:eng``) is a ``g3`` row.
+    """
     if subject_type not in VALID_SUBJECT_TYPES:
         raise PolicyValidationError(
             f"subject_type must be one of {sorted(VALID_SUBJECT_TYPES)}, "
@@ -51,4 +60,9 @@ def make_assignment_rule(subject_type: str, subject_id: str, role: str) -> List[
         )
     if not subject_id or not subject_id.strip():
         raise PolicyValidationError("subject_id is required")
-    return ["g", f"{subject_type}:{subject_id}", _role_token(role)]
+
+    subject = f"{subject_type}:{subject_id}"
+    role_token = _role_token(role)
+    if domain and domain != "*":
+        return ["g3", subject, role_token, domain]
+    return ["g", subject, role_token]

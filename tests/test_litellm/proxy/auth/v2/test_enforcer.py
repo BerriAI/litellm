@@ -81,3 +81,31 @@ def test_direct_object_matching_still_works_with_grouping_enabled():
     e = _enforcer([READER_POLICY], [["user:alice", "role:model_reader"]])
     assert e.enforce("user:alice", "*", "model:gpt4", "read") is True
     assert e.enforce("user:alice", "*", "model:gpt4", "write") is False
+
+
+def test_domain_scoped_role_applies_only_in_its_domain():
+    e = CasbinEnforcer(
+        policies=[["role:team_admin", "*", "team:*", "manage", "allow"]],
+        groupings=[],
+        resource_groupings=None,
+        domain_groupings=[["user:dana", "role:team_admin", "team:eng"]],
+    )
+    assert e.enforce("user:dana", "team:eng", "team:eng", "manage") is True
+    # Same user+role, different domain -> denied.
+    assert e.enforce("user:dana", "team:sales", "team:sales", "manage") is False
+
+
+def test_global_and_domain_roles_coexist():
+    e = CasbinEnforcer(
+        policies=[
+            ["role:reader", "*", "model:*", "read", "allow"],
+            ["role:team_admin", "*", "team:*", "manage", "allow"],
+        ],
+        groupings=[["user:gina", "role:reader"]],
+        domain_groupings=[["user:gina", "role:team_admin", "team:eng"]],
+    )
+    # Global reader role works anywhere.
+    assert e.enforce("user:gina", "team:sales", "model:x", "read") is True
+    # Domain-scoped admin role only in team:eng.
+    assert e.enforce("user:gina", "team:eng", "team:eng", "manage") is True
+    assert e.enforce("user:gina", "team:sales", "team:sales", "manage") is False

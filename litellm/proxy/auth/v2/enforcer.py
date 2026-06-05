@@ -22,6 +22,7 @@ class CasbinEnforcer:
         policies: List[Rule],
         groupings: List[Rule],
         resource_groupings: Optional[List[Rule]] = None,
+        domain_groupings: Optional[List[Rule]] = None,
     ):
         self._enforcer = casbin.Enforcer(_MODEL_PATH)
         self._enforcer.enable_auto_save(False)
@@ -31,6 +32,8 @@ class CasbinEnforcer:
             self._enforcer.add_named_grouping_policy("g", *rule)
         for rule in resource_groupings or []:
             self._enforcer.add_named_grouping_policy("g2", *rule)
+        for rule in domain_groupings or []:
+            self._enforcer.add_named_grouping_policy("g3", *rule)
 
     def enforce(self, subject: str, domain: str, obj: str, action: str) -> bool:
         return self._enforcer.enforce(subject, domain, obj, action)

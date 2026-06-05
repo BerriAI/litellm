@@ -58,6 +58,16 @@ def test_assignment_rule_for_user_and_team():
     assert make_assignment_rule("team", "eng", "role:x") == ["g", "team:eng", "role:x"]
 
 
+def test_global_assignment_when_domain_is_wildcard_or_absent():
+    assert make_assignment_rule("user", "u1", "admin", domain=None)[0] == "g"
+    assert make_assignment_rule("user", "u1", "admin", domain="*")[0] == "g"
+
+
+def test_domain_scoped_assignment_is_a_g3_rule():
+    rule = make_assignment_rule("user", "u1", "team_admin", domain="team:eng")
+    assert rule == ["g3", "user:u1", "role:team_admin", "team:eng"]
+
+
 def test_assignment_rejects_unknown_subject_type():
     with pytest.raises(PolicyValidationError):
         make_assignment_rule("org", "o1", "admin")
