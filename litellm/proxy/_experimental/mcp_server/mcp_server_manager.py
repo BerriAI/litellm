@@ -1722,6 +1722,11 @@ class MCPServerManager:
             return static_headers
 
         global_values, user_specs = parse_admin_env_vars(env_vars)
+        # An empty-valued global is treated as unset: it must not mask a per-user
+        # var the user still has to supply, nor override a value the user did
+        # supply. The unresolved ${NAME} is then left untouched, like any other
+        # undefined reference.
+        global_values = {name: value for name, value in global_values.items() if value}
         user_var_names = {spec["name"] for spec in user_specs}
 
         # If no env vars are configured, return static_headers as-is.

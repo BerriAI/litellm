@@ -490,6 +490,84 @@ async def test_resolve_static_headers_dual_scope_var_uses_global_without_412(
     assert load_calls == []
 
 
+@pytest.mark.asyncio
+async def test_resolve_static_headers_empty_global_does_not_cover_user_var(
+    monkeypatch,
+):
+    """An empty-valued global must not cover a referenced per-user var. The
+    global carries no usable value, so the tool-call path still raises a 412
+    when the user hasn't supplied one, instead of silently interpolating an
+    empty string into the header."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-6",
+        name="srv6",
+        transport="http",
+        url="https://example.com",
+        static_headers={"Authorization": "Bearer ${SHARED_TOKEN}"},
+        env_vars=[
+            {"name": "SHARED_TOKEN", "value": "", "scope": "global"},
+            {"name": "SHARED_TOKEN", "value": "", "scope": "user"},
+        ],
+    )
+
+    async def fake_load_user_env_vars(
+        server, user_api_key_auth, *, force_refresh=False
+    ):
+        return {}
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+
+    with pytest.raises(_u("MCPMissingUserEnvVarsError")) as exc:
+        await manager._resolve_static_headers_with_env_vars(
+            server, user_api_key_auth=object()
+        )
+    assert exc.value.missing == ["SHARED_TOKEN"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_static_headers_user_value_wins_over_empty_global(
+    monkeypatch,
+):
+    """When a global is empty, a value the user did supply must win the merge
+    rather than being clobbered by the empty global. The header resolves to the
+    user's value, not an empty string."""
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="srv-7",
+        name="srv7",
+        transport="http",
+        url="https://example.com",
+        static_headers={"Authorization": "Bearer ${SHARED_TOKEN}"},
+        env_vars=[
+            {"name": "SHARED_TOKEN", "value": "", "scope": "global"},
+            {"name": "SHARED_TOKEN", "value": "", "scope": "user"},
+        ],
+    )
+
+    async def fake_load_user_env_vars(
+        server, user_api_key_auth, *, force_refresh=False
+    ):
+        return {"SHARED_TOKEN": "user-secret"}
+
+    monkeypatch.setattr(manager, "_load_user_env_vars", fake_load_user_env_vars)
+
+    headers = await manager._resolve_static_headers_with_env_vars(
+        server, user_api_key_auth=object()
+    )
+    assert headers == {"Authorization": "Bearer user-secret"}
+
+
 # ── health-check skip for per-user-env-var-backed headers ──────────────────
 
 
