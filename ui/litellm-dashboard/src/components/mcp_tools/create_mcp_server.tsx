@@ -44,7 +44,7 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   if (!Array.isArray(list)) return {};
   return list.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
     const header = entry?.header?.trim();
-    if (header) acc[header] = entry?.value ?? "";
+    if (header) acc[header] = (entry?.value ?? "").trim();
     return acc;
   }, {});
 };

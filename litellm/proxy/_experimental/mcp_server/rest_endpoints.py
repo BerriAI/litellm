@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 from datetime import datetime
 from typing import (
@@ -13,6 +14,7 @@ from typing import (
     Union,
 )
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
@@ -43,6 +45,28 @@ router = APIRouter(
     prefix="/mcp-rest",
     tags=["mcp"],
 )
+
+
+def _connection_error_message(exc: BaseException) -> str:
+    if isinstance(exc, httpx.LocalProtocolError):
+        return (
+            "Failed to connect to MCP server: a request header is malformed. "
+            "Check static headers for leading/trailing spaces or illegal characters."
+        )
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return (
+            "Failed to connect to MCP server: the server is unreachable. "
+            "Check the URL and that the server is running."
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return "Failed to connect to MCP server: the connection timed out."
+    if isinstance(exc, httpx.HTTPStatusError):
+        return (
+            f"Failed to connect to MCP server: it returned HTTP "
+            f"{exc.response.status_code}."
+        )
+    return "Failed to connect to MCP server. Check proxy logs for details."
+
 
 if MCP_AVAILABLE:
     from mcp.types import Tool as MCPTool
@@ -981,14 +1005,14 @@ if MCP_AVAILABLE:
 
             return await operation(client)
 
-        except (KeyboardInterrupt, SystemExit):
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except BaseException as e:
             verbose_logger.error("Error in MCP operation: %s", e, exc_info=True)
             return {
                 "status": "error",
                 "error": True,
-                "message": "Failed to connect to MCP server. Check proxy logs for details.",
+                "message": _connection_error_message(e),
             }
 
     async def _preview_openapi_tools(spec_path: str) -> dict:

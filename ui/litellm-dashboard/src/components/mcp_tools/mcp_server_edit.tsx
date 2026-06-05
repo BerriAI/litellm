@@ -118,7 +118,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             if (!header) {
               return acc;
             }
-            acc[header] = entry?.value ?? "";
+            acc[header] = (entry?.value ?? "").trim();
             return acc;
           }, {})
         : ({} as Record<string, string>);
@@ -426,7 +426,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             if (!header) {
               return acc;
             }
-            acc[header] = entry?.value ?? "";
+            acc[header] = (entry?.value ?? "").trim();
             return acc;
           }, {})
         : ({} as Record<string, string>);
