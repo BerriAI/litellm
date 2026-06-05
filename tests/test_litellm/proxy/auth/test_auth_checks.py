@@ -306,7 +306,7 @@ async def test_can_key_call_model_all_team_models_uses_team_allowlist():
 
 @pytest.mark.asyncio
 async def test_can_key_call_model_all_team_models_empty_team_models_is_unrestricted():
-    """When team_models is empty, all-team-models resolves to [] which grants unrestricted access."""
+    """Team-bound key with empty team_models expands to [] -> unrestricted (same as get_key_models)."""
     from litellm.proxy._types import SpecialModelNames
     from litellm.proxy.auth.auth_checks import can_key_call_model
 
@@ -326,6 +326,29 @@ async def test_can_key_call_model_all_team_models_empty_team_models_is_unrestric
         )
         is True
     )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
+    """Key with all-team-models but no team_id cannot resolve the sentinel; access must be denied."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan-key",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="gpt-4o",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
 
 
 @pytest.mark.asyncio
