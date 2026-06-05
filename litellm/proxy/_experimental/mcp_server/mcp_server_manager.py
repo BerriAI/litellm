@@ -3167,7 +3167,11 @@ class MCPServerManager:
         try:
             mcp_responses = await asyncio.gather(*tasks)
         except asyncio.CancelledError:
-            timeout = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
+            timeout = (
+                mcp_server.timeout
+                if mcp_server.timeout is not None
+                else MCP_CLIENT_TIMEOUT
+            )
             raise HTTPException(
                 status_code=504,
                 detail={

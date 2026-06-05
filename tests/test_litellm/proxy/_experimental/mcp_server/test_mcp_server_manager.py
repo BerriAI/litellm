@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import logging
 import os
@@ -3141,6 +3142,41 @@ class TestMCPServerTimestamps:
         servers = list(manager.config_mcp_servers.values())
         assert len(servers) == 1
         assert servers[0].timeout == 90.0
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_timeout_returns_504(self):
+        """When the MCP client call is cancelled (timeout), _call_regular_mcp_tool raises HTTPException 504."""
+        from unittest.mock import AsyncMock, patch
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="timeout-tool-server",
+            name="timeout_tool_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            timeout=2.0,
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(side_effect=asyncio.CancelledError())
+
+        with patch.object(manager, "_create_mcp_client", return_value=mock_client):
+            with pytest.raises(HTTPException) as exc_info:
+                await manager._call_regular_mcp_tool(
+                    mcp_server=server,
+                    original_tool_name="some_tool",
+                    arguments={},
+                    tasks=[],
+                    mcp_auth_header=None,
+                    mcp_server_auth_headers=None,
+                    oauth2_headers=None,
+                    raw_headers=None,
+                    proxy_logging_obj=None,
+                )
+
+        assert exc_info.value.status_code == 504
+        assert exc_info.value.detail["error"] == "timeout"
+        assert "2.0s" in exc_info.value.detail["message"]
 
 
 class TestInternalDelegatePkceWarningLog:
