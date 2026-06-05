@@ -14,6 +14,7 @@ from litellm.proxy._types import (
 )
 
 from .auth_checks_organization import _user_is_org_admin
+from .rbac import get_configured_rbac_engine
 
 # Management write routes denied to PROXY_ADMIN_VIEW_ONLY. Adding a new write
 # endpoint to a management router REQUIRES adding it here too — the surrounding
@@ -243,6 +244,27 @@ class RouteChecks:
         )
 
     @staticmethod
+    def _rbac_governed_route_allowed(
+        user_obj: Optional[LiteLLM_UserTable], route: str
+    ) -> bool:
+        """Whether the caller's custom RBAC role permits ``route``.
+
+        Returns False when the role is not governed by an RBAC policy (the caller
+        should fall through to the built-in role checks). Raises 403 when the role
+        is governed but the route is not granted (default-deny).
+        """
+        raw_role = user_obj.user_role if user_obj is not None else None
+        engine = get_configured_rbac_engine()
+        if engine is None or raw_role is None or not engine.is_governed_role(raw_role):
+            return False
+        if engine.is_route_allowed(role_name=raw_role, route=route):
+            return True
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"RBAC: role '{raw_role}' is not allowed to access route {route}",
+        )
+
+    @staticmethod
     def non_proxy_admin_allowed_routes_check(
         user_obj: Optional[LiteLLM_UserTable],
         _user_role: Optional[LitellmUserRoles],
@@ -259,6 +281,11 @@ class RouteChecks:
         RouteChecks.custom_admin_only_route_check(
             route=route,
         )
+
+        # Custom RBAC roles are governed entirely by the configured policy
+        # (default-deny). Built-in roles fall through to the checks below.
+        if RouteChecks._rbac_governed_route_allowed(user_obj=user_obj, route=route):
+            return
 
         if RouteChecks.is_auth_enforced_pass_through_route(
             route=route,

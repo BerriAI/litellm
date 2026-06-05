@@ -179,6 +179,63 @@ class LitellmUserRoles(str, enum.Enum):
         ]
 
 
+_ASSIGNABLE_BUILTIN_USER_ROLES = (
+    LitellmUserRoles.PROXY_ADMIN,
+    LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    LitellmUserRoles.INTERNAL_USER,
+    LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
+)
+
+
+def coerce_user_role(
+    value: Optional[Union[str, LitellmUserRoles]],
+) -> Optional[Union[LitellmUserRoles, str]]:
+    """Return the enum for a built-in role, the raw string for a custom RBAC role,
+    or None. Never raises, so a custom role flows through auth unchanged."""
+    if value is None:
+        return None
+    try:
+        return LitellmUserRoles(value)
+    except ValueError:
+        return str(value)
+
+
+def validate_assignable_user_role(
+    value: Optional[Union[str, LitellmUserRoles]],
+) -> Optional[Union[str, LitellmUserRoles]]:
+    """Accept a built-in assignable role or a custom role defined in the RBAC policy.
+
+    Custom roles are checked against the configured policy at request time so a
+    typo (e.g. ``internal_use``) is rejected instead of being silently created.
+    """
+    if value is None:
+        return None
+
+    try:
+        role: Optional[LitellmUserRoles] = LitellmUserRoles(value)
+    except ValueError:
+        role = None
+
+    if role is not None:
+        if role in _ASSIGNABLE_BUILTIN_USER_ROLES:
+            return role
+        raise ValueError(
+            f"user_role={role.value} cannot be assigned via this endpoint. Allowed "
+            f"built-in roles: {[r.value for r in _ASSIGNABLE_BUILTIN_USER_ROLES]}"
+        )
+
+    from litellm.auth.rbac import get_configured_rbac_engine
+
+    engine = get_configured_rbac_engine()
+    if engine is not None and engine.is_governed_role(str(value)):
+        return str(value)
+    raise ValueError(
+        f"Invalid user_role={value!r}. Must be a built-in assignable role "
+        f"({[r.value for r in _ASSIGNABLE_BUILTIN_USER_ROLES]}) or a role defined in "
+        f"the RBAC policy"
+    )
+
+
 class LitellmTableNames(str, enum.Enum):
     """
     Enum for Table Names used by LiteLLM
@@ -1593,15 +1650,14 @@ class NewUserRequest(GenerateRequestBase):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
     user_alias: Optional[str] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-    ] = None
+    user_role: Optional[Union[LitellmUserRoles, str]] = None
     teams: Optional[Union[List[str], List[NewUserRequestTeam]]] = None
+
+    @field_validator("user_role")
+    @classmethod
+    def _validate_user_role(cls, value):
+        return validate_assignable_user_role(value)
+
     auto_create_key: bool = (
         True  # flag used for returning a key as part of the /user/new response
     )
@@ -1613,15 +1669,14 @@ class NewUserRequest(GenerateRequestBase):
 class NewUserResponse(GenerateKeyResponse):
     max_budget: Optional[float] = None
     user_email: Optional[str] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-    ] = None
+    user_role: Optional[Union[LitellmUserRoles, str]] = None
     teams: Optional[list] = None
+
+    @field_validator("user_role")
+    @classmethod
+    def _coerce_user_role(cls, value):
+        return coerce_user_role(value)
+
     user_alias: Optional[str] = None
     model_max_budget: Optional[dict] = None
     created_at: Optional[datetime] = None
@@ -1635,15 +1690,13 @@ class UpdateUserRequestNoUserIDorEmail(
     spend: Optional[float] = None
     metadata: Optional[dict] = None
     user_alias: Optional[str] = None
-    user_role: Optional[
-        Literal[
-            LitellmUserRoles.PROXY_ADMIN,
-            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-            LitellmUserRoles.INTERNAL_USER,
-            LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        ]
-    ] = None
+    user_role: Optional[Union[LitellmUserRoles, str]] = None
     max_budget: Optional[float] = None
+
+    @field_validator("user_role")
+    @classmethod
+    def _validate_user_role(cls, value):
+        return validate_assignable_user_role(value)
 
 
 class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
@@ -2714,7 +2767,7 @@ class UserAPIKeyAuth(
     """
 
     api_key: Optional[str] = None
-    user_role: Optional[LitellmUserRoles] = None
+    user_role: Optional[Union[LitellmUserRoles, str]] = None
     allowed_model_region: Optional[AllowedModelRegion] = None
     parent_otel_span: Optional[Span] = None
     rpm_limit_per_model: Optional[Dict[str, int]] = None
@@ -2739,6 +2792,11 @@ class UserAPIKeyAuth(
     jwt_claims: Optional[Dict] = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    @field_validator("user_role")
+    @classmethod
+    def _coerce_user_role(cls, value):
+        return coerce_user_role(value)
 
     @model_validator(mode="before")
     @classmethod

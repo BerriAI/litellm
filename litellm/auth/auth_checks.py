@@ -53,6 +53,7 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLMRoutes,
     LitellmUserRoles,
+    coerce_user_role,
     NewTeamRequest,
     ProxyErrorTypes,
     ProxyException,
@@ -60,7 +61,7 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
@@ -821,12 +822,6 @@ def _is_api_route_allowed(
 def _is_user_proxy_admin(user_obj: Optional[LiteLLM_UserTable]):
     if user_obj is None:
         return False
-
-    if (
-        user_obj.user_role is not None
-        and user_obj.user_role == LitellmUserRoles.PROXY_ADMIN.value
-    ):
-        return True
 
     if (
         user_obj.user_role is not None
@@ -2384,7 +2379,7 @@ class ExperimentalUIJWTToken:
             team_id="litellm-dashboard",
             models=user_info.models,
             max_parallel_requests=None,
-            user_role=LitellmUserRoles(user_info.user_role),
+            user_role=coerce_user_role(user_info.user_role),
         )
 
         return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
@@ -2441,7 +2436,7 @@ class ExperimentalUIJWTToken:
             team_alias=team_alias,
             models=user_info.models,
             max_parallel_requests=None,
-            user_role=LitellmUserRoles(user_info.user_role),
+            user_role=coerce_user_role(user_info.user_role),
         )
 
         return encrypt_value_helper(valid_token.model_dump_json(exclude_none=True))
@@ -2452,7 +2447,7 @@ class ExperimentalUIJWTToken:
     ) -> Optional[UserAPIKeyAuth]:
         import json
 
-        from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+        from litellm.auth.user_api_key_auth import UserAPIKeyAuth
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
             decrypt_value_helper,
         )
