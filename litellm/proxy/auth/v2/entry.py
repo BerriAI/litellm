@@ -2,6 +2,8 @@ from typing import Any, Optional, Tuple
 
 from fastapi import HTTPException, Request, status
 
+from litellm.integrations.otel.runtime import seed_request_identity
+
 from .authenticators import AuthContext, AuthResult, authenticate
 from .authorizer import AuthorizationDenied, authorize
 from .context import AuthMethod, RequestAuthContext, set_auth_context
@@ -133,6 +135,7 @@ async def user_api_key_auth_v2(
         except AuthorizationDenied as e:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
+        seed_request_identity(identity)
         identity.request_route = route
         return identity
 
@@ -158,6 +161,7 @@ async def user_api_key_auth_v2(
                     detail=f"auth_v2: not permitted to call model '{requested_model}'",
                 )
         await resolve_end_user(request, request_data, dict(request.headers))
+        seed_request_identity(identity, model=requested_model)
         identity.request_route = route
         return identity
 
@@ -165,6 +169,7 @@ async def user_api_key_auth_v2(
     result = await _best_effort_identity(token, ctx)
     principal, identity = _establish_context(request, result, route)
     authorize(principal, route, None, _DENY_ALL, request.method)
+    seed_request_identity(identity)
     identity.request_route = route
     return identity
 

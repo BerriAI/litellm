@@ -9,7 +9,6 @@ from .context import (
 from .end_user import resolve_end_user
 from .enrichment import enrich_identity
 from .entry import user_api_key_auth_v2
-from .telemetry import identity_span_attributes
 
 __all__ = [
     "user_api_key_auth_v2",
@@ -20,6 +19,5 @@ __all__ = [
     "set_auth_context",
     "attach_end_user",
     "resolve_end_user",
-    "identity_span_attributes",
     "enrich_identity",
 ]

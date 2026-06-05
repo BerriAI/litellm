@@ -17,26 +17,17 @@ and enable the feature in `general_settings`:
 
 ---
 
-## 1. Telemetry on the route (OTel v2)
+## 1. Telemetry (OTel v2)
 
-**State.** The helper is built: `identity_span_attributes(context)` in
-`litellm/proxy/auth/v2/telemetry.py`. Today v1 seeds identity inside the auth gate
-via `seed_request_identity(...)` (`litellm/integrations/otel/runtime.py:30`); v2
-does not call it, by design — telemetry should read the context on the route.
+**Wired.** `entry.py` calls `seed_request_identity(identity, model=...)`
+(`litellm/integrations/otel/runtime.py:30`) before returning from each branch —
+the same SDK-free seeder v1 uses at the auth boundary. It seeds identity Baggage
+that propagates to every downstream route span, and is a no-op when the OTel SDK
+is absent or V2 is not the active logger, so it is safe to call unconditionally.
 
-**Change.** In the OTel v2 route span path, read the context and set the
-attributes:
-
-    from litellm.proxy.auth.v2 import get_auth_context, identity_span_attributes
-    ctx = get_auth_context(request)            # raises if auth_v2 didn't run
-    span.set_attributes(identity_span_attributes(ctx))
-
-Use `try_get_auth_context(request)` (returns None) at any call site that also runs
-under v1, so it no-ops instead of raising.
-
-**Verify (live).** Send a request under `auth_version: v2`, then confirm the trace
-span carries `litellm.user_id` / `litellm.team_id` / `litellm.auth.method` /
-`litellm.end_user_id`. No unit test substitutes for seeing the exported span.
+**What remains (live).** Only verification: send a request under
+`auth_version: v2` and confirm the exported route spans carry the team/key/user
+identity. No unit test substitutes for seeing the exported span.
 
 ---
 
