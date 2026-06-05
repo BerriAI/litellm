@@ -104,8 +104,9 @@ def langfuse_client_init(
 
     from ...llms.custom_httpx.http_handler import _get_httpx_client
 
-    http_client = _get_httpx_client()
-    parameters["httpx_client"] = http_client.client
+    if Version(langfuse.version.__version__) >= Version("2.7.3"):
+        http_client = _get_httpx_client()
+        parameters["httpx_client"] = http_client.client
 
     client = Langfuse(**parameters)
 

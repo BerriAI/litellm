@@ -437,9 +437,17 @@ class SonioxAudioTranscriptionHandler:
 
             self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
-            # Carry through hidden_params hints expected by the rest of litellm.
+            audio_duration_ms = transcription_meta.get("audio_duration_ms")
             response._hidden_params.update(
-                {"model": model, "custom_llm_provider": "soniox"}
+                {
+                    "model": model,
+                    "custom_llm_provider": "soniox",
+                    "audio_transcription_duration": (
+                        float(audio_duration_ms) / 1000.0
+                        if audio_duration_ms is not None
+                        else None
+                    ),
+                }
             )
             return response
         finally:
@@ -665,8 +673,17 @@ class SonioxAudioTranscriptionHandler:
 
             self._safe_log_post_call(logging_obj, audio_file, api_key, body, payload)
 
+            audio_duration_ms = transcription_meta.get("audio_duration_ms")
             response._hidden_params.update(
-                {"model": model, "custom_llm_provider": "soniox"}
+                {
+                    "model": model,
+                    "custom_llm_provider": "soniox",
+                    "audio_transcription_duration": (
+                        float(audio_duration_ms) / 1000.0
+                        if audio_duration_ms is not None
+                        else None
+                    ),
+                }
             )
             return response
         finally:

@@ -3164,19 +3164,19 @@ class MCPServerManager:
             asyncio.create_task(_call_tool_via_client(client, call_tool_params))
         )
 
+        _timeout = (
+            mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
+        )
         try:
-            mcp_responses = await asyncio.gather(*tasks)
-        except asyncio.CancelledError:
-            timeout = (
-                mcp_server.timeout
-                if mcp_server.timeout is not None
-                else MCP_CLIENT_TIMEOUT
+            mcp_responses = await asyncio.wait_for(
+                asyncio.gather(*tasks), timeout=_timeout
             )
+        except asyncio.TimeoutError:
             raise HTTPException(
                 status_code=504,
                 detail={
                     "error": "timeout",
-                    "message": f"MCP tool call timed out after {timeout}s",
+                    "message": f"MCP tool call timed out after {_timeout}s",
                 },
             )
         except (
