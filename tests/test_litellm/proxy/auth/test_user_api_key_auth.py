@@ -31,12 +31,14 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _PendingAutoRegister,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
+    _user_api_key_auth_builder,
     get_api_key,
     user_api_key_auth,
 )
@@ -1513,6 +1515,7 @@ class TestJWTOAuth2Coexistence:
 
         mock_request = MagicMock()
         mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
         mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
         mock_request.query_params = {}
 
@@ -1546,7 +1549,95 @@ class TestJWTOAuth2Coexistence:
             mock_oauth2.assert_not_called()
             # JWT auth SHOULD be called
             mock_jwt_auth.assert_called_once()
+            assert mock_jwt_auth.call_args.kwargs["request_method"] == "POST"
             assert result.user_id == "jwt-human-user"
+
+    @pytest.mark.asyncio
+    async def test_auto_register_passes_validated_org_context_to_generated_key(self):
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        general_settings = {"enable_jwt_auth": True}
+        user_api_key_cache = DualCache()
+        prisma_client = MagicMock()
+        jwt_handler = MagicMock()
+        jwt_handler.is_jwt.return_value = True
+        jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
+        jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+            virtual_key_claim_field="sub",
+            virtual_key_mapping_cache_ttl=300,
+        )
+        auto_registered_key = UserAPIKeyAuth(
+            token="hashed-auto-key",
+            team_id="validated-team",
+            user_id="validated-user",
+            org_id="validated-org",
+            end_user_id="validated-end-user",
+        )
+        mock_jwt_result = {
+            "is_proxy_admin": False,
+            "team_object": None,
+            "user_object": None,
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": "validated-team",
+            "user_id": "validated-user",
+            "end_user_id": "validated-end-user",
+            "org_id": "validated-org",
+            "team_membership": None,
+            "jwt_claims": {"sub": "user1"},
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+        mock_request.state = SimpleNamespace()
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+                new_callable=AsyncMock,
+                return_value=_PendingAutoRegister(
+                    claim_field="sub",
+                    claim_value="user1",
+                    cache_key="jwt_key_mapping:sub:user1",
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+                return_value=mock_jwt_result,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._auto_register_jwt_mapping",
+                new_callable=AsyncMock,
+                return_value=auto_registered_key,
+            ) as mock_auto_register,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=jwt_token,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o-mini"},
+            )
+
+        mock_auto_register.assert_awaited_once()
+        assert mock_auto_register.call_args.kwargs["team_id"] == "validated-team"
+        assert mock_auto_register.call_args.kwargs["user_id"] == "validated-user"
+        assert mock_auto_register.call_args.kwargs["org_id"] == "validated-org"
+        assert mock_auto_register.call_args.kwargs["end_user_id"] == "validated-end-user"
+        assert result.org_id == "validated-org"
 
     @pytest.mark.asyncio
     async def test_routing_override_routes_matching_jwt_to_oauth2(self):
@@ -3334,4 +3425,126 @@ async def test_master_key_auth_substitutes_alias_for_api_key():
         assert result.api_key != hash_token(master_key)
     finally:
         for k, v in _orig.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_sets_end_user_id_when_builder_skips_it():
+    """Defense-in-depth: ``_user_api_key_auth_builder`` has multiple
+    early-return paths (master_key=None, /user/auth route, JWT
+    short-circuits) that bypass the end-user resolution block. The wrapper
+    must still attribute spend logs to the request-supplied end-user when
+    none of those paths set it.
+
+    Krrish flagged the removal of this fallback as a regression risk; this
+    test pins the behaviour so future refactors don't silently drop it.
+    """
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    builder_token = UserAPIKeyAuth(api_key="sk-test", user_id="u1")
+    # builder did NOT set end_user_id (e.g. master_key=None early return)
+    assert builder_token.end_user_id is None
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps(
+        {"model": "gpt-4o", "user": "alice@example.com"}
+    ).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        # Stub the builder so the test doesn't have to traverse the full
+        # auth state machine; we only care about the wrapper's safety net.
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=builder_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+        ):
+            result = await user_api_key_auth(request=request, api_key="Bearer sk-test")
+
+        # Validation flag is False by default → pass-through, raw value lands
+        # on the auth obj instead of being silently dropped.
+        assert result.end_user_id == "alice@example.com"
+    finally:
+        for k, v in originals.items():
+            setattr(_proxy_server_mod, k, v)
+
+
+@pytest.mark.asyncio
+async def test_user_api_key_auth_does_not_overwrite_end_user_id_set_by_builder():
+    """When the builder already resolved the end-user id (the primary
+    path), the wrapper-level safety net must not run a second resolution
+    pass — that would re-extract from the request body and could
+    overwrite a value the builder explicitly chose to set."""
+    from fastapi import Request
+    from starlette.datastructures import URL
+
+    import litellm.proxy.proxy_server as _proxy_server_mod
+
+    builder_token = UserAPIKeyAuth(
+        api_key="sk-test", user_id="u1", end_user_id="builder-resolved-id"
+    )
+
+    request = Request(
+        scope={
+            "type": "http",
+            "headers": [(b"content-type", b"application/json")],
+            "method": "POST",
+        }
+    )
+    request._url = URL(url="/chat/completions")
+    request._body = json.dumps(
+        {"model": "gpt-4o", "user": "different-id-from-body"}
+    ).encode()
+
+    attrs = _proxy_attrs_for_centralized_checks(user_custom_auth=None)
+    originals = {a: getattr(_proxy_server_mod, a, None) for a in attrs}
+    try:
+        for k, v in attrs.items():
+            setattr(_proxy_server_mod, k, v)
+        with (
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+                new_callable=AsyncMock,
+                return_value=builder_token,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._run_centralized_common_checks",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.resolve_and_validate_end_user_id",
+                new_callable=AsyncMock,
+            ) as mock_resolve,
+        ):
+            result = await user_api_key_auth(request=request, api_key="Bearer sk-test")
+
+        assert result.end_user_id == "builder-resolved-id"
+        mock_resolve.assert_not_awaited()
+    finally:
+        for k, v in originals.items():
             setattr(_proxy_server_mod, k, v)

@@ -70,9 +70,7 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-700 flex items-center space-x-1">
             <span>Expire Key</span>
-            <Tooltip
-              title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged."
-            >
+            <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged.">
               <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
             </Tooltip>
             {!isCreateMode && onNeverExpireChange && (

@@ -328,7 +328,7 @@ async def retrieve_container(
         custom_llm_provider=custom_llm_provider,
     )
     data.update(
-        get_container_forwarding_params(
+        await get_container_forwarding_params(
             container_id,
             original_container_id,
             custom_llm_provider,
@@ -433,7 +433,7 @@ async def delete_container(
         custom_llm_provider=custom_llm_provider,
     )
     data.update(
-        get_container_forwarding_params(
+        await get_container_forwarding_params(
             container_id,
             original_container_id,
             custom_llm_provider,

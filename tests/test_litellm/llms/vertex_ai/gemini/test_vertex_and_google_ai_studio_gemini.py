@@ -2097,6 +2097,125 @@ def test_is_gemini_3_or_newer():
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
 
 
+def test_forward_gemini_function_call_id_vertex_vs_google_ai_studio():
+    """Vertex AI rejects `id` on function_call/function_response; Google AI Studio accepts it on Gemini 3.5+."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    model = "gemini-3.5-flash"
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai") is False
+    )
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai_beta")
+        is False
+    )
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, "gemini") is True
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, None) is False
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(
+            "gemini-2.5-flash", "gemini"
+        )
+        is False
+    )
+
+
+def test_vertex_ai_gemini_35_tool_calls_omit_function_call_id():
+    """Regression: Vertex must not send OpenAI tool_call id inside Gemini function_call parts."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "Explore this directory"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_50e7e0fe0989464a89f188eda443",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"filePath": "/tmp"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_50e7e0fe0989464a89f188eda443",
+            "content": "ok",
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages,
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+    )
+
+    for content in contents:
+        for part in content.get("parts", []):
+            fc = part.get("function_call")
+            if fc is not None:
+                assert "id" not in fc, f"Vertex payload must not include id: {fc}"
+            fr = part.get("function_response")
+            if fr is not None:
+                assert "id" not in fr, f"Vertex payload must not include id: {fr}"
+
+
+def test_google_ai_studio_gemini_35_tool_calls_include_function_call_id():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    tool_call_id = "call_50e7e0fe0989464a89f188eda443"
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"filePath": "/tmp"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": "ok",
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages,
+        model="gemini-3.5-flash",
+        custom_llm_provider="gemini",
+    )
+
+    function_call_ids = []
+    function_response_ids = []
+    for content in contents:
+        for part in content.get("parts", []):
+            fc = part.get("function_call")
+            if fc is not None:
+                function_call_ids.append(fc.get("id"))
+            fr = part.get("function_response")
+            if fr is not None:
+                function_response_ids.append(fr.get("id"))
+
+    assert function_call_ids == [tool_call_id]
+    assert function_response_ids == [tool_call_id]
+
+
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     """Test that reasoning_effort maps to thinking_level AND includeThoughts for Gemini 3+ models"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -2959,6 +3078,83 @@ def test_vertex_ai_gemini3_tool_combination_no_drop():
     assert len(tools) == 3
 
 
+def test_get_optional_params_keeps_google_search_with_server_side_flag():
+    """
+    include_server_side_tool_invocations must be in non_default_params before
+    map_openai_params runs (not only via add_provider_specific_params after).
+    """
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="gemini-3.1-pro-preview",
+        custom_llm_provider="gemini",
+        tools=[
+            {"google_search": {}},
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": "Send a message back",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    },
+                },
+            },
+        ],
+        include_server_side_tool_invocations=True,
+    )
+
+    assert optional_params.get("include_server_side_tool_invocations") is True
+    tool_keys = set()
+    for tool in optional_params.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" in tool_keys
+
+
+def test_map_openai_params_tools_before_include_server_side_flag():
+    """
+    Request bodies often list tools before include_server_side_tool_invocations.
+    Search tools must not be dropped when the flag is present later in the dict.
+    """
+    v = VertexGeminiConfig()
+    optional_params: dict = {}
+    non_default_params = {
+        "tools": [
+            {"google_search": {}},
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": "Send a message back",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    },
+                },
+            },
+        ],
+        "include_server_side_tool_invocations": True,
+    }
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-3.1-pro-preview",
+        drop_params=True,
+    )
+
+    assert result.get("include_server_side_tool_invocations") is True
+    tool_keys = set()
+    for tool in result.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" in tool_keys
+
+
 def test_vertex_ai_mixed_tools_and_web_search_options_drops_search():
     """
     When function tools and web_search_options are sent separately (Codex-style),
@@ -3531,7 +3727,12 @@ def test_video_metadata_supported_for_all_gemini_models():
         }
     ]
 
-    for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro-preview"]:
+    for model in [
+        "gemini-1.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-3-pro-preview",
+    ]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
 
         file_part = None
@@ -3541,19 +3742,25 @@ def test_video_metadata_supported_for_all_gemini_models():
                 break
 
         assert file_part is not None, f"{model}: file part should exist"
-        assert "video_metadata" in file_part, f"{model}: video_metadata should be present"
+        assert (
+            "video_metadata" in file_part
+        ), f"{model}: video_metadata should be present"
         assert file_part["video_metadata"]["fps"] == 5, f"{model}: fps should be 5"
 
     # Per-part media_resolution is Gemini 3+ only; 2.x uses generation_config global
     for model in ["gemini-3-pro-preview"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" in file_part, f"{model}: media_resolution should be present"
+        assert (
+            "media_resolution" in file_part
+        ), f"{model}: media_resolution should be present"
 
     for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" not in file_part, f"{model}: per-part media_resolution should not be set"
+        assert (
+            "media_resolution" not in file_part
+        ), f"{model}: per-part media_resolution should not be set"
 
 
 def test_chunk_parser_handles_prompt_feedback_block():
@@ -4186,8 +4393,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
     # DOCUMENT tokens should be included in text_tokens: 8 (TEXT) + 774 (DOCUMENT) = 782
     assert result.prompt_tokens_details is not None
-    assert result.prompt_tokens_details.text_tokens == 782, \
-        "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    assert (
+        result.prompt_tokens_details.text_tokens == 782
+    ), "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
@@ -4222,8 +4430,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
 
     # DOCUMENT cached tokens map to cached_text_tokens, so:
     # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert result.prompt_tokens_details.text_tokens == 382, \
-        "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert (
+        result.prompt_tokens_details.text_tokens == 382
+    ), "text_tokens should be (8 + 774) - 400 cached = 382"
     assert result.prompt_tokens_details.cached_tokens == 400
 
 
@@ -4693,7 +4902,9 @@ def test_mid_stream_429_error_raises_during_iteration():
                 {
                     "content": {
                         "role": "model",
-                        "parts": [{"text": "Let me think about this...", "thought": True}],
+                        "parts": [
+                            {"text": "Let me think about this...", "thought": True}
+                        ],
                     },
                     "index": 0,
                 }
@@ -4713,7 +4924,9 @@ def test_mid_stream_429_error_raises_during_iteration():
                 {
                     "content": {
                         "role": "model",
-                        "parts": [{"text": "I'll generate the image now.", "thought": True}],
+                        "parts": [
+                            {"text": "I'll generate the image now.", "thought": True}
+                        ],
                     },
                     "index": 0,
                 }

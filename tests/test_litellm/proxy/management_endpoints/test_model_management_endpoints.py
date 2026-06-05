@@ -1129,6 +1129,307 @@ class TestTeamModelUpdate:
                 )
             assert "403" in str(exc_info.value)
 
+    def test_get_public_model_name_28382_dashboard_echo_preserves_public_name(self):
+        """Regression for #28382 - a non-rename dashboard PATCH echoes the
+        internal generated model_name (model_name_{team}_{uuid}) at the top
+        level. That internal-shape value must be ignored (not treated as a
+        rename), so _get_public_model_name falls through to the existing public
+        name instead of overwriting it with the internal one."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_test-team_abc123",
+            litellm_params=LiteLLM_Params(model="azure/gpt-5.2-low-rpm-testing"),
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="model_name_test-team_abc123",
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+    def test_get_public_model_name_preserves_db_public_name_when_internal_name_unchanged(
+        self,
+    ):
+        """If patch_data.model_info has no team_public_model_name and
+        patch_data.model_name equals db_model.model_name (dashboard re-sending
+        the internal name without touching the public-name field), the
+        existing db_model.model_info.team_public_model_name must be preserved."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_test-team_abc123",
+            litellm_params=LiteLLM_Params(model="azure/gpt-5.2-low-rpm-testing"),
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="model_name_test-team_abc123",
+            model_info=ModelInfo(team_id="test-team"),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+    def test_get_public_model_name_allows_top_level_rename(self):
+        """A genuine rename via the top-level model_name field (no
+        patch_data.model_info.team_public_model_name supplied, and the new
+        name differs from the existing internal db model_name) must still
+        return the new name."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_test-team_abc123",
+            litellm_params=LiteLLM_Params(model="azure/gpt-5.2-low-rpm-testing"),
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="old-public-name",
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(team_id="test-team"),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "new-public-name"
+        )
+
+    def test_get_public_model_name_top_level_rename_wins_over_stale_model_info(self):
+        """Regression (codex review): on a dashboard rename the UI sends the new
+        name in model_name but passes the existing model_info blob through
+        untouched -- so it still carries the OLD team_public_model_name. The
+        top-level rename must win; otherwise _update_existing_team_model_assignment
+        sees no change, never updates the team ACL, and the rename is silently
+        dropped while the UI optimistically shows the new name."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_team-a_abc123",
+            litellm_params=LiteLLM_Params(model="azure/gpt-4.1"),
+            model_info=ModelInfo(
+                team_id="team-a", team_public_model_name="old-public-name"
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="new-public-name",
+            model_info=ModelInfo(
+                team_id="team-a",
+                team_public_model_name="old-public-name",  # stale, untouched by UI
+            ),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "new-public-name"
+        )
+
+    def test_get_public_model_name_falls_back_to_db_public_name(self):
+        """When patch_data carries no name hints at all (neither model_name
+        nor model_info.team_public_model_name), fall back to the existing
+        db_model.model_info.team_public_model_name."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_test-team_abc123",
+            litellm_params=LiteLLM_Params(model="azure/gpt-5.2-low-rpm-testing"),
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        patch_data = updateDeployment(
+            model_info=ModelInfo(team_id="test-team"),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+    def test_get_public_model_name_last_resort_returns_db_model_name(self):
+        """Legacy rows may have no team_public_model_name anywhere; the
+        function must still return a string (the existing db_model.model_name)
+        rather than raising."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="legacy-model",
+            litellm_params=LiteLLM_Params(model="azure/legacy"),
+            model_info=ModelInfo(team_id="test-team"),
+        )
+        patch_data = updateDeployment(
+            model_info=ModelInfo(team_id="test-team"),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "legacy-model"
+        )
+
+    def test_get_public_model_name_ignores_different_internal_shape_name(self):
+        """A stale client may PATCH an internal-shaped model_name that does not
+        equal the current DB column (e.g. a different uuid). It must NOT be
+        treated as a rename -- fall through to the existing public name."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_test-team_realuuid",
+            litellm_params=LiteLLM_Params(model="azure/gpt-5.2-low-rpm-testing"),
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="model_name_test-team_differentuuid",
+            model_info=ModelInfo(team_id="test-team"),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+    def test_get_public_model_name_ignores_internal_shape_patch_public(self):
+        """If a corrupted row round-trips an internal-shaped value in
+        model_info.team_public_model_name, it must not be accepted as the
+        public name -- fall through to the existing db public name."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _get_public_model_name,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_test-team_realuuid",
+            litellm_params=LiteLLM_Params(model="azure/gpt-5.2-low-rpm-testing"),
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        patch_data = updateDeployment(
+            model_info=ModelInfo(
+                team_id="test-team",
+                team_public_model_name="model_name_test-team_realuuid",
+            ),
+        )
+
+        assert (
+            _get_public_model_name(patch_data=patch_data, db_model=db_model)
+            == "gpt-5.2-low-rpm-testing"
+        )
+
+    @pytest.mark.asyncio
+    async def test_dashboard_edit_preserves_public_name_and_acl(self):
+        """End-to-end regression for #28382: PATCH payload shaped like the
+        dashboard's model-edit form (top-level model_name = internal generated
+        name, model_info.team_public_model_name = public name) must NOT trigger
+        a public-name rename, must NOT touch the team ACL, and must serialize
+        the public name back into model_info."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _update_team_model_in_db,
+        )
+        from litellm.types.router import ModelInfo
+
+        db_model = Deployment(
+            model_name="model_name_test-team_abc123",
+            litellm_params=LiteLLM_Params(
+                model="azure/gpt-5.2-low-rpm-testing",
+                custom_llm_provider="azure",
+            ),
+            model_info=ModelInfo(
+                id="model-id-123",
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        patch_data = updateDeployment(
+            model_name="model_name_test-team_abc123",
+            litellm_params=None,
+            model_info=ModelInfo(
+                id="model-id-123",
+                team_id="test-team",
+                team_public_model_name="gpt-5.2-low-rpm-testing",
+            ),
+        )
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id="test_user",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        prisma_client = MockPrismaClient(team_exists=True)
+
+        with (
+            patch(
+                "litellm.proxy.proxy_server.premium_user",
+                True,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_add"
+            ) as mock_team_model_add,
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.team_model_delete"
+            ) as mock_team_model_delete,
+        ):
+            result = await _update_team_model_in_db(
+                db_model=db_model,
+                patch_data=patch_data,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,  # type: ignore
+            )
+
+        # team ACL must not be touched on a no-op edit
+        mock_team_model_add.assert_not_called()
+        mock_team_model_delete.assert_not_called()
+
+        # the merged model_info written to the DB must keep the public name
+        model_info_json = result.get("model_info", "")
+        parsed_model_info = json.loads(model_info_json)
+        assert (
+            parsed_model_info.get("team_public_model_name") == "gpt-5.2-low-rpm-testing"
+        )
+
+        # the internal model_name must not have been overwritten (caller
+        # intentionally clears patch_data.model_name so the DB row's name
+        # column is left alone)
+        assert result.get("model_name") == "model_name_test-team_abc123"
+
 
 class TestModelInfoEndpoint:
     """Test the model_info endpoint for retrieving individual model information"""
@@ -1495,6 +1796,305 @@ class TestUpdateDBModelBlocked:
             updated_patch=updateDeployment(),
         )
         assert "blocked" not in result
+
+
+def _build_db_model_with_pricing():
+    """Wildcard deployment with custom pricing in litellm_params; Deployment.__init__
+    mirrors SPECIAL_MODEL_INFO_PARAMS into model_info, so both blobs hold the rate."""
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="openai/*",
+        litellm_params=LiteLLM_Params(
+            model="openai/*",
+            input_cost_per_token=0.000001,
+            output_cost_per_token=0.000002,
+        ),
+        model_info=ModelInfo(id="dep-pricing-0"),
+    )
+
+
+class TestUpdateDBModelClearPricing:
+    """Sending an explicit `null` for a pricing field must remove it from both
+    `litellm_params` and `model_info` (SPECIAL_MODEL_INFO_PARAMS are mirrored
+    between the two by Deployment.__init__).
+
+    Restricted to SPECIAL_MODEL_INFO_PARAMS so non-pricing fields (e.g. team_id)
+    cannot be cleared via this path.
+    """
+
+    def test_clear_input_cost_removes_from_both_blobs(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+        # Other pricing untouched
+        assert params.get("output_cost_per_token") == 0.000002
+        assert info.get("output_cost_per_token") == 0.000002
+
+    def test_clear_output_cost_removes_from_both_blobs(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "output_cost_per_token" not in params
+        assert "output_cost_per_token" not in info
+
+    def test_non_null_pricing_update_still_works(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=0.000005)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["input_cost_per_token"] == 0.000005
+
+    def test_omitted_pricing_field_is_preserved(self):
+        """PATCH semantics: fields not in the patch keep their existing value."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(output_cost_per_token=0.000007)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        assert params["input_cost_per_token"] == 0.000001
+        assert params["output_cost_per_token"] == 0.000007
+
+    def test_null_on_non_pricing_field_does_not_clear(self):
+        """Security guard: only SPECIAL_MODEL_INFO_PARAMS can be cleared via null.
+        Privileged or unrelated model_info fields (e.g. team_id) must be unaffected
+        by the null-clearing path so a team admin can't ungate a team-scoped model.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+            ),
+            model_info=ModelInfo(id="dep-pricing-1", team_id="team-keep-me"),
+        )
+
+        # Patch sends a null for api_base (non-SPECIAL field). Must NOT clear team_id
+        # or any other non-pricing field from the merged dict.
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(api_base=None)
+            ),
+        )
+
+        info = json.loads(result["model_info"])
+        # Pricing still present (not part of this patch)
+        assert "input_cost_per_token" in info
+        # team_id must survive
+        assert info.get("team_id") == "team-keep-me"
+
+    def test_clear_survives_model_info_passthrough_with_old_pricing(self):
+        """Realistic UI submit shape: the patch carries BOTH blobs. The
+        model_info portion still has the old pricing because the form
+        re-serializes the source blob. The litellm_params null must beat the
+        model_info merge — i.e. the clear runs after both merges, not between.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo, updateLiteLLMParams
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(input_cost_per_token=None),
+                # The UI passes the OLD model_info blob through unchanged.
+                model_info=ModelInfo(
+                    id="dep-pricing-0",
+                    input_cost_per_token=0.000001,  # stale value from the page state
+                ),
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert (
+            "input_cost_per_token" not in info
+        ), "model_info passthrough must not resurrect the cleared override"
+
+    def test_clear_via_model_info_clears_both_blobs(self):
+        """The mirror works in the reverse direction too: nulling a pricing field
+        via the model_info patch should clear it from litellm_params as well."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import ModelInfo
+
+        result = update_db_model(
+            db_model=_build_db_model_with_pricing(),
+            updated_patch=updateDeployment(
+                model_info=ModelInfo(id="dep-pricing-0", input_cost_per_token=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "input_cost_per_token" not in params
+        assert "input_cost_per_token" not in info
+
+    def test_clear_cache_read_cost_removes_from_both_blobs(self):
+        """cache_read_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-read overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_read_input_token_cost=0.0000005,
+            ),
+            model_info=ModelInfo(id="dep-cache-read-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+
+    def test_clear_cache_write_cost_removes_from_both_blobs(self):
+        """cache_creation_input_token_cost was added to SPECIAL_MODEL_INFO_PARAMS so
+        the same null-clear path works for cache-write overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-write-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_creation_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_creation_input_token_cost" not in params
+        assert "cache_creation_input_token_cost" not in info
+
+    def test_clear_cache_read_preserves_other_pricing(self):
+        """Clearing cache_read must not touch input/output cost overrides."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            update_db_model,
+        )
+        from litellm.types.router import (
+            Deployment,
+            LiteLLM_Params,
+            ModelInfo,
+            updateLiteLLMParams,
+        )
+
+        db_model = Deployment(
+            model_name="openai/*",
+            litellm_params=LiteLLM_Params(
+                model="openai/*",
+                input_cost_per_token=0.000001,
+                output_cost_per_token=0.000002,
+                cache_read_input_token_cost=0.0000005,
+                cache_creation_input_token_cost=0.000003,
+            ),
+            model_info=ModelInfo(id="dep-cache-mixed-0"),
+        )
+
+        result = update_db_model(
+            db_model=db_model,
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(cache_read_input_token_cost=None)
+            ),
+        )
+
+        params = json.loads(result["litellm_params"])
+        info = json.loads(result["model_info"])
+        assert "cache_read_input_token_cost" not in params
+        assert "cache_read_input_token_cost" not in info
+        # Other pricing untouched in both blobs
+        assert params["input_cost_per_token"] == 0.000001
+        assert params["output_cost_per_token"] == 0.000002
+        assert params["cache_creation_input_token_cost"] == 0.000003
+        assert info["input_cost_per_token"] == 0.000001
+        assert info["output_cost_per_token"] == 0.000002
+        assert info["cache_creation_input_token_cost"] == 0.000003
 
 
 class TestGetModelInfoWithIdBlocked:

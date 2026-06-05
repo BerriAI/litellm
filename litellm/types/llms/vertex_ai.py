@@ -16,15 +16,16 @@ GeminiEmbeddingInput = Union[EmbeddingInput, List[List[str]]]
 
 class FunctionResponse(TypedDict, total=False):
     # `id` correlates this response with the originating `functionCall` part.
-    # Required by Gemini 3.5+ for strict function-calling response matching.
+    # Supported on Google AI Studio Gemini 3.5+; Vertex AI rejects this field.
     id: str
     name: Required[str]
     response: Optional[dict]
+    parts: List["FunctionResponsePartType"]
 
 
 class FunctionCall(TypedDict, total=False):
-    # `id` is returned by Gemini 3.5+ to correlate the corresponding
-    # `functionResponse`. Older Gemini models omit this field.
+    # `id` correlates the corresponding `functionResponse` on Google AI Studio
+    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
     id: str
     name: Required[str]
     args: Optional[dict]
@@ -40,6 +41,11 @@ class BlobType(TypedDict, total=False):
     data: Required[str]
 
 
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
+
+
 class PartType(TypedDict, total=False):
     text: str
     inline_data: BlobType
@@ -52,8 +58,8 @@ class PartType(TypedDict, total=False):
 
 
 class HttpxFunctionCall(TypedDict, total=False):
-    # `id` is returned by Gemini 3.5+ to correlate the corresponding
-    # `functionResponse`. Older Gemini models omit this field.
+    # `id` correlates the corresponding `functionResponse` on Google AI Studio
+    # Gemini 3.5+. Vertex AI and older Gemini models omit/reject this field.
     id: str
     name: Required[str]
     args: dict
@@ -240,6 +246,7 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     response_json_schema: dict
+    responseFormat: dict
     seed: int
     responseLogprobs: bool
     logprobs: int

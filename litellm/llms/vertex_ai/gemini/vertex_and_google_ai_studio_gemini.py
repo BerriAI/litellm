@@ -289,6 +289,20 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             return True
         return False
 
+    @staticmethod
+    def _forward_gemini_function_call_id(
+        model: str, custom_llm_provider: Optional[str] = None
+    ) -> bool:
+        """
+        Whether to include `id` on function_call / function_response parts.
+
+        Gemini 3+ on Google AI Studio accepts (and returns) `id` for strict
+        tool-call matching. Vertex AI rejects the field with HTTP 400.
+        """
+        if custom_llm_provider != "gemini":
+            return False
+        return VertexGeminiConfig._is_gemini_3_or_newer(model)
+
     def _supports_penalty_parameters(self, model: str) -> bool:
         # Gemini 3 models do not support penalty parameters
         if VertexGeminiConfig._is_gemini_3_or_newer(model):
@@ -1133,6 +1147,26 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         return cast(dict, speech_config)
 
+    @staticmethod
+    def _apply_include_server_side_tool_invocations(
+        non_default_params: Dict,
+        optional_params: Dict,
+    ) -> None:
+        """
+        Set include_server_side_tool_invocations before tools are mapped.
+
+        map_openai_params iterates non_default_params in request order; if tools
+        appear before this flag, _resolve_search_tool_conflict would drop search
+        tools before the flag is applied.
+        """
+        for key in (
+            "include_server_side_tool_invocations",
+            "includeServerSideToolInvocations",
+        ):
+            if non_default_params.get(key) is True or optional_params.get(key) is True:
+                optional_params["include_server_side_tool_invocations"] = True
+                return
+
     def map_openai_params(  # noqa: PLR0915
         self,
         non_default_params: Dict,
@@ -1140,6 +1174,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         model: str,
         drop_params: bool,
     ) -> Dict:
+        self._apply_include_server_side_tool_invocations(
+            non_default_params, optional_params
+        )
         gemini_sampling_params_warned: bool = False
         for param, value in non_default_params.items():
             if param == "temperature":
@@ -2649,7 +2686,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         litellm_params: Optional[dict] = None,
     ) -> List[ContentType]:
         return _gemini_convert_messages_with_history(
-            messages=messages, model=model, litellm_params=litellm_params
+            messages=messages,
+            model=model,
+            litellm_params=litellm_params,
+            custom_llm_provider="vertex_ai",
         )
 
     def get_error_class(

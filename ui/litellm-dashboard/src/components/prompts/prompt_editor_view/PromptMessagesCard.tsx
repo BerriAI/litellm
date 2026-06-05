@@ -53,7 +53,7 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
       <div className="mb-2">
         <Text className="text-sm font-medium">Prompt messages</Text>
         <Text className="text-gray-500 text-xs mt-1">
-          Use <code className="bg-gray-100 px-1 rounded text-xs">{'{{variable}}'}</code> syntax for template variables
+          Use <code className="bg-gray-100 px-1 rounded text-xs">{"{{variable}}"}</code> syntax for template variables
         </Text>
       </div>
       <div className="space-y-2">
@@ -83,10 +83,7 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
               </Select>
               <div className="flex items-center gap-1">
                 {messages.length > 1 && (
-                  <button
-                    onClick={() => onRemoveMessage(index)}
-                    className="text-gray-400 hover:text-red-500"
-                  >
+                  <button onClick={() => onRemoveMessage(index)} className="text-gray-400 hover:text-red-500">
                     <TrashIcon size={14} />
                   </button>
                 )}
@@ -106,10 +103,7 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
           </div>
         ))}
       </div>
-      <button
-        onClick={onAddMessage}
-        className="mt-2 text-xs text-blue-600 hover:text-blue-700 flex items-center"
-      >
+      <button onClick={onAddMessage} className="mt-2 text-xs text-blue-600 hover:text-blue-700 flex items-center">
         <PlusIcon size={14} className="mr-1" />
         Add message
       </button>
@@ -118,4 +112,3 @@ const PromptMessagesCard: React.FC<PromptMessagesCardProps> = ({
 };
 
 export default PromptMessagesCard;
-
