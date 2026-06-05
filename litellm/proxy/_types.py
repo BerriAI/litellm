@@ -4256,6 +4256,7 @@ PassThroughEndpointLoggingResultValues = Union[
     EmbeddingResponse,
     VideoObject,
     StandardPassThroughResponseObject,
+    ResponsesAPIResponse,
 ]
 
 
