@@ -317,6 +317,12 @@ class OCIChatConfig(BaseConfig):
         for key, value in {**non_default_params, **optional_params}.items():
             alias = param_map.get(key)
             if alias is False:
+                # max_retries is a litellm-level control param (litellm applies
+                # retries itself); it is never a generation param OCI accepts, so
+                # drop it silently. The litellm proxy injects it on every request,
+                # which otherwise 500s OCI calls unless drop_params is set.
+                if key == "max_retries":
+                    continue
                 if drop_params or litellm.drop_params:
                     continue
                 raise OCIError(
