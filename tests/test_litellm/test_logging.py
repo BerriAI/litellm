@@ -328,3 +328,48 @@ async def test_cache_hit_includes_custom_llm_provider():
         # Clean up
         litellm.callbacks = original_callbacks
         litellm.cache = None
+
+
+# --- color toggle (NO_COLOR / FORCE_COLOR / tty) -----------------------------
+
+
+class _FakeStream:
+    def __init__(self, is_tty: bool):
+        self._is_tty = is_tty
+
+    def isatty(self) -> bool:
+        return self._is_tty
+
+
+@pytest.fixture
+def clean_color_env(monkeypatch):
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+
+
+def test_should_use_color_no_color_env_disables(monkeypatch, clean_color_env):
+    from litellm._logging import _should_use_color
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    # Even on a tty + FORCE_COLOR, NO_COLOR must win.
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert _should_use_color(_FakeStream(is_tty=True)) is False
+
+
+def test_should_use_color_force_color_enables_on_pipe(monkeypatch, clean_color_env):
+    from litellm._logging import _should_use_color
+
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert _should_use_color(_FakeStream(is_tty=False)) is True
+
+
+def test_should_use_color_tty_default_on(clean_color_env):
+    from litellm._logging import _should_use_color
+
+    assert _should_use_color(_FakeStream(is_tty=True)) is True
+
+
+def test_should_use_color_pipe_default_off(clean_color_env):
+    from litellm._logging import _should_use_color
+
+    assert _should_use_color(_FakeStream(is_tty=False)) is False
