@@ -16,6 +16,7 @@ export const E2E_UPDATE_LIMITS_KEY_ALIAS = "e2eUpdateLimitsKey";
 export const E2E_DELETE_KEY_ALIAS = "e2eDeleteKey";
 export const E2E_REGENERATE_KEY_ALIAS = "e2eRegenerateKey";
 export const E2E_INTERNAL_USER_KEY_ALIAS = "e2eInternalUserKey";
+export const E2E_INTERNAL_USER_API_KEY = "e2e-key-internal-user";
 export const E2E_VIEWER_KEY_ALIAS = "e2eViewerKey";
 
 // Team identifiers (match seed.sql)

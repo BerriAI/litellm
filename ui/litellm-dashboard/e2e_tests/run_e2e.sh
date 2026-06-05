@@ -8,9 +8,12 @@ set -euo pipefail
 # and UI from the built Next.js static export).
 #
 # Usage:
-#   ./run_e2e.sh                    # Run once
-#   ./run_e2e.sh --repeat-each=5    # Run each test 5 times
-#   ./run_e2e.sh --headed           # Run with browser visible
+#   ./run_e2e.sh                                         # Run full suite
+#   ./run_e2e.sh tests/mcp/mcpServersRBAC.spec.ts        # Run one spec file
+#   ./run_e2e.sh --repeat-each=5                         # Run each test 5 times
+#   ./run_e2e.sh --headed                                # Run with browser visible
+#
+# Test file paths are relative to this e2e_tests/ directory (not litellm-dashboard/).
 #
 # In CI (CI=true), expects:
 #   - PostgreSQL already running on 127.0.0.1:5432
@@ -46,6 +49,38 @@ cleanup() {
   echo "Done."
 }
 trap cleanup EXIT INT TERM
+
+validate_test_args() {
+  if [ "$#" -eq 0 ]; then
+    return 0
+  fi
+
+  if printf '%s\n' "$@" | grep -q 'mcpServersRBAC\|mcpServersAuth'; then
+    if [ ! -f "$SCRIPT_DIR/tests/mcp/mcpServersRBAC.spec.ts" ] && printf '%s\n' "$@" | grep -q 'mcpServersRBAC'; then
+      echo "Error: $SCRIPT_DIR/tests/mcp/mcpServersRBAC.spec.ts not found."
+      echo "Run this script from the worktree that contains the MCP RBAC tests."
+      exit 1
+    fi
+    if [ ! -f "$SCRIPT_DIR/helpers/mcp.ts" ]; then
+      echo "Error: $SCRIPT_DIR/helpers/mcp.ts not found."
+      echo "mcpServersRBAC.spec.ts imports this helper; without it Playwright reports \"No tests found\"."
+      exit 1
+    fi
+  fi
+
+  local list_output
+  if ! list_output="$(cd "$SCRIPT_DIR" && npx playwright test --config playwright.config.ts "$@" --list 2>&1)"; then
+    echo "$list_output"
+    exit 1
+  fi
+
+  if echo "$list_output" | grep -q 'Total: 0 tests'; then
+    echo "Error: No tests matched: $*"
+    echo "Paths are relative to $SCRIPT_DIR (e.g. tests/mcp/mcpServersRBAC.spec.ts)."
+    echo "$list_output"
+    exit 1
+  fi
+}
 
 # --- Pre-flight checks ---
 for cmd in python3 npx uv; do
@@ -107,6 +142,12 @@ export LITELLM_LICENSE="${LITELLM_LICENSE:-}"
 echo "=== Building UI from source ==="
 cd "$DASHBOARD_DIR"
 npm install --silent 2>/dev/null || true
+
+if [ "$#" -gt 0 ]; then
+  echo "=== Validating Playwright test selection ==="
+  validate_test_args "$@"
+fi
+
 npm run build
 # Copy the fresh build to the proxy's static UI directory
 cp -r "$DASHBOARD_DIR/out/" "$REPO_ROOT/litellm/proxy/_experimental/out/"
@@ -186,7 +227,8 @@ npm install --silent 2>/dev/null || true
 npx playwright install chromium --with-deps 2>/dev/null || npx playwright install chromium
 
 echo "=== Running Playwright tests ==="
-npx playwright test --config e2e_tests/playwright.config.ts "$@"
+cd "$SCRIPT_DIR"
+npx playwright test --config playwright.config.ts "$@"
 EXIT_CODE=$?
 
 exit $EXIT_CODE

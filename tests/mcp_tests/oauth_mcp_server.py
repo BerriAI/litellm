@@ -1,10 +1,11 @@
 import argparse
 import base64
+import contextvars
 import hashlib
 import os
 import secrets
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 import uvicorn
@@ -122,6 +123,11 @@ class TokenStore:
 
 
 store = TokenStore()
+_current_token: contextvars.ContextVar[str] = contextvars.ContextVar("_current_token", default="")
+
+_issue_store: Dict[str, Dict[str, Any]] = {}
+_issue_counter = 0
+
 fastmcp = FastMCP("OAuthProtected")
 fastmcp.settings.streamable_http_path = "/"
 
@@ -135,14 +141,50 @@ def whoami_tool(label: str) -> str:
 def echo_oauth(value: str) -> str:
     return value
 
+@fastmcp.tool()
+def whoami_from_token() -> Dict[str, str]:
+    token = _current_token.get()
+    rec = store.tokens.get(token, {})
+    return {
+        "client_id": str(rec.get("client_id", "unknown")),
+        "scope": str(rec.get("scope", "")),
+    }
+
+
+@fastmcp.tool()
+def create_issue(title: str, description: str = "") -> Dict[str, Any]:
+    global _issue_counter
+    token = _current_token.get()
+    rec = store.tokens.get(token, {})
+    _issue_counter += 1
+    issue_id = f"E2E-{_issue_counter}"
+    _issue_store[issue_id] = {
+        "title": title,
+        "description": description,
+        "status": "todo",
+        "created_by": str(rec.get("client_id", "unknown")),
+    }
+    return {
+        "id": issue_id,
+        "url": f"https://linear.app/e2e/issue/{issue_id}",
+        "title": title,
+        "status": "todo",
+        "created_by": str(rec.get("client_id", "unknown")),
+    }
+
+
+@fastmcp.tool()
+def list_issues() -> List[Dict[str, Any]]:
+    return [{"id": k, **v} for k, v in _issue_store.items()]
 
 async def authorize_endpoint(request: Request) -> Response:
     """Auto-approving PKCE authorization endpoint.
 
     Issues a code bound to the supplied code_challenge and redirects back to
     redirect_uri with code+state. No login UI; approval is implicit so the e2e
-    flow can run headless.
+    flow can run headless
     """
+    
     params = dict(request.query_params)
     redirect_uri = params.get("redirect_uri")
     if not redirect_uri:
@@ -293,6 +335,13 @@ async def test_invalidate(request: Request) -> Response:
     return JSONResponse({"invalidated": n})
 
 
+async def test_reset_issues(request: Request) -> Response:
+    global _issue_counter
+    _issue_store.clear()
+    _issue_counter = 0
+    return JSONResponse({"ok": True})
+
+
 class BearerAuthMiddleware(BaseHTTPMiddleware):
     """Reject any /mcp request without a valid Bearer token from `store`."""
 
@@ -312,6 +361,7 @@ class BearerAuthMiddleware(BaseHTTPMiddleware):
         token = auth.split(" ", 1)[1].strip()
         if not store.is_valid(token):
             return JSONResponse({"error": "invalid_token"}, status_code=401)
+        _current_token.set(token)
         return await call_next(request)
 
 
@@ -333,6 +383,7 @@ def build_app() -> Starlette:
         ),
         Route("/_test/issued_tokens", test_issued_tokens, methods=["GET"]),
         Route("/_test/invalidate", test_invalidate, methods=["POST"]),
+        Route("/_test/reset_issues", test_reset_issues, methods=["POST"]),
         Mount("/mcp", app=mcp_app),
     ]
     app = Starlette(
