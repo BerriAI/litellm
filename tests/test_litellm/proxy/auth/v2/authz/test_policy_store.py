@@ -1,7 +1,7 @@
 import pytest
 
-from litellm.proxy.auth.v2 import policy_store
-from litellm.proxy.auth.v2.policy_store import (
+from litellm.proxy.auth.v2.authz import policy_store
+from litellm.proxy.auth.v2.authz.policy_store import (
     DEFAULT_POLICIES,
     load_policy_snapshot,
     reset_cache,

@@ -6,9 +6,9 @@ from .context import (
     set_auth_context,
     try_get_auth_context,
 )
-from .end_user import resolve_end_user
-from .enrichment import enrich_identity
 from .entry import user_api_key_auth_v2
+from .stages.end_user import resolve_end_user
+from .stages.enrichment import enrich_identity
 
 __all__ = [
     "user_api_key_auth_v2",

@@ -1,6 +1,6 @@
 import pytest
 
-from litellm.proxy.auth.v2.jwt_claims import (
+from litellm.proxy.auth.v2.authn.jwt_claims import (
     JWTClaimError,
     JWTSettings,
     extract_identity,

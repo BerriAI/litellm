@@ -45,13 +45,13 @@ independent of v1/v2.
 JWT, and OAuth authenticators return a thin identity (no budget/limit fields), so
 the hooks read `None` and enforce nothing for those logins.
 
-**Built.** `enrichment.py` (`enrich_identity`) copies the user/team limit fields
+**Built.** `stages/enrichment.py` (`enrich_identity`) copies the user/team limit fields
 1:1 from the rows into the identity's distinct `user_*` / `team_*` slots, filling
 only unset fields so it never overrides an already-resolved value. It is wired
 into the inference path in `entry.py` for non-virtual-key logins
 (`_enrich_for_limits`), with the loaders (`get_user_object` auth_checks.py:1650,
 `get_team_object` auth_checks.py:1982) injected. Unit-tested in
-`test_enrichment.py`.
+`stages/test_enrichment.py`.
 
 **What remains (live).** Only the verification below. The mapping is additive
 (these logins enforce nothing today, so it cannot regress existing behavior), but
@@ -74,12 +74,12 @@ limit silently over- or under-enforces a customer's spend.
 
 **Done.** Team, organization, and global proxy-spend caps live in v1's
 `common_checks`, which v2 does not run. Rather than move them (which would risk
-v1's path), `budgets.py` (`enforce_hierarchy_budgets`) calls the *same* functions
+v1's path), `stages/budgets.py` (`enforce_hierarchy_budgets`) calls the *same* functions
 v1 uses — `_team_max_budget_check`, `_organization_max_budget_check`, and
 `get_global_proxy_spend` + `_global_proxy_budget_check` — from v2's inference
 path. One implementation, two callers: single authority, correct counter keys, no
 edit to v1. A breach surfaces as the same 429 `ProxyException` v1 raises.
-Unit-tested in `test_budgets.py` (team over/under budget, no-team no-op).
+Unit-tested in `stages/test_budgets.py` (team over/under budget, no-team no-op).
 
 **What remains (live).** Cross-pod spend-counter accuracy. Set a team `max_budget`
 (and `litellm.max_budget` for the global cap) below current spend and confirm

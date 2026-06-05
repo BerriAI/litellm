@@ -12,7 +12,7 @@ import pytest
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.v2.budgets import enforce_hierarchy_budgets
+from litellm.proxy.auth.v2.stages.budgets import enforce_hierarchy_budgets
 
 
 class _Logging:

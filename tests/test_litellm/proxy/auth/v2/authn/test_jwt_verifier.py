@@ -3,7 +3,7 @@ import time
 import pytest
 from authlib.jose import JsonWebKey, jwt
 
-from litellm.proxy.auth.v2.jwt_verifier import JWTVerificationError, verify
+from litellm.proxy.auth.v2.authn.jwt_verifier import JWTVerificationError, verify
 
 ISSUER = "https://idp.example"
 AUDIENCE = "litellm"

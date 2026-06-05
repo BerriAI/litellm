@@ -1,6 +1,6 @@
 import pytest
 
-from litellm.proxy.auth.v2.policy_admin import (
+from litellm.proxy.auth.v2.authz.policy_admin import (
     PolicyValidationError,
     make_assignment_rule,
     make_permission_rule,

@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from .principal import Principal
+from ..principal import Principal
 from .route_map import GovernedRoute, match_route
 
 logger = logging.getLogger("litellm.proxy.auth.v2")

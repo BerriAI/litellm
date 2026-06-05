@@ -1,4 +1,4 @@
-from litellm.proxy.auth.v2.enforcer import CasbinEnforcer
+from litellm.proxy.auth.v2.authz.enforcer import CasbinEnforcer
 
 READER_POLICY = ["role:model_reader", "*", "model:*", "read", "allow"]
 ADMIN_POLICY = ["role:proxy_admin", "*", "*", "*", "allow"]

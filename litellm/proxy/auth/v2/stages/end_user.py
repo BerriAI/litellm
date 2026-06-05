@@ -2,7 +2,7 @@ from typing import Awaitable, Callable, Optional
 
 from starlette.requests import Request
 
-from .context import attach_end_user
+from ..context import attach_end_user
 
 # Extraction reuses the existing request-body/header logic; validation (the
 # customer-table lookup) is injected so this stage is testable without a DB and

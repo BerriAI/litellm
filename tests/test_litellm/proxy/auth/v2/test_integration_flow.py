@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.auth.v2 import policy_store
+from litellm.proxy.auth.v2.authz import policy_store
 from litellm.proxy.auth.v2.management_endpoints import router as auth_v2_router
 
 MASTER_KEY = "sk-master-1234"

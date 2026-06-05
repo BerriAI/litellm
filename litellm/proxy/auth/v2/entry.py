@@ -4,16 +4,16 @@ from fastapi import HTTPException, Request, status
 
 from litellm.integrations.otel.runtime import seed_request_identity
 
-from .authenticators import AuthContext, AuthResult, authenticate
-from .authorizer import AuthorizationDenied, authorize
-from .budgets import enforce_hierarchy_budgets
+from .authn.authenticators import AuthContext, AuthResult, authenticate
+from .authz.authorizer import AuthorizationDenied, authorize
+from .authz.enforcer import CasbinEnforcer
+from .authz.policy_store import load_policy_snapshot
+from .authz.route_map import is_inference_route, match_route
 from .context import AuthMethod, RequestAuthContext, set_auth_context
-from .end_user import resolve_end_user
-from .enforcer import CasbinEnforcer
-from .enrichment import enrich_identity
-from .policy_store import load_policy_snapshot
 from .principal import Principal, build_principal
-from .route_map import is_inference_route, match_route
+from .stages.budgets import enforce_hierarchy_budgets
+from .stages.end_user import resolve_end_user
+from .stages.enrichment import enrich_identity
 
 
 async def _anonymous_identity(api_key: Optional[str]) -> Any:

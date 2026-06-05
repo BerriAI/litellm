@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from litellm.proxy.auth.v2.authorizer import AuthorizationDenied, authorize
+from litellm.proxy.auth.v2.authz.authorizer import AuthorizationDenied, authorize
 from litellm.proxy.auth.v2.principal import Principal
 
 PRINCIPAL = Principal(subject="user:u1", domain="*", groupings=[])

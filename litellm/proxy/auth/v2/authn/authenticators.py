@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Protocol, runtime_checkab
 
 from fastapi import HTTPException, status
 
-from .context import AuthMethod
+from ..context import AuthMethod
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth

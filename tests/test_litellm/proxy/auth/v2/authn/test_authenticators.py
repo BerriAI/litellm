@@ -1,6 +1,6 @@
 import pytest
 
-from litellm.proxy.auth.v2.authenticators import (
+from litellm.proxy.auth.v2.authn.authenticators import (
     OAuth2IntrospectionAuthenticator,
     JWTAuthenticator,
     MasterKeyAuthenticator,

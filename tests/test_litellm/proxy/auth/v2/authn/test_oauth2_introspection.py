@@ -1,6 +1,6 @@
 import pytest
 
-from litellm.proxy.auth.v2.oauth2_introspection import (
+from litellm.proxy.auth.v2.authn.oauth2_introspection import (
     IntrospectionSettings,
     OAuth2IntrospectionError,
     parse_introspection_response,

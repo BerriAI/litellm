@@ -6,12 +6,12 @@ from pydantic import BaseModel
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
-from .policy_admin import (
+from .authz.policy_admin import (
     PolicyValidationError,
     make_assignment_rule,
     make_permission_rule,
 )
-from .policy_store import reset_cache
+from .authz.policy_store import reset_cache
 
 router = APIRouter(tags=["auth_v2"])
 

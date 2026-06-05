@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from litellm.proxy.auth.v2.enrichment import enrich_identity
+from litellm.proxy.auth.v2.stages.enrichment import enrich_identity
 
 
 def _identity(**overrides):

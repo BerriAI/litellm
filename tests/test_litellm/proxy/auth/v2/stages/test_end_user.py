@@ -8,7 +8,7 @@ from litellm.proxy.auth.v2.context import (
     get_auth_context,
     set_auth_context,
 )
-from litellm.proxy.auth.v2.end_user import resolve_end_user
+from litellm.proxy.auth.v2.stages.end_user import resolve_end_user
 from litellm.proxy.auth.v2.principal import Principal
 
 

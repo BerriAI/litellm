@@ -1,4 +1,4 @@
-from litellm.proxy.auth.v2.route_map import is_inference_route, match_route
+from litellm.proxy.auth.v2.authz.route_map import is_inference_route, match_route
 
 
 def test_model_routes_map_to_resource_and_action():
