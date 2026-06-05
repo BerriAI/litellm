@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from litellm.integrations.langfuse.langfuse_prompt_management import (
     LangfusePromptManagement,
+    langfuse_client_init,
 )
 
 
@@ -65,3 +66,38 @@ class TestLangfusePromptManagement:
                 mock_run_async.call_args[0][0]
                 == langfuse_prompt_management.async_log_failure_event
             )
+
+    def test_langfuse_client_init_passes_httpx_client(self):
+        mock_langfuse_class = MagicMock()
+        with (
+            patch(
+                "litellm.integrations.langfuse.langfuse_prompt_management.resolve_langfuse_credentials",
+                return_value=("pk-1234", "sk-1234", "https://localhost"),
+            ),
+            patch(
+                "litellm.integrations.langfuse.langfuse_prompt_management.LangFuseLogger._get_langfuse_flush_interval",
+                return_value=1,
+            ),
+            patch.dict("sys.modules", {"langfuse": self._mock_langfuse}),
+            patch(
+                "litellm.llms.custom_httpx.http_handler._get_httpx_client"
+            ) as mock_get_httpx,
+        ):
+            mock_http_handler = MagicMock()
+            mock_http_handler.client = MagicMock()
+            mock_get_httpx.return_value = mock_http_handler
+
+            self._mock_langfuse.Langfuse = mock_langfuse_class
+
+            langfuse_client_init(
+                langfuse_public_key="pk-1234",
+                langfuse_secret="sk-1234",
+                langfuse_host="https://localhost",
+            )
+
+            mock_langfuse_class.assert_called_once()
+            call_kwargs = mock_langfuse_class.call_args[1]
+            assert "httpx_client" in call_kwargs
+            assert call_kwargs["httpx_client"] is mock_http_handler.client
+
+        langfuse_client_init.cache_clear()
