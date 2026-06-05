@@ -65,8 +65,8 @@ export interface ApiClientConfig {
   getBaseUrl: () => string;
   /** Resolves the auth header name at call time. Defaults to "Authorization". */
   getAuthHeaderName?: () => string;
-  /** Invoked with the derived message right before a non-2xx response throws. */
-  onError?: (message: string) => void;
+  /** Invoked with the derived message right before a non-2xx response throws. Fire-and-forget. */
+  onError?: (message: string) => void | Promise<void>;
   /** Injectable fetch implementation; defaults to the global. */
   fetchImpl?: typeof fetch;
 }
@@ -140,7 +140,8 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       throw new ApiError(message, response.status, errorBody);
     }
 
-    return response.json() as Promise<T>;
+    const text = await response.text();
+    return (text ? JSON.parse(text) : undefined) as T;
   }
 
   return {

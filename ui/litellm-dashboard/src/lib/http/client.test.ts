@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from "vitest";
 import { createApiClient, ApiError } from "./client";
 
 const okResponse = (data: unknown): Response =>
-  ({ ok: true, status: 200, json: async () => data }) as unknown as Response;
+  ({ ok: true, status: 200, text: async () => JSON.stringify(data) }) as unknown as Response;
+
+const emptyResponse = (status: number): Response => ({ ok: true, status, text: async () => "" }) as unknown as Response;
 
 const errorResponse = (status: number, body: unknown): Response =>
   ({ ok: false, status, text: async () => JSON.stringify(body) }) as unknown as Response;
@@ -65,6 +67,13 @@ describe("createApiClient", () => {
 
     await expect(promise).rejects.toMatchObject({ message: "<html>Bad Gateway</html>", status: 502 });
     expect(onError).toHaveBeenCalledWith("<html>Bad Gateway</html>");
+  });
+
+  it("returns undefined for an empty success body (e.g. a 204 No Content)", async () => {
+    const fetchImpl = vi.fn(async () => emptyResponse(204));
+    const client = createApiClient({ getBaseUrl: () => "", fetchImpl });
+
+    await expect(client.delete("/policies/abc", { accessToken: "sk" })).resolves.toBeUndefined();
   });
 
   it("omits the auth header when no token is provided", async () => {
