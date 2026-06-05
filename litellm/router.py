@@ -462,6 +462,7 @@ class Router:
         self.complexity_routers: Dict[str, "ComplexityRouter"] = {}
         self.adaptive_routers: Dict[str, "AdaptiveRouter"] = {}
         self.quality_routers: Dict[str, "QualityRouter"] = {}
+        self.adept_routers: Dict[str, Any] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
         self.model_group_alias: Dict[str, Union[str, RouterModelGroupAliasItem]] = (
@@ -7404,6 +7405,8 @@ class Router:
             return False  # This is handled by adaptive_router
         if litellm_params.model.startswith("auto_router/quality_router"):
             return False  # This is handled by quality_router
+        if litellm_params.model.startswith("adept/"):
+            return False  # This is handled by adept_router
         if litellm_params.model.startswith("auto_router/"):
             return True
         return False
@@ -7663,6 +7666,93 @@ class Router:
             )
         self.quality_routers[deployment.model_name] = quality_router
 
+    def _is_adept_router_deployment(self, litellm_params: LiteLLM_Params) -> bool:
+        """Returns True when the model prefix is 'adept/'."""
+        return litellm_params.model.startswith("adept/")
+
+    def init_adept_router_deployment(self, deployment: Deployment) -> None:
+        """
+        Initialize an ADEPT router deployment and register it in self.adept_routers.
+
+        Called from _add_deployment on every 30-second DB sync tick. If the deployment
+        is already registered with identical params, this is a no-op. If a param
+        changed (e.g. operator edited trainer_url in the UI), the in-memory router
+        is rebuilt so the new value takes effect without a proxy restart.
+        """
+        from litellm.router_strategy.adept_router.adept_router import AdeptRouter
+        from litellm.router_strategy.adept_router.config import (
+            DEFAULT_CONVERSATIONS_THRESHOLD,
+        )
+
+        lp = deployment.litellm_params
+        default_model: Optional[str] = lp.adept_router_default_model
+        if default_model is None:
+            raise ValueError(
+                "adept_router_default_model is required for ADEPT router deployments."
+            )
+
+        if not lp.adept_router_pg_host:
+            raise ValueError(
+                "adept_router_pg_host is required for ADEPT router deployments. "
+                "Configure a PostgreSQL database so the trainer pipeline can access the data."
+            )
+
+        from urllib.parse import quote_plus
+
+        password = lp.adept_router_pg_password or ""
+        port = lp.adept_router_pg_port or 5432
+        user = lp.adept_router_pg_user or ""
+        database = lp.adept_router_pg_database or ""
+        pg_url = f"postgresql+psycopg2://{quote_plus(user)}:{quote_plus(password)}@{lp.adept_router_pg_host}:{port}/{database}"
+
+        threshold = (
+            lp.adept_router_conversations_threshold or DEFAULT_CONVERSATIONS_THRESHOLD
+        )
+        tag_prefix = lp.adept_router_tag_prefix or ""
+
+        existing = self.adept_routers.get(deployment.model_name)
+        if existing is not None:
+            params_changed = (
+                getattr(existing, "default_model", None) != default_model
+                or getattr(existing.template_router, "trainer_url", None)
+                != lp.adept_router_trainer_url
+                or getattr(existing.template_router, "conversations_threshold", None)
+                != threshold
+                or getattr(existing.template_router, "tag_prefix", None) != tag_prefix
+            )
+            if not params_changed:
+                verbose_router_logger.debug(
+                    f"AdeptRouter: '{deployment.model_name}' already registered with "
+                    "matching params — skipping re-init."
+                )
+                return
+            verbose_router_logger.info(
+                f"AdeptRouter: '{deployment.model_name}' params changed — rebuilding "
+                "in-memory router."
+            )
+            # Remove stale callback so the new instance is the only one logging
+            # success events. Best-effort — the callback manager is the source of truth.
+            try:
+                if existing in litellm.callbacks:
+                    litellm.callbacks.remove(existing)
+                if existing in litellm._async_success_callback:
+                    litellm._async_success_callback.remove(existing)
+            except Exception:
+                pass
+
+        adept_router: AdeptRouter = AdeptRouter(
+            model_name=deployment.model_name,
+            default_model=default_model,
+            litellm_router_instance=self,
+            pg_url=pg_url,
+            tag_prefix=tag_prefix,
+            conversations_threshold=threshold,
+            trainer_url=lp.adept_router_trainer_url,
+            seed_config=lp.adept_router_seed_config,
+        )
+        self.adept_routers[deployment.model_name] = adept_router
+        litellm.logging_callback_manager.add_litellm_callback(adept_router)
+
     def deployment_is_active_for_environment(self, deployment: Deployment) -> bool:
         """
         Function to check if a llm deployment is active for a given environment. Allows using the same config.yaml across multople environments
@@ -7712,6 +7802,7 @@ class Router:
         self.quality_routers = {}
         self.complexity_routers = {}
         self.auto_routers = {}
+        self.adept_routers = {}
         self._invalidate_model_group_info_cache()
         self._invalidate_access_groups_cache()
         # we add api_base/api_key each model so load balancing between azure/gpt on api_base1 and api_base2 works
@@ -7774,9 +7865,17 @@ class Router:
             if split_litellm_model in litellm._known_custom_logger_compatible_callbacks:
                 is_prompt_management_model = True
 
-        if is_prompt_management_model:
-            # For prompt management models, skip LLM provider validation
-            # The actual model will be resolved at runtime from the prompt file
+        # ADEPT deployments route through their own strategy (initialized later in
+        # this method at `init_adept_router_deployment`) and don't have a standard
+        # LLM provider. Skip the get_llm_provider validation that would otherwise
+        # reject `adept/<name>` as an unsupported provider.
+        is_adept_router_model = self._is_adept_router_deployment(
+            litellm_params=deployment.litellm_params
+        )
+
+        if is_prompt_management_model or is_adept_router_model:
+            # Skip LLM provider validation — actual routing happens via a
+            # strategy-specific init path further down.
             _model = litellm_model
             custom_llm_provider = None
             dynamic_api_key = None
@@ -7880,6 +7979,12 @@ class Router:
         #########################################################
         if self._is_quality_router_deployment(litellm_params=deployment.litellm_params):
             self.init_quality_router_deployment(deployment=deployment)
+
+        #########################################################
+        # Check if this is an ADEPT router deployment
+        #########################################################
+        if self._is_adept_router_deployment(litellm_params=deployment.litellm_params):
+            self.init_adept_router_deployment(deployment=deployment)
 
         return deployment
 
@@ -8624,7 +8729,9 @@ class Router:
                     custom_llm_provider=litellm_params.custom_llm_provider,
                 )
             except litellm.exceptions.BadRequestError as e:
-                verbose_router_logger.error("litellm.router.py::get_model_group_info() - {}".format(str(e)))
+                verbose_router_logger.error(
+                    "litellm.router.py::get_model_group_info() - {}".format(str(e))
+                )
 
             if model_info is None:
                 supported_openai_params = litellm.get_supported_openai_params(
@@ -10539,6 +10646,18 @@ class Router:
         #########################################################
         if model in self.quality_routers:
             return await self.quality_routers[model].async_pre_routing_hook(
+                model=model,
+                request_kwargs=request_kwargs,
+                messages=messages,
+                input=input,
+                specific_deployment=specific_deployment,
+            )
+
+        #########################################################
+        # Check if any ADEPT router should be used
+        #########################################################
+        if model in self.adept_routers:
+            return await self.adept_routers[model].async_pre_routing_hook(
                 model=model,
                 request_kwargs=request_kwargs,
                 messages=messages,

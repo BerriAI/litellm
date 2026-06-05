@@ -102,6 +102,13 @@ semantic-router = [
     "aurelio-sdk>=0.0.19,<1.0; python_version < '3.14'",
 ]
 mlflow = ["mlflow>=3.11.1,<4.0"]
+adept = [
+    # ADEPT router stores prompt-skeleton templates in Postgres via SQLAlchemy.
+    # Opt-in extra so non-ADEPT users don't carry these deps. Install with:
+    #     pip install "litellm[proxy,adept]"
+    "sqlalchemy>=2.0,<3.0",
+    "psycopg2-binary==2.9.11",
+]
 grpc = [
     # Newest non-yanked release older than the 30-day cutoff.
     "grpcio==1.78.0",

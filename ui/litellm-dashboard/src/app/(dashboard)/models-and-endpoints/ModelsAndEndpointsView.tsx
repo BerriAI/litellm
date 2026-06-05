@@ -432,6 +432,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                       <AddModelTab
                         form={addModelForm}
                         handleOk={handleOk}
+                        onModelAdded={handleRefreshClick}
                         selectedProvider={selectedProvider}
                         setSelectedProvider={setSelectedProvider}
                         providerModels={providerModels}
