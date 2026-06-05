@@ -762,3 +762,57 @@ def test_base_responses_config_sign_request_is_noop_by_default():
     )
     assert out_headers == {"Authorization": "Bearer sk-existing"}
     assert signed_body is None
+
+
+def _make_responses_handler_call(signed_body):
+    """Drive BaseLLMHTTPHandler.response_api_handler with a fully mocked provider
+    config + sync client, returning the kwargs the client.post was called with.
+
+    signed_body=None simulates a no-op (non-signing) provider; bytes simulates a
+    signing provider (e.g. Bedrock Mantle).
+    """
+    from unittest.mock import MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    provider_config = MagicMock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = (
+        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+    )
+    provider_config.transform_responses_api_request.return_value = {"input": "hi"}
+    provider_config.should_fake_stream.return_value = False
+    provider_config.sign_request.return_value = ({"X-Signed": "1"}, signed_body)
+
+    mock_client = MagicMock(spec=HTTPHandler)
+    mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    handler.response_api_handler(
+        model="openai.gpt-5.5",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={},
+        custom_llm_provider="bedrock_mantle",
+        litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        logging_obj=MagicMock(),
+        client=mock_client,
+        _is_async=False,
+    )
+    return mock_client.post.call_args.kwargs
+
+
+def test_responses_handler_sends_json_when_not_signed():
+    """No-op provider (signed_body is None) -> handler posts json=data, no data= bytes."""
+    kwargs = _make_responses_handler_call(signed_body=None)
+    assert kwargs.get("json") == {"input": "hi"}
+    assert "data" not in kwargs
+
+
+def test_responses_handler_sends_signed_bytes_when_signed():
+    """Signing provider -> handler posts the exact signed bytes via data=, not json=."""
+    kwargs = _make_responses_handler_call(signed_body=b'{"input": "hi"}')
+    assert kwargs.get("data") == b'{"input": "hi"}'
+    assert "json" not in kwargs
+    assert kwargs["headers"] == {"X-Signed": "1"}
