@@ -14,6 +14,8 @@ import os
 import sys
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
@@ -1378,3 +1380,73 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so detection doesn't depend on the
+    network-fetched ``main`` copy (which lacks this branch's flags until merge)."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
+class TestClaudeOpus48AdaptiveThinking:
+    """Opus 4.8 requires adaptive thinking (``thinking.type='adaptive'`` +
+    ``output_config.effort``). Detection is driven by the
+    ``supports_adaptive_thinking`` cost-map flag, resolved through provider
+    prefixes. Before the fix the Bedrock entries lacked the flag and the lookup
+    didn't strip the ``us.anthropic.``/``invoke/`` prefixes, so a
+    ``bedrock/us.anthropic.claude-opus-4-8`` call sent the legacy
+    ``thinking.type='enabled'`` shape and Bedrock rejected it (issue #29188)."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-8",
+            "anthropic/claude-opus-4-8",
+            "anthropic.claude-opus-4-8",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "bedrock/invoke/us.anthropic.claude-opus-4-8",
+            "bedrock/eu.anthropic.claude-opus-4-8",
+            "vertex_ai/claude-opus-4-8",
+            "azure_ai/claude-opus-4-8",
+        ],
+    )
+    def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    def test_resolver_reads_flag_through_bedrock_invoke_prefix(
+        self, local_model_cost_map
+    ):
+        """The resolver fix: ``bedrock/invoke/...`` resolves to the flagged
+        Bedrock entry. Pure ``_supports_factory`` without prefix-stripping
+        returns False here, which is why the data-only fix alone was not enough."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert (
+            AnthropicModelInfo._supports_model_capability(
+                "bedrock/invoke/us.anthropic.claude-opus-4-8",
+                "supports_adaptive_thinking",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "model",
+        ["claude-opus-4-5", "claude-3-7-sonnet", "claude-3-5-haiku-20241022"],
+    )
+    def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
