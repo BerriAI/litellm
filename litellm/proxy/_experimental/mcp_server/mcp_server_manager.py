@@ -3166,12 +3166,20 @@ class MCPServerManager:
 
         try:
             mcp_responses = await asyncio.gather(*tasks)
+        except asyncio.CancelledError:
+            timeout = mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "error": "timeout",
+                    "message": f"MCP tool call timed out after {timeout}s",
+                },
+            )
         except (
             BlockedPiiEntityError,
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error(
                 f"Guardrail blocked MCP tool call during result check: {str(e)}"
             )
