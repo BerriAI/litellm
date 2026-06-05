@@ -19,6 +19,7 @@ import asyncio
 import base64
 import hashlib
 import os
+import random
 import secrets
 import socket
 import subprocess
@@ -62,22 +63,15 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
         mp.undo()
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _spawn_oauth_server(label: str) -> tuple[subprocess.Popen, str]:
     host = "127.0.0.1"
-    port = _free_port()
     cmd = [
         sys.executable,
         str(OAUTH_SERVER_SCRIPT),
         "--host",
         host,
         "--port",
-        str(port),
+        "0",
     ]
     proc = subprocess.Popen(
         cmd,
@@ -86,23 +80,22 @@ def _spawn_oauth_server(label: str) -> tuple[subprocess.Popen, str]:
         stderr=subprocess.PIPE,
         env=os.environ.copy(),
     )
+    assert proc.stdout is not None
     start = time.time()
-    base = f"http://{host}:{port}"
     while True:
         if proc.poll() is not None:
-            out, err = proc.communicate()
+            out = proc.stdout.read()
+            _, err = proc.communicate()
             raise RuntimeError(
                 f"OAuth MCP server ({label}) exited early.\nSTDOUT:\n{out.decode()}\nSTDERR:\n{err.decode()}"
             )
-        try:
-            with socket.create_connection((host, port), timeout=0.1):
-                break
-        except OSError:
-            if time.time() - start > START_TIMEOUT:
-                proc.terminate()
-                raise TimeoutError(f"OAuth MCP server ({label}) did not start")
-            time.sleep(0.05)
-    return proc, base
+        line = proc.stdout.readline().decode().strip()
+        if line.startswith("LISTENING:"):
+            port = int(line.split(":")[1])
+            return proc, f"http://{host}:{port}"
+        if time.time() - start > START_TIMEOUT:
+            proc.terminate()
+            raise TimeoutError(f"OAuth MCP server ({label}) did not start")
 
 
 def _terminate(proc: subprocess.Popen) -> None:
@@ -169,7 +162,7 @@ def proxy_oauth_url(
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", 0))
+    sock.bind(("127.0.0.1", 8080))
     host, port = sock.getsockname()
 
     uv_config = uvicorn.Config(proxy_app, host=host, port=port, log_level="warning")
@@ -231,7 +224,7 @@ def _drive_interactive_oauth(proxy_url: str, server_name: str, scope: str) -> di
     """
     verifier, challenge = _pkce_pair()
     client_state = "client-state-" + secrets.token_urlsafe(8)
-    client_redirect = f"http://127.0.0.1:{_free_port()}/callback"
+    client_redirect = f"http://127.0.0.1:{random.randint(49152, 65535)}/callback"
 
     authorize = httpx.get(
         f"{proxy_url}/{server_name}/authorize",

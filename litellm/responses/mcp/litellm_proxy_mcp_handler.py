@@ -743,6 +743,10 @@ class LiteLLM_Proxy_MCP_Handler:
                     if user_api_key:
                         logging_request_data["metadata"]["user_api_key"] = user_api_key
 
+                    logging_request_data["metadata"]["user_api_key_user_id"] = getattr(user_api_key_auth, "user_id", None)
+                    logging_request_data["metadata"]["user_api_key_team_id"] = getattr(user_api_key_auth, "team_id", None)
+                    logging_request_data["metadata"]["user_api_key_end_user_id"] = getattr(user_api_key_auth, "end_user_id", None)
+
                     user_identifier = getattr(
                         user_api_key_auth, "end_user_id", None
                     ) or getattr(user_api_key_auth, "user_id", None)
