@@ -315,13 +315,23 @@ def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
             if "name" not in param:
                 continue
             param_name = param["name"]
-            param_schema = param.get("schema", {})
-            param_type = param_schema.get("type", "string")
-
-            properties[param_name] = {
-                "type": param_type,
-                "description": param.get("description", ""),
-            }
+            raw_schema = param.get("schema")
+            # Preserve the full resolved JSON Schema for the parameter
+            # (#29715). Previously only `type` was copied, dropping `items`,
+            # `enum`, `format`, `default`, `properties`, `required`, etc.
+            # Downstream consumers (CrewAI etc.) then converted the
+            # truncated schema to Pydantic and produced `items: {}` for
+            # arrays, which OpenAI rejects as an invalid tool schema.
+            schema_copy = (
+                dict(raw_schema) if isinstance(raw_schema, dict) else {}
+            )  # mutable-ok: copy the full param schema so downstream edits don't mutate the source operation
+            schema_copy.setdefault("type", "string")
+            # OpenAPI puts the human description on the parameter object,
+            # not on the schema; let it win when present, else fall back to
+            # any schema-level description, else empty string.
+            description = param.get("description") or schema_copy.get("description") or ""
+            schema_copy["description"] = description
+            properties[param_name] = schema_copy
 
             if param.get("required", False):
                 required.append(param_name)
@@ -334,11 +344,16 @@ def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
         # Try to get JSON schema
         if "application/json" in content:
             schema: Final[_OpenAPIJSONSchema] = content["application/json"].get("schema", {})
-            properties["body"] = {
-                "type": "object",
-                "description": request_body.get("description", "Request body"),
-                "properties": schema.get("properties", {}),
-            }
+            # Preserve the full body schema (#29715) instead of only
+            # `properties` — required, additionalProperties, $defs,
+            # nested items/enum, etc. are all load-bearing for downstream
+            # tool-call validation.
+            body_copy: Final = (
+                dict(schema) if schema else {}
+            )  # mutable-ok: copy the full body schema so downstream edits don't mutate the source operation
+            body_copy.setdefault("type", "object")
+            body_copy["description"] = request_body.get("description", "Request body")
+            properties["body"] = body_copy
             if request_body.get("required", False):
                 required.append("body")
 
