@@ -285,15 +285,69 @@ class TestYouComSearch:
             )
 
             call_args = mock_post.call_args
-            assert (
-                call_args.kwargs["url"] == "https://api.you.com/v1/agents/search"
-            )
+            assert call_args.kwargs["url"] == "https://api.you.com/v1/agents/search"
             headers = call_args.kwargs.get("headers", {})
             assert "X-API-Key" not in headers
             assert headers["Content-Type"] == "application/json"
 
             assert len(response.results) == 1
             assert response.results[0].title == "Keyless Result"
+
+    @pytest.mark.asyncio
+    async def test_you_com_search_programmatic_api_key_selects_keyed_endpoint(
+        self, monkeypatch
+    ):
+        """
+        When the key is passed programmatically (no YOUCOM_API_KEY in the env),
+        the keyed endpoint must be selected and the X-API-Key header sent, instead
+        of silently falling back to the keyless free tier.
+        """
+        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "results": {"web": [], "news": []},
+            "metadata": {},
+        }
+
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            await litellm.asearch(
+                query="anything",
+                search_provider="you_com",
+                api_key="my-programmatic-key",
+            )
+
+            call_args = mock_post.call_args
+            assert call_args.kwargs["url"] == "https://ydc-index.io/v1/search"
+            headers = call_args.kwargs.get("headers", {})
+            assert headers["X-API-Key"] == "my-programmatic-key"
+
+    def test_you_com_search_complete_url_uses_programmatic_api_key(self, monkeypatch):
+        """
+        get_complete_url selects the keyed endpoint from a forwarded api_key even
+        when YOUCOM_API_KEY is absent from the environment.
+        """
+        monkeypatch.delenv("YOUCOM_API_KEY", raising=False)
+
+        from litellm.llms.you_com.search.transformation import YouComSearchConfig
+
+        config = YouComSearchConfig()
+        assert (
+            config.get_complete_url(
+                api_base=None, optional_params={}, api_key="my-programmatic-key"
+            )
+            == "https://ydc-index.io/v1/search"
+        )
+        assert (
+            config.get_complete_url(api_base=None, optional_params={}, api_key=None)
+            == "https://api.you.com/v1/agents/search"
+        )
 
     def test_you_com_search_validate_environment_keyless(self, monkeypatch):
         """

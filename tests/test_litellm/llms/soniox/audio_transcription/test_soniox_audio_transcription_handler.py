@@ -47,7 +47,7 @@ class _MockSyncClient(HTTPHandler):
         return self._next("POST", url)
 
     def get(self, url, headers=None, timeout=None, **kw):  # type: ignore[override]
-        self.calls.append({"method": "GET", "url": url})
+        self.calls.append({"method": "GET", "url": url, "timeout": timeout})
         return self._next("GET", url)
 
     def delete(self, url, headers=None, timeout=None, **kw):  # type: ignore[override]
@@ -72,7 +72,7 @@ class _MockAsyncClient(AsyncHTTPHandler):
         return self._next("POST", url)
 
     async def get(self, url, headers=None, timeout=None, **kw):  # type: ignore[override]
-        self.calls.append({"method": "GET", "url": url})
+        self.calls.append({"method": "GET", "url": url, "timeout": timeout})
         return self._next("GET", url)
 
     async def delete(self, url, headers=None, timeout=None, **kw):  # type: ignore[override]
@@ -265,6 +265,69 @@ class TestSyncPolling:
                 **_common_call_kwargs(client),
             )
         assert exc_info.value.status_code == 504
+
+
+class TestGetRequestTimeoutForwarding:
+    def test_sync_should_forward_timeout_to_poll_and_transcript_gets(self, monkeypatch):
+        monkeypatch.setattr("time.sleep", lambda *_: None)
+        responses = {
+            "POST https://api.soniox.com/v1/transcriptions": [
+                _make_response({"id": "tx_1"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response({"status": "completed"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                _make_response({"text": "done", "tokens": []}),
+            ],
+        }
+        client = _MockSyncClient(responses)
+
+        SonioxAudioTranscriptionHandler().audio_transcriptions(
+            audio_file=None,
+            optional_params={
+                "audio_url": "https://example.com/a.wav",
+                "soniox_cleanup": None,
+            },
+            litellm_params={},
+            atranscription=False,
+            **_common_call_kwargs(client),
+        )
+
+        get_calls = [c for c in client.calls if c["method"] == "GET"]
+        assert get_calls
+        assert all(c["timeout"] == 30.0 for c in get_calls)
+
+    def test_async_should_forward_timeout_to_poll_and_transcript_gets(self):
+        responses = {
+            "POST https://api.soniox.com/v1/transcriptions": [
+                _make_response({"id": "tx_1"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1": [
+                _make_response({"status": "completed"}),
+            ],
+            "GET https://api.soniox.com/v1/transcriptions/tx_1/transcript": [
+                _make_response({"text": "done", "tokens": []}),
+            ],
+        }
+        client = _MockAsyncClient(responses)
+
+        asyncio.run(
+            SonioxAudioTranscriptionHandler().audio_transcriptions(
+                audio_file=None,
+                optional_params={
+                    "audio_url": "https://example.com/a.wav",
+                    "soniox_cleanup": None,
+                },
+                litellm_params={},
+                atranscription=True,
+                **_common_call_kwargs(client),
+            )
+        )
+
+        get_calls = [c for c in client.calls if c["method"] == "GET"]
+        assert get_calls
+        assert all(c["timeout"] == 30.0 for c in get_calls)
 
 
 class TestPollLimitsClamping:

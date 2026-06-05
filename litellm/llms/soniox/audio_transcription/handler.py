@@ -422,6 +422,7 @@ class SonioxAudioTranscriptionHandler:
             transcript_resp = http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}/transcript",
                 headers=auth_headers,
+                timeout=timeout,
             )
             self._raise_for_response(
                 transcript_resp, provider_config, "fetch transcript"
@@ -502,6 +503,7 @@ class SonioxAudioTranscriptionHandler:
             resp = http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}",
                 headers=auth_headers,
+                timeout=timeout,
             )
             self._raise_for_response(resp, provider_config, "poll transcription")
             data = resp.json()
@@ -658,6 +660,7 @@ class SonioxAudioTranscriptionHandler:
             transcript_resp = await http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}/transcript",
                 headers=auth_headers,
+                timeout=timeout,
             )
             self._raise_for_response(
                 transcript_resp, provider_config, "fetch transcript"
@@ -737,6 +740,7 @@ class SonioxAudioTranscriptionHandler:
             resp = await http_client.get(
                 url=f"{base_url}/v1/transcriptions/{transcription_id}",
                 headers=auth_headers,
+                timeout=timeout,
             )
             self._raise_for_response(resp, provider_config, "poll transcription")
             data = resp.json()

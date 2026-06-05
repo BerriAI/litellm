@@ -502,7 +502,12 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -555,7 +560,12 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -611,7 +621,12 @@ class TestMCPServerManager:
         captured_extra_headers = None
 
         async def capture_create_mcp_client(
-            server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
+            server,
+            mcp_auth_header,
+            extra_headers,
+            stdio_env,
+            subject_token=None,
+            **kwargs,
         ):  # pragma: no cover - helper
             nonlocal captured_extra_headers
             captured_extra_headers = extra_headers
@@ -3149,13 +3164,6 @@ class TestMCPServerTimestamps:
         from unittest.mock import AsyncMock, patch
 
         manager = MCPServerManager()
-        server = MCPServer(
-            server_id="timeout-tool-server",
-            name="timeout_tool_server",
-            url="https://example.com/mcp",
-            transport=MCPTransport.http,
-            timeout=2.0,
-        )
 
         async def _slow_call(*args, **kwargs):
             await asyncio.sleep(999)
