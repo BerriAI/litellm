@@ -220,7 +220,6 @@ ci = [
     # Pin to 1.0.8 so it pairs correctly with langgraph==1.0.10.
     "langgraph-prebuilt==1.0.8",
     "claude-agent-sdk==0.1.44",
-    "google-genai==1.37.0",
 ]
 healthcheck = [
     "httpx==0.28.1",

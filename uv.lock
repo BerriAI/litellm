@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-06-02T13:44:09.517413Z"
+exclude-newer = "2026-06-02T14:26:18.124315Z"
 exclude-newer-span = "P3D"
 
 [manifest]
@@ -3392,7 +3392,6 @@ ci = [
     { name = "blockbuster" },
     { name = "claude-agent-sdk" },
     { name = "detect-secrets" },
-    { name = "google-genai" },
     { name = "google-generativeai" },
     { name = "jsonlines" },
     { name = "langchain" },
@@ -3558,7 +3557,6 @@ ci = [
     { name = "blockbuster", specifier = "==1.5.26" },
     { name = "claude-agent-sdk", specifier = "==0.1.44" },
     { name = "detect-secrets", specifier = "==1.5.0" },
-    { name = "google-genai", specifier = "==1.37.0" },
     { name = "google-generativeai", specifier = "==0.8.6" },
     { name = "jsonlines", specifier = "==4.0.0" },
     { name = "langchain", specifier = "==1.2.10" },
