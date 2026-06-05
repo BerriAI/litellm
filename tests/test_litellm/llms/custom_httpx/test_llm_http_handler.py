@@ -742,3 +742,23 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     assert first_sent == prebuilt  # attempt 0 used prebuilt
     assert second_sent == _json.dumps(request_body)  # attempt 1 re-serialized
     assert "MUTATED" in second_sent  # ... the mutated body
+
+
+def test_base_responses_config_sign_request_is_noop_by_default():
+    """Default responses sign_request must be a no-op: unchanged headers, no signed body.
+
+    Guards the 15 existing responses providers from accidental signing when the
+    handler starts calling sign_request.
+    """
+    from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+
+    cfg = OpenAIResponsesAPIConfig()
+    headers = {"Authorization": "Bearer sk-existing"}
+    out_headers, signed_body = cfg.sign_request(
+        headers=headers,
+        optional_params={},
+        request_data={"input": "hi"},
+        api_base="https://api.openai.com/v1/responses",
+    )
+    assert out_headers == {"Authorization": "Bearer sk-existing"}
+    assert signed_body is None
