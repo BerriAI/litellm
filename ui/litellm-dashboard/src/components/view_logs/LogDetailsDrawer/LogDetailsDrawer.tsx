@@ -133,11 +133,17 @@ export function LogDetailsDrawer({
       const pagesToFetch = Math.min(firstPage.total_pages ?? 1, MAX_SESSION_PAGES);
 
       if (pagesToFetch > 1) {
-        const remaining = await Promise.all(
-          Array.from({ length: pagesToFetch - 1 }, (_, i) =>
-            sessionSpendLogsCall(accessToken, sessionId, i + 2, SESSION_PAGE_SIZE),
-          ),
-        );
+        const BATCH = 5;
+        const remaining: Awaited<ReturnType<typeof sessionSpendLogsCall>>[] = [];
+        for (let start = 2; start <= pagesToFetch; start += BATCH) {
+          const end = Math.min(start + BATCH - 1, pagesToFetch);
+          const batch = await Promise.all(
+            Array.from({ length: end - start + 1 }, (_, i) =>
+              sessionSpendLogsCall(accessToken, sessionId, start + i, SESSION_PAGE_SIZE),
+            ),
+          );
+          remaining.push(...batch);
+        }
         for (const page of remaining) {
           rows = rows.concat(page.data || []);
         }
