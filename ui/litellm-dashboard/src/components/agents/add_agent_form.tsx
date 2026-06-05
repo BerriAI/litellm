@@ -19,13 +19,8 @@ import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_
 import { Team } from "../key_team_helpers/key_list";
 import TeamDropdown from "../common_components/team_dropdown";
 import AgentFormFields from "./agent_form_fields";
-import AgentCardDiscovery, {
-  DiscoveredAgentCardSelection,
-} from "./agent_card_discovery";
-import {
-  buildDiscoveryRequest,
-  overlayDiscoveredCardParams,
-} from "./agent_discovery_utils";
+import AgentCardDiscovery, { DiscoveredAgentCardSelection } from "./agent_card_discovery";
+import { buildDiscoveryRequest, overlayDiscoveredCardParams } from "./agent_discovery_utils";
 import DynamicAgentFormFields, { buildDynamicAgentData } from "./dynamic_agent_form_fields";
 import { getDefaultFormValues, buildAgentDataFromForm } from "./agent_config";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
@@ -44,13 +39,7 @@ interface AddAgentFormProps {
   teams?: Team[] | null;
 }
 
-const AddAgentForm: React.FC<AddAgentFormProps> = ({
-  visible,
-  onClose,
-  accessToken,
-  onSuccess,
-  teams,
-}) => {
+const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessToken, onSuccess, teams }) => {
   const { userId, userRole } = useAuthorized();
   const [form] = Form.useForm();
   const [currentStep, setCurrentStep] = useState(0);
@@ -68,7 +57,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const [loadingKeys, setLoadingKeys] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
-  const [availableAgents, setAvailableAgents] = useState<{agent_id: string; agent_name: string}[]>([]);
+  const [availableAgents, setAvailableAgents] = useState<{ agent_id: string; agent_name: string }[]>([]);
   const [loadingAgents, setLoadingAgents] = useState(false);
 
   // Step 4: results
@@ -85,8 +74,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   // Latest upstream card selection from auto-discovery (skills, capabilities,
   // name, description). Dynamic agent forms don't render Form.Items for those
   // fields, so we overlay this onto agent_card_params at submit.
-  const [appliedDiscoveredSelection, setAppliedDiscoveredSelection] =
-    useState<DiscoveredAgentCardSelection | null>(null);
+  const [appliedDiscoveredSelection, setAppliedDiscoveredSelection] = useState<DiscoveredAgentCardSelection | null>(
+    null,
+  );
 
   // Fetch agent type metadata on mount
   useEffect(() => {
@@ -163,12 +153,12 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       .finally(() => {
         if (!cancelled) setLoadingAgents(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [currentStep, accessToken]);
 
-  const selectedAgentTypeInfo = agentTypeMetadata.find(
-    (info) => info.agent_type === agentType
-  );
+  const selectedAgentTypeInfo = agentTypeMetadata.find((info) => info.agent_type === agentType);
 
   // Watch every form field so we can recompute the discovery plan whenever
   // the user types into a relevant credential field below.
@@ -185,19 +175,14 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   // Returns undefined when nothing usable is filled in yet, which causes the
   // component to fall back to a manual URL input.
   const discoveryRequest = React.useMemo(
-    () =>
-      buildDiscoveryRequest(
-        agentType,
-        watchedFormValues || {},
-        selectedAgentTypeInfo,
-      ),
+    () => buildDiscoveryRequest(agentType, watchedFormValues || {}, selectedAgentTypeInfo),
     [watchedFormValues, selectedAgentTypeInfo, agentType],
   );
 
   const handleNext = async () => {
     try {
       if (currentStep === 0) {
-        await form.validateFields(["agent_name"]);
+        await form.validateFields();
         const agentName = form.getFieldValue("agent_name");
         if (agentName && !newKeyName) {
           setNewKeyName(`${agentName}-key`);
@@ -254,10 +239,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       return null;
     }
 
-    return overlayDiscoveredCardParams(
-      agentData,
-      appliedDiscoveredSelection?.selected_card,
-    );
+    return overlayDiscoveredCardParams(agentData, appliedDiscoveredSelection?.selected_card);
   };
 
   const handleCreateAgent = async () => {
@@ -283,7 +265,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
       const entitlementModels = values.entitlement_models || [];
       const entitlementAgents = values.entitlement_agents || [];
       const hasObjectPermission =
-        (mcpServersAndGroups?.servers?.length > 0 || mcpServersAndGroups?.accessGroups?.length > 0) ||
+        mcpServersAndGroups?.servers?.length > 0 ||
+        mcpServersAndGroups?.accessGroups?.length > 0 ||
         Object.keys(mcpToolPermissions).length > 0 ||
         entitlementModels.length > 0 ||
         entitlementAgents.length > 0;
@@ -392,7 +375,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const renderEntitlementsStep = () => (
     <div className="space-y-4">
       <p className="text-sm text-gray-600">
-        Configure which models, agents, and MCP tools this agent is allowed to use. Leave fields empty to allow all (subject to key/team permissions).
+        Configure which models, agents, and MCP tools this agent is allowed to use. Leave fields empty to allow all
+        (subject to key/team permissions).
       </p>
 
       <Form.Item
@@ -426,7 +410,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           loading={loadingAgents}
           showSearch
           filterOption={(input, option) =>
-            (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
+            ((option?.label as string) ?? "").toLowerCase().includes(input.toLowerCase())
           }
           options={availableAgents.map((a) => ({
             label: a.agent_name,
@@ -441,7 +425,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         label={
           <span>
             Allowed MCP Servers{" "}
-            <InfoCircleOutlined title="Select which MCP servers or access groups this agent can access" style={{ marginLeft: "4px" }} />
+            <InfoCircleOutlined
+              title="Select which MCP servers or access groups this agent can access"
+              style={{ marginLeft: "4px" }}
+            />
           </span>
         }
         name="allowed_mcp_servers_and_groups"
@@ -472,7 +459,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
               accessToken={accessToken ?? ""}
               selectedServers={form.getFieldValue("allowed_mcp_servers_and_groups")?.servers ?? []}
               toolPermissions={form.getFieldValue("mcp_tool_permissions") ?? {}}
-              onChange={(toolPerms: Record<string, string[]>) => form.setFieldsValue({ mcp_tool_permissions: toolPerms })}
+              onChange={(toolPerms: Record<string, string[]>) =>
+                form.setFieldsValue({ mcp_tool_permissions: toolPerms })
+              }
             />
           </div>
         )}
@@ -494,10 +483,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                 Only accept this agent being invoked with a trace-id (e.g. when used as a sub-agent).
               </p>
             </div>
-            <Switch
-              checked={requireTraceIdInbound}
-              onChange={setRequireTraceIdInbound}
-            />
+            <Switch checked={requireTraceIdInbound} onChange={setRequireTraceIdInbound} />
           </div>
 
           <div className="flex items-center justify-between">
@@ -530,7 +516,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         <div className="space-y-4">
           {!requireTraceIdOutbound && (
             <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-sm text-yellow-800">
-              Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure budgets and rate limits.
+              Enable &quot;Require x-litellm-trace-id on calls BY this agent&quot; in Tracing to configure budgets and
+              rate limits.
             </div>
           )}
 
@@ -566,9 +553,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           <Divider className="my-2" />
 
           <div className="text-sm font-medium text-gray-700">Agent Rate Limits</div>
-          <p className="text-xs text-gray-500">
-            Global rate limits applied across all callers of this agent.
-          </p>
+          <p className="text-xs text-gray-500">Global rate limits applied across all callers of this agent.</p>
           <div className="grid grid-cols-2 gap-4">
             <Form.Item label="TPM Limit" name="tpm_limit" className="mb-0">
               <InputNumber className="w-full" min={0} placeholder="e.g. 100000" disabled={!requireTraceIdOutbound} />
@@ -628,9 +613,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   // every field below; LangGraph and other dynamic forms only pick up the
   // shared ones (`agent_name`, `description`, plus any credential field whose
   // key looks URL-ish).
-  const handleApplyDiscoveredCard = (
-    selection: DiscoveredAgentCardSelection | null,
-  ) => {
+  const handleApplyDiscoveredCard = (selection: DiscoveredAgentCardSelection | null) => {
     setAppliedDiscoveredSelection(selection);
     if (!selection) return;
     const { selected_card, upstream_url } = selection;
@@ -643,8 +626,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     }));
 
     const currentAgentName = form.getFieldValue("agent_name");
-    const seededAgentName =
-      currentAgentName || selected_card.name || selected_card.provider?.organization || "";
+    const seededAgentName = currentAgentName || selected_card.name || selected_card.provider?.organization || "";
 
     const fieldsToSet: Record<string, any> = {
       agent_name: seededAgentName,
@@ -679,8 +661,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
   const isCustomAgent = agentType === CUSTOM_AGENT_TYPE;
   const selectedLogo = isCustomAgent
     ? null
-    : selectedAgentTypeInfo?.logo_url ||
-      agentTypeMetadata.find((a) => a.agent_type === "a2a")?.logo_url;
+    : selectedAgentTypeInfo?.logo_url || agentTypeMetadata.find((a) => a.agent_type === "a2a")?.logo_url;
 
   const renderConfigureStep = () => (
     <>
@@ -700,14 +681,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
               {menu}
               <Divider style={{ margin: "4px 0" }} />
               <div className="px-2 py-1">
-                <div className="text-xs text-gray-400 font-medium mb-1 uppercase tracking-wide px-2">
-                  Not listed?
-                </div>
+                <div className="text-xs text-gray-400 font-medium mb-1 uppercase tracking-wide px-2">Not listed?</div>
                 <div
                   className={`flex items-center gap-3 px-2 py-2 rounded cursor-pointer transition-colors ${
-                    agentType === CUSTOM_AGENT_TYPE
-                      ? "bg-amber-50"
-                      : "hover:bg-amber-50"
+                    agentType === CUSTOM_AGENT_TYPE ? "bg-amber-50" : "hover:bg-amber-50"
                   }`}
                   onClick={() => handleAgentTypeChange(CUSTOM_AGENT_TYPE)}
                 >
@@ -715,7 +692,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                   <div className="flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-amber-700">Custom / Other</span>
-                      <Tag color="orange" style={{ fontSize: 10, padding: "0 4px" }}>GENERIC</Tag>
+                      <Tag color="orange" style={{ fontSize: 10, padding: "0 4px" }}>
+                        GENERIC
+                      </Tag>
                     </div>
                     <div className="text-xs text-amber-600">
                       For agents that don&apos;t follow a standard protocol — just needs a virtual key
@@ -738,16 +717,10 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
               }
             >
               <div className="flex items-center gap-3 py-1">
-                <img
-                  src={info.logo_url || ""}
-                  alt={info.agent_type_display_name}
-                  className="w-5 h-5 object-contain"
-                />
+                <img src={info.logo_url || ""} alt={info.agent_type_display_name} className="w-5 h-5 object-contain" />
                 <div>
                   <div className="font-medium">{info.agent_type_display_name}</div>
-                  {info.description && (
-                    <div className="text-xs text-gray-500">{info.description}</div>
-                  )}
+                  {info.description && <div className="text-xs text-gray-500">{info.description}</div>}
                 </div>
               </div>
             </Select.Option>
@@ -765,10 +738,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
             >
               <Input placeholder="e.g. my-custom-agent" />
             </Form.Item>
-            <Form.Item
-              label="Description"
-              name="description"
-            >
+            <Form.Item label="Description" name="description">
               <Input.TextArea placeholder="Describe what this agent does…" rows={3} />
             </Form.Item>
           </div>
@@ -787,11 +757,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                     key={field.key}
                     label={field.label}
                     name={field.key}
-                    rules={
-                      field.required
-                        ? [{ required: true, message: `Please enter ${field.label}` }]
-                        : undefined
-                    }
+                    rules={field.required ? [{ required: true, message: `Please enter ${field.label}` }] : undefined}
                     tooltip={field.tooltip}
                     initialValue={field.default_value}
                   >
@@ -824,7 +790,6 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           </div>
         )}
       </div>
-
     </>
   );
 
@@ -871,9 +836,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                     <KeyOutlined className="text-indigo-600" />
                     <span className="font-medium text-gray-900">Create a new key for this agent</span>
                   </div>
-                  <p className="text-sm text-gray-500 mt-1">
-                    A dedicated key scoped to this agent.
-                  </p>
+                  <p className="text-sm text-gray-500 mt-1">A dedicated key scoped to this agent.</p>
                   {keyAssignOption === "create_new" && (
                     <div className="mt-3 space-y-3" onClick={(e) => e.stopPropagation()}>
                       <div>
@@ -912,9 +875,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                   <KeyOutlined className="text-gray-500" />
                   <span className="font-medium text-gray-900">Assign an existing key</span>
                 </div>
-                <p className="text-sm text-gray-500 mt-1">
-                  Re-assign a key you already have to this agent.
-                </p>
+                <p className="text-sm text-gray-500 mt-1">Re-assign a key you already have to this agent.</p>
                 {keyAssignOption === "existing_key" && (
                   <div className="mt-3" onClick={(e) => e.stopPropagation()}>
                     <Select
@@ -925,7 +886,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
                       value={selectedExistingKey}
                       onChange={(value) => setSelectedExistingKey(value)}
                       filterOption={(input, option) =>
-                        (option?.label as string ?? "").toLowerCase().includes(input.toLowerCase())
+                        ((option?.label as string) ?? "").toLowerCase().includes(input.toLowerCase())
                       }
                       options={existingKeys.map((k) => ({
                         label: k.key_alias || k.token?.slice(0, 12) + "…",
@@ -972,9 +933,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
         </p>
       )}
       {!createdKeyValue && !assignedKeyAlias && keyAssignOption === "skip" && (
-        <p className="text-sm text-gray-500 mt-2">
-          No key assigned. You can create one from the Virtual Keys page.
-        </p>
+        <p className="text-sm text-gray-500 mt-2">No key assigned. You can create one from the Virtual Keys page.</p>
       )}
     </div>
   );
@@ -983,9 +942,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
     <Modal
       title={
         <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-          {selectedLogo && currentStep < 1 && (
-            <img src={selectedLogo} alt="Agent" className="w-6 h-6 object-contain" />
-          )}
+          {selectedLogo && currentStep < 1 && <img src={selectedLogo} alt="Agent" className="w-6 h-6 object-contain" />}
           <h2 className="text-xl font-semibold text-gray-900">Add New Agent</h2>
         </div>
       }
@@ -1014,8 +971,21 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({
           layout="vertical"
           initialValues={
             agentType === "a2a"
-              ? { ...getDefaultFormValues(), allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {}, entitlement_models: [], entitlement_agents: [], guardrails: [] }
-              : { allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] }, mcp_tool_permissions: {}, entitlement_models: [], entitlement_agents: [], guardrails: [] }
+              ? {
+                  ...getDefaultFormValues(),
+                  allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
+                  mcp_tool_permissions: {},
+                  entitlement_models: [],
+                  entitlement_agents: [],
+                  guardrails: [],
+                }
+              : {
+                  allowed_mcp_servers_and_groups: { servers: [], accessGroups: [] },
+                  mcp_tool_permissions: {},
+                  entitlement_models: [],
+                  entitlement_agents: [],
+                  guardrails: [],
+                }
           }
           className="space-y-4"
         >

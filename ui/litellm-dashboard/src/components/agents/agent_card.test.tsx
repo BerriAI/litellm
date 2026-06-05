@@ -73,24 +73,20 @@ describe("AgentCard", () => {
   it("should show delete button only for admins", () => {
     const onDeleteClick = vi.fn();
     const { unmount } = renderWithProviders(
-      <AgentCard {...defaultProps} isAdmin={false} onDeleteClick={onDeleteClick} />
+      <AgentCard {...defaultProps} isAdmin={false} onDeleteClick={onDeleteClick} />,
     );
     expect(screen.queryByRole("button", { name: /delete/i })).not.toBeInTheDocument();
 
     unmount();
 
-    renderWithProviders(
-      <AgentCard {...defaultProps} isAdmin={true} onDeleteClick={onDeleteClick} />
-    );
+    renderWithProviders(<AgentCard {...defaultProps} isAdmin={true} onDeleteClick={onDeleteClick} />);
     expect(screen.getByRole("button", { name: /delete/i })).toBeInTheDocument();
   });
 
   it("should call onDeleteClick with agent id and name when delete is clicked", async () => {
     const user = userEvent.setup();
     const onDeleteClick = vi.fn();
-    renderWithProviders(
-      <AgentCard {...defaultProps} isAdmin={true} onDeleteClick={onDeleteClick} />
-    );
+    renderWithProviders(<AgentCard {...defaultProps} isAdmin={true} onDeleteClick={onDeleteClick} />);
 
     await user.click(screen.getByRole("button", { name: /delete/i }));
 

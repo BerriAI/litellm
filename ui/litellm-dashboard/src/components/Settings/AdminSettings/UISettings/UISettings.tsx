@@ -17,8 +17,7 @@ export default function UISettings() {
   const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
   const requireAuthForPublicAIHubProperty = schema?.properties?.require_auth_for_public_ai_hub;
   const forwardClientHeadersProperty = schema?.properties?.forward_client_headers_to_llm_api;
-  const forwardLLMProviderAuthHeadersProperty =
-    schema?.properties?.forward_llm_provider_auth_headers;
+  const forwardLLMProviderAuthHeadersProperty = schema?.properties?.forward_llm_provider_auth_headers;
   const enableProjectsUIProperty = schema?.properties?.enable_projects_ui;
   const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const disableAgentsProperty = schema?.properties?.disable_agents_for_internal_users;
@@ -306,10 +305,7 @@ export default function UISettings() {
               disabled={isUpdating}
               loading={isUpdating}
               onChange={handleToggleForwardLLMProviderAuthHeaders}
-              aria-label={
-                forwardLLMProviderAuthHeadersProperty?.description ??
-                "Forward LLM provider auth headers"
-              }
+              aria-label={forwardLLMProviderAuthHeadersProperty?.description ?? "Forward LLM provider auth headers"}
             />
             <Space direction="vertical" size={4}>
               <Typography.Text strong>Forward LLM provider auth headers</Typography.Text>

@@ -99,6 +99,33 @@ async def test_async_log_success_event_should_handle_float_duration():
         assert call_kwargs.kwargs["duration"] == 1.5
 
 
+@pytest.mark.asyncio
+async def test_async_log_success_event_forwards_start_and_end_time():
+    """The LITELLM service span must carry its real execution window, so
+    ``async_log_success_event`` forwards ``start_time``/``end_time`` to the service
+    hook. Without forwarding, the span emits with a synthetic now() boundary
+    instead of the call's actual timing."""
+    service_logger = ServiceLogging(mock_testing=True)
+
+    start_time = datetime(2026, 2, 13, 22, 35, 0)
+    end_time = datetime(2026, 2, 13, 22, 35, 1)
+
+    with patch.object(
+        service_logger, "async_service_success_hook", new_callable=AsyncMock
+    ) as mock_hook:
+        await service_logger.async_log_success_event(
+            kwargs={"call_type": "completion"},
+            response_obj=None,
+            start_time=start_time,
+            end_time=end_time,
+        )
+
+    mock_hook.assert_called_once()
+    forwarded = mock_hook.call_args.kwargs
+    assert forwarded["start_time"] == start_time
+    assert forwarded["end_time"] == end_time
+
+
 # --------------------------------------------------------------------------- #
 #  V2 OpenTelemetry service-span dispatch (regression: service spans were always
 #  dropped because the dispatch only recognized the legacy OpenTelemetry class).

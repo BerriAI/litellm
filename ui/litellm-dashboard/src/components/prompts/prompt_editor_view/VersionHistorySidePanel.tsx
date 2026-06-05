@@ -49,7 +49,7 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
     if (prompt.version) {
       return `v${prompt.version}`;
     }
-    
+
     // Fallback: try to extract from litellm_params.prompt_id
     const versionedId = (prompt.litellm_params as any)?.prompt_id || prompt.prompt_id;
     if (versionedId.includes(".v")) {
@@ -85,21 +85,21 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
           dataSource={versions}
           renderItem={(item, index) => {
             // Use version field for comparison since all items have the same prompt_id
-            const itemVersionNum = item.version || parseInt(getVersionNumber(item).replace('v', ''));
-            
+            const itemVersionNum = item.version || parseInt(getVersionNumber(item).replace("v", ""));
+
             // Extract version number from activeVersionId (may have .vX suffix)
             let activeVersionNum: number | null = null;
             if (activeVersionId) {
-              if (activeVersionId.includes('.v')) {
-                activeVersionNum = parseInt(activeVersionId.split('.v')[1]);
-              } else if (activeVersionId.includes('_v')) {
-                activeVersionNum = parseInt(activeVersionId.split('_v')[1]);
+              if (activeVersionId.includes(".v")) {
+                activeVersionNum = parseInt(activeVersionId.split(".v")[1]);
+              } else if (activeVersionId.includes("_v")) {
+                activeVersionNum = parseInt(activeVersionId.split("_v")[1]);
               }
             }
-            
+
             // Default to latest (first item) if no activeVersionId
             const isSelected = activeVersionNum ? itemVersionNum === activeVersionNum : index === 0;
-            
+
             return (
               <div
                 key={`${item.prompt_id}-v${item.version || itemVersionNum}`}
@@ -110,10 +110,12 @@ const VersionHistorySidePanel: React.FC<VersionHistorySidePanelProps> = ({
               >
                 <div className="flex justify-between items-start mb-2">
                   <div className="flex items-center gap-2">
-                    <Tag className="m-0">
-                      {getVersionNumber(item)}
-                    </Tag>
-                    {index === 0 && <Tag color="blue" className="m-0">Latest</Tag>}
+                    <Tag className="m-0">{getVersionNumber(item)}</Tag>
+                    {index === 0 && (
+                      <Tag color="blue" className="m-0">
+                        Latest
+                      </Tag>
+                    )}
                   </div>
                   {isSelected && (
                     <Tag color="green" className="m-0">

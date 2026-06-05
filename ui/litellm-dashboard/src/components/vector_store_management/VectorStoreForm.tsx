@@ -238,8 +238,8 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   <li>
                     For website, healthcare, and connector-based sources (Drive, Gmail, Slack, Jira, etc.): create a
                     search app on top of the data store, then copy the <strong>Engine ID</strong> and enter it in the
-                    Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for this record,
-                    but it isn't used in the GCP URL when Engine ID is set.
+                    Engine ID field. The Vector Store ID is still required as the LiteLLM-side name for this record, but
+                    it isn't used in the GCP URL when Engine ID is set.
                   </li>
                 </ol>
               </div>

@@ -78,8 +78,7 @@ vi.mock("@tremor/react", async (importOriginal) => {
     Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
       React.createElement("button", { ...props, ref }, children),
     ),
-    Tooltip: ({ children }: { children?: React.ReactNode }) =>
-      React.createElement(React.Fragment, null, children),
+    Tooltip: ({ children }: { children?: React.ReactNode }) => React.createElement(React.Fragment, null, children),
     Switch: ({
       checked,
       onChange,
@@ -97,11 +96,7 @@ vi.mock("@tremor/react", async (importOriginal) => {
         className,
       }),
     Icon: ({ icon: _IconComp, onClick, className }: any) =>
-      React.createElement(
-        "button",
-        { type: "button", onClick, className },
-        "TrashIcon",
-      ),
+      React.createElement("button", { type: "button", onClick, className }, "TrashIcon"),
   };
 });
 
@@ -171,9 +166,7 @@ describe("PoliciesPanel attachment delete", () => {
     await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
 
     const dialog = await screen.findByRole("dialog", {}, { timeout: 5000 });
-    expect(
-      within(dialog).getByText(/Are you sure you want to delete this attachment/i),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText(/Are you sure you want to delete this attachment/i)).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: /^delete$/i }));
 

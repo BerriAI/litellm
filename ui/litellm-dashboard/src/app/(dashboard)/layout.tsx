@@ -69,17 +69,13 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
           sidebarCollapsed={sidebarCollapsed}
           onToggleSidebar={toggleSidebar}
           proxySettings={undefined}
-          setProxySettings={() => { }}
+          setProxySettings={() => {}}
           accessToken={accessToken}
         />
         <DebugWarningBanner accessToken={accessToken} />
         <div className="flex flex-1 overflow-auto">
           <div className="mt-2">
-            <SidebarProvider
-              setPage={handleSetPage}
-              defaultSelectedKey={page}
-              sidebarCollapsed={sidebarCollapsed}
-            />
+            <SidebarProvider setPage={handleSetPage} defaultSelectedKey={page} sidebarCollapsed={sidebarCollapsed} />
           </div>
           <main className="flex-1">{children}</main>
         </div>
