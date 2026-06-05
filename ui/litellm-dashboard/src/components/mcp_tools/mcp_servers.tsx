@@ -31,7 +31,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
-  const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
+  const {
+    data: healthStatuses,
+    isLoading: isLoadingHealth,
+    recheckServerHealth,
+    recheckingServerIds,
+  } = useMCPServerHealth();
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
@@ -44,9 +49,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       const healthStatus = healthMap.get(server.server_id);
       return {
         ...server,
-        status: healthStatus
-          ? (healthStatus as "healthy" | "unhealthy" | "unknown")
-          : server.status,
+        status: healthStatus ? (healthStatus as "healthy" | "unhealthy" | "unknown") : server.status,
       };
     });
   }, [mcpServers, healthStatuses]);
@@ -109,35 +112,40 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     if (!serversWithHealth) return [];
     return Array.from(
       new Set(
-        serversWithHealth.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
+        serversWithHealth
+          .flatMap((server) => server.mcp_access_groups)
+          .filter((group): group is string => group != null),
       ),
     );
   }, [serversWithHealth]);
 
   // Filtering logic for both team and access group
-  const filterServers = useCallback((teamId: string, group: string) => {
-    if (!serversWithHealth) return setFilteredServers([]);
-    let filtered = serversWithHealth;
-    if (teamId === "personal") {
-      setFilteredServers([]);
-      return;
-    }
-    if (teamId !== "all") {
-      filtered = filtered.filter((server) => server.teams?.some((team) => team.team_id === teamId));
-    }
-    if (group !== "all") {
-      filtered = filtered.filter((server) =>
-        server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
-      );
-    }
-    const sorted = [...filtered].sort((a, b) => {
-      if (!a.created_at && !b.created_at) return 0;
-      if (!a.created_at) return 1;
-      if (!b.created_at) return -1;
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-    setFilteredServers(sorted);
-  }, [serversWithHealth]);
+  const filterServers = useCallback(
+    (teamId: string, group: string) => {
+      if (!serversWithHealth) return setFilteredServers([]);
+      let filtered = serversWithHealth;
+      if (teamId === "personal") {
+        setFilteredServers([]);
+        return;
+      }
+      if (teamId !== "all") {
+        filtered = filtered.filter((server) => server.teams?.some((team) => team.team_id === teamId));
+      }
+      if (group !== "all") {
+        filtered = filtered.filter((server) =>
+          server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
+        );
+      }
+      const sorted = [...filtered].sort((a, b) => {
+        if (!a.created_at && !b.created_at) return 0;
+        if (!a.created_at) return 1;
+        if (!b.created_at) return -1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+      setFilteredServers(sorted);
+    },
+    [serversWithHealth],
+  );
 
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
@@ -218,18 +226,20 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   // Memoize the selected server to prevent unnecessary re-renders
   const selectedServer = React.useMemo(() => {
-    return filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
-      server_id: "",
-      server_name: "",
-      alias: "",
-      url: "",
-      transport: "",
-      auth_type: "",
-      created_at: "",
-      created_by: "",
-      updated_at: "",
-      updated_by: "",
-    };
+    return (
+      filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
+        server_id: "",
+        server_name: "",
+        alias: "",
+        url: "",
+        transport: "",
+        auth_type: "",
+        created_at: "",
+        created_by: "",
+        updated_at: "",
+        updated_by: "",
+      }
+    );
   }, [filteredServers, selectedServerId]);
 
   // Memoize the onBack callback to prevent unnecessary re-renders
@@ -258,14 +268,18 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         confirmLoading={isDeletingServer}
       >
         <div className="space-y-4">
-          <AntdText className="text-gray-600">This action is permanent and cannot be undone. All associated configurations will be removed.</AntdText>
+          <AntdText className="text-gray-600">
+            This action is permanent and cannot be undone. All associated configurations will be removed.
+          </AntdText>
 
           {serverToDelete && (
             <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
               <Descriptions column={1} size="small" colon={false}>
                 {serverToDelete.server_name && (
                   <Descriptions.Item label={<span className="text-gray-500 text-sm">Name</span>}>
-                    <AntdText strong className="text-sm">{serverToDelete.server_name}</AntdText>
+                    <AntdText strong className="text-sm">
+                      {serverToDelete.server_name}
+                    </AntdText>
                   </Descriptions.Item>
                 )}
                 <Descriptions.Item label={<span className="text-gray-500 text-sm">ID</span>}>
@@ -287,6 +301,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       </Modal>
       <CreateMCPServer
         userRole={userRole}
+        userID={userID}
         accessToken={accessToken}
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}
@@ -354,7 +369,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
-            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
+            {isAdminRole(userRole) && (
+              <Tab>
+                <span className="flex items-center gap-2">
+                  Submitted MCPs <NewBadge />
+                </span>
+              </Tab>
+            )}
           </div>
         </TabList>
         <TabPanels>
@@ -380,7 +401,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                         <Text className="text-sm font-medium text-gray-600 whitespace-nowrap">Team</Text>
                         <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 220 }} size="middle">
                           <Option value="all">
-                            <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
+                            <span className="font-medium">
+                              {isInternalUser ? "All Available Servers" : "All Servers"}
+                            </span>
                           </Option>
                           <Option value="personal">
                             <span className="font-medium">Personal</span>
@@ -400,7 +423,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                             <QuestionCircleOutlined style={{ marginLeft: 4, color: "#9ca3af" }} />
                           </Tooltip>
                         </Text>
-                        <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 220 }} size="middle">
+                        <Select
+                          value={selectedMcpAccessGroup}
+                          onChange={handleMcpAccessGroupChange}
+                          style={{ width: 220 }}
+                          size="middle"
+                        >
                           <Option value="all">
                             <span className="font-medium">All Access Groups</span>
                           </Option>

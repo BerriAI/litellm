@@ -918,9 +918,11 @@ class GuardrailRaisedException(Exception):
         guardrail_name: Optional[str] = None,
         message: str = "",
         should_wrap_with_default_message: bool = True,
+        status_code: int = 400,
     ):
         default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
+        self.status_code = status_code
         self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
@@ -930,12 +932,14 @@ class BlockedPiiEntityError(Exception):
         self,
         entity_type: str,
         guardrail_name: Optional[str] = None,
+        status_code: int = 400,
     ):
         """
         Raised when a blocked entity is detected by a guardrail.
         """
         self.entity_type = entity_type
         self.guardrail_name = guardrail_name
+        self.status_code = status_code
         self.message = f"Blocked entity detected: {entity_type} by Guardrail: {guardrail_name}. This entity is not allowed to be used in this request."
         super().__init__(self.message)
 
@@ -1058,3 +1062,37 @@ class GuardrailInterventionNormalStringError(
 
     def __repr__(self):
         return self.__str__()
+
+
+class SensitiveDataRouteException(Exception):
+    """
+    Exception raised when a guardrail detects sensitive data and wants to reroute the request.
+
+    Instead of blocking the request, this exception signals that the request should be
+    routed to a different model (typically an on-premise model for data privacy).
+
+    The proxy catches this exception and:
+    1. Reroutes the current request to the specified model
+    2. When sticky_session_routing is True, stores the routing decision in session
+       cache so all subsequent requests in the same session are routed to the same model
+    """
+
+    def __init__(
+        self,
+        route_to_model: str,
+        session_id: str,
+        guardrail_name: Optional[str] = None,
+        detection_info: Optional[Dict[str, Any]] = None,
+        message: Optional[str] = None,
+        sticky_session_routing: bool = True,
+    ):
+        self.route_to_model = route_to_model
+        self.session_id = session_id
+        self.guardrail_name = guardrail_name
+        self.detection_info = detection_info or {}
+        self.sticky_session_routing = sticky_session_routing
+        self.message = (
+            message
+            or f"Sensitive data detected by {guardrail_name}. Routing to model: {route_to_model}"
+        )
+        super().__init__(self.message)

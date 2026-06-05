@@ -1278,6 +1278,194 @@ def test_xff_misconfig_warning_emitted_once(caplog):
     ), f"expected exactly one warning, got {len(matching)}: {[r.getMessage() for r in matching]}"
 
 
+def test_get_request_base_url_honors_proxy_base_url_env(monkeypatch):
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP discoverable endpoints not available")
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "10.0.0.7"
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "litellm-internal:4000",
+        "X-Forwarded-Port": "9999",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com")
+    assert get_request_base_url(mock_request) == "https://litellm.example.com"
+
+    monkeypatch.setenv("PROXY_BASE_URL", "https://litellm.example.com/")
+    assert get_request_base_url(mock_request) == "https://litellm.example.com"
+
+
+def test_validate_trusted_redirect_uri_logs_diagnostic_on_rejection(
+    caplog, monkeypatch
+):
+    try:
+        from fastapi import HTTPException, Request
+
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            validate_trusted_redirect_uri,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+    monkeypatch.delenv("MCP_TRUSTED_REDIRECT_ORIGINS", raising=False)
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "203.0.113.5"
+    headers = {
+        "X-Forwarded-Proto": "https",
+        "X-Forwarded-Host": "litellm.example.com",
+        "X-Forwarded-Port": "443",
+        "Host": "litellm-internal:4000",
+    }
+    mock_request.headers.get = lambda name, default=None: headers.get(name, default)
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            validate_trusted_redirect_uri(
+                mock_request,
+                "https://litellm.example.com/ui/mcp/oauth/callback",
+            )
+        assert exc_info.value.status_code == 400
+        detail = exc_info.value.detail
+        assert isinstance(detail, dict)
+        assert detail.get("error") == "invalid_request"
+        assert "error_description" in detail
+        assert "redirect_uri origin" in detail["error_description"]
+        assert "proxy origin" in detail["error_description"]
+        assert "hint" in detail
+
+    matching = [r for r in caplog.records if "rejecting redirect_uri" in r.getMessage()]
+    assert len(matching) == 1, (
+        "expected exactly one diagnostic warning, got "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    msg = matching[0].getMessage()
+    assert "https://litellm.example.com/ui/mcp/oauth/callback" in msg
+    assert "litellm-internal:4000" in msg
+    assert "X-Forwarded-Host" in msg
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        "litellm.example.com",
+        "litellm.example.com/",
+        "://litellm.example.com",
+        "ftp://litellm.example.com",
+        "https://",
+        "not a url at all",
+    ],
+)
+def test_get_request_base_url_rejects_malformed_proxy_base_url(
+    bad_value, monkeypatch, caplog
+):
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server import oauth_utils
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    oauth_utils._warned_invalid_proxy_base_url = None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"
+    mock_request.headers.get = lambda name, default=None: default
+
+    monkeypatch.setenv("PROXY_BASE_URL", bad_value)
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        result = get_request_base_url(mock_request)
+
+    assert result == "http://litellm-internal:4000", (
+        f"malformed PROXY_BASE_URL={bad_value!r} should be ignored, " f"got {result!r}"
+    )
+    matching = [
+        r
+        for r in caplog.records
+        if "PROXY_BASE_URL" in r.getMessage() and "ignored" in r.getMessage()
+    ]
+    assert len(matching) == 1, (
+        "expected one diagnostic for malformed PROXY_BASE_URL, got "
+        f"{[r.getMessage() for r in caplog.records]}"
+    )
+    assert (
+        repr(bad_value) in matching[0].getMessage()
+        or bad_value in matching[0].getMessage()
+    )
+
+
+def test_get_request_base_url_malformed_proxy_base_url_warning_is_one_shot(
+    monkeypatch, caplog
+):
+    try:
+        from fastapi import Request
+
+        from litellm.proxy._experimental.mcp_server import oauth_utils
+        from litellm.proxy._experimental.mcp_server.oauth_utils import (
+            get_request_base_url,
+        )
+    except ImportError:
+        pytest.skip("MCP oauth_utils not available")
+
+    oauth_utils._warned_invalid_proxy_base_url = None
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "http://litellm-internal:4000/"
+    mock_request.client = MagicMock()
+    mock_request.client.host = "127.0.0.1"
+    mock_request.headers.get = lambda name, default=None: default
+
+    monkeypatch.setenv("PROXY_BASE_URL", "litellm.example.com")
+
+    import logging
+
+    with (
+        caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        patch("litellm.proxy.proxy_server.general_settings", {}, create=True),
+    ):
+        for _ in range(5):
+            get_request_base_url(mock_request)
+
+    matching = [
+        r
+        for r in caplog.records
+        if "PROXY_BASE_URL" in r.getMessage() and "ignored" in r.getMessage()
+    ]
+    assert (
+        len(matching) == 1
+    ), f"expected exactly one warning across 5 calls, got {len(matching)}"
+
+
 # -------------------------------------------------------------------
 # Tests for scopes_supported when mcp_server.scopes is None
 # -------------------------------------------------------------------
@@ -1327,7 +1515,7 @@ async def test_oauth_protected_resource_returns_empty_scopes_when_none():
     mock_request.headers = {}
 
     try:
-        response = _build_oauth_protected_resource_response(
+        response = await _build_oauth_protected_resource_response(
             request=mock_request,
             mcp_server_name="atlassian_mcp",
             use_standard_pattern=False,
@@ -1817,7 +2005,7 @@ async def test_discovery_root_does_not_expose_private_server_for_external_client
                 request=mock_request,
                 mcp_server_name=None,
             )
-            resource_response = _build_oauth_protected_resource_response(
+            resource_response = await _build_oauth_protected_resource_response(
                 request=mock_request,
                 mcp_server_name=None,
                 use_standard_pattern=False,

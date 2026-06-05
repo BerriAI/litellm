@@ -50,12 +50,12 @@ export function useChatHistory({ simplified }: { simplified: boolean }): UseChat
 
   const [mcpEvents, setMCPEvents] = useState<MCPEvent[]>([]);
 
-  const [messageTraceId, setMessageTraceId] = useState<string | null>(
-    () => (simplified ? null : sessionStorage.getItem("messageTraceId") || null),
+  const [messageTraceId, setMessageTraceId] = useState<string | null>(() =>
+    simplified ? null : sessionStorage.getItem("messageTraceId") || null,
   );
 
-  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(
-    () => (simplified ? null : sessionStorage.getItem("responsesSessionId") || null),
+  const [responsesSessionId, setResponsesSessionId] = useState<string | null>(() =>
+    simplified ? null : sessionStorage.getItem("responsesSessionId") || null,
   );
 
   const [useApiSessionManagement, setUseApiSessionManagement] = useState<boolean>(() => {

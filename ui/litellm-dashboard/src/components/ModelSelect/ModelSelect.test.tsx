@@ -40,9 +40,7 @@ vi.mock("antd", async (importOriginal) => {
       // Simulate maxTagCount responsive behavior - if value length > 5, call maxTagPlaceholder
       const shouldShowPlaceholder = maxTagCount === "responsive" && Array.isArray(value) && value.length > 5;
       const visibleValues = shouldShowPlaceholder ? value.slice(0, 5) : value;
-      const omittedValues = shouldShowPlaceholder
-        ? value.slice(5).map((v: string) => ({ value: v, label: v }))
-        : [];
+      const omittedValues = shouldShowPlaceholder ? value.slice(5).map((v: string) => ({ value: v, label: v })) : [];
 
       return (
         <div data-testid={dataTestId || "model-select"}>
@@ -168,9 +166,7 @@ describe("ModelSelect", () => {
         isLoading: true,
       } as any);
 
-      const { unmount } = renderWithProviders(
-        <ModelSelect onChange={mockOnChange} context={context} {...props} />,
-      );
+      const { unmount } = renderWithProviders(<ModelSelect onChange={mockOnChange} context={context} {...props} />);
 
       expect(screen.getByTestId("skeleton-input")).toBeInTheDocument();
       unmount();
@@ -337,7 +333,7 @@ describe("ModelSelect", () => {
         name: "global context",
         context: "global" as const,
         options: {},
-        setup: () => { },
+        setup: () => {},
         expectedVisible: ["gpt-4", "claude-3"],
         expectedHidden: [],
       },
@@ -378,7 +374,7 @@ describe("ModelSelect", () => {
         name: "when showAllProxyModelsOverride is true",
         context: "user" as const,
         options: { showAllProxyModelsOverride: true, includeSpecialOptions: true },
-        setup: () => { },
+        setup: () => {},
         shouldShow: true,
       },
       {
@@ -411,7 +407,7 @@ describe("ModelSelect", () => {
         name: "when context is global",
         context: "global" as const,
         options: { includeSpecialOptions: true },
-        setup: () => { },
+        setup: () => {},
         shouldShow: true,
       },
       {

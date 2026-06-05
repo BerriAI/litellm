@@ -4,9 +4,7 @@ import type { MultiModelResult } from "./types";
 import type { CostEstimateResponse } from "../types";
 
 vi.mock("@/utils/dataUtils", () => ({
-  formatNumberWithCommas: vi.fn((v: number, d: number = 0) =>
-    Number.isFinite(v) ? v.toFixed(d) : "-"
-  ),
+  formatNumberWithCommas: vi.fn((v: number, d: number = 0) => (Number.isFinite(v) ? v.toFixed(d) : "-")),
 }));
 
 function makeCostResponse(overrides: Partial<CostEstimateResponse> = {}): CostEstimateResponse {
@@ -139,10 +137,27 @@ describe("exportMultiToPDF", () => {
   it("should only include entries that have a result", () => {
     const multiResult: MultiModelResult = {
       entries: [
-        { entry: { id: "e1", model: "gpt-4", input_tokens: 1000, output_tokens: 500 }, result: null, loading: false, error: null },
-        { entry: { id: "e2", model: "claude-3", input_tokens: 500, output_tokens: 250 }, result: makeCostResponse({ model: "claude-3", provider: "anthropic" }), loading: false, error: null },
+        {
+          entry: { id: "e1", model: "gpt-4", input_tokens: 1000, output_tokens: 500 },
+          result: null,
+          loading: false,
+          error: null,
+        },
+        {
+          entry: { id: "e2", model: "claude-3", input_tokens: 500, output_tokens: 250 },
+          result: makeCostResponse({ model: "claude-3", provider: "anthropic" }),
+          loading: false,
+          error: null,
+        },
       ],
-      totals: { cost_per_request: 0.05, daily_cost: 5.0, monthly_cost: 150.0, margin_per_request: 0, daily_margin: null, monthly_margin: null },
+      totals: {
+        cost_per_request: 0.05,
+        daily_cost: 5.0,
+        monthly_cost: 150.0,
+        margin_per_request: 0,
+        daily_margin: null,
+        monthly_margin: null,
+      },
     };
     exportMultiToPDF(multiResult);
     const html = mockPrintWindow.document.write.mock.calls[0][0] as string;
@@ -153,10 +168,27 @@ describe("exportMultiToPDF", () => {
   it("should show plural 'models' when multiple results are present", () => {
     const multiResult: MultiModelResult = {
       entries: [
-        { entry: { id: "e1", model: "gpt-4", input_tokens: 1000, output_tokens: 500 }, result: makeCostResponse(), loading: false, error: null },
-        { entry: { id: "e2", model: "claude-3", input_tokens: 500, output_tokens: 250 }, result: makeCostResponse({ model: "claude-3" }), loading: false, error: null },
+        {
+          entry: { id: "e1", model: "gpt-4", input_tokens: 1000, output_tokens: 500 },
+          result: makeCostResponse(),
+          loading: false,
+          error: null,
+        },
+        {
+          entry: { id: "e2", model: "claude-3", input_tokens: 500, output_tokens: 250 },
+          result: makeCostResponse({ model: "claude-3" }),
+          loading: false,
+          error: null,
+        },
       ],
-      totals: { cost_per_request: 0.10, daily_cost: 10.0, monthly_cost: 300.0, margin_per_request: 0, daily_margin: null, monthly_margin: null },
+      totals: {
+        cost_per_request: 0.1,
+        daily_cost: 10.0,
+        monthly_cost: 300.0,
+        margin_per_request: 0,
+        daily_margin: null,
+        monthly_margin: null,
+      },
     };
     exportMultiToPDF(multiResult);
     const html = mockPrintWindow.document.write.mock.calls[0][0] as string;
@@ -250,9 +282,21 @@ describe("exportMultiToCSV", () => {
   it("should skip entries with null results", () => {
     const multiResult: MultiModelResult = {
       entries: [
-        { entry: { id: "e1", model: "gpt-4", input_tokens: 1000, output_tokens: 500 }, result: null, loading: false, error: null },
+        {
+          entry: { id: "e1", model: "gpt-4", input_tokens: 1000, output_tokens: 500 },
+          result: null,
+          loading: false,
+          error: null,
+        },
       ],
-      totals: { cost_per_request: 0, daily_cost: null, monthly_cost: null, margin_per_request: 0, daily_margin: null, monthly_margin: null },
+      totals: {
+        cost_per_request: 0,
+        daily_cost: null,
+        monthly_cost: null,
+        margin_per_request: 0,
+        daily_margin: null,
+        monthly_margin: null,
+      },
     };
 
     let csvContent = "";

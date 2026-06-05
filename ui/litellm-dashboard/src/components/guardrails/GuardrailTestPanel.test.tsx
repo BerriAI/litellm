@@ -41,7 +41,7 @@ describe("GuardrailTestPanel", () => {
         results={null}
         errors={null}
         onClose={mockOnClose}
-      />
+      />,
     );
 
     // Find and type in the textarea
@@ -57,4 +57,3 @@ describe("GuardrailTestPanel", () => {
     });
   });
 });
-

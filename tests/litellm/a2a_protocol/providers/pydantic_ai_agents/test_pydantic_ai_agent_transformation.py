@@ -90,9 +90,10 @@ class TestPydanticAITransformation:
             request_id="req-123",
         )
 
-        # Should return standard A2A format with message
+        # Should return standard A2A non-streaming format where `result` is the
+        # Message itself (kind="message"), per A2A spec / SendMessageResponse.
         assert result["jsonrpc"] == "2.0"
         assert result["id"] == "req-123"
-        assert "message" in result["result"]
-        assert result["result"]["message"]["role"] == "agent"
-        assert result["result"]["message"]["parts"][0]["text"] == "The answer is 4."
+        assert result["result"]["kind"] == "message"
+        assert result["result"]["role"] == "agent"
+        assert result["result"]["parts"][0]["text"] == "The answer is 4."

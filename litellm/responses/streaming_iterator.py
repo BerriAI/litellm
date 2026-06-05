@@ -9,6 +9,7 @@ from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
+from openai._streaming import SSEDecoder
 
 import litellm
 from litellm.constants import (
@@ -27,7 +28,7 @@ from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfi
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
-from litellm.utils import CustomStreamWrapper, async_post_call_success_deployment_hook
+from litellm.utils import async_post_call_success_deployment_hook
 
 
 @lru_cache(maxsize=1)
@@ -120,10 +121,10 @@ class BaseResponsesAPIStreamingIterator:
         if not chunk:
             return None
 
-        # Handle SSE format (data: {...})
-        chunk = CustomStreamWrapper._strip_sse_data_from_chunk(chunk)
-        if chunk is None:
-            return None
+        # NOTE: ``SSEDecoder`` already strips the SSE ``data:`` field prefix, so
+        # the value passed in here is the raw field content. Do not re-run
+        # ``_strip_sse_data_from_chunk`` on it — doing so would incorrectly mangle
+        # payloads whose actual JSON value happens to start with ``data:``.
 
         # Handle "[DONE]" marker
         if chunk == STREAM_SSE_DONE_STRING:
@@ -634,7 +635,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
-        self.stream_iterator = response.aiter_lines()
+        self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
 
     def __aiter__(self):
         return self
@@ -645,13 +646,13 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             while True:
                 # Get the next chunk from the stream
                 try:
-                    chunk = await self.stream_iterator.__anext__()
+                    sse = await self.stream_iterator.__anext__()
                 except StopAsyncIteration:
                     self.finished = True
                     raise StopAsyncIteration
 
                 self._check_max_streaming_duration()
-                result = self._process_chunk(chunk)
+                result = self._process_chunk(sse.data)
 
                 if self.finished:
                     raise StopAsyncIteration
@@ -708,7 +709,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             request_data,
             call_type,
         )
-        self.stream_iterator = response.iter_lines()
+        self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
 
     def __iter__(self):
         return self
@@ -719,13 +720,13 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             while True:
                 # Get the next chunk from the stream
                 try:
-                    chunk = next(self.stream_iterator)
+                    sse = next(self.stream_iterator)
                 except StopIteration:
                     self.finished = True
                     raise StopIteration
 
                 self._check_max_streaming_duration()
-                result = self._process_chunk(chunk)
+                result = self._process_chunk(sse.data)
 
                 if self.finished:
                     raise StopIteration
@@ -1250,6 +1251,7 @@ class ResponsesWebSocketStreaming:
         logging_obj: LiteLLMLoggingObj,
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
+        first_message: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1258,6 +1260,7 @@ class ResponsesWebSocketStreaming:
         self.request_data: Dict = request_data or {}
         self.messages: list[Dict] = []
         self.input_messages: list[Dict[str, str]] = []
+        self.first_message = first_message
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1361,6 +1364,11 @@ class ResponsesWebSocketStreaming:
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
+            if self.first_message is not None:
+                self._store_input(self.first_message)
+                self._store_event(self.first_message)
+                await self.backend_ws.send(self.first_message)  # type: ignore[union-attr]
+
             while True:
                 message = await self.websocket.receive_text()
 
@@ -1439,6 +1447,7 @@ class ManagedResponsesWebSocketHandler:
         api_base: Optional[str] = None,
         timeout: Optional[float] = None,
         custom_llm_provider: Optional[str] = None,
+        first_message: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
         self.websocket = websocket
@@ -1450,6 +1459,8 @@ class ManagedResponsesWebSocketHandler:
         self.api_base = api_base
         self.timeout = timeout
         self.custom_llm_provider = custom_llm_provider
+        self._connection_provider = self._resolve_provider(model) or custom_llm_provider
+        self.first_message = first_message
         # Carry through safe pass-through kwargs (e.g. extra_headers)
         self.extra_kwargs: Dict[str, Any] = {
             k: v for k, v in kwargs.items() if k not in _MANAGED_WS_SKIP_KWARGS
@@ -1647,8 +1658,30 @@ class ManagedResponsesWebSocketHandler:
             # cross-connection multi-turn when spend logs are committed)
             call_kwargs["previous_response_id"] = previous_response_id
 
+    @staticmethod
+    def _resolve_provider(model: Optional[str]) -> Optional[str]:
+        """Resolve the LLM provider for a model string, or None if unresolvable."""
+        if not model:
+            return None
+        try:
+            from litellm import get_llm_provider
+
+            _, provider, _, _ = get_llm_provider(model=model)
+            return provider
+        except Exception:
+            return None
+
+    def _same_provider(self, model: Optional[str]) -> bool:
+        """Return True if model uses the same LLM provider as the connection model."""
+        if model is None or model == self.model:
+            return True
+        event_provider = self._resolve_provider(model)
+        if event_provider is None:
+            return False
+        return event_provider == self._connection_provider
+
     def _inject_credentials(
-        self, call_kwargs: Dict[str, Any], event_model: Optional[str]
+        self, call_kwargs: Dict[str, Any], model: Optional[str] = None
     ) -> None:
         """Inject connection-level credentials and metadata into call_kwargs."""
         if self.api_key is not None:
@@ -1657,10 +1690,12 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs["api_base"] = self.api_base
         if self.timeout is not None:
             call_kwargs["timeout"] = self.timeout
-        # Only propagate custom_llm_provider when no per-request model override exists.
-        # If the payload specifies a different model, let litellm re-resolve the
-        # provider so we don't accidentally force the wrong backend.
-        if self.custom_llm_provider is not None and not event_model:
+        # Only force connection-level custom_llm_provider when the per-event model
+        # uses the same provider as the connection model. If the provider differs
+        # (e.g., connection is vertex_ai but event says openai/gpt-4), let litellm
+        # re-resolve from the model string. Same-provider model variants (e.g.,
+        # vertex_ai/gemini-2.0 -> vertex_ai/gemini-1.5) still inherit the provider.
+        if self.custom_llm_provider is not None and self._same_provider(model):
             call_kwargs["custom_llm_provider"] = self.custom_llm_provider
         if self.litellm_metadata:
             call_kwargs["litellm_metadata"] = dict(self.litellm_metadata)
@@ -1775,8 +1810,7 @@ class ManagedResponsesWebSocketHandler:
         call_kwargs = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        event_model: Optional[str] = call_kwargs.pop("model", None)
-        model = event_model or self.model
+        model = call_kwargs.pop("model", None) or self.model
 
         previous_response_id: Optional[str] = call_kwargs.pop(
             "previous_response_id", None
@@ -1793,7 +1827,7 @@ class ManagedResponsesWebSocketHandler:
         self._apply_history(
             call_kwargs, previous_response_id, current_messages, prior_history
         )
-        self._inject_credentials(call_kwargs, event_model)
+        self._inject_credentials(call_kwargs, model=model)
         self._update_proxy_request(call_kwargs, model)
         call_kwargs.update(self.extra_kwargs)
 
@@ -1818,6 +1852,9 @@ class ManagedResponsesWebSocketHandler:
         each one before waiting for the next message.
         """
         try:
+            if self.first_message is not None:
+                await self._process_response_create(self.first_message)
+
             while True:
                 try:
                     message = await self.websocket.receive_text()

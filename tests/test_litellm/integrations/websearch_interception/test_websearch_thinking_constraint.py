@@ -68,7 +68,9 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
@@ -102,7 +104,9 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
@@ -136,7 +140,9 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
@@ -170,7 +176,9 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
@@ -201,7 +209,9 @@ class TestThinkingBudgetTokensConstraint:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
@@ -286,7 +296,9 @@ class TestLoggingObjExcludedFromFollowUp:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
@@ -325,7 +337,9 @@ class TestLoggingObjExcludedFromFollowUp:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
@@ -373,7 +387,9 @@ class TestFollowUpErrorScenarios:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fail_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             with pytest.raises(Exception, match="max_tokens must be greater"):
@@ -450,7 +466,9 @@ class TestFollowUpErrorScenarios:
                 "litellm.integrations.websearch_interception.handler.anthropic_messages.acreate",
                 side_effect=_fake_acreate,
             ),
-            patch.object(logger, "_execute_search", return_value="search result"),
+            patch.object(
+                logger, "_execute_search", return_value=("search result", None)
+            ),
         ):
 
             await logger._execute_agentic_loop(
