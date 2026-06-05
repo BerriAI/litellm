@@ -18,6 +18,16 @@ OCI Generative AI as a first-class provider (chat, embeddings, streaming, reason
 
 ---
 
+## Latest Release Candidate
+
+### [v1.88.0rc3 — Claude Opus 4.8, MCP Access-Group Authorization & Typed OpenTelemetry](/release_notes/v1.88.0rc3/v1-88-0-rc-3)
+
+_June 4, 2026_
+
+Claude Opus 4.8 across Anthropic, Bedrock (with `global` / `us` / `eu` / `au` regional routes), Azure AI, and Vertex at 1M context with adaptive thinking and `output_config` goal mode, a full rework of MCP access-group authorization (key and team access groups resolve to MCP servers, additive opt-in grants, stateful/stateless session routing), typed semconv-aligned OpenTelemetry spans carrying `team_metadata` and `http.route` on inference spans, and a ~30% cheaper per-chunk Anthropic/Bedrock streaming path.
+
+---
+
 ## Recent Releases
 
 | Version                             | Date         | Highlights                                                 |
