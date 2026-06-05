@@ -6,6 +6,7 @@ import {
   useCreateAccessGroup,
   AccessGroupCreateParams,
 } from "@/app/(dashboard)/hooks/accessGroups/useCreateAccessGroup";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface AccessGroupCreateModalProps {
   visible: boolean;
@@ -16,6 +17,7 @@ interface AccessGroupCreateModalProps {
 export function AccessGroupCreateModal({ visible, onCancel, onSuccess }: AccessGroupCreateModalProps) {
   const [form] = Form.useForm<AccessGroupFormValues>();
   const createMutation = useCreateAccessGroup();
+  const { accessToken } = useAuthorized();
 
   const handleOk = () => {
     form
@@ -27,6 +29,8 @@ export function AccessGroupCreateModal({ visible, onCancel, onSuccess }: AccessG
           access_model_names: values.modelIds,
           access_mcp_server_ids: values.mcpServerIds,
           access_agent_ids: values.agentIds,
+          access_passthrough_routes: values.passthroughRoutes,
+          access_vector_store_ids: values.vectorStoreIds,
         };
 
         createMutation.mutate(params, {
@@ -55,7 +59,7 @@ export function AccessGroupCreateModal({ visible, onCancel, onSuccess }: AccessG
       confirmLoading={createMutation.isPending}
       destroyOnClose
     >
-      <AccessGroupBaseForm form={form} />
+      <AccessGroupBaseForm form={form} accessToken={accessToken ?? ""} />
     </Modal>
   );
 }

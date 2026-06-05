@@ -1,9 +1,11 @@
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { ModelSelect } from "@/components/ModelSelect/ModelSelect";
+import PassThroughRoutesSelector from "@/components/common_components/PassThroughRoutesSelector";
+import VectorStoreSelector from "@/components/vector_store_management/VectorStoreSelector";
 import type { FormInstance } from "antd";
 import { Form, Input, Select, Space, Tabs } from "antd";
-import { BotIcon, InfoIcon, LayersIcon, ServerIcon } from "lucide-react";
+import { BotIcon, DatabaseIcon, InfoIcon, LayersIcon, RouteIcon, ServerIcon } from "lucide-react";
 
 const { TextArea } = Input;
 
@@ -13,14 +15,17 @@ export interface AccessGroupFormValues {
   modelIds: string[];
   mcpServerIds: string[];
   agentIds: string[];
+  passthroughRoutes: string[];
+  vectorStoreIds: string[];
 }
 
 interface AccessGroupBaseFormProps {
   form: FormInstance<AccessGroupFormValues>;
+  accessToken: string;
   isNameDisabled?: boolean;
 }
 
-export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGroupBaseFormProps) {
+export function AccessGroupBaseForm({ form, accessToken, isNameDisabled = false }: AccessGroupBaseFormProps) {
   const { data: agentsData } = useAgents();
   const { data: mcpServersData } = useMCPServers();
 
@@ -128,6 +133,46 @@ export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGrou
         </div>
       ),
     },
+    {
+      key: "5",
+      label: (
+        <Space align="center" size={4}>
+          <RouteIcon size={16} />
+          Pass Through Routes
+        </Space>
+      ),
+      children: (
+        <div style={{ paddingTop: 16 }}>
+          <Form.Item name="passthroughRoutes" label="Allowed Pass Through Routes">
+            <PassThroughRoutesSelector
+              accessToken={accessToken}
+              value={form.getFieldValue("passthroughRoutes") ?? []}
+              onChange={(values) => form.setFieldsValue({ passthroughRoutes: values })}
+            />
+          </Form.Item>
+        </div>
+      ),
+    },
+    {
+      key: "6",
+      label: (
+        <Space align="center" size={4}>
+          <DatabaseIcon size={16} />
+          Vector Stores
+        </Space>
+      ),
+      children: (
+        <div style={{ paddingTop: 16 }}>
+          <Form.Item name="vectorStoreIds" label="Allowed Vector Stores">
+            <VectorStoreSelector
+              accessToken={accessToken}
+              value={form.getFieldValue("vectorStoreIds") ?? []}
+              onChange={(values) => form.setFieldsValue({ vectorStoreIds: values })}
+            />
+          </Form.Item>
+        </div>
+      ),
+    },
   ];
 
   return (
@@ -139,6 +184,8 @@ export function AccessGroupBaseForm({ form, isNameDisabled = false }: AccessGrou
         modelIds: [],
         mcpServerIds: [],
         agentIds: [],
+        passthroughRoutes: [],
+        vectorStoreIds: [],
       }}
     >
       <Tabs defaultActiveKey="1" items={items} />

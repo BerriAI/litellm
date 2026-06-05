@@ -730,27 +730,19 @@ class RouteChecks:
         """
         Check if route is a passthrough route.
         Supports both exact match and prefix match.
+
+        Allowed routes come from `allowed_passthrough_routes` on the key or team
+        metadata, plus any routes granted through the key's or team's access groups
+        (resolved into `access_group_passthrough_routes` during common_checks).
         """
-        metadata = user_api_key_dict.metadata
+        metadata = user_api_key_dict.metadata or {}
         team_metadata = user_api_key_dict.team_metadata or {}
-        if metadata is None and team_metadata is None:
-            return False
-        if (
-            "allowed_passthrough_routes" not in metadata
-            and "allowed_passthrough_routes" not in team_metadata
-        ):
-            return False
-        if (
-            metadata.get("allowed_passthrough_routes") is None
-            and team_metadata.get("allowed_passthrough_routes") is None
-        ):
-            return False
 
         allowed_passthrough_routes = (
             metadata.get("allowed_passthrough_routes")
             or team_metadata.get("allowed_passthrough_routes")
             or []
-        )
+        ) + (user_api_key_dict.access_group_passthrough_routes or [])
 
         # Check if route matches any allowed passthrough route (exact or prefix match)
         for allowed_route in allowed_passthrough_routes:
