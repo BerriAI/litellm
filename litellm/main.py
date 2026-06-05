@@ -437,6 +437,7 @@ async def acompletion(  # noqa: PLR0915
     # Optional liteLLM function params
     thinking: Optional[AnthropicThinkingParam] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    include_server_side_tool_invocations: Optional[bool] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
     # Per-request JSON schema validation (overrides litellm.enable_json_schema_validation)
@@ -584,6 +585,7 @@ async def acompletion(  # noqa: PLR0915
         "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
         "web_search_options": web_search_options,
+        "include_server_side_tool_invocations": include_server_side_tool_invocations,
         "shared_session": shared_session,
         "enable_json_schema_validation": enable_json_schema_validation,
     }
@@ -1116,6 +1118,7 @@ def completion(  # type: ignore # noqa: PLR0915
     top_logprobs: Optional[int] = None,
     parallel_tool_calls: Optional[bool] = None,
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
+    include_server_side_tool_invocations: Optional[bool] = None,
     deployment_id=None,
     extra_headers: Optional[dict] = None,
     safety_identifier: Optional[str] = None,
@@ -1319,7 +1322,9 @@ def completion(  # type: ignore # noqa: PLR0915
     preset_cache_key = kwargs.get("preset_cache_key", None)
     hf_model_name = kwargs.get("hf_model_name", None)
     supports_system_message = kwargs.get("supports_system_message", None)
-    base_model = kwargs.get("base_model", None)
+    base_model = kwargs.get("base_model", None) or (
+        model_info.get("base_model") if isinstance(model_info, dict) else None
+    )
     ### DISABLE FLAGS ###
     disable_add_transform_inline_image_block = kwargs.get(
         "disable_add_transform_inline_image_block", None
@@ -1531,11 +1536,7 @@ def completion(  # type: ignore # noqa: PLR0915
             "logit_bias": logit_bias,
             "user": user,
             # params to identify the model
-            "model": (
-                model_info.get("base_model")
-                if isinstance(model_info, dict) and model_info.get("base_model")
-                else model
-            ),
+            "model": model,
             "custom_llm_provider": custom_llm_provider,
             "response_format": response_format,
             "seed": seed,
@@ -1550,6 +1551,11 @@ def completion(  # type: ignore # noqa: PLR0915
             "reasoning_effort": reasoning_effort,
             "thinking": thinking,
             "web_search_options": web_search_options,
+            "include_server_side_tool_invocations": (
+                include_server_side_tool_invocations
+                if include_server_side_tool_invocations is not None
+                else kwargs.get("include_server_side_tool_invocations")
+            ),
             "safety_identifier": safety_identifier,
             "service_tier": service_tier,
             "allowed_openai_params": kwargs.get("allowed_openai_params"),

@@ -54,9 +54,7 @@ test.describe("MCP Servers", () => {
     // the MCP servers table so the form modal's `server_name` input — which
     // still holds the timestamped value during its close animation — can't
     // satisfy the assertion before the server actually lands in the list.
-    await expect(page.getByText("MCP Server created successfully").first())
-      .toBeVisible({ timeout: 15_000 });
-    await expect(page.locator("table tbody").getByText(uniqueName).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText("MCP Server created successfully").first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator("table tbody").getByText(uniqueName).first()).toBeVisible({ timeout: 10_000 });
   });
 });

@@ -170,11 +170,6 @@ class FireworksAIConfig(OpenAIGPTConfig):
                         is_response_format_supported=False,
                         enforce_tool_choice=False,  # tools and response_format are both set, don't enforce tool_choice
                     )
-                elif "json_schema" in value:
-                    optional_params["response_format"] = {
-                        "type": "json_object",
-                        "schema": value["json_schema"]["schema"],
-                    }
                 else:
                     optional_params["response_format"] = value
             elif param == "max_completion_tokens":

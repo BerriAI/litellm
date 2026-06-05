@@ -69,11 +69,7 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
       ]}
     >
       <div className="space-y-3">
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded text-red-600 text-sm">
-            {error}
-          </div>
-        )}
+        {error && <div className="p-3 bg-red-50 border border-red-200 rounded text-red-600 text-sm">{error}</div>}
         <textarea
           value={json}
           onChange={(e) => setJson(e.target.value)}
@@ -86,4 +82,3 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
 };
 
 export default ToolModal;
-

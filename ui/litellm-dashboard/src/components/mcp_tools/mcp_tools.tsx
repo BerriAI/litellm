@@ -39,9 +39,7 @@ const MCPToolsViewer = ({
   // `mcp_server_edit.tsx`.
   const isOAuth = auth_type === "oauth2" && !tokenUrl;
   const [oauthToken, setOauthToken] = useState<string | null>(() =>
-    isOAuth && isTokenValid(serverId, userID)
-      ? (getToken(serverId, userID)?.access_token ?? null)
-      : null
+    isOAuth && isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null,
   );
 
   // Re-sync token when serverId/userID changes (useState initializer only runs on mount).
@@ -50,14 +48,14 @@ const MCPToolsViewer = ({
       setOauthToken(null);
       return;
     }
-    setOauthToken(
-      isTokenValid(serverId, userID)
-        ? (getToken(serverId, userID)?.access_token ?? null)
-        : null
-    );
+    setOauthToken(isTokenValid(serverId, userID) ? getToken(serverId, userID)?.access_token ?? null : null);
   }, [serverId, userID, isOAuth]);
 
-  const { startOAuthFlow, status: oauthStatus, error: oauthError } = useToolsOAuthFlow({
+  const {
+    startOAuthFlow,
+    status: oauthStatus,
+    error: oauthError,
+  } = useToolsOAuthFlow({
     accessToken: accessToken ?? "",
     serverId,
     serverAlias,
@@ -126,9 +124,7 @@ const MCPToolsViewer = ({
         if (status === 401) {
           removeToken(serverId, userID);
         }
-        const enhancedError = new Error(
-          result.message || result.error || "Failed to fetch MCP tools",
-        ) as Error & {
+        const enhancedError = new Error(result.message || result.error || "Failed to fetch MCP tools") as Error & {
           status?: number;
           statusText?: string;
           details?: any;
@@ -153,9 +149,7 @@ const MCPToolsViewer = ({
   // If the tools query fails with 401, the cached OAuth token is invalid —
   // clear it so the auth gate is shown again and the user can re-authenticate.
   useEffect(() => {
-    const err = mcpToolsError as
-      | (Error & { status?: number; response?: { status?: number } })
-      | null;
+    const err = mcpToolsError as (Error & { status?: number; response?: { status?: number } }) | null;
     const status = err?.status ?? err?.response?.status;
     if (status === 401) {
       removeToken(serverId, userID);
@@ -169,13 +163,9 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result: CallMCPToolResponse = await callMCPTool(
-          accessToken, 
-          serverId, 
-          args.tool.name, 
-          args.arguments,
-          { customHeaders: buildCustomHeaders() }
-        );
+        const result: CallMCPToolResponse = await callMCPTool(accessToken, serverId, args.tool.name, args.arguments, {
+          customHeaders: buildCustomHeaders(),
+        });
         return result;
       } catch (error) {
         throw error;
@@ -223,9 +213,7 @@ const MCPToolsViewer = ({
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center">
                       <KeyOutlined className="text-blue-600 mr-2" />
-                      <Text className="text-sm font-medium text-blue-800">
-                        Additional Headers
-                      </Text>
+                      <Text className="text-sm font-medium text-blue-800">Additional Headers</Text>
                     </div>
                     <AntdButton
                       size="small"
@@ -236,20 +224,18 @@ const MCPToolsViewer = ({
                       {showHeaderInput ? "Hide" : "Configure"}
                     </AntdButton>
                   </div>
-                  
+
                   {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
                     <Text className="text-xs text-blue-700">
                       This server requires additional headers. Click &quot;Configure&quot; to provide values.
                     </Text>
                   )}
-                  
+
                   {showHeaderInput && (
                     <div className="mt-3 space-y-2">
                       {extraHeaders?.map((headerName) => (
                         <div key={headerName}>
-                          <label className="block text-xs font-medium text-gray-700 mb-1">
-                            {headerName}
-                          </label>
+                          <label className="block text-xs font-medium text-gray-700 mb-1">{headerName}</label>
                           <Input
                             size="small"
                             placeholder={`Enter ${headerName}`}
@@ -272,14 +258,14 @@ const MCPToolsViewer = ({
                           refetchTools();
                           setShowHeaderInput(false);
                         }}
-                        disabled={Object.values(passthroughHeaders).every(v => !v || !v.trim())}
+                        disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}
                         className="w-full mt-2"
                       >
                         Load Tools
                       </AntdButton>
                     </div>
                   )}
-                  
+
                   {!showHeaderInput && Object.keys(passthroughHeaders).length > 0 && (
                     <div className="mt-2">
                       <Text className="text-xs text-green-700 flex items-center">
@@ -307,9 +293,7 @@ const MCPToolsViewer = ({
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
                     <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
-                    <p className="text-xs text-gray-500 mb-3">
-                      Authenticate to view available tools
-                    </p>
+                    <p className="text-xs text-gray-500 mb-3">Authenticate to view available tools</p>
                     <AntdButton
                       size="small"
                       type="primary"
@@ -319,134 +303,145 @@ const MCPToolsViewer = ({
                     >
                       Authorize
                     </AntdButton>
-                    {oauthError && (
-                      <p className="text-xs text-red-500 mt-2">{oauthError}</p>
-                    )}
+                    {oauthError && <p className="text-xs text-red-500 mt-2">{oauthError}</p>}
                   </div>
                 )}
 
                 {/* Search Bar — only shown when tools are loaded */}
-                {!isOAuth || oauthToken ? <>
-                {toolsData.length > 0 && (
-                  <div className="mb-3">
-                    <Input
-                      placeholder="Search tools..."
-                      prefix={<SearchOutlined className="text-gray-400" />}
-                      value={toolSearchTerm}
-                      onChange={(e) => setToolSearchTerm(e.target.value)}
-                      allowClear
-                      className="rounded-lg"
-                      size="middle"
-                    />
-                  </div>
-                )}
-
-                {/* Loading State */}
-                {isLoadingTools && (
-                  <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
-                    <div className="relative mb-3">
-                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
-                      <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
-                    </div>
-                    <p className="text-xs font-medium text-gray-700">Loading tools...</p>
-                  </div>
-                )}
-
-                {/* Error State */}
-                {(mcpToolsResponse?.error || mcpToolsError) && !isLoadingTools && !toolsData.length && (
-                  <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
-                    <p className="font-medium">
-                      Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
-                    </p>
-                  </div>
-                )}
-
-                {/* No Tools State */}
-                {!isLoadingTools && !mcpToolsResponse?.error && !mcpToolsError && (!toolsData || toolsData.length === 0) && (
-                  <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                    <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
-                      <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 8.172V5L8 4z"
-                        />
-                      </svg>
-                    </div>
-                    <p className="text-xs font-medium text-gray-700 mb-1">No tools available</p>
-                    <p className="text-xs text-gray-500">No tools found for this server</p>
-                  </div>
-                )}
-
-                {/* Tools List */}
-                {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
+                {!isOAuth || oauthToken ? (
                   <>
-                    {filteredTools.length === 0 ? (
-                      <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
-                        <SearchOutlined className="text-2xl text-gray-400 mb-2" />
-                        <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
-                        <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
-                      </div>
-                    ) : (
-                      <div
-                        className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
-                        style={{
-                          maxHeight: "400px",
-                          scrollbarWidth: "auto",
-                          scrollbarColor: "#cbd5e0 #f7fafc",
-                        }}
-                      >
-                        {filteredTools.map((tool: MCPTool) => (
-                      <div
-                        key={tool.name}
-                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${selectedTool?.name === tool.name
-                            ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
-                            : "border-gray-200 bg-white hover:border-gray-300"
-                          }`}
-                        onClick={() => {
-                          setSelectedTool(tool);
-                          setToolResult(null);
-                          setToolError(null);
-                        }}
-                      >
-                        <div className="flex items-start space-x-2">
-                          {tool.mcp_info.logo_url && (
-                            <img
-                              src={tool.mcp_info.logo_url}
-                              alt={`${tool.mcp_info.server_name} logo`}
-                              className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
-                            />
-                          )}
-                          <div className="flex-1 min-w-0">
-                            <h4 className="font-mono text-xs font-medium text-gray-900 truncate">{tool.name}</h4>
-                            <p className="text-xs text-gray-500 truncate">{tool.mcp_info.server_name}</p>
-                            <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">
-                              {tool.description}
-                            </p>
-                          </div>
-                        </div>
-                        {selectedTool?.name === tool.name && (
-                          <div className="mt-2 pt-2 border-t border-blue-200">
-                            <div className="flex items-center text-xs font-medium text-blue-700">
-                              <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
-                                <path
-                                  fillRule="evenodd"
-                                  d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                                  clipRule="evenodd"
-                                />
-                              </svg>
-                              Selected
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                        ))}
+                    {toolsData.length > 0 && (
+                      <div className="mb-3">
+                        <Input
+                          placeholder="Search tools..."
+                          prefix={<SearchOutlined className="text-gray-400" />}
+                          value={toolSearchTerm}
+                          onChange={(e) => setToolSearchTerm(e.target.value)}
+                          allowClear
+                          className="rounded-lg"
+                          size="middle"
+                        />
                       </div>
                     )}
+
+                    {/* Loading State */}
+                    {isLoadingTools && (
+                      <div className="flex flex-col items-center justify-center py-8 bg-white border border-gray-200 rounded-lg">
+                        <div className="relative mb-3">
+                          <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
+                          <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
+                        </div>
+                        <p className="text-xs font-medium text-gray-700">Loading tools...</p>
+                      </div>
+                    )}
+
+                    {/* Error State */}
+                    {(mcpToolsResponse?.error || mcpToolsError) && !isLoadingTools && !toolsData.length && (
+                      <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
+                        <p className="font-medium">
+                          Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* No Tools State */}
+                    {!isLoadingTools &&
+                      !mcpToolsResponse?.error &&
+                      !mcpToolsError &&
+                      (!toolsData || toolsData.length === 0) && (
+                        <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                          <div className="mx-auto w-8 h-8 bg-gray-200 rounded-full flex items-center justify-center mb-2">
+                            <svg
+                              className="w-4 h-4 text-gray-400"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 8.172V5L8 4z"
+                              />
+                            </svg>
+                          </div>
+                          <p className="text-xs font-medium text-gray-700 mb-1">No tools available</p>
+                          <p className="text-xs text-gray-500">No tools found for this server</p>
+                        </div>
+                      )}
+
+                    {/* Tools List */}
+                    {!isLoadingTools && !mcpToolsResponse?.error && toolsData.length > 0 && (
+                      <>
+                        {filteredTools.length === 0 ? (
+                          <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
+                            <SearchOutlined className="text-2xl text-gray-400 mb-2" />
+                            <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
+                            <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
+                          </div>
+                        ) : (
+                          <div
+                            className="space-y-2 flex-1 overflow-y-auto min-h-0 mcp-tools-scrollable"
+                            style={{
+                              maxHeight: "400px",
+                              scrollbarWidth: "auto",
+                              scrollbarColor: "#cbd5e0 #f7fafc",
+                            }}
+                          >
+                            {filteredTools.map((tool: MCPTool) => (
+                              <div
+                                key={tool.name}
+                                className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
+                                  selectedTool?.name === tool.name
+                                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
+                                    : "border-gray-200 bg-white hover:border-gray-300"
+                                }`}
+                                onClick={() => {
+                                  setSelectedTool(tool);
+                                  setToolResult(null);
+                                  setToolError(null);
+                                }}
+                              >
+                                <div className="flex items-start space-x-2">
+                                  {tool.mcp_info.logo_url && (
+                                    <img
+                                      src={tool.mcp_info.logo_url}
+                                      alt={`${tool.mcp_info.server_name} logo`}
+                                      className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
+                                    />
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    <h4 className="font-mono text-xs font-medium text-gray-900 truncate">
+                                      {tool.name}
+                                    </h4>
+                                    <p className="text-xs text-gray-500 truncate">{tool.mcp_info.server_name}</p>
+                                    <p className="text-xs text-gray-600 mt-1 line-clamp-2 leading-relaxed">
+                                      {tool.description}
+                                    </p>
+                                  </div>
+                                </div>
+                                {selectedTool?.name === tool.name && (
+                                  <div className="mt-2 pt-2 border-t border-blue-200">
+                                    <div className="flex items-center text-xs font-medium text-blue-700">
+                                      <svg className="w-3 h-3 mr-1" fill="currentColor" viewBox="0 0 20 20">
+                                        <path
+                                          fillRule="evenodd"
+                                          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                                          clipRule="evenodd"
+                                        />
+                                      </svg>
+                                      Selected
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
                   </>
-                )}
-                </> : null}
+                ) : null}
               </div>
             </div>
           </div>
