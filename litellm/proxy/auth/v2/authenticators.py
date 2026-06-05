@@ -101,15 +101,28 @@ def _load_jwt_settings() -> Any:
     )
 
 
+def _jwt_is_configured() -> bool:
+    import os
+
+    from litellm.proxy.proxy_server import general_settings
+
+    cfg = (general_settings or {}).get("auth_v2_jwt") or {}
+    return bool(cfg.get("jwks_uri") or os.getenv("AUTH_V2_JWKS_URI"))
+
+
 class JWTAuthenticator:
     """Verifies a bearer JWT with authlib and maps its claims to an identity."""
 
     def can_handle(self, api_key: Optional[str]) -> bool:
-        return (
+        # Only claim JWT-shaped tokens when JWT auth is actually configured, so an
+        # unconfigured deployment falls through to a clean 401 instead of a 500.
+        if not (
             isinstance(api_key, str)
             and not api_key.startswith("sk-")
             and api_key.count(".") == 2
-        )
+        ):
+            return False
+        return _jwt_is_configured()
 
     async def authenticate(self, api_key: str, ctx: AuthContext) -> Any:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
