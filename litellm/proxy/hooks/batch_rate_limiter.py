@@ -623,13 +623,16 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             and user_api_key_dict.team_id is not None
             and prisma_client is not None
         ):
-            team_object = await get_team_object(
-                team_id=user_api_key_dict.team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_dict.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-            )
+            try:
+                team_object = await get_team_object(
+                    team_id=user_api_key_dict.team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=user_api_key_dict.parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            except Exception:
+                pass
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
         for model in models:
