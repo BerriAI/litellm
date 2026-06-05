@@ -19,14 +19,36 @@ class AnthropicCountTokensConfig:
     - Response: {"input_tokens": <number>}
     """
 
-    def get_anthropic_count_tokens_endpoint(self) -> str:
+    def get_anthropic_count_tokens_endpoint(
+        self, api_base: Optional[str] = None
+    ) -> str:
         """
         Get the Anthropic CountTokens API endpoint.
 
+        Mirrors how /v1/messages resolves its URL: if a custom ``api_base``
+        is configured, append the ``/v1/messages/count_tokens`` path when
+        it's not already there. This is what makes self-hosted vLLM /
+        air-gapped Anthropic-compatible backends work — without it the
+        handler hit the hardcoded ``api.anthropic.com`` even when an
+        ``api_base`` was set on the deployment (#29764).
+
+        Args:
+            api_base: Optional custom API base from the deployment's
+                ``litellm_params.api_base``.
+
         Returns:
-            The endpoint URL for the CountTokens API
+            The endpoint URL for the CountTokens API.
         """
-        return "https://api.anthropic.com/v1/messages/count_tokens"
+        if not api_base:
+            return "https://api.anthropic.com/v1/messages/count_tokens"
+        api_base = api_base.rstrip("/")
+        if api_base.endswith("/v1/messages/count_tokens"):
+            return api_base
+        if api_base.endswith("/v1/messages"):
+            return f"{api_base}/count_tokens"
+        if api_base.endswith("/v1"):
+            return f"{api_base}/messages/count_tokens"
+        return f"{api_base}/v1/messages/count_tokens"
 
     def transform_request_to_count_tokens(
         self,

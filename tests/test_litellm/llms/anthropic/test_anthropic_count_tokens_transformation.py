@@ -93,3 +93,67 @@ def test_transform_no_system_no_tools():
 
     assert "system" not in result
     assert "tools" not in result
+
+
+def test_get_endpoint_no_api_base_returns_anthropic_default():
+    """#29764 baseline: with no api_base, the endpoint is api.anthropic.com."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config.get_anthropic_count_tokens_endpoint()
+        == "https://api.anthropic.com/v1/messages/count_tokens"
+    )
+
+
+def test_get_endpoint_with_api_base_only_appends_full_path():
+    """#29764: a bare api_base (e.g. http://vllm-host:8000) must have the
+    full /v1/messages/count_tokens path appended."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config.get_anthropic_count_tokens_endpoint(api_base="http://vllm-host:8000")
+        == "http://vllm-host:8000/v1/messages/count_tokens"
+    )
+
+
+def test_get_endpoint_with_api_base_ending_in_v1_appends_messages_count_tokens():
+    """#29764 main scenario: vLLM-style configs typically pass
+    `http://host:port/v1` as api_base — append only the messages path so
+    we don't double up the /v1."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config.get_anthropic_count_tokens_endpoint(
+            api_base="http://vllm-host:8000/v1"
+        )
+        == "http://vllm-host:8000/v1/messages/count_tokens"
+    )
+
+
+def test_get_endpoint_with_api_base_ending_in_messages_appends_count_tokens():
+    """If a caller already terminated api_base with /v1/messages, just
+    append /count_tokens — don't repeat /messages."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config.get_anthropic_count_tokens_endpoint(
+            api_base="https://example.com/v1/messages"
+        )
+        == "https://example.com/v1/messages/count_tokens"
+    )
+
+
+def test_get_endpoint_with_full_count_tokens_url_returned_verbatim():
+    """If the caller explicitly passes the full count_tokens URL, hand it
+    back unchanged — no idempotency footgun."""
+    config = AnthropicCountTokensConfig()
+    url = "https://example.com/v1/messages/count_tokens"
+    assert config.get_anthropic_count_tokens_endpoint(api_base=url) == url
+
+
+def test_get_endpoint_strips_trailing_slash_on_api_base():
+    """A trailing slash on api_base must not produce a double slash in the
+    constructed URL."""
+    config = AnthropicCountTokensConfig()
+    assert (
+        config.get_anthropic_count_tokens_endpoint(
+            api_base="http://vllm-host:8000/v1/"
+        )
+        == "http://vllm-host:8000/v1/messages/count_tokens"
+    )
