@@ -94,6 +94,22 @@ curl -sX POST localhost:4000/auth/v2/policy/assignment/add \
 curl -s localhost:4000/auth/v2/policy/list -H "Authorization: Bearer $MASTER_KEY"
 ```
 
+## Tenancy model
+
+v1 uses **global roles with optional domain scoping**, not forced per-tenant
+isolation. A role assignment is global by default (a `g` row), so the role
+applies everywhere. To scope a role to one tenant, assign it within a `domain`
+(a `g3` row, e.g. `team:eng` or `org:acme`); the role then grants its permissions
+only in that domain. This is how a per-org admin is expressed: assign the admin
+role scoped to that org's domain, and it cannot touch other orgs.
+
+Deliberately deferred: **automatic** isolation where every resource is implicitly
+domain-qualified and a request is confined to the caller's own org/team without
+any explicit scoping. That is a larger model (every resource object must carry
+its owning domain, and the matcher must enforce it on every check) and is left to
+a later version. Until then, isolation is opt-in per role assignment via the
+domain field, which already covers the common "admin of just this org/team" case.
+
 ## Live verification runbook
 
 Prereq: generate a migration for `LiteLLM_CasbinRule`, run `make format`,
