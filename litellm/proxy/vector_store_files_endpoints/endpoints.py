@@ -191,6 +191,89 @@ def _replace_file_id_in_response(response, original_file_id: str):
     return response
 
 
+def _update_request_data_with_model_routing_hint(
+    data: Dict,
+    request: Request,
+    llm_router: Optional["Router"] = None,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+) -> Dict:
+    if data.get("api_key") is not None or data.get("api_base") is not None:
+        return data
+
+    model_hint = (
+        data.get("model")
+        or request.query_params.get("model")
+        or request.headers.get("x-litellm-model")
+    )
+
+    should_route = False
+    credentials = None
+    if isinstance(model_hint, str) and "*" in model_hint:
+        if llm_router is not None:
+            credentials = llm_router.get_deployment_credentials_with_provider(
+                model_id=model_hint
+            )
+            should_route = credentials is not None
+    else:
+        (
+            should_route,
+            _model_used,
+            _original_file_id,
+            credentials,
+        ) = handle_model_based_routing(
+            file_id="",
+            request=request,
+            llm_router=llm_router,
+            data=data,
+            check_file_id_encoding=False,
+        )
+
+    if should_route and credentials is not None:
+        prepare_data_with_credentials(
+            data=data,
+            credentials=credentials,
+        )
+        return data
+
+    if llm_router is None or user_api_key_dict is None:
+        return data
+
+    team_models = getattr(user_api_key_dict, "team_models", None) or []
+    if not isinstance(team_models, list):
+        return data
+
+    openai_credentials = None
+    for model_name in team_models:
+        if not isinstance(model_name, str) or model_name in {
+            "all-team-models",
+            "all-proxy-models",
+            "no-default-models",
+        }:
+            continue
+
+        credentials = llm_router.get_deployment_credentials_with_provider(
+            model_id=model_name
+        )
+        if credentials is None:
+            continue
+
+        provider = credentials.get("custom_llm_provider")
+        model = credentials.get("model")
+        if provider is None and isinstance(model, str) and "/" in model:
+            provider = model.split("/", 1)[0]
+        if provider not in (None, LlmProviders.OPENAI.value):
+            continue
+
+        if openai_credentials is not None:
+            return data
+        openai_credentials = credentials
+
+    if openai_credentials is not None:
+        prepare_data_with_credentials(data=data, credentials=openai_credentials)
+
+    return data
+
+
 def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
@@ -477,6 +560,13 @@ async def vector_store_file_list(
     data["vector_store_id"] = vector_store_id
     managed_vector_store = await assert_user_can_access_vector_store_id(
         vector_store_id=vector_store_id,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    data = _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
         user_api_key_dict=user_api_key_dict,
     )
 
