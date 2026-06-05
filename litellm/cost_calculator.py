@@ -2429,7 +2429,7 @@ class BaseTokenUsageProcessor:
                             getattr(combined.completion_tokens_details, attr, 0) or 0
                         )
                         new_val = getattr(usage.completion_tokens_details, attr, 0) or 0
-                        if new_val is not None and isinstance(new_val, (int, float)):
+                        if isinstance(new_val, (int, float)):
                             setattr(
                                 combined.completion_tokens_details,
                                 attr,
