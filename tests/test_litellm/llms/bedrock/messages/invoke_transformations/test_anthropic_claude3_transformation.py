@@ -1818,21 +1818,16 @@ def test_bedrock_anthropic_messages_system_role_transformation():
     assert "system" not in req
 
     # 8. Test case: existing_system is empty string
-    req = config.transform_anthropic_messages_request(
-        model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        messages=[
+    req_data = {
+        "messages": [
             {"role": "system", "content": "System message"},
             {"role": "user", "content": "Hello"},
         ],
-        anthropic_messages_optional_request_params={
-            "max_tokens": 100,
-            "system": "",
-        },
-        litellm_params={},
-        headers={},
-    )
-    assert req["messages"] == [{"role": "user", "content": "Hello"}]
-    assert req["system"] == [{"type": "text", "text": "System message"}]
+        "system": "",
+    }
+    config._extract_system_messages_from_messages(req_data)
+    assert req_data["messages"] == [{"role": "user", "content": "Hello"}]
+    assert req_data["system"] == [{"type": "text", "text": "System message"}]
 
     # 9. Test case: existing_system is list
     req = config.transform_anthropic_messages_request(
