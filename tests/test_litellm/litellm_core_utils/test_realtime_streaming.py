@@ -632,6 +632,62 @@ def test_client_session_update_marks_transcription_session():
     assert streaming._is_transcription_session is True
 
 
+def test_detect_transcription_session_from_backend_transcription_session_events():
+    """Backend transcription_session.created/updated events flag the session."""
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    assert streaming._is_transcription_session is False
+    streaming._detect_transcription_session_from_backend(
+        {"type": "transcription_session.created"}
+    )
+    assert streaming._is_transcription_session is True
+
+    streaming2 = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    streaming2._detect_transcription_session_from_backend(
+        {"type": "transcription_session.updated"}
+    )
+    assert streaming2._is_transcription_session is True
+
+
+def test_detect_transcription_session_from_backend_session_created_with_type():
+    """Backend session.created with type=transcription flags the session."""
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    streaming._detect_transcription_session_from_backend(
+        {"type": "session.created", "session": {"type": "transcription"}}
+    )
+    assert streaming._is_transcription_session is True
+
+
+def test_detect_transcription_session_from_backend_ignores_non_transcription():
+    """Backend session.created without type=transcription does not flag the session."""
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    streaming._detect_transcription_session_from_backend(
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}}
+    )
+    assert streaming._is_transcription_session is False
+
+
+def test_capture_transcription_usage_deduplicates_when_already_stored():
+    """
+    When the event is already in messages (logged via store_message), it must not
+    be appended a second time by _capture_transcription_usage.
+    """
+    import litellm
+
+    streaming = RealTimeStreaming(MagicMock(), MagicMock(), MagicMock())
+    # Add the event type to the default logged list so _should_store_message returns True.
+    streaming.logged_real_time_event_types = [
+        "conversation.item.input_audio_transcription.completed"
+    ]
+    event = {
+        "type": "conversation.item.input_audio_transcription.completed",
+        "usage": {"type": "duration", "seconds": 5.0},
+    }
+    streaming.store_message(json.dumps(event))
+    initial_count = len(streaming.messages)
+    streaming._capture_transcription_usage(event)
+    assert len(streaming.messages) == initial_count  # no duplicate
+
+
 @pytest.mark.asyncio
 async def test_client_ack_caches_setup_to_prevent_duplicate_session_update_setup():
     websocket = MagicMock()

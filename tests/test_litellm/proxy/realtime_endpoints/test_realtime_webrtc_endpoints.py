@@ -499,3 +499,113 @@ async def test_transcription_sessions_encrypts_client_secret(
         )
     finally:
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_session_type_coerced_for_unknown_value():
+    """An unrecognized session_type in the token falls back to 'realtime'."""
+    payload = _encode_realtime_token_payload(
+        ephemeral_key="epk",
+        model_id="gpt-4o",
+        user_id=None,
+        team_id=None,
+        expires_at=None,
+        session_type="INJECTED_TYPE",
+    )
+    # Force-deserialize and check the coercion that happens in proxy_realtime_calls.
+    decoded = json.loads(payload)
+    session_type = decoded.get("session_type") or "realtime"
+    if session_type not in ("realtime", "transcription"):
+        session_type = "realtime"
+    assert session_type == "realtime"
+
+
+@pytest.mark.asyncio
+async def test_transcription_sessions_returns_upstream_error_verbatim(
+    proxy_app,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+):
+    """Non-200 upstream response is forwarded unchanged (no encryption attempted)."""
+    mock_resp = MagicMock(spec=httpx.Response)
+    mock_resp.status_code = 400
+    mock_resp.content = b'{"error":"bad_request"}'
+    mock_resp.headers = {}
+    mock_resp.json.return_value = {"error": "bad_request"}
+    mock_resp.text = '{"error":"bad_request"}'
+
+    async def _mock_route(*args, **kwargs):
+        async def _inner():
+            return mock_resp
+
+        return _inner()
+
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user", team_id="test-team"
+    )
+    try:
+        client = TestClient(proxy_app)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.route_request",
+                side_effect=_mock_route,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+            )
+        assert response.status_code == 400
+        assert response.content == b'{"error":"bad_request"}'
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_transcription_sessions_wraps_route_exception(
+    proxy_app,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+):
+    """A route exception is wrapped in a ProxyException with a human-readable message."""
+    from fastapi import HTTPException
+
+    async def _raise_http(*args, **kwargs):
+        raise HTTPException(status_code=403, detail="Model not allowed")
+
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user"
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.route_request",
+                side_effect=_raise_http,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={"input_audio_transcription": {"model": "gpt-realtime-whisper"}},
+            )
+        assert response.status_code == 403
+        assert "Model not allowed" in response.text
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)

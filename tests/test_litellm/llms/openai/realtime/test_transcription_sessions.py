@@ -55,7 +55,10 @@ def test_azure_transcription_session_url_uses_deployment_and_api_version():
     )
 
 
-def test_request_resolves_model_from_top_level_hint():
+def test_request_resolves_model_returns_none_when_both_absent():
+    req = RealtimeTranscriptionSessionRequest(input_audio_format="pcm16")
+    assert req.resolved_model() is None
+
     req = RealtimeTranscriptionSessionRequest(
         model="openai/gpt-realtime-whisper",
         input_audio_transcription={"model": "gpt-realtime-whisper"},

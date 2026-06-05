@@ -421,6 +421,8 @@ def test_realtime_logging_object_allows_null_transcript_in_conversation_item_add
     assert logging_result.usage.total_tokens == 18
     assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
     assert logging_result.results[0]["item"]["content"][0]["transcript"] is None
+
+
 def test_realtime_transcription_duration_cost(monkeypatch):
     """
     gpt-realtime-whisper transcription sessions are billed by input audio duration
@@ -544,7 +546,26 @@ def test_realtime_transcription_token_billed_fallback(monkeypatch):
     assert abs(cost - expected) < 1e-12
 
 
-def test_custom_pricing_with_router_model_id():
+def test_transcription_usage_cost_returns_zero_for_unknown_type():
+    """An unrecognized usage type yields 0 (safe fallback, no exception)."""
+    from litellm.cost_calculator import _transcription_usage_cost
+
+    assert _transcription_usage_cost({"type": "future_billing_type"}, {}) == 0.0
+    assert _transcription_usage_cost({}, {}) == 0.0
+
+
+def test_get_transcription_model_falls_back_to_session_model(monkeypatch):
+    """session.model is used when transcription-specific model fields are absent."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    from litellm.cost_calculator import _get_transcription_model_name_from_results
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-realtime-whisper"}},
+    ]
+    assert _get_transcription_model_name_from_results(results) == "gpt-realtime-whisper"
+
     from litellm import Router
 
     router = Router(
