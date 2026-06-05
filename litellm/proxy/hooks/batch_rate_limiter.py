@@ -603,6 +603,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         enforces on `/chat/completions` apply here.
         """
         from litellm.proxy.auth.auth_checks import (
+            _check_team_member_model_access,
             _key_access_group_grants_model,
             can_key_call_model,
             can_team_access_model,
@@ -661,6 +662,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                             llm_router=llm_router,
                         ):
                             raise
+                    await _check_team_member_model_access(
+                        model=model_to_check,
+                        team_object=team_object,
+                        valid_token=user_api_key_dict,
+                        llm_router=llm_router,
+                        prisma_client=prisma_client,
+                        user_api_key_cache=user_api_key_cache,
+                        proxy_logging_obj=proxy_logging_obj,
+                    )
                 else:
                     await can_key_call_model(
                         model=model_to_check,
