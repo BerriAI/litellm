@@ -34,9 +34,7 @@ def extract_identity(claims: Dict[str, Any], settings: JWTSettings) -> JWTIdenti
     """
     user_id = claims.get(settings.user_id_claim)
     if not user_id:
-        raise JWTClaimError(
-            f"token missing user id claim '{settings.user_id_claim}'"
-        )
+        raise JWTClaimError(f"token missing user id claim '{settings.user_id_claim}'")
 
     team_id = claims.get(settings.team_claim) if settings.team_claim else None
 

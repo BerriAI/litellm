@@ -35,8 +35,13 @@ def test_team_and_role_are_mapped():
 
 def test_unmapped_role_value_yields_no_role():
     # An arbitrary IdP role string must not be trusted as a litellm role.
-    settings = JWTSettings(jwks_uri="x", role_claim="role", role_map={"a": "proxy_admin"})
-    assert extract_identity({"sub": "u1", "role": "totally-unknown"}, settings).role is None
+    settings = JWTSettings(
+        jwks_uri="x", role_claim="role", role_map={"a": "proxy_admin"}
+    )
+    assert (
+        extract_identity({"sub": "u1", "role": "totally-unknown"}, settings).role
+        is None
+    )
 
 
 def test_missing_user_id_raises():

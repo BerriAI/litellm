@@ -9,7 +9,9 @@ class JWTVerificationError(Exception):
     """Raised when a token fails signature or standard-claim validation."""
 
 
-def build_claims_options(issuer: Optional[str], audience: Optional[str]) -> Dict[str, Any]:
+def build_claims_options(
+    issuer: Optional[str], audience: Optional[str]
+) -> Dict[str, Any]:
     options: Dict[str, Any] = {"exp": {"essential": True}}
     if issuer:
         options["iss"] = {"essential": True, "value": issuer}

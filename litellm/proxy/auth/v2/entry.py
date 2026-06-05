@@ -74,9 +74,7 @@ async def user_api_key_auth_v2(
         try:
             authorize(principal, route, request_data, enforcer)
         except AuthorizationDenied as e:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail=str(e)
-            )
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(e))
 
         identity.request_route = route
         return identity

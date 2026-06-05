@@ -6,11 +6,9 @@ from fastapi import HTTPException, status
 
 @runtime_checkable
 class Authenticator(Protocol):
-    def can_handle(self, api_key: Optional[str]) -> bool:
-        ...
+    def can_handle(self, api_key: Optional[str]) -> bool: ...
 
-    async def authenticate(self, api_key: str, ctx: "AuthContext") -> Any:
-        ...
+    async def authenticate(self, api_key: str, ctx: "AuthContext") -> Any: ...
 
 
 class AuthContext:
@@ -122,9 +120,7 @@ class JWTAuthenticator:
         settings = _load_jwt_settings()
         key_set = await JWKSProvider(settings.jwks_uri).get_key_set()
         try:
-            claims = verify(
-                api_key, key_set, settings.issuer, settings.audience
-            )
+            claims = verify(api_key, key_set, settings.issuer, settings.audience)
         except JWTVerificationError as e:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -218,9 +214,7 @@ class OAuth2IntrospectionAuthenticator:
         import httpx
 
         auth = (
-            (settings.client_id, settings.client_secret)
-            if settings.client_id
-            else None
+            (settings.client_id, settings.client_secret) if settings.client_id else None
         )
         async with httpx.AsyncClient() as client:
             response = await client.post(
