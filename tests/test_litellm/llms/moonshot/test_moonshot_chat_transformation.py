@@ -205,6 +205,42 @@ class TestMoonshotConfig:
             # Temperature should be preserved
             assert result.get("temperature") == temp
 
+    def test_temperature_dropped_for_reasoning_models(self):
+        """Reasoning models (kimi-k2.5, kimi-k2.6) reject any temperature except 1,
+        so the param is dropped rather than clamped. A clamp to 0.3/1 would still
+        400 when the caller passes e.g. 0.5."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=True,
+        ):
+            for temp in [0.0, 0.5, 1.0, 1.5]:
+                result = config.map_openai_params(
+                    non_default_params={"temperature": temp},
+                    optional_params={},
+                    model="kimi-k2.5",
+                    drop_params=False,
+                )
+                assert "temperature" not in result
+
+    def test_temperature_clamped_for_non_reasoning_models(self):
+        """Non-reasoning models keep the [0.3, 1] clamp behaviour."""
+        config = MoonshotChatConfig()
+
+        with patch(
+            "litellm.llms.moonshot.chat.transformation.supports_reasoning",
+            return_value=False,
+        ):
+            result = config.map_openai_params(
+                non_default_params={"temperature": 1.5},
+                optional_params={},
+                model="moonshot-v1-8k",
+                drop_params=False,
+            )
+
+        assert result.get("temperature") == 1
+
     def test_tool_choice_required_adds_message(self):
         """Test that tool_choice='required' adds a special message and removes tool_choice"""
         config = MoonshotChatConfig()
