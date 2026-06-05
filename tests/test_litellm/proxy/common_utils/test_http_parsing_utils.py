@@ -497,33 +497,42 @@ async def test_surrogate_repair_skipped_above_size_limit(monkeypatch):
     assert repaired_large["model"] == "gpt-4o"
 
 
+class _FakeFormData:
+    """Minimal stand-in for Starlette's ``FormData`` for unit tests —
+    supports ``multi_items()`` so the same key can appear multiple times
+    (which is what real multipart requests produce for ``field[]`` arrays).
+    """
+
+    def __init__(self, items):
+        self._items = list(items)
+
+    def multi_items(self):
+        return list(self._items)
+
+
 @pytest.mark.asyncio
 async def test_get_form_data():
     """
     Test that get_form_data correctly handles form data with array notation.
     Tests audio transcription parameters as a specific example.
     """
-    # Create a mock request with transcription form data
     mock_request = MagicMock()
-
-    # Create mock form data with array notation for timestamp_granularities
-    mock_form_data = {
-        "file": "file_object",  # In a real request this would be an UploadFile
-        "model": "gpt-4o-transcribe",
-        "include[]": "logprobs",  # Array notation
-        "language": "en",
-        "prompt": "Transcribe this audio file",
-        "response_format": "json",
-        "stream": "false",
-        "temperature": "0.2",
-        "timestamp_granularities[]": "word",  # First array item
-        "timestamp_granularities[]": "segment",  # Second array item (would overwrite in dict, but handled by the function)
-    }
-
-    # Mock the form method to return the test data
+    mock_form_data = _FakeFormData(
+        [
+            ("file", "file_object"),
+            ("model", "gpt-4o-transcribe"),
+            ("include[]", "logprobs"),
+            ("language", "en"),
+            ("prompt", "Transcribe this audio file"),
+            ("response_format", "json"),
+            ("stream", "false"),
+            ("temperature", "0.2"),
+            ("timestamp_granularities[]", "word"),
+            ("timestamp_granularities[]", "segment"),
+        ]
+    )
     mock_request.form = AsyncMock(return_value=mock_form_data)
 
-    # Call the function being tested
     result = await get_form_data(mock_request)
 
     # Verify regular form fields are preserved
@@ -535,16 +544,81 @@ async def test_get_form_data():
     assert result["stream"] == "false"
     assert result["temperature"] == "0.2"
 
-    # Verify array fields are correctly parsed
-    assert "include" in result
     assert isinstance(result["include"], list)
-    assert "logprobs" in result["include"]
+    assert result["include"] == ["logprobs"]
 
-    assert "timestamp_granularities" in result
-    assert isinstance(result["timestamp_granularities"], list)
-    # Note: In a real MultiDict, both values would be present
-    # But in our mock dictionary the second value overwrites the first
-    assert "segment" in result["timestamp_granularities"]
+    # #29766: both values must survive — previously dict(form) collapsed
+    # repeated multipart keys to the last value before this loop saw them.
+    assert result["timestamp_granularities"] == ["word", "segment"]
+
+
+@pytest.mark.asyncio
+async def test_get_form_data_preserves_repeated_known_speaker_references():
+    """#29766: gpt-4o-transcribe-diarize accepts up to 4 known speakers via
+    repeated ``known_speaker_names[]`` / ``known_speaker_references[]``
+    multipart fields. Each entry must survive parsing; before the fix only
+    the last one made it into the forwarded request."""
+    mock_request = MagicMock()
+    mock_form_data = _FakeFormData(
+        [
+            ("file", "file_object"),
+            ("model", "gpt-4o-transcribe-diarize"),
+            ("response_format", "diarized_json"),
+            ("chunking_strategy", "auto"),
+            ("known_speaker_names[]", "alice"),
+            ("known_speaker_references[]", "data:audio/wav;base64,AAAA"),
+            ("known_speaker_names[]", "bob"),
+            ("known_speaker_references[]", "data:audio/wav;base64,BBBB"),
+            ("known_speaker_names[]", "carol"),
+            ("known_speaker_references[]", "data:audio/wav;base64,CCCC"),
+        ]
+    )
+    mock_request.form = AsyncMock(return_value=mock_form_data)
+
+    result = await get_form_data(mock_request)
+
+    assert result["known_speaker_names"] == ["alice", "bob", "carol"]
+    assert result["known_speaker_references"] == [
+        "data:audio/wav;base64,AAAA",
+        "data:audio/wav;base64,BBBB",
+        "data:audio/wav;base64,CCCC",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_form_data_single_array_value_stays_single_element_list():
+    """A single ``field[]=v`` produces a one-element list, not a scalar —
+    keeps the downstream contract uniform whether one or many values
+    arrive."""
+    mock_request = MagicMock()
+    mock_form_data = _FakeFormData(
+        [
+            ("file", "f"),
+            ("known_speaker_names[]", "solo"),
+        ]
+    )
+    mock_request.form = AsyncMock(return_value=mock_form_data)
+
+    result = await get_form_data(mock_request)
+
+    assert result["known_speaker_names"] == ["solo"]
+
+
+@pytest.mark.asyncio
+async def test_get_form_data_non_array_keys_keep_last_value_wins_semantics():
+    """For non-bracketed keys, ``dict(form)``'s "last value wins" behavior
+    is the existing contract — preserve it on the ``multi_items()`` path."""
+    mock_request = MagicMock()
+    mock_form_data = _FakeFormData(
+        [
+            ("model", "gpt-4o-transcribe"),
+            ("model", "gpt-4o-transcribe-diarize"),
+        ]
+    )
+    mock_request.form = AsyncMock(return_value=mock_form_data)
+
+    result = await get_form_data(mock_request)
+    assert result["model"] == "gpt-4o-transcribe-diarize"
 
 
 def test_get_tags_from_request_body_with_metadata_tags():
@@ -1025,7 +1099,7 @@ class TestGetRequestBody:
         mock_request = MagicMock()
         mock_request.method = "POST"
         mock_request.headers = {"content-type": "multipart/form-data; boundary=x"}
-        mock_request.form = AsyncMock(return_value={"k": "v"})
+        mock_request.form = AsyncMock(return_value=_FakeFormData([("k", "v")]))
         mock_request.scope = {}
 
         result = await get_request_body(mock_request)

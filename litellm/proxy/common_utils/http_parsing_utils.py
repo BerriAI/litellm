@@ -268,19 +268,28 @@ def check_file_size_under_limit(
 
 async def get_form_data(request: Request) -> Dict[str, Any]:
     """
-    Read form data from request
+    Read form data from request.
 
-    Handles when OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    Handles when OpenAI SDKs pass form keys as
+    ``timestamp_granularities[]="word"`` instead of
+    ``timestamp_granularities=["word", "sentence"]``.
+
+    Iterate Starlette's FormData via ``multi_items()`` instead of casting
+    to ``dict()`` first — ``dict(form)`` silently collapses repeated keys
+    to the last value, dropping every earlier occurrence of repeated
+    bracketed-array fields like ``known_speaker_references[]`` (#29766).
     """
     form = await request.form()
-    form_data = dict(form)
     parsed_form_data: dict[str, Any] = {}
-    for key, value in form_data.items():
-        # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"` instead of `timestamp_granularities=["word", "sentence"]`
+    for key, value in form.multi_items():
         if key.endswith("[]"):
+            # OpenAI SDKs pass form keys as `timestamp_granularities[]="word"`
+            # instead of `timestamp_granularities=["word", "sentence"]`.
             clean_key = key[:-2]
             parsed_form_data.setdefault(clean_key, []).append(value)
         else:
+            # Non-array fields: last value wins (preserves existing
+            # contract for non-repeated keys).
             parsed_form_data[key] = value
     return parsed_form_data
 
