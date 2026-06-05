@@ -632,8 +632,18 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     parent_otel_span=user_api_key_dict.parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-            except Exception:
-                pass
+            except HTTPException:
+                raise
+            except Exception as e:
+                raise HTTPException(
+                    status_code=403,
+                    detail={
+                        "error": (
+                            "Batch input file model access could not be "
+                            "validated against the current team."
+                        )
+                    },
+                ) from e
 
         llm_model_list = llm_router.model_list if llm_router is not None else None
         for model in models:

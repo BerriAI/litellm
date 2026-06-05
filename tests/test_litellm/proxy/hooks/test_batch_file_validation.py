@@ -304,6 +304,65 @@ async def test_pre_call_uses_current_team_allowlist_for_all_team_models_key():
     mock_get_team_object.assert_awaited_once()
 
 
+@pytest.mark.parametrize(
+    ("team_fetch_error", "expected_status"),
+    [
+        (HTTPException(status_code=404, detail="team not found"), 404),
+        (Exception("team fetch failed"), 403),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pre_call_fails_closed_when_current_team_fetch_fails_for_all_team_models_key(
+    team_fetch_error, expected_status
+):
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    stale_model = "stale-model"
+    file_dict = [
+        {
+            "body": {
+                "model": stale_model,
+                "messages": [{"role": "user", "content": "x"}],
+            }
+        }
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-team",
+        user_id="alice",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[stale_model],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(side_effect=team_fetch_error),
+        ) as mock_get_team_object,
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=AsyncMock(return_value=True),
+        ) as mock_can_key_call_model,
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+        )
+
+    assert exc_info.value.status_code == expected_status
+    mock_get_team_object.assert_awaited_once()
+    mock_can_key_call_model.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_pre_call_allows_authorized_model_in_batch_file():
     """If every model in the JSONL is on the caller's allowlist, the hook
