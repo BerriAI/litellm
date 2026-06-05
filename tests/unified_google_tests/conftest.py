@@ -83,8 +83,9 @@ def _start_proxy_server(
     return f"http://{host}:{port}", server, thread, sock
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(scope="session")
 def google_genai_proxy_url() -> Iterator[str]:
+    from base_google_genai_proxy_sdk_test import has_vertex_credentials
     from base_google_test import load_vertex_ai_credentials
 
     saved_env = {
@@ -103,14 +104,15 @@ def google_genai_proxy_url() -> Iterator[str]:
     os.environ["LITELLM_MASTER_KEY"] = PROXY_MASTER_KEY
     os.environ["STORE_MODEL_IN_DB"] = "False"
 
-    credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-    if not (credentials_file and os.path.isfile(credentials_file)):
-        vertex_credentials_path = load_vertex_ai_credentials(
-            model="vertex_ai/gemini-2.5-flash-lite"
-        )
-        if vertex_credentials_path:
-            temp_credentials_path = vertex_credentials_path
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = vertex_credentials_path
+    if has_vertex_credentials():
+        credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+        if not (credentials_file and os.path.isfile(credentials_file)):
+            vertex_credentials_path = load_vertex_ai_credentials(
+                model="vertex_ai/gemini-2.5-flash-lite"
+            )
+            if vertex_credentials_path:
+                temp_credentials_path = vertex_credentials_path
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = vertex_credentials_path
 
     server_url, server, thread, sock = _start_proxy_server(str(PROXY_CONFIG_PATH))
     try:

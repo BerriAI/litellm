@@ -20,6 +20,16 @@ MASTER_KEY = "sk-1234"
 PROMPT = "Reply with only the single word: pong"
 
 
+def has_vertex_credentials() -> bool:
+    credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
+    if credentials_file and os.path.isfile(credentials_file):
+        return True
+    return bool(
+        os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+        and os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+    )
+
+
 def _make_client(proxy_url: str) -> "genai.Client":
     return genai.Client(
         api_key=MASTER_KEY,
@@ -58,12 +68,7 @@ class BaseGoogleGenAIProxySDKTest(ABC):
             return None
 
         if "vertex_ai" in model:
-            credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-            if credentials_file and os.path.isfile(credentials_file):
-                return None
-            private_key = os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
-            private_key_id = os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
-            if private_key and private_key_id:
+            if has_vertex_credentials():
                 return None
             return "Vertex AI credentials not set — skipping Vertex AI proxy SDK tests"
 
@@ -79,12 +84,24 @@ class BaseGoogleGenAIProxySDKTest(ABC):
     def _setup_vertex_credentials_if_needed(self) -> None:
         if "vertex_ai" not in self.model_config.get("model", ""):
             return
-        credentials_file = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")
-        if credentials_file and os.path.isfile(credentials_file):
+        if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", ""):
+            return
+        if not (
+            os.environ.get("VERTEX_AI_PRIVATE_KEY", "")
+            and os.environ.get("VERTEX_AI_PRIVATE_KEY_ID", "")
+        ):
             return
         temp_file_path = load_vertex_ai_credentials(model=self.model_config["model"])
         if temp_file_path:
             self._proxy_sdk_temp_files.append(temp_file_path)
+
+    def teardown_method(self) -> None:
+        for temp_file in self._proxy_sdk_temp_files:
+            try:
+                os.unlink(temp_file)
+            except OSError:
+                pass
+        self._proxy_sdk_temp_files.clear()
 
     def test_proxy_genai_sdk_non_streaming(self, google_genai_proxy_url: str) -> None:
         self._require_proxy_sdk()
