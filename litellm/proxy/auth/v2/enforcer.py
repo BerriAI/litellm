@@ -1,9 +1,10 @@
 import os
-from typing import List, Optional, Sequence
+from typing import Optional, Sequence
 
 _MODEL_PATH = os.path.join(os.path.dirname(__file__), "model.conf")
 
 Rule = Sequence[str]
+Rules = Sequence[Rule]
 
 
 class CasbinEnforcer:
@@ -17,10 +18,10 @@ class CasbinEnforcer:
 
     def __init__(
         self,
-        policies: List[Rule],
-        groupings: List[Rule],
-        resource_groupings: Optional[List[Rule]] = None,
-        domain_groupings: Optional[List[Rule]] = None,
+        policies: Rules,
+        groupings: Rules,
+        resource_groupings: Optional[Rules] = None,
+        domain_groupings: Optional[Rules] = None,
     ):
         # Imported lazily so merely importing the proxy (or this package, e.g. to
         # register the policy-admin router) never requires casbin. The dependency
