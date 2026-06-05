@@ -1018,6 +1018,7 @@ router_settings:
 | OPENMETER_API_ENDPOINT | API endpoint for OpenMeter integration
 | OPENMETER_API_KEY | API key for OpenMeter services
 | OPENMETER_EVENT_TYPE | Type of events sent to OpenMeter
+| OPENMETER_TRUST_REQUEST_USER | If false, ignore the request body `user` and resolve the OpenMeter subject from the authenticated key's user_id. Defaults to true
 | ONYX_API_BASE | Base URL for Onyx Security AI Guard service (defaults to https://ai-guard.onyx.security)
 | ONYX_API_KEY | API key for Onyx Security AI Guard service
 | ONYX_TIMEOUT | Timeout in seconds for Onyx Guard server requests. Default is 10
