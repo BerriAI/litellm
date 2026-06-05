@@ -41,7 +41,6 @@ from typing import Iterator
 import httpx
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Skip gate
 # ---------------------------------------------------------------------------
@@ -79,7 +78,9 @@ def _wait_for_health(base_url: str, proc: subprocess.Popen, deadline: float) -> 
         except httpx.HTTPError:
             pass
         time.sleep(0.5)
-    raise RuntimeError(f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s")
+    raise RuntimeError(
+        f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s"
+    )
 
 
 def _oci_env_from_profile() -> dict[str, str]:
@@ -206,9 +207,7 @@ def test_chat_completion_via_proxy(proxy_url: str, model: str) -> None:
     # Reasoning models may return empty content if their budget covers only
     # the thinking turn — accept either text or a non-empty reasoning field.
     has_content = bool(msg.get("content"))
-    has_reasoning = bool(msg.get("reasoning_content")) or bool(
-        msg.get("reasoning")
-    )
+    has_reasoning = bool(msg.get("reasoning_content")) or bool(msg.get("reasoning"))
     assert has_content or has_reasoning, f"empty assistant message for {model}: {msg}"
     usage = body.get("usage") or {}
     assert usage.get("total_tokens", 0) > 0
@@ -232,7 +231,7 @@ def test_chat_completion_streaming_via_proxy(proxy_url: str, model: str) -> None
                 continue
             if not line.startswith("data:"):
                 continue
-            payload = line[len("data:"):].strip()
+            payload = line[len("data:") :].strip()
             if payload == "[DONE]":
                 saw_done = True
                 break
@@ -271,4 +270,26 @@ def test_model_list_advertises_oci_models(proxy_url: str) -> None:
     assert r.status_code == 200, r.text
     advertised = {row["id"] for row in r.json()["data"]}
     for expected in CHAT_MODELS + ["oci-embed"]:
-        assert expected in advertised, f"{expected} missing from /v1/models: {advertised}"
+        assert (
+            expected in advertised
+        ), f"{expected} missing from /v1/models: {advertised}"
+
+
+def test_cohere_default_n_via_proxy(proxy_url: str) -> None:
+    """A Cohere request carrying the default n=1 succeeds through the gateway.
+
+    Regression for the HTTP 500 ``param `n` is not supported on OCI`` that
+    rejected every client which always sends n=1 (e.g. the MLflow gateway),
+    since OCI Cohere has no numGenerations field.
+    """
+    payload = {**_chat_payload("oci-cohere-command"), "n": 1}
+    r = httpx.post(
+        f"{proxy_url}/v1/chat/completions",
+        headers=_auth_headers(),
+        json=payload,
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"n=1 -> {r.status_code}: {r.text}"
+    body = r.json()
+    assert body["object"] == "chat.completion"
+    assert body["choices"][0]["message"].get("content") is not None
