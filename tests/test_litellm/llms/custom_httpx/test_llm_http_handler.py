@@ -725,8 +725,9 @@ async def test_anthropic_post_uses_prebuilt_body_without_redumping():
 
 
 @pytest.mark.asyncio
-async def test_anthropic_post_falls_back_to_json_dumps_when_unsigned_none():
-    """signed_json_body=None keeps the exact legacy behavior."""
+async def test_anthropic_post_serializes_unsigned_body_with_orjson():
+    """signed_json_body=None -> the body is serialized for the wire (now via
+    orjson). The sent bytes must parse back to the original request body."""
     import json as _json
 
     handler = BaseLLMHTTPHandler()
@@ -756,7 +757,8 @@ async def test_anthropic_post_falls_back_to_json_dumps_when_unsigned_none():
         model="claude",
     )
     sent = http_client.post.await_args.kwargs["data"]
-    assert sent == _json.dumps(request_body)
+    assert isinstance(sent, str)
+    assert _json.loads(sent) == request_body
 
 
 @pytest.mark.asyncio
@@ -810,8 +812,9 @@ async def test_anthropic_post_retry_reserializes_mutated_body():
     assert http_client.post.await_count == 2
     first_sent = http_client.post.await_args_list[0].kwargs["data"]
     second_sent = http_client.post.await_args_list[1].kwargs["data"]
-    assert first_sent == prebuilt  # attempt 0 used prebuilt
-    assert second_sent == _json.dumps(request_body)  # attempt 1 re-serialized
+    assert first_sent == prebuilt  # attempt 0 used the prebuilt body as-is
+    assert isinstance(second_sent, str)
+    assert _json.loads(second_sent) == request_body  # attempt 1 re-serialized
     assert "MUTATED" in second_sent  # ... the mutated body
 
 
@@ -1051,3 +1054,36 @@ def test_async_compact_handler_sends_json_when_not_signed():
     )
     assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
     assert "data" not in kwargs
+
+
+def test_dumps_request_body_orjson_with_stdlib_fallback(monkeypatch):
+    """_dumps_request_body serializes via orjson (fast, valid JSON) and falls
+    back to the stdlib encoder for payloads orjson rejects (e.g. ints beyond
+    64 bits) and when orjson is not installed (SDK-only environments), always
+    producing a str that parses back to the input."""
+    import json as _json
+
+    from litellm.llms.custom_httpx import llm_http_handler as _h
+    from litellm.llms.custom_httpx.llm_http_handler import _dumps_request_body
+
+    body = {
+        "model": "claude",
+        "messages": [{"role": "user", "content": "café \U0001f600"}],
+        "n": 1,
+        "f": 2.5,
+        "ok": True,
+        "nil": None,
+    }
+    out = _dumps_request_body(body)
+    assert isinstance(out, str)
+    assert _json.loads(out) == body
+
+    # orjson raises on ints beyond 64 bits -> stdlib fallback handles them
+    big = {"x": 2**70}
+    assert _json.loads(_dumps_request_body(big)) == big
+
+    # orjson unavailable (SDK install without the proxy extras) -> stdlib fallback
+    monkeypatch.setattr(_h, "orjson", None)
+    out_no_orjson = _dumps_request_body(body)
+    assert isinstance(out_no_orjson, str)
+    assert _json.loads(out_no_orjson) == body
