@@ -3516,6 +3516,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Traceloop",
     )
 
+    galileo: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="galileo",
+        litellm_callback_params=[
+            "GALILEO_API_KEY",
+            "GALILEO_PROJECT_ID",
+            "GALILEO_LOG_STREAM_ID",
+            "GALILEO_BASE_URL",
+            "GALILEO_USERNAME",
+            "GALILEO_PASSWORD",
+        ],
+        ui_callback_name="Galileo",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
