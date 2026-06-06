@@ -419,7 +419,7 @@ describe("teamInfoCall", () => {
   it("should URL-encode team_id query param to handle special characters safely", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue({ team_id: "team with spaces & special?chars" }),
+      text: vi.fn().mockResolvedValue(JSON.stringify({ team_id: "team with spaces & special?chars" })),
     } as any);
     global.fetch = mockFetch as any;
 
@@ -432,16 +432,15 @@ describe("teamInfoCall", () => {
     const parsed = typeof url === "string" ? new URL(url, "http://example.com") : new URL((url as Request).url);
 
     expect(urlStr).toContain("/team/info");
-    // Encoded value is present in the raw URL string (verifies encodeURIComponent was used)
-    expect(urlStr).toContain(`team_id=${encodeURIComponent(teamID)}`);
-    // Round-trip parse returns the original team_id
+    // Special characters are encoded (not present raw) and round-trip back to the original
+    expect(urlStr).not.toContain("team with spaces");
     expect(parsed.searchParams.get("team_id")).toBe(teamID);
   });
 
   it("should not append team_id when teamID is null", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: vi.fn().mockResolvedValue({}),
+      text: vi.fn().mockResolvedValue("{}"),
     } as any);
     global.fetch = mockFetch as any;
 
