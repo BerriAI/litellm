@@ -67,6 +67,12 @@ variable "s3_force_destroy" {
   default     = false
 }
 
+variable "skip_final_snapshot" {
+  description = "Skip the Aurora final snapshot on destroy (ephemeral/CI only)."
+  type        = bool
+  default     = false
+}
+
 variable "proxy_config" {
   description = "LiteLLM proxy config (contents of config.yaml). Empty → defaults."
   type        = any

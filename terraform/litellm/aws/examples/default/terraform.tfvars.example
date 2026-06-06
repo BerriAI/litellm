@@ -23,8 +23,10 @@ env    = "stage"
 # allow_plaintext_alb = true
 
 # Storage retention: false (default) makes `terraform destroy` refuse on a
-# non-empty bucket. Flip to true only for ephemeral / CI stacks.
-# s3_force_destroy = false
+# non-empty bucket / take an Aurora final snapshot. Flip to true only for
+# ephemeral / CI stacks where you accept losing the data.
+# s3_force_destroy    = false
+# skip_final_snapshot = false
 
 # Component images and per-task sizing/autoscaling are NOT exposed as
 # variables in this example (it keeps the curated surface small). They
