@@ -29,10 +29,13 @@ from mcp.types import Tool as MCPTool
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
+    _deserialize_json_list,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPApprovalStatus,
+    MCPEnvVar,
+    MCPEnvVarScope,
     MCPTransport,
 )
 from litellm.types.mcp import MCPAuth
@@ -3057,6 +3060,57 @@ class TestMCPServerTimestamps:
         assert rebuilt_table.created_at == created
         assert rebuilt_table.updated_at == updated
 
+    def test_deserialize_json_list_normalizes_pydantic_models(self):
+        """Prisma hydrates the ``env_vars`` JSON column into ``MCPEnvVar`` models;
+        ``_deserialize_json_list`` must hand back plain dicts so ``MCPServer``
+        (typed ``List[Dict[str, Any]]``) validates."""
+        env_vars = [
+            MCPEnvVar(
+                name="GITHUB_TOKEN", scope=MCPEnvVarScope.user, description="PAT"
+            ),
+            MCPEnvVar(name="REGION", value="us-east-1", scope=MCPEnvVarScope.global_),
+        ]
+        result = _deserialize_json_list(env_vars)
+        assert result is not None
+        assert all(isinstance(item, dict) for item in result)
+        assert result[0]["name"] == "GITHUB_TOKEN"
+        assert result[0]["scope"] == "user"
+        assert result[1]["value"] == "us-east-1"
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_server_from_table_with_model_env_vars(self):
+        """Regression: a DB row whose ``env_vars`` is a list of ``MCPEnvVar``
+        models (as Prisma returns) must build into an ``MCPServer`` instead of
+        raising a Pydantic ``dict_type`` validation error that silently drops
+        the server from the registry."""
+        manager = MCPServerManager()
+
+        table_record = LiteLLM_MCPServerTable(
+            server_id="env-var-server-1",
+            server_name="github_peruser",
+            url="https://api.githubcopilot.com/mcp/",
+            transport=MCPTransport.http,
+            static_headers={"Authorization": "Bearer ${GITHUB_TOKEN}"},
+            env_vars=[
+                MCPEnvVar(
+                    name="GITHUB_TOKEN",
+                    scope=MCPEnvVarScope.user,
+                    description="Your personal GitHub PAT",
+                )
+            ],
+        )
+
+        mcp_server = await manager.build_mcp_server_from_table(table_record)
+
+        assert mcp_server.env_vars == [
+            {
+                "name": "GITHUB_TOKEN",
+                "value": "",
+                "scope": "user",
+                "description": "Your personal GitHub PAT",
+            }
+        ]
+
     @pytest.mark.asyncio
     async def test_round_trip_source_url_preserved(self):
         """source_url survives the full round-trip: LiteLLM_MCPServerTable -> MCPServer -> LiteLLM_MCPServerTable.
@@ -4105,6 +4159,179 @@ class TestApprovalStatusGate:
             self._make_server("never-seen", MCPApprovalStatus.pending_review)
         )
         assert "never-seen" not in manager.registry
+
+
+class TestRegistryTableConversionPreservesEnvVars:
+    """The registry ``MCPServer`` -> ``LiteLLM_MCPServerTable`` conversions back
+    the GET /v1/mcp/server list and health responses, which populate the admin
+    edit form. When they dropped ``env_vars`` the form loaded an empty list and
+    saving any edit silently wiped the stored vars, so ``${VAR}`` static headers
+    were forwarded upstream un-interpolated.
+    """
+
+    @staticmethod
+    def _server_with_env_vars() -> MCPServer:
+        return MCPServer(
+            server_id="env-vars-server",
+            name="env_vars_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            static_headers={"X-Db-Url": "${DB_PROTOCOL}://${CORP_USER}@${DB_HOST}"},
+            env_vars=[
+                {
+                    "name": "DB_PROTOCOL",
+                    "value": "postgresql",
+                    "scope": "global",
+                    "description": None,
+                },
+                {
+                    "name": "CORP_USER",
+                    "value": "",
+                    "scope": "user",
+                    "description": "Your DB username",
+                },
+            ],
+        )
+
+    @staticmethod
+    def _assert_env_vars_round_tripped(table: LiteLLM_MCPServerTable) -> None:
+        assert table.env_vars is not None
+        by_name = {entry.name: entry for entry in table.env_vars}
+        assert set(by_name) == {"DB_PROTOCOL", "CORP_USER"}
+        assert by_name["DB_PROTOCOL"].scope == MCPEnvVarScope.global_
+        assert by_name["DB_PROTOCOL"].value == "postgresql"
+        assert by_name["CORP_USER"].scope == MCPEnvVarScope.user
+        assert by_name["CORP_USER"].description == "Your DB username"
+
+    def test_build_mcp_server_table_preserves_env_vars(self):
+        manager = MCPServerManager()
+        table = manager._build_mcp_server_table(self._server_with_env_vars())
+        self._assert_env_vars_round_tripped(table)
+
+    @pytest.mark.asyncio
+    async def test_health_check_server_preserves_env_vars(self):
+        # OAuth2 without client credentials needs a per-user token, so the
+        # health check is skipped (no network) and we exercise the table
+        # construction path directly.
+        manager = MCPServerManager()
+        server = self._server_with_env_vars()
+        assert server.requires_per_user_auth is True
+        manager.registry[server.server_id] = server
+        table = await manager.health_check_server(server.server_id)
+        self._assert_env_vars_round_tripped(table)
+
+
+class TestHealthCheckInterpolatesGlobalEnvVars:
+    """The upstream probes (health check and the initialize-instructions
+    prefetch) must substitute global ``${NAME}`` env vars into static headers
+    before opening the connection. Forwarding the raw placeholder makes any
+    server whose auth header is backed by a global env var fail authentication
+    and flip to 'unhealthy', even though real tool calls (which do interpolate)
+    keep working.
+    """
+
+    @staticmethod
+    def _server() -> MCPServer:
+        return MCPServer(
+            server_id="global-env-server",
+            name="global_env_server",
+            url="https://example.com/mcp",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            static_headers={"Authorization": "Bearer ${API_TOKEN}"},
+            env_vars=[
+                {
+                    "name": "API_TOKEN",
+                    "value": "secret-token",
+                    "scope": "global",
+                    "description": None,
+                }
+            ],
+        )
+
+    @staticmethod
+    def _capture_headers(manager: MCPServerManager) -> Dict[str, Any]:
+        captured: Dict[str, Any] = {}
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+
+        async def _create(server, mcp_auth_header, extra_headers, stdio_env):
+            captured["extra_headers"] = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = AsyncMock(side_effect=_create)
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_health_check_interpolates_global_env_vars(self):
+        manager = MCPServerManager()
+        server = self._server()
+        assert server.requires_per_user_auth is False
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+        manager._remember_upstream_initialize_instructions = MagicMock()
+        captured = self._capture_headers(manager)
+
+        result = await manager.health_check_server(server.server_id)
+
+        assert captured["extra_headers"] == {"Authorization": "Bearer secret-token"}
+        assert result.status == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_initialize_instructions_prefetch_interpolates_global_env_vars(self):
+        manager = MCPServerManager()
+        server = self._server()
+        captured = self._capture_headers(manager)
+        manager._remember_upstream_initialize_instructions = MagicMock()
+
+        await manager._ensure_upstream_initialize_instructions_cached(server)
+
+        assert captured["extra_headers"] == {"Authorization": "Bearer secret-token"}
+
+
+class TestUserEnvVarsCacheEviction:
+    """At capacity the per-user env var cache must shed a single oldest entry
+    rather than wiping every entry, so a steady stream of distinct callers does
+    not periodically stampede the DB by invalidating every still-valid value.
+    """
+
+    @staticmethod
+    def _patch_cache(monkeypatch, max_size):
+        from litellm.proxy._experimental.mcp_server import mcp_server_manager as m
+
+        cache: Dict[Any, Any] = {}
+        monkeypatch.setattr(m, "_user_env_vars_cache", cache)
+        monkeypatch.setattr(m, "_USER_ENV_VARS_CACHE_MAX_SIZE", max_size)
+        return m, cache
+
+    def test_eviction_drops_single_oldest_entry_not_whole_cache(self, monkeypatch):
+        m, cache = self._patch_cache(monkeypatch, max_size=3)
+
+        for i in range(3):
+            m._write_user_env_vars_cache(f"user{i}", "srv", {"V": str(i)})
+        assert set(cache) == {("user0", "srv"), ("user1", "srv"), ("user2", "srv")}
+
+        m._write_user_env_vars_cache("user3", "srv", {"V": "3"})
+
+        assert len(cache) == 3
+        assert ("user0", "srv") not in cache
+        assert ("user3", "srv") in cache
+        assert cache[("user1", "srv")][0] == {"V": "1"}
+
+    def test_refreshing_existing_key_does_not_evict(self, monkeypatch):
+        m, cache = self._patch_cache(monkeypatch, max_size=2)
+
+        m._write_user_env_vars_cache("a", "srv", {"V": "1"})
+        m._write_user_env_vars_cache("b", "srv", {"V": "2"})
+        m._write_user_env_vars_cache("a", "srv", {"V": "1-new"})
+
+        assert set(cache) == {("a", "srv"), ("b", "srv")}
+        assert cache[("a", "srv")][0] == {"V": "1-new"}
+        # The just-refreshed key must now sit at the tail so the next insert
+        # evicts the genuinely older entry instead.
+        m._write_user_env_vars_cache("c", "srv", {"V": "3"})
+        assert ("b", "srv") not in cache
+        assert ("a", "srv") in cache
 
 
 class TestGetPublicMCPServers:

@@ -22,8 +22,9 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
+import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -52,7 +53,7 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   if (!Array.isArray(list)) return {};
   return list.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
     const header = entry?.header?.trim();
-    if (header) acc[header] = entry?.value ?? "";
+    if (header) acc[header] = (entry?.value ?? "").trim();
     return acc;
   }, {});
 };
@@ -298,6 +299,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     try {
       const {
         static_headers: staticHeadersList,
+        env_vars: envVarsList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
@@ -312,6 +314,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const accessGroups = restValues.mcp_access_groups;
 
       const staticHeaders = reduceStaticHeaders(staticHeadersList);
+      const envVars = normalizeEnvVars(envVarsList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -412,10 +415,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         oauth_passthrough: Boolean(oauthPassthroughRaw),
         static_headers: staticHeaders,
+        env_vars: envVars,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
-      payload.static_headers = staticHeaders;
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
@@ -1050,6 +1053,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
             {/* Stdio Configuration - only show for stdio transport */}
             <StdioConfiguration isVisible={transportType === "stdio"} />
+          </div>
+
+          {/* Environment Variables Section */}
+          <div className="mt-8">
+            <EnvVarsSection />
           </div>
 
           {/* Permission Management / Access Control Section */}

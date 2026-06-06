@@ -1664,6 +1664,257 @@ class TestAddAndDeleteModelLifecycle:
             assert str(exc_info.value.code) == "400"
 
 
+class TestDeleteTeamBYOKModelGhost:
+    """Regression for issue #22594.
+
+    A team BYOK model (added via /model/new with model_info.team_id) stores its
+    public name only in team.models and model_info.team_public_model_name -- it
+    never creates a litellm_modeltable alias row. delete_model used to strip
+    team.models using alias lookups alone, so the public name lingered forever
+    and showed up as a 'ghost' in /models. It also skipped the team cache
+    refresh, so even a corrected DB write would lag behind the cache TTL.
+    """
+
+    @pytest.mark.asyncio
+    async def test_delete_strips_public_name_and_refreshes_cache(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        team_id = "team-byok-ghost"
+        model_id = "byok-model-123"
+        public_name = "my-team-gpt"
+        kept_name = "kept-team-model"
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=f"model_name_{team_id}_abc-uuid",
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={
+                "id": model_id,
+                "team_id": team_id,
+                "team_public_model_name": public_name,
+            },
+            created_by="admin",
+            updated_by="admin",
+        )
+
+        def _team(models):
+            return LiteLLM_TeamTable(
+                team_id=team_id,
+                team_alias="byok-team",
+                members_with_roles=[Member(user_id="admin", role="admin")],
+                models=models,
+            )
+
+        team_row = _team([public_name, kept_name])
+        updated_team_row = _team([kept_name])
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        # After the row delete no team deployment remains -> nothing backs the public name.
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=updated_team_row
+        )
+        # Team BYOK models have no alias row; delete_team_model_alias finds nothing.
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()) as mock_refresh,
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+
+        mock_prisma.db.litellm_teamtable.update.assert_awaited_once()
+        update_kwargs = mock_prisma.db.litellm_teamtable.update.await_args.kwargs
+        assert public_name not in update_kwargs["data"]["models"]
+        assert kept_name in update_kwargs["data"]["models"]
+        assert update_kwargs["include"] == {"object_permission": True}
+
+        mock_refresh.assert_awaited_once()
+        assert mock_refresh.await_args.kwargs["team_row"] is updated_team_row
+        # BYOK internal name can't be an alias value -> the alias-table scan is skipped.
+        mock_prisma.db.litellm_modeltable.find_many.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_non_internal_team_model_still_scans_aliases(self):
+        """A team model whose name is not the BYOK internal shape must still run the
+        alias cleanup (delete_team_model_alias), preserving legacy behavior."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        team_id = "team-legacy"
+        model_id = "legacy-model-1"
+        public_name = "legacy-public"
+
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=public_name,  # not the model_name_{team_id}_ internal shape
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={
+                "id": model_id,
+                "team_id": team_id,
+                "team_public_model_name": public_name,
+            },
+            created_by="admin",
+            updated_by="admin",
+        )
+        team_row = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias="legacy-team",
+            members_with_roles=[Member(user_id="admin", role="admin")],
+            models=[public_name, "kept"],
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        # No alias row matches -> delete_team_model_alias returns nothing, but it still ran.
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=model_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+        # Non-internal name -> the alias-table scan runs.
+        mock_prisma.db.litellm_modeltable.find_many.assert_awaited()
+
+    @pytest.mark.asyncio
+    async def test_delete_keeps_public_name_when_sibling_backs_it(self):
+        """A public name load-balanced across two team deployments must stay in
+        team.models when one replica is deleted but a sibling still backs it."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+
+        team_id = "team-lb"
+        deleted_id = "replica-1"
+        sibling_id = "replica-2"
+        public_name = "lb-gpt"
+
+        def _row(model_id):
+            return LiteLLM_ProxyModelTable(
+                model_id=model_id,
+                model_name=f"model_name_{team_id}_{model_id}",
+                litellm_params={"model": "openai/gpt-4.1-nano"},
+                model_info={
+                    "id": model_id,
+                    "team_id": team_id,
+                    "team_public_model_name": public_name,
+                },
+                created_by="admin",
+                updated_by="admin",
+            )
+
+        deleted_row = _row(deleted_id)
+        sibling_row = _row(sibling_id)
+        team_row = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias="lb-team",
+            members_with_roles=[Member(user_id="admin", role="admin")],
+            models=[public_name],
+        )
+
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=deleted_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(
+            return_value=deleted_row
+        )
+        # After the deleted replica's row is gone, the sibling still backs the public name.
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(
+            return_value=[sibling_row]
+        )
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+
+        admin_user = UserAPIKeyAuth(
+            user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()) as mock_refresh,
+        ):
+            result = await delete_model_endpoint(
+                model_info=ModelInfoDelete(id=deleted_id),
+                user_api_key_dict=admin_user,
+            )
+
+        assert "deleted successfully" in result["message"]
+        # The public name is still backed by the sibling, so team.models is untouched.
+        mock_prisma.db.litellm_teamtable.update.assert_not_awaited()
+        mock_refresh.assert_not_awaited()
+
+
 class TestGetTeamDeployments:
     """Tests for _get_team_deployments which filters by model_name prefix + Python-side team_id check."""
 

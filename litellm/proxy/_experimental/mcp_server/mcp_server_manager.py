@@ -58,20 +58,26 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
+    MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    build_env_var_setup_url,
+    collect_env_var_references,
     compute_short_server_prefix,
     get_server_prefix,
+    interpolate_headers,
     is_short_mcp_tool_prefix_enabled,
     is_tool_name_prefixed,
     iter_known_server_prefixes,
     merge_mcp_headers,
     normalize_server_name,
+    parse_admin_env_vars,
     split_server_prefix_from_name,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
+    MCPEnvVar,
     MCPTransport,
     MCPTransportType,
     UserAPIKeyAuth,
@@ -123,6 +129,33 @@ _AZURE_ENTRA_HOSTS = {
     "login.microsoftonline.us",  # US Government
     "login.chinacloudapi.cn",  # China
 }
+
+# Short-lived in-memory cache for per-user MCP env var values, mirroring the
+# BYOK credential cache. Keyed by (user_id, server_id); value is
+# (values_dict, monotonic_timestamp). Keeps the tool-call and tool-listing
+# paths off the DB on every request within the TTL window.
+_user_env_vars_cache: Dict[Tuple[str, str], Tuple[Dict[str, str], float]] = {}
+_USER_ENV_VARS_CACHE_TTL = 60  # seconds
+_USER_ENV_VARS_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+
+
+def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
+    """Drop a cached entry after the user stores or clears their env var values
+    so the next request reads the fresh value instead of a stale one."""
+    _user_env_vars_cache.pop((user_id, server_id), None)
+
+
+def _write_user_env_vars_cache(
+    user_id: str, server_id: str, values: Dict[str, str]
+) -> None:
+    cache_key = (user_id, server_id)
+    # Re-insert at the tail so eviction drops the oldest-written entry, not a
+    # freshly refreshed one, and only sheds a single entry instead of wiping the
+    # whole cache (which would stampede the DB).
+    _user_env_vars_cache.pop(cache_key, None)
+    if len(_user_env_vars_cache) >= _USER_ENV_VARS_CACHE_MAX_SIZE:
+        _user_env_vars_cache.pop(next(iter(_user_env_vars_cache)), None)
+    _user_env_vars_cache[cache_key] = (values, time.monotonic())
 
 
 def _should_strip_caller_authorization(
@@ -295,6 +328,31 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+def _deserialize_json_list(data: Any) -> Optional[List[Dict[str, Any]]]:
+    """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
+
+    Returns ``None`` for empty / null / unparseable input. Accepts strings
+    (raw JSON), already-materialized lists of dicts, and lists of Pydantic
+    models (Prisma may hydrate a JSON column such as ``env_vars`` into
+    ``MCPEnvVar`` objects); model entries are normalized to plain dicts so
+    downstream consumers expecting ``List[Dict[str, Any]]`` validate.
+    """
+    if data is None or data == "" or data == []:
+        return None
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        data = parsed
+    if not isinstance(data, list):
+        return None
+    return [
+        item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+        for item in data
+    ]
+
+
 def _create_sampling_callback(user_api_key_auth: Optional[Any] = None):
     """
     Create a sampling callback for MCP ClientSession.
@@ -456,7 +514,8 @@ class MCPServerManager:
           - server is OpenAPI (spec_path),
           - non-empty upstream instructions are already cached,
           - auth preconditions match health_check_server's skip rules
-            (per-user auth / missing static auth token),
+            (per-user auth / missing static auth token / static headers that
+            reference a per-user env var),
           - a prior probe attempt for this server is within
             MCP_HEALTH_CHECK_TIMEOUT seconds (the probe is a health-check-shaped
             op and already uses this knob for its inner call timeout; reusing it
@@ -470,6 +529,8 @@ class MCPServerManager:
         if self._upstream_initialize_instructions_by_server_id.get(server.server_id):
             return
         if server.requires_per_user_auth:
+            return
+        if self._references_per_user_env_var(server):
             return
         if (
             server.auth_type
@@ -495,8 +556,13 @@ class MCPServerManager:
         )
 
         try:
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server=server,
+                user_api_key_auth=None,
+                raise_on_missing=False,
+            )
             extra_headers: Optional[Dict[str, str]] = (
-                dict(server.static_headers) if server.static_headers else None
+                dict(resolved_static_headers) if resolved_static_headers else None
             )
             client = await self._create_mcp_client(
                 server=server,
@@ -656,6 +722,7 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                env_vars=server_config.get("env_vars", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
@@ -920,16 +987,40 @@ class MCPServerManager:
                 f"Server ID {mcp_server.server_id} not found in registry"
             )
 
+    def _resolve_env_vars_list(
+        self,
+        mcp_server: LiteLLM_MCPServerTable,
+        *,
+        env_vars_are_encrypted: bool,
+    ) -> Optional[List[Dict[str, Any]]]:
+        env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
+        if env_vars_are_encrypted:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                decrypt_global_env_var_values,
+            )
+
+            decrypt_global_env_var_values(env_vars_list)
+        return env_vars_list
+
     async def build_mcp_server_from_table(
         self,
         mcp_server: LiteLLM_MCPServerTable,
         *,
         credentials_are_encrypted: bool = True,
+        env_vars_are_encrypted: Optional[bool] = None,
     ) -> MCPServer:
         _mcp_info: MCPInfo = mcp_server.mcp_info or {}
         env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
+        )
+        env_vars_list = self._resolve_env_vars_list(
+            mcp_server,
+            env_vars_are_encrypted=(
+                credentials_are_encrypted
+                if env_vars_are_encrypted is None
+                else env_vars_are_encrypted
+            ),
         )
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
@@ -1030,6 +1121,7 @@ class MCPServerManager:
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
             static_headers=static_headers_dict,
+            env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
@@ -1128,7 +1220,14 @@ class MCPServerManager:
             return
         try:
             if mcp_server.server_id not in self.registry:
-                new_server = await self.build_mcp_server_from_table(mcp_server)
+                # Callers hand us a record returned by the db.py read/write
+                # helpers, which already decrypt global env var values (the
+                # `credentials` field is the only one still encrypted here).
+                # Re-decrypting plaintext would zero the values, so build with
+                # env_vars_are_encrypted=False.
+                new_server = await self.build_mcp_server_from_table(
+                    mcp_server, env_vars_are_encrypted=False
+                )
                 self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
@@ -1151,7 +1250,11 @@ class MCPServerManager:
             return
         try:
             if mcp_server.server_id in self.registry:
-                new_server = await self.build_mcp_server_from_table(mcp_server)
+                # See add_server: db.py helpers already decrypted env var
+                # values, so don't decrypt them a second time here.
+                new_server = await self.build_mcp_server_from_table(
+                    mcp_server, env_vars_are_encrypted=False
+                )
                 # Carry the previously-resolved short prefix across so the
                 # tool names stay stable for clients holding cached lists.
                 existing_prefix = self.registry[mcp_server.server_id].short_prefix
@@ -1572,6 +1675,180 @@ class MCPServerManager:
 
         return resolved_env
 
+    def _references_per_user_env_var(self, server: MCPServer) -> bool:
+        """True when ``server.static_headers`` reference a per-user ``${NAME}`` env var.
+
+        Such placeholders can only be filled from a calling user's stored values,
+        so a userless probe (health check / instructions prefetch) would forward
+        the literal ``${NAME}`` upstream and get rejected. Callers skip the probe
+        and report ``unknown`` instead of a misleading ``unhealthy``.
+        """
+        static_headers = server.static_headers
+        env_vars = getattr(server, "env_vars", None)
+        if not static_headers or not env_vars:
+            return False
+        _global_values, user_specs = parse_admin_env_vars(env_vars)
+        user_var_names = {spec["name"] for spec in user_specs}
+        if not user_var_names:
+            return False
+        referenced = collect_env_var_references(strings=static_headers.values())
+        return bool(referenced & user_var_names)
+
+    async def _resolve_static_headers_with_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        *,
+        raise_on_missing: bool = True,
+    ) -> Optional[Dict[str, str]]:
+        """Return server.static_headers with ``${NAME}`` interpolated.
+
+        Globals come from ``server.env_vars`` entries with ``scope=="global"``.
+        Per-user values come from the ``LiteLLM_MCPUserEnvVars`` row for the
+        calling user.
+
+        When ``raise_on_missing`` is ``True`` (the tool-*call* path), raises
+        ``MCPMissingUserEnvVarsError`` if ``static_headers`` reference a per-user
+        variable the calling user has not yet supplied — converted into a
+        user-facing 412 by the REST layer.
+
+        When ``raise_on_missing`` is ``False`` (the tool-*list* path), missing
+        per-user vars are non-blocking: we interpolate whatever is available and
+        leave unfilled ``${NAME}`` references untouched, so the server's tools
+        still appear in the listing. The user only hits the friendly error when
+        they actually invoke a tool that needs the missing value.
+        """
+        static_headers = server.static_headers
+        env_vars = getattr(server, "env_vars", None)
+        if not static_headers and not env_vars:
+            return static_headers
+
+        global_values, user_specs = parse_admin_env_vars(env_vars)
+        # An empty-valued global is treated as unset: it must not mask a per-user
+        # var the user still has to supply, nor override a value the user did
+        # supply. The unresolved ${NAME} is then left untouched, like any other
+        # undefined reference.
+        global_values = {name: value for name, value in global_values.items() if value}
+        user_var_names = {spec["name"] for spec in user_specs}
+
+        # If no env vars are configured, return static_headers as-is.
+        if not global_values and not user_specs:
+            return static_headers
+
+        # Figure out which user-scoped vars are actually referenced. A var that
+        # also carries a global value is always covered by that global (globals
+        # win in the merge below), so it can never be genuinely "missing" even if
+        # the user hasn't filled it in -- only vars without a global fallback do.
+        referenced = collect_env_var_references(strings=(static_headers or {}).values())
+        referenced_user_vars = referenced & user_var_names
+        required_user_vars = {
+            name for name in referenced_user_vars if name not in global_values
+        }
+
+        user_values: Dict[str, str] = {}
+        if required_user_vars:
+            try:
+                user_values = await self._load_user_env_vars(server, user_api_key_auth)
+            except Exception as exc:
+                # On the tool-call path a DB failure must surface as a real
+                # server error, not a misleading "set up your credentials" 412.
+                # On the listing path we stay best-effort and leave the
+                # unfilled ${NAME} references untouched so tools still appear.
+                if raise_on_missing:
+                    raise
+                verbose_logger.warning(
+                    "MCPServerManager: best-effort user env var load failed for "
+                    "server=%s: %s",
+                    server.server_id,
+                    exc,
+                )
+
+            if raise_on_missing:
+                missing = sorted(
+                    name for name in required_user_vars if not user_values.get(name)
+                )
+                if missing:
+                    # A cached negative must never produce a 412: cache
+                    # invalidation is process-local, so a user who just stored
+                    # values on another worker would otherwise be told their
+                    # credentials are missing until the entry expires. Confirm
+                    # against the DB before raising.
+                    user_values = await self._load_user_env_vars(
+                        server, user_api_key_auth, force_refresh=True
+                    )
+                    missing = sorted(
+                        name for name in required_user_vars if not user_values.get(name)
+                    )
+                if missing:
+                    raise MCPMissingUserEnvVarsError(
+                        server_id=server.server_id,
+                        server_name=server.server_name or server.name,
+                        missing=missing,
+                        setup_url=build_env_var_setup_url(server.server_id),
+                    )
+
+        # Only honor stored user values for currently user-scoped vars, and let
+        # admin globals win, so a stale row from when a var was user-scoped can
+        # never override the global value the admin set after switching it.
+        scoped_user_values = {
+            name: value for name, value in user_values.items() if name in user_var_names
+        }
+        merged_vars: Dict[str, str] = {**scoped_user_values, **global_values}
+        if not static_headers:
+            return static_headers
+        return interpolate_headers(static_headers, merged_vars)
+
+    async def _load_user_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        *,
+        force_refresh: bool = False,
+    ) -> Dict[str, str]:
+        """Look up the calling user's env var values for ``server``.
+
+        Returns an empty dict when no user is available. Results are cached in a
+        short-lived in-memory map keyed by (user_id, server_id) so the tool-call
+        and tool-listing paths avoid a DB round-trip per request within the TTL
+        window; the cache is invalidated when the user stores or clears values.
+        Pass ``force_refresh`` to bypass the cache read and re-fetch from the DB
+        (used before raising a "missing credentials" error so a process-local
+        stale entry cannot mask values stored on another worker). A missing DB
+        connection and any other DB error propagate so the caller can decide
+        between failing the request (tool-call path) and staying best-effort
+        (listing path); they must never be mistaken for "user has no values",
+        which would send the user a misleading "set up your credentials" 412.
+        """
+        if user_api_key_auth is None:
+            return {}
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        if not user_id:
+            return {}
+
+        cache_key = (user_id, server.server_id)
+        if not force_refresh:
+            cached = _user_env_vars_cache.get(cache_key)
+            if cached is not None:
+                values, ts = cached
+                if time.monotonic() - ts < _USER_ENV_VARS_CACHE_TTL:
+                    return values
+
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+
+        if prisma_client is None:
+            raise RuntimeError(
+                "MCP per-user env vars require a database connection, but none "
+                "is configured. Connect a database to your proxy to use per-user "
+                "MCP env vars."
+            )
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            get_user_env_vars,
+        )
+
+        values = await get_user_env_vars(prisma_client, user_id, server.server_id)
+        _write_user_env_vars_cache(user_id, server.server_id, values)
+        return values
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
@@ -1732,10 +2009,17 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            # Tool *listing* must not be blocked by missing per-user env vars —
+            # the server's tools should still appear so the client connects. The
+            # friendly "missing vars" error is raised only on the tool-*call*
+            # path (see _call_regular_mcp_tool).
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server, user_api_key_auth, raise_on_missing=False
+            )
+            if resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(resolved_static_headers)
 
             # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
             # Skip entirely when the signer is not configured (avoid an unnecessary
@@ -3105,10 +3389,17 @@ class MCPServerManager:
                     continue
                 extra_headers[header] = header_value
 
-        if mcp_server.static_headers:
+        # Interpolate env vars into static_headers. Raises
+        # MCPMissingUserEnvVarsError when the calling user has not filled in
+        # a required per-user variable — the REST layer converts that into
+        # a friendly 412 with a setup URL.
+        resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+            mcp_server, user_api_key_auth
+        )
+        if resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(mcp_server.static_headers)
+            extra_headers.update(resolved_static_headers)
 
         if hook_extra_headers:
             if extra_headers is None:
@@ -3566,7 +3857,13 @@ class MCPServerManager:
                 verbose_logger.debug(
                     f"Building server from DB: {server.server_id} ({server.server_name})"
                 )
-                new_server = await self.build_mcp_server_from_table(server)
+                # raw_rows come straight from the DB, so their global env var
+                # values (like credentials) are still encrypted here, unlike the
+                # already-decrypted records add_server/update_server are handed.
+                # Decrypt them while building the registry entry.
+                new_server = await self.build_mcp_server_from_table(
+                    server, env_vars_are_encrypted=True
+                )
                 # Carry the cached short_prefix from the previous registry entry
                 # (if any) so the prefix is stable across reloads.
                 if existing_server is not None and existing_server.short_prefix:
@@ -3906,11 +4203,21 @@ class MCPServerManager:
             and not server.authentication_token
         ):
             should_skip_health_check = True
+        # Skip if static_headers reference a per-user env var: a userless probe
+        # can't fill ${NAME} and would forward the literal placeholder upstream,
+        # flipping the server to unhealthy even though real user calls succeed.
+        elif self._references_per_user_env_var(server):
+            should_skip_health_check = True
 
         if not should_skip_health_check:
-            extra_headers = {}
-            if server.static_headers:
-                extra_headers.update(server.static_headers)
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server=server,
+                user_api_key_auth=None,
+                raise_on_missing=False,
+            )
+            extra_headers = (
+                dict(resolved_static_headers) if resolved_static_headers else {}
+            )
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3960,6 +4267,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
+            env_vars=self._env_vars_to_models(server.env_vars),
             status=status,
             last_health_check=datetime.now(),
             health_check_error=health_check_error,
@@ -4033,6 +4341,14 @@ class MCPServerManager:
 
         return list_mcp_servers
 
+    @staticmethod
+    def _env_vars_to_models(
+        env_vars: Optional[List[Dict[str, Any]]],
+    ) -> Optional[List[MCPEnvVar]]:
+        if env_vars is None:
+            return None
+        return [MCPEnvVar.model_validate(env_var) for env_var in env_vars]
+
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
@@ -4053,6 +4369,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
+            env_vars=self._env_vars_to_models(server.env_vars),
             status=None,  # No health check performed
             last_health_check=None,  # No health check performed
             health_check_error=None,
