@@ -319,9 +319,13 @@ async def _arealtime(  # noqa: PLR0915
         api_key=api_key,
     )
 
-    # Ensure query params use the normalized provider model (no proxy aliases).
+    # If the client supplied `model` in the URL, ensure it uses the normalized
+    # provider model (no proxy aliases). If they omitted it, preserve that shape
+    # for transcription-only sessions like OpenAI's `?intent=transcription`.
     if query_params is not None:
-        query_params = {**query_params, "model": model}
+        query_params = {**query_params}
+        if "model" in query_params:
+            query_params["model"] = model
 
     litellm_logging_obj.update_from_kwargs(
         kwargs=kwargs,
@@ -374,8 +378,13 @@ async def _arealtime(  # noqa: PLR0915
             kwargs.get("realtime_protocol")
             or litellm_params.get("realtime_protocol")
             or os.environ.get("LITELLM_AZURE_REALTIME_PROTOCOL")
-            or "beta"
         )
+        if (
+            realtime_protocol is None
+            and (query_params or {}).get("intent") == "transcription"
+        ):
+            realtime_protocol = "GA"
+        realtime_protocol = realtime_protocol or "beta"
         await azure_realtime.async_realtime(
             model=model,
             websocket=websocket,

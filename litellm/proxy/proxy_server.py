@@ -9426,13 +9426,15 @@ async def vertex_ai_live_passthrough_endpoint(
 
 @lru_cache(maxsize=_REALTIME_BODY_CACHE_SIZE)
 def _realtime_query_params_template(
-    model: str, intent: Optional[str]
+    model: Optional[str], intent: Optional[str]
 ) -> Tuple[Tuple[str, str], ...]:
     """
     Build a hashable representation of the realtime query params so we can cache
     the repetitive model/intent combinations.
     """
-    params: List[Tuple[str, str]] = [("model", model)]
+    params: List[Tuple[str, str]] = []
+    if model is not None:
+        params.append(("model", model))
     if intent is not None:
         params.append(("intent", intent))
     return tuple(params)
@@ -9443,8 +9445,10 @@ def _realtime_query_params_template(
 @app.websocket("/realtime")
 async def realtime_websocket_endpoint(
     websocket: WebSocket,
-    model: str,
-    intent: str = fastapi.Query(
+    model: Optional[str] = fastapi.Query(
+        None, description="The model to use for the websocket connection."
+    ),
+    intent: Optional[str] = fastapi.Query(
         None, description="The intent of the websocket connection."
     ),
     guardrails: Optional[str] = fastapi.Query(
@@ -9461,6 +9465,17 @@ async def realtime_websocket_endpoint(
     accept_kwargs: dict = {}
     if requested_protocols:
         accept_kwargs["subprotocol"] = requested_protocols[0]
+
+    route_model = model
+    if route_model is None:
+        if intent == "transcription":
+            route_model = "gpt-realtime-whisper"
+        else:
+            await websocket.close(
+                code=1008, reason="model query parameter is required"
+            )
+            return
+    assert route_model is not None
     await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
@@ -9469,7 +9484,7 @@ async def realtime_websocket_endpoint(
     )
 
     data: Dict[str, Any] = {
-        "model": model,
+        "model": route_model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
     }
@@ -9489,7 +9504,7 @@ async def realtime_websocket_endpoint(
     request._url = websocket.url
 
     async def return_body():
-        return _realtime_request_body(model)
+        return _realtime_request_body(route_model)
 
     request.body = return_body  # type: ignore
 
@@ -9515,7 +9530,7 @@ async def realtime_websocket_endpoint(
             user_request_timeout=user_request_timeout,
             user_max_tokens=user_max_tokens,
             user_api_base=user_api_base,
-            model=model,
+            model=route_model,
             route_type="_arealtime",
         )
     except Exception as e:

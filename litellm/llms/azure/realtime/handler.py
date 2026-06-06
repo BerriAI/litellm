@@ -65,19 +65,25 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             "GA",
             "V1",
         )
+        intent = (query_params or {}).get("intent")
+
         if _is_ga:
             path = "/openai/v1/realtime"
-            qs = urlencode({"model": model})
+            query_parts = []
+            if intent != "transcription" and (
+                query_params is None or "model" in query_params
+            ):
+                query_parts.append(urlencode({"model": model}))
         else:
             # Default to beta path for backwards compatibility
             path = "/openai/realtime"
-            qs = urlencode({"api-version": api_version, "deployment": model})
+            query_parts = [urlencode({"api-version": api_version, "deployment": model})]
 
-        intent = (query_params or {}).get("intent")
         if intent:
-            qs = f"{qs}&{urlencode({'intent': intent})}"
+            query_parts.append(urlencode({"intent": intent}))
 
-        return f"{api_base}{path}?{qs}"
+        qs = "&".join(query_parts)
+        return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
 
     async def async_realtime(
         self,
