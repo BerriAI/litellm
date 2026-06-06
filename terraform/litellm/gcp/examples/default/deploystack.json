@@ -29,8 +29,8 @@
     },
     {
       "name": "image_registry",
-      "description": "Artifact Registry path prefix for the four litellm-* images. Format: <region>-docker.pkg.dev/<project>/litellm/berriai, pointing at the remote repo you created above. The ghcr.io/berriai default does NOT work; Cloud Run rejects ghcr.io URIs at apply time",
-      "default": "us-central1-docker.pkg.dev/PROJECT_ID/litellm/berriai"
+      "description": "Artifact Registry path prefix for the four litellm-* images. Format: <region>-docker.pkg.dev/<project>/litellm/berriai, pointing at the remote repo you created above. Substitute BOTH REGION and PROJECT_ID in the default to match the AR repo you just created (REGION must match the region you picked above). The ghcr.io/berriai default in the module does NOT work; Cloud Run rejects ghcr.io URIs at apply time",
+      "default": "REGION-docker.pkg.dev/PROJECT_ID/litellm/berriai"
     },
     {
       "name": "allow_plaintext_lb",
