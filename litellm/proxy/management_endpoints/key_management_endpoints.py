@@ -39,6 +39,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
     rotate_mcp_user_credentials_master_key,
+    rotate_mcp_user_env_vars_master_key,
 )
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
@@ -691,10 +692,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
             prisma_client=prisma_client,
         )
 
-    # Capture the caller-supplied max_budget before any defaults or upperbound
-    # params can fill it, so the ceiling check only fires when the caller
-    # explicitly requested a budget.
+    # Capture caller-supplied max_budget and team_id before any defaults or
+    # upperbound params can fill them, so the ceiling check and its team-key
+    # exemption key off what the caller explicitly requested, not a value that
+    # default_key_generate_params injected.
     _requested_max_budget = data.max_budget
+    _requested_team_id = data.team_id
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
@@ -722,8 +725,17 @@ async def _common_key_generation_helper(  # noqa: PLR0915
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # with an explicit budget cannot grant a key a higher budget than their own.
     # Callers with max_budget=None (unlimited) can delegate any budget.
+    # A UI/CLI session token's max_budget is a per-session chat spend cap
+    # (max_ui_session_budget), not a delegation authority, so it is exempt only
+    # when creating a team key - that key's spend is bounded by the team budget
+    # at request time. Personal keys keep the ceiling; nothing else bounds them.
+    is_ui_session_team_key = (
+        user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+        and _requested_team_id is not None
+    )
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
+        and not is_ui_session_team_key
         and _requested_max_budget is not None
         and user_api_key_dict.max_budget is not None
         and _requested_max_budget > user_api_key_dict.max_budget
@@ -894,7 +906,12 @@ async def _common_key_generation_helper(  # noqa: PLR0915
                 user_api_key_dict.user_role is not None
                 and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
             )
-            if not _is_proxy_admin:
+            _org_inherited_from_team = (
+                team_table is not None
+                and team_table.organization_id is not None
+                and data.organization_id == team_table.organization_id
+            )
+            if not _is_proxy_admin and not _org_inherited_from_team:
                 await _validate_caller_can_assign_key_org(
                     user_api_key_dict=user_api_key_dict,
                     organization_id=data.organization_id,
@@ -1388,6 +1405,7 @@ async def generate_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
     - tpm_limit_type: Optional[str] - Type of tpm limit. Options: "best_effort_throughput" (no error if we're overallocating tpm), "guaranteed_throughput" (raise an error if we're overallocating tpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - rpm_limit_type: Optional[str] - Type of rpm limit. Options: "best_effort_throughput" (no error if we're overallocating rpm), "guaranteed_throughput" (raise an error if we're overallocating rpm), "dynamic" (dynamically exceed limit when no 429 errors). Defaults to "best_effort_throughput".
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -1606,6 +1624,7 @@ async def generate_service_account_key_fn(
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
     - model_rpm_limit: Optional[dict] - key-specific model rpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific rpm limit.
     - model_tpm_limit: Optional[dict] - key-specific model tpm limit. Example - {"text-davinci-002": 1000, "gpt-3.5-turbo": 1000}. IF null or {} then no model specific tpm limit.
+    - mcp_rpm_limit: Optional[dict] - key-specific per-MCP-server rpm limit, keyed by MCP server name (alias if set, else the configured name). Example - {"github": 100, "slack": 200}. IF null or {} then no MCP-specific rpm limit.
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request
@@ -2422,6 +2441,7 @@ async def update_key_fn(  # noqa: PLR0915
     - tpm_limit: Optional[int] - Tokens per minute limit
     - rpm_limit: Optional[int] - Requests per minute limit
     - model_rpm_limit: Optional[dict] - Model-specific RPM limits {"gpt-4": 100, "claude-v1": 200}
+    - mcp_rpm_limit: Optional[dict] - Per-MCP-server RPM limits, keyed by MCP server name {"github": 100, "slack": 200}
     - model_tpm_limit: Optional[dict] - Model-specific TPM limits {"gpt-4": 100000, "claude-v1": 200000}
     - tpm_limit_type: Optional[str] - TPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
@@ -3401,6 +3421,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     model_max_budget: Optional[dict] = {},
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
+    mcp_rpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
     policies: Optional[list] = None,
     prompts: Optional[list] = None,
@@ -3479,6 +3500,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if model_tpm_limit is not None:
         metadata = metadata or {}
         metadata["model_tpm_limit"] = model_tpm_limit
+    if mcp_rpm_limit is not None:
+        metadata = metadata or {}
+        metadata["mcp_rpm_limit"] = mcp_rpm_limit
     if guardrails is not None:
         metadata = metadata or {}
         metadata["guardrails"] = guardrails
@@ -4112,6 +4136,15 @@ async def _rotate_master_key(  # noqa: PLR0915
         verbose_proxy_logger.warning(
             "Failed to rotate MCP user credentials: %s", str(e)
         )
+
+    # 4c. process MCP per-user environment variables table
+    try:
+        await rotate_mcp_user_env_vars_master_key(
+            prisma_client=prisma_client,
+            new_master_key=new_master_key,
+        )
+    except Exception as e:
+        verbose_proxy_logger.warning("Failed to rotate MCP user env vars: %s", str(e))
 
     # 5. process credentials table
     try:

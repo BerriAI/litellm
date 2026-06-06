@@ -1,26 +1,72 @@
 import { isAdminRole } from "@/utils/roles";
-import { QuestionCircleOutlined } from "@ant-design/icons";
+import { QuestionCircleOutlined, SearchOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import NewBadge from "../common_components/NewBadge";
-import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
+import { Descriptions, Empty, Input, Modal, Select, Spin, Tooltip, Typography } from "antd";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
 import { deleteMCPServer } from "../networking";
 import { MCPSubmissionsTab } from "./MCPSubmissionsTab";
 import { MCPToolsetsTab } from "./MCPToolsetsTab";
-import { DataTable } from "../view_logs/table";
 import CreateMCPServer from "./create_mcp_server";
 import MCPConnect from "./mcp_connect";
-import { mcpServerColumns } from "./mcp_server_columns";
+import MCPServerCard from "./MCPServerCard";
 import { MCPServerView } from "./mcp_server_view";
-import { DiscoverableMCPServer, MCPServer, MCPServerProps, Team } from "./types";
+import type { DiscoverableMCPServer, MCPServer, MCPServerProps, MCPUserEnvVarsStatus, Team } from "./types";
 import MCPSemanticFilterSettings from "../Settings/AdminSettings/MCPSemanticFilterSettings/MCPSemanticFilterSettings";
 import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
+import UserEnvVarsModal from "./UserEnvVarsModal";
+import { listMCPUserEnvVarStatus } from "../networking";
+
+type SortKey = "created_desc" | "updated_desc" | "name_asc" | "health";
+
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: "created_desc", label: "Recently created" },
+  { value: "updated_desc", label: "Recently updated" },
+  { value: "name_asc", label: "Name (A→Z)" },
+  { value: "health", label: "Health (unhealthy first)" },
+];
+
+const HEALTH_RANK: Record<string, number> = {
+  unhealthy: 0,
+  unknown: 1,
+  healthy: 2,
+};
+
+const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
+  switch (sort) {
+    case "name_asc": {
+      const nameA = (a.server_name || a.alias || a.server_id).toLowerCase();
+      const nameB = (b.server_name || b.alias || b.server_id).toLowerCase();
+      return nameA.localeCompare(nameB);
+    }
+    case "updated_desc": {
+      const ta = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+      const tb = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+      return tb - ta;
+    }
+    case "health": {
+      const ra = HEALTH_RANK[a.status ?? "unknown"] ?? 1;
+      const rb = HEALTH_RANK[b.status ?? "unknown"] ?? 1;
+      if (ra !== rb) return ra - rb;
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return tb - ta;
+    }
+    case "created_desc":
+    default: {
+      const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return tb - ta;
+    }
+  }
+};
 
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
@@ -31,7 +77,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const { data: mcpServers, isLoading: isLoadingServers, refetch } = useMCPServers();
 
   // Fetch health status for all servers
-  const { data: healthStatuses, isLoading: isLoadingHealth, recheckServerHealth, recheckingServerIds } = useMCPServerHealth();
+  const {
+    data: healthStatuses,
+    isLoading: isLoadingHealth,
+    recheckServerHealth,
+    recheckingServerIds,
+  } = useMCPServerHealth();
 
   // Merge health status data into servers
   const serversWithHealth = useMemo(() => {
@@ -44,9 +95,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       const healthStatus = healthMap.get(server.server_id);
       return {
         ...server,
-        status: healthStatus
-          ? (healthStatus as "healthy" | "unhealthy" | "unknown")
-          : server.status,
+        status: healthStatus ? (healthStatus as "healthy" | "unhealthy" | "unknown") : server.status,
       };
     });
   }, [mcpServers, healthStatuses]);
@@ -64,7 +113,51 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  // Per-user env-var fill modal target + deep-link source captured once from the URL.
+  const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
+  const [deepLinkServerId, setDeepLinkServerId] = useState<string | null>(() =>
+    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("fill_env_vars"),
+  );
+  const [searchQuery, setSearchQuery] = useState<string>("");
+  const [sortKey, setSortKey] = useState<SortKey>("created_desc");
   const isInternalUser = userRole === "Internal User";
+
+  // Single bulk fetch of this user's per-server env-var status. Drives the
+  // red "N user fields missing" footer on each card with no per-row request.
+  const { data: envVarStatuses, refetch: refetchEnvVarStatus } = useQuery<MCPUserEnvVarsStatus[]>({
+    queryKey: ["mcpUserEnvVarStatus"],
+    queryFn: () => listMCPUserEnvVarStatus(accessToken!),
+    enabled: !!accessToken,
+  });
+
+  // Per-server list of per-user fields this user still needs to fill in.
+  const missingFieldsByServer = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const status of envVarStatuses ?? []) {
+      map[status.server_id] = (status.required ?? []).filter((spec) => !spec.is_set).map((spec) => spec.name);
+    }
+    return map;
+  }, [envVarStatuses]);
+
+  // Deep-link via ?fill_env_vars=<server_id> — the link users follow from the
+  // friendly error the proxy returns when a per-user var is missing. The id is
+  // captured into state above and resolved to a server below; here we only strip
+  // the param so a refresh doesn't reopen the modal.
+  useEffect(() => {
+    if (!deepLinkServerId || typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    if (!params.has("fill_env_vars")) return;
+    params.delete("fill_env_vars");
+    const newSearch = params.toString();
+    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : "") + window.location.hash;
+    window.history.replaceState({}, "", newUrl);
+  }, [deepLinkServerId]);
+
+  const deepLinkServer = useMemo(
+    () => (deepLinkServerId ? serversWithHealth.find((s) => s.server_id === deepLinkServerId) ?? null : null),
+    [deepLinkServerId, serversWithHealth],
+  );
+  const activeEnvVarsServer = envVarsModalServer ?? deepLinkServer;
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -109,35 +202,40 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     if (!serversWithHealth) return [];
     return Array.from(
       new Set(
-        serversWithHealth.flatMap((server) => server.mcp_access_groups).filter((group): group is string => group != null),
+        serversWithHealth
+          .flatMap((server) => server.mcp_access_groups)
+          .filter((group): group is string => group != null),
       ),
     );
   }, [serversWithHealth]);
 
   // Filtering logic for both team and access group
-  const filterServers = useCallback((teamId: string, group: string) => {
-    if (!serversWithHealth) return setFilteredServers([]);
-    let filtered = serversWithHealth;
-    if (teamId === "personal") {
-      setFilteredServers([]);
-      return;
-    }
-    if (teamId !== "all") {
-      filtered = filtered.filter((server) => server.teams?.some((team) => team.team_id === teamId));
-    }
-    if (group !== "all") {
-      filtered = filtered.filter((server) =>
-        server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
-      );
-    }
-    const sorted = [...filtered].sort((a, b) => {
-      if (!a.created_at && !b.created_at) return 0;
-      if (!a.created_at) return 1;
-      if (!b.created_at) return -1;
-      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
-    });
-    setFilteredServers(sorted);
-  }, [serversWithHealth]);
+  const filterServers = useCallback(
+    (teamId: string, group: string) => {
+      if (!serversWithHealth) return setFilteredServers([]);
+      let filtered = serversWithHealth;
+      if (teamId === "personal") {
+        setFilteredServers([]);
+        return;
+      }
+      if (teamId !== "all") {
+        filtered = filtered.filter((server) => server.teams?.some((team) => team.team_id === teamId));
+      }
+      if (group !== "all") {
+        filtered = filtered.filter((server) =>
+          server.mcp_access_groups?.some((g: any) => (typeof g === "string" ? g === group : g && g.name === group)),
+        );
+      }
+      const sorted = [...filtered].sort((a, b) => {
+        if (!a.created_at && !b.created_at) return 0;
+        if (!a.created_at) return 1;
+        if (!b.created_at) return -1;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+      setFilteredServers(sorted);
+    },
+    [serversWithHealth],
+  );
 
   // Handle team filter change
   const handleTeamChange = (teamId: string) => {
@@ -156,26 +254,20 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     filterServers(selectedTeam, selectedMcpAccessGroup);
   }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
 
-  const columns = React.useMemo(
-    () =>
-      mcpServerColumns(
-        userRole ?? "",
-        (serverId: string) => {
-          setSelectedServerId(serverId);
-          setEditServer(false);
-        },
-        (serverId: string) => {
-          setSelectedServerId(serverId);
-          setEditServer(true);
-        },
-        handleDelete,
-        isLoadingHealth,
-        (server: MCPServer) => setByokModalServer(server),
-        recheckServerHealth,
-        recheckingServerIds,
-      ),
-    [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
-  );
+  // Search + sort layer applied on top of the team/access-group filters.
+  const displayedServers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const matches = q
+      ? filteredServers.filter((s) => {
+          const name = (s.server_name || "").toLowerCase();
+          const alias = (s.alias || "").toLowerCase();
+          const url = (s.url || "").toLowerCase();
+          const id = s.server_id.toLowerCase();
+          return name.includes(q) || alias.includes(q) || url.includes(q) || id.includes(q);
+        })
+      : filteredServers;
+    return [...matches].sort((a, b) => compareServers(a, b, sortKey));
+  }, [filteredServers, searchQuery, sortKey]);
 
   function handleDelete(server_id: string) {
     setServerToDelete(server_id);
@@ -190,6 +282,14 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       setIsDeletingServer(true);
       await deleteMCPServer(accessToken, serverIdToDelete);
       NotificationsManager.success("Deleted MCP Server successfully");
+      // If the user is currently viewing the detail page of the server they
+      // just deleted, return them to the All Servers list. Otherwise the
+      // detail view would stay mounted, fall back to an empty stub server,
+      // and show a phantom "Unnamed Server" page.
+      if (selectedServerId === serverIdToDelete) {
+        setEditServer(false);
+        setSelectedServerId(null);
+      }
       refetch();
     } catch (error) {
       console.error("Error deleting the mcp server:", error);
@@ -218,18 +318,20 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
 
   // Memoize the selected server to prevent unnecessary re-renders
   const selectedServer = React.useMemo(() => {
-    return filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
-      server_id: "",
-      server_name: "",
-      alias: "",
-      url: "",
-      transport: "",
-      auth_type: "",
-      created_at: "",
-      created_by: "",
-      updated_at: "",
-      updated_by: "",
-    };
+    return (
+      filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
+        server_id: "",
+        server_name: "",
+        alias: "",
+        url: "",
+        transport: "",
+        auth_type: "",
+        created_at: "",
+        created_by: "",
+        updated_at: "",
+        updated_by: "",
+      }
+    );
   }, [filteredServers, selectedServerId]);
 
   // Memoize the onBack callback to prevent unnecessary re-renders
@@ -258,14 +360,18 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         confirmLoading={isDeletingServer}
       >
         <div className="space-y-4">
-          <AntdText className="text-gray-600">This action is permanent and cannot be undone. All associated configurations will be removed.</AntdText>
+          <AntdText className="text-gray-600">
+            This action is permanent and cannot be undone. All associated configurations will be removed.
+          </AntdText>
 
           {serverToDelete && (
             <div className="mt-3 p-4 bg-gray-50 rounded-lg border border-gray-200">
               <Descriptions column={1} size="small" colon={false}>
                 {serverToDelete.server_name && (
                   <Descriptions.Item label={<span className="text-gray-500 text-sm">Name</span>}>
-                    <AntdText strong className="text-sm">{serverToDelete.server_name}</AntdText>
+                    <AntdText strong className="text-sm">
+                      {serverToDelete.server_name}
+                    </AntdText>
                   </Descriptions.Item>
                 )}
                 <Descriptions.Item label={<span className="text-gray-500 text-sm">ID</span>}>
@@ -355,7 +461,13 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
             <Tab>Connect</Tab>
             <Tab>Semantic Filter</Tab>
             <Tab>Network Settings</Tab>
-            {isAdminRole(userRole) && <Tab><span className="flex items-center gap-2">Submitted MCPs <NewBadge /></span></Tab>}
+            {isAdminRole(userRole) && (
+              <Tab>
+                <span className="flex items-center gap-2">
+                  Submitted MCPs <NewBadge />
+                </span>
+              </Tab>
+            )}
           </div>
         </TabList>
         <TabPanels>
@@ -381,7 +493,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                         <Text className="text-sm font-medium text-gray-600 whitespace-nowrap">Team</Text>
                         <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 220 }} size="middle">
                           <Option value="all">
-                            <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
+                            <span className="font-medium">
+                              {isInternalUser ? "All Available Servers" : "All Servers"}
+                            </span>
                           </Option>
                           <Option value="personal">
                             <span className="font-medium">Personal</span>
@@ -401,7 +515,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                             <QuestionCircleOutlined style={{ marginLeft: 4, color: "#9ca3af" }} />
                           </Tooltip>
                         </Text>
-                        <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 220 }} size="middle">
+                        <Select
+                          value={selectedMcpAccessGroup}
+                          onChange={handleMcpAccessGroupChange}
+                          style={{ width: 220 }}
+                          size="middle"
+                        >
                           <Option value="all">
                             <span className="font-medium">All Access Groups</span>
                           </Option>
@@ -415,17 +534,75 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                     </div>
                   </div>
                 </div>
-                <div className="w-full mt-6">
-                  <DataTable
-                    data={filteredServers}
-                    columns={columns}
-                    renderSubComponent={() => <div></div>}
-                    getRowCanExpand={() => false}
-                    isLoading={isLoadingServers}
-                    noDataMessage="No MCP servers configured. Click '+ Add New MCP Server' to get started."
-                    loadingMessage="Loading MCP servers..."
-                    enableSorting={true}
+                <div className="mt-4 flex flex-wrap items-center gap-3">
+                  <Input
+                    allowClear
+                    prefix={<SearchOutlined className="text-gray-400" />}
+                    placeholder="Search by name, alias, URL, or ID"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    style={{ maxWidth: 320 }}
                   />
+                  <div className="flex items-center gap-2">
+                    <Text className="whitespace-nowrap text-sm font-medium text-gray-600">Sort</Text>
+                    <Select
+                      value={sortKey}
+                      onChange={(v: SortKey) => setSortKey(v)}
+                      style={{ width: 220 }}
+                      size="middle"
+                    >
+                      {SORT_OPTIONS.map((opt) => (
+                        <Option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </Option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="ml-auto text-xs text-gray-500">
+                    {displayedServers.length} of {filteredServers.length} servers
+                  </div>
+                </div>
+                <div className="mt-4 w-full">
+                  {isLoadingServers ? (
+                    <div className="flex items-center justify-center rounded-lg border border-dashed border-gray-200 bg-white p-12">
+                      <Spin tip="Loading MCP servers..." />
+                    </div>
+                  ) : displayedServers.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-gray-200 bg-white p-12">
+                      <Empty
+                        description={
+                          filteredServers.length === 0
+                            ? "No MCP servers configured. Click '+ Add New MCP Server' to get started."
+                            : "No servers match the current filters or search."
+                        }
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      data-testid="mcp-servers-grid"
+                      className="grid auto-rows-fr grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3"
+                    >
+                      {displayedServers.map((server) => (
+                        <MCPServerCard
+                          key={server.server_id}
+                          server={server}
+                          missingUserFields={missingFieldsByServer[server.server_id]}
+                          isLoadingHealth={isLoadingHealth}
+                          isRechecking={recheckingServerIds?.has(server.server_id)}
+                          onClick={() => {
+                            setSelectedServerId(server.server_id);
+                            setEditServer(true);
+                          }}
+                          onRecheckHealth={
+                            recheckServerHealth ? () => recheckServerHealth(server.server_id) : undefined
+                          }
+                          onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
+                          onOpenFillFields={() => setEnvVarsModalServer(server)}
+                          onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             )}
@@ -462,6 +639,22 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
           accessToken={accessToken || ""}
         />
       )}
+
+      {/* Per-user env-var fill modal — backed by /v1/mcp/server/{id}/user-env-vars */}
+      <UserEnvVarsModal
+        server={activeEnvVarsServer}
+        open={!!activeEnvVarsServer}
+        accessToken={accessToken}
+        onClose={() => {
+          setEnvVarsModalServer(null);
+          setDeepLinkServerId(null);
+        }}
+        onSaved={() => {
+          // Refresh the bulk status so the red "N user fields missing" footer
+          // on each card clears once the user has filled in their values.
+          refetchEnvVarStatus();
+        }}
+      />
     </div>
   );
 };

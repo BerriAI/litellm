@@ -14,10 +14,9 @@ async function globalSetup() {
       await page.getByPlaceholder("Enter your username").fill(email);
       await page.getByPlaceholder("Enter your password").fill(password);
       await page.getByRole("button", { name: "Login", exact: true }).click();
-      await page.waitForURL(
-        (url) => url.pathname.startsWith("/ui") && !url.pathname.includes("/login"),
-        { timeout: 30_000 },
-      );
+      await page.waitForURL((url) => url.pathname.startsWith("/ui") && !url.pathname.includes("/login"), {
+        timeout: 30_000,
+      });
       await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 30_000 });
       // Dismiss feedback popup if present
       const dismiss = page.getByText("Don't ask me again");

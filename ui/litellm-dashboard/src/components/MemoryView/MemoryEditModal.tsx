@@ -11,21 +11,10 @@ interface MemoryEditModalProps {
   mode: "create" | "edit";
   initialRow?: MemoryRow;
   onClose: () => void;
-  onSave: (
-    key: string,
-    value: string,
-    metadataText: string,
-    isCreate: boolean,
-  ) => Promise<boolean>;
+  onSave: (key: string, value: string, metadataText: string, isCreate: boolean) => Promise<boolean>;
 }
 
-export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({
-  open,
-  mode,
-  initialRow,
-  onClose,
-  onSave,
-}) => {
+export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, initialRow, onClose, onSave }) => {
   const [form] = Form.useForm();
   const [submitting, setSubmitting] = useState(false);
 
@@ -35,10 +24,7 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({
       form.setFieldsValue({
         key: initialRow.key,
         value: initialRow.value,
-        metadata:
-          initialRow.metadata != null
-            ? JSON.stringify(initialRow.metadata, null, 2)
-            : "",
+        metadata: initialRow.metadata != null ? JSON.stringify(initialRow.metadata, null, 2) : "",
       });
     } else {
       form.resetFields();
@@ -48,12 +34,7 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({
   const handleOk = async () => {
     const values = await form.validateFields();
     setSubmitting(true);
-    const ok = await onSave(
-      values.key.trim(),
-      values.value ?? "",
-      values.metadata ?? "",
-      mode === "create",
-    );
+    const ok = await onSave(values.key.trim(), values.value ?? "", values.metadata ?? "", mode === "create");
     setSubmitting(false);
     if (ok) {
       form.resetFields();
@@ -82,10 +63,7 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({
           rules={[{ required: true, message: "Key is required" }]}
           tooltip="Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes)."
         >
-          <Input
-            placeholder="e.g. user_role"
-            disabled={mode === "edit"}
-          />
+          <Input placeholder="e.g. user_role" disabled={mode === "edit"} />
         </Form.Item>
         <Form.Item
           label="Value"
@@ -93,10 +71,7 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({
           rules={[{ required: true, message: "Value is required" }]}
           tooltip="Markdown/text injected into LLM context. Plain strings are fine."
         >
-          <Input.TextArea
-            rows={8}
-            placeholder="What the agent should remember…"
-          />
+          <Input.TextArea rows={8} placeholder="What the agent should remember…" />
         </Form.Item>
         <Form.Item
           label={

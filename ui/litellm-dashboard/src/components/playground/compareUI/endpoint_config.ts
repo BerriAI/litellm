@@ -62,8 +62,7 @@ export const getAvailableEndpoints = () =>
   }));
 
 // Helper to get config for an endpoint
-export const getEndpointConfig = (endpointId: EndpointIdType): EndpointConfig =>
-  ENDPOINT_CONFIGS[endpointId];
+export const getEndpointConfig = (endpointId: EndpointIdType): EndpointConfig => ENDPOINT_CONFIGS[endpointId];
 
 // Helper to check if endpoint uses agents
 export const isAgentEndpoint = (endpointId: EndpointIdType): boolean =>
@@ -97,13 +96,13 @@ export const getSelectionFieldName = (endpointId: EndpointIdType): "model" | "ag
 // Get the current selection from a comparison based on endpoint
 export const getComparisonSelection = (
   comparison: { model: string; agent: string },
-  endpointId: EndpointIdType
+  endpointId: EndpointIdType,
 ): string => (isAgentEndpoint(endpointId) ? comparison.agent : comparison.model);
 
 // Check if comparison has a valid selection for the endpoint
 export const hasValidSelection = (
   comparison: { model: string; agent: string },
-  endpointId: EndpointIdType
+  endpointId: EndpointIdType,
 ): boolean => {
   const selection = getComparisonSelection(comparison, endpointId);
   return Boolean(selection && selection.trim());
@@ -111,7 +110,7 @@ export const hasValidSelection = (
 
 /**
  * To add a new endpoint:
- * 
+ *
  * 1. Add the endpoint ID to EndpointId const
  * 2. Add configuration to ENDPOINT_CONFIGS
  * 3. If the endpoint uses a new selector type (not model or agent):
@@ -119,11 +118,11 @@ export const hasValidSelection = (
  *    - Add fetch logic in CompareUI.tsx
  *    - Add conversion function (e.g., xxxOptionsToSelectorOptions)
  * 4. Add request handling in CompareUI.tsx handleSendMessage
- * 
+ *
  * Example for adding /v1/responses endpoint:
- * 
+ *
  * EndpointId.RESPONSES = "/v1/responses"
- * 
+ *
  * ENDPOINT_CONFIGS[EndpointId.RESPONSES] = {
  *   id: EndpointId.RESPONSES,
  *   label: "/v1/responses",
@@ -135,4 +134,3 @@ export const hasValidSelection = (
  *   validationMessage: "Select a model before sending.",
  * }
  */
-

@@ -1,9 +1,5 @@
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
-import {
-  deriveErrorMessage,
-  getGlobalLitellmHeaderName,
-  getProxyBaseUrl,
-} from "@/components/networking";
+import { deriveErrorMessage, getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export interface TeamMemberInfo {
@@ -29,10 +25,7 @@ export interface TeamMemberInfo {
   } | null;
 }
 
-const fetchMyTeamMember = async (
-  accessToken: string,
-  teamId: string,
-): Promise<TeamMemberInfo | null> => {
+const fetchMyTeamMember = async (accessToken: string, teamId: string): Promise<TeamMemberInfo | null> => {
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/team/${encodeURIComponent(teamId)}/members/me`
@@ -62,9 +55,7 @@ const fetchMyTeamMember = async (
   return (await response.json()) as TeamMemberInfo;
 };
 
-export const useMyTeamMember = (
-  teamId: string | null | undefined,
-): UseQueryResult<TeamMemberInfo | null> => {
+export const useMyTeamMember = (teamId: string | null | undefined): UseQueryResult<TeamMemberInfo | null> => {
   const { accessToken } = useAuthorized();
   return useQuery<TeamMemberInfo | null>({
     queryKey: ["team", teamId, "members", "me"],

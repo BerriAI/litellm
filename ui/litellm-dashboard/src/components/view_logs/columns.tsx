@@ -162,11 +162,7 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
         sessionAgentCount > 0 && `${sessionAgentCount} Agent`,
         sessionMcpCount > 0 && `${sessionMcpCount} MCP`,
       ].filter(Boolean);
-      return (
-        <Tooltip title={tooltipParts.join(" • ")}>
-          {sessionTypeBadge}
-        </Tooltip>
-      );
+      return <Tooltip title={tooltipParts.join(" • ")}>{sessionTypeBadge}</Tooltip>;
     },
   },
   {
