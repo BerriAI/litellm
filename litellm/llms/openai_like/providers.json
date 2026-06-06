@@ -123,5 +123,9 @@
     "param_mappings": {
       "max_completion_tokens": "max_tokens"
     }
+  },
+  "greenpt": {
+    "base_url": "https://api.greenpt.ai/v1",
+    "api_key_env": "GREENPT_API_KEY"
   }
 }
