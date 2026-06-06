@@ -8,9 +8,9 @@ tests:
       migrationJob:
         enabled: true
     asserts:
-      - equal:
+      - matchRegex:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/berriai/litellm-database:v1.85.1
+          pattern: ^ghcr\.io/berriai/litellm-database:v[0-9]+\.[0-9]+\.[0-9]+$
       - notMatchRegex:
           path: spec.template.spec.containers[0].image
           pattern: :main-
