@@ -138,10 +138,11 @@ locals {
 
 # ---------- Gateway ----------
 resource "google_cloud_run_v2_service" "gateway" {
-  name     = "${local.name}-gateway"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels   = local.labels
+  name                = "${local.name}-gateway"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -251,10 +252,11 @@ resource "google_cloud_run_v2_service" "gateway" {
 
 # ---------- Backend ----------
 resource "google_cloud_run_v2_service" "backend" {
-  name     = "${local.name}-backend"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels   = local.labels
+  name                = "${local.name}-backend"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -366,10 +368,11 @@ resource "google_cloud_run_v2_service" "backend" {
 # with zero IAM bindings, so a compromised UI container can't pivot to
 # Secret Manager / Cloud SQL via the metadata service.
 resource "google_cloud_run_v2_service" "ui" {
-  name     = "${local.name}-ui"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
-  labels   = local.labels
+  name                = "${local.name}-ui"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     service_account                  = google_service_account.ui_runtime.email
@@ -441,9 +444,10 @@ resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
 # assembles DATABASE_URL from the DATABASE_* env vars and runs `prisma
 # migrate deploy`. No proxy_config, no master key, no shell wrapper.
 resource "google_cloud_run_v2_job" "migrations" {
-  name     = "${local.name}-migrations"
-  location = var.region
-  labels   = local.labels
+  name                = "${local.name}-migrations"
+  location            = var.region
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     template {
