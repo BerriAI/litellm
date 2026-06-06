@@ -71,7 +71,7 @@ class CloudflareChatConfig(BaseConfig):
             )
         headers = {
             "accept": "application/json",
-            "content-type": "apbplication/json",
+            "content-type": "application/json",
             "Authorization": "Bearer " + api_key,
         }
         return headers
@@ -149,9 +149,12 @@ class CloudflareChatConfig(BaseConfig):
     ) -> ModelResponse:
         completion_response = raw_response.json()
 
-        # Support both "response" and "response_text" keys (newer models like Nemotron use "response_text")
+        # Support Workers AI response variants:
+        # - result.response
+        # - result.response_text
+        # - result.choices[0].message.content for OpenAI-compatible chat models
         result = completion_response["result"]
-        model_response.choices[0].message.content = result.get("response") if result.get("response") is not None else result.get("response_text", "")  # type: ignore
+        model_response.choices[0].message.content = self._get_response_text(result)  # type: ignore
 
         prompt_tokens = litellm.utils.get_token_count(messages=messages, model=model)
         completion_tokens = len(
@@ -167,6 +170,28 @@ class CloudflareChatConfig(BaseConfig):
         )
         setattr(model_response, "usage", usage)
         return model_response
+
+    @staticmethod
+    def _get_response_text(result: dict) -> str:
+        response = result.get("response")
+        if response is not None:
+            return response
+        response_text = result.get("response_text")
+        if response_text is not None:
+            return response_text
+        choices = result.get("choices")
+        if isinstance(choices, list) and len(choices) > 0:
+            first_choice = choices[0]
+            if isinstance(first_choice, dict):
+                message = first_choice.get("message")
+                if isinstance(message, dict):
+                    content = message.get("content")
+                    if content is not None:
+                        return content
+                text = first_choice.get("text")
+                if text is not None:
+                    return text
+        return ""
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
