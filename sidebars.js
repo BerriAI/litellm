@@ -89,6 +89,7 @@ const sidebars = {
           "proxy/guardrails/pii_masking_v2",
           "proxy/guardrails/panw_prisma_airs",
           "proxy/guardrails/secret_detection",
+          "proxy/guardrails/sensitive_data_routing",
           "proxy/guardrails/custom_guardrail",
           "proxy/guardrails/custom_code_guardrail",
           "proxy/guardrails/prompt_injection",
