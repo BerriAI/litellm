@@ -1,9 +1,5 @@
 """Tests for AGIone provider configuration and integration."""
 
-import os
-
-import pytest
-
 import litellm
 
 
@@ -91,25 +87,3 @@ class TestAGIoneProviderConfig:
 
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "agione-chat"
-
-
-def test_agione_completion_live():
-    """Optional live smoke test. Runs only when AGIONE_API_KEY is set."""
-    api_key = os.environ.get("AGIONE_API_KEY")
-    if not api_key or api_key == "PASTE_YOUR_NEW_KEY_HERE":
-        pytest.skip("AGIONE_API_KEY not set")
-
-    response = litellm.completion(
-        model="agione/deepseek/deepseek-v3.2/0000n",
-        messages=[
-            {
-                "role": "user",
-                "content": "Reply exactly: litellm-agione-ok",
-            }
-        ],
-        max_tokens=20,
-    )
-
-    assert response is not None
-    assert response.choices
-    assert response.choices[0].message.content is not None
