@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { RegenerateKeyModal } from "./RegenerateKeyModal";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import * as keyExpiryUtils from "@/utils/keyExpiryUtils";
 
 // Mock the networking call
 const mockRegenerateKeyCall = vi.fn();
@@ -237,6 +238,28 @@ describe("RegenerateKeyModal", () => {
     await waitFor(() => {
       expect(screen.getByText(expected)).toBeInTheDocument();
     });
+  });
+
+  it("should fall back to the previous expiry when preview calculation returns null", async () => {
+    const user = userEvent.setup();
+    const previousExpires = "2026-12-31T00:00:00Z";
+    vi.spyOn(keyExpiryUtils, "calculateExpiryPreviewFromDuration").mockReturnValue(null);
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: "new-token-hash",
+    });
+
+    renderWithProviders(
+      <RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ expires: previousExpires, duration: "30d" })} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(mockOnKeyUpdate).toHaveBeenCalledOnce();
+    });
+
+    expect(mockOnKeyUpdate.mock.calls[0][0].expires).toBe(previousExpires);
   });
 
   it("should reject unparseable duration values before calling regenerate", async () => {

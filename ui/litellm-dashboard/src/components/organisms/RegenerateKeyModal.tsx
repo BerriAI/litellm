@@ -1,13 +1,12 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
 import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
-import { add } from "date-fns";
 import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
-import { isKeyExpired } from "@/utils/keyExpiryUtils";
+import { calculateExpiryPreviewFromDuration, formatExpiresUtc, isKeyExpired } from "@/utils/keyExpiryUtils";
 
 const { Text } = Typography;
 
@@ -52,40 +51,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     }
   }, [visible, selectedToken, form, accessToken]);
 
-  const calculateNewExpiryTime = (duration: string | undefined): string | null => {
-    if (!duration) return null;
-
-    try {
-      const amount = parseInt(duration);
-      if (Number.isNaN(amount)) {
-        throw new Error("Invalid duration format");
-      }
-      const now = new Date();
-      // Check "mo" before "m" to avoid a false prefix match (e.g. "1mo" → minutes).
-      let newExpiry: Date;
-      if (duration.endsWith("mo")) {
-        newExpiry = add(now, { months: amount });
-      } else if (duration.endsWith("s")) {
-        newExpiry = add(now, { seconds: amount });
-      } else if (duration.endsWith("m")) {
-        newExpiry = add(now, { minutes: amount });
-      } else if (duration.endsWith("h")) {
-        newExpiry = add(now, { hours: amount });
-      } else if (duration.endsWith("d")) {
-        newExpiry = add(now, { days: amount });
-      } else if (duration.endsWith("w")) {
-        newExpiry = add(now, { weeks: amount });
-      } else {
-        throw new Error("Invalid duration format");
-      }
-
-      return newExpiry.toLocaleString();
-    } catch (error) {
-      return null;
-    }
-  };
-
-  const newExpiryTime = durationValue ? calculateNewExpiryTime(durationValue) : null;
+  const newExpiryTime = durationValue ? calculateExpiryPreviewFromDuration(durationValue) : null;
 
   const handleRegenerateKey = async () => {
     if (!selectedToken || !accessToken) return;
@@ -110,7 +76,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
         expires: formValues.duration
-          ? calculateNewExpiryTime(formValues.duration) ?? selectedToken.expires
+          ? calculateExpiryPreviewFromDuration(formValues.duration) ?? selectedToken.expires
           : selectedToken.expires,
       };
 
@@ -232,8 +198,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                 extra={
                   <Flex vertical gap={2}>
                     <Text type={keyIsExpired ? "danger" : "secondary"} style={{ fontSize: 12 }}>
-                      Current expiry:{" "}
-                      {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
+                      Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
                       {keyIsExpired && " (expired)"}
                     </Text>
                     {newExpiryTime && (
