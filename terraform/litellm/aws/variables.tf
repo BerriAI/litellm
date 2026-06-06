@@ -420,10 +420,12 @@ variable "backend_extra_secrets" {
 variable "proxy_config" {
   description = <<-EOT
     LiteLLM proxy config (the contents of config.yaml). Mirrors the helm
-    chart's `gateway.config.proxy_config` value. Passed to gateway, backend,
-    and the migration task as a base64-encoded env var and decoded to
-    /tmp/litellm-config.yaml at container start; CONFIG_FILE_PATH is set
-    automatically.
+    chart's `gateway.config.proxy_config` value. Uploaded to S3 under
+    `config/litellm-config.yaml` in the stack's bucket; gateway and backend
+    container entrypoints download it to /tmp/litellm-config.yaml at task
+    start (CONFIG_FILE_PATH is set automatically). The S3 object's etag is
+    wired into the task definition, so editing this value produces a new
+    task-def revision and a rolling redeploy.
 
     Example:
       proxy_config = {
@@ -455,4 +457,59 @@ variable "log_retention_days" {
   description = "CloudWatch log retention for the three services."
   type        = number
   default     = 30
+}
+
+# ---------- OpenTelemetry v2 ----------
+#
+# https://docs.litellm.ai/docs/observability/opentelemetry_v2
+#
+# Setting otel_endpoint to a non-empty value turns OTel v2 on for both gateway
+# and backend (LITELLM_OTEL_V2=true plus OTEL_EXPORTER/OTEL_ENDPOINT/
+# OTEL_SERVICE_NAME/OTEL_ENVIRONMENT_NAME are added to shared_env). Empty
+# endpoint = nothing added to the container env.
+
+variable "otel_endpoint" {
+  description = <<-EOT
+    OTLP collector endpoint (sets OTEL_ENDPOINT / OTEL_EXPORTER_OTLP_ENDPOINT).
+    Empty disables OTel export. Point at any OTLP-compatible backend
+    (self-hosted collector, Grafana Tempo, Honeycomb, Datadog, etc.). Example:
+    "http://otel-collector.internal:4318" for OTLP/HTTP.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_exporter" {
+  description = <<-EOT
+    OTLP exporter protocol. One of "otlp_http", "otlp_grpc", or "console"
+    (stdout, useful for verifying instrumentation against CloudWatch logs).
+    Ignored when otel_endpoint is empty.
+  EOT
+  type        = string
+  default     = "otlp_http"
+
+  validation {
+    condition     = contains(["otlp_http", "otlp_grpc", "console"], var.otel_exporter)
+    error_message = "otel_exporter must be one of: otlp_http, otlp_grpc, console."
+  }
+}
+
+variable "otel_service_name" {
+  description = <<-EOT
+    OTEL_SERVICE_NAME resource attribute. Defaults to the stack name
+    (`<tenant>-litellm-<env>`).
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_headers_secret_arn" {
+  description = <<-EOT
+    Secrets Manager ARN whose plaintext value becomes OTEL_HEADERS
+    (comma-separated `key=value` pairs, typically used to pass an API key
+    header to a managed collector). The execution role auto-gains
+    secretsmanager:GetSecretValue on this ARN. Empty omits OTEL_HEADERS.
+  EOT
+  type        = string
+  default     = ""
 }

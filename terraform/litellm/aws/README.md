@@ -44,9 +44,12 @@ needs the `aws` CLI installed and authenticated.
 ### `proxy_config` (preferred)
 
 Mirrors the helm chart's `gateway.config.proxy_config`. The map is YAML-encoded
-and base64-passed to gateway, backend, and the migration task; each container
-decodes it to `/tmp/litellm-config.yaml` at startup and sets `CONFIG_FILE_PATH`
-to match.
+and uploaded to S3 (`config/litellm-config.yaml` in the stack's bucket); the
+gateway and backend container entrypoints download it to
+`/tmp/litellm-config.yaml` at task start via boto3 and set `CONFIG_FILE_PATH`
+to match. The S3 object's etag is wired into the task definition, so editing
+`proxy_config` produces a new task-def revision and a rolling redeploy of both
+services.
 
 ```hcl
 proxy_config = {
@@ -118,6 +121,35 @@ aws secretsmanager create-secret \
   --name openai-api-key \
   --secret-string "sk-proj-..."
 ```
+
+### Observability (OpenTelemetry v2)
+
+Set `otel_endpoint` and OTel v2
+(https://docs.litellm.ai/docs/observability/opentelemetry_v2) turns on for
+both gateway and backend; the stack flips `LITELLM_OTEL_V2=true` and wires
+`OTEL_EXPORTER` / `OTEL_ENDPOINT` / `OTEL_SERVICE_NAME` /
+`OTEL_ENVIRONMENT_NAME` into the shared env block. Leave it empty and no OTel
+env vars are added.
+
+```hcl
+otel_endpoint     = "http://otel-collector.internal:4318"
+otel_exporter     = "otlp_http"   # otlp_grpc, console
+otel_service_name = ""             # defaults to the stack name
+```
+
+For collectors that require an auth header, store the comma-separated
+`key=value` string in Secrets Manager and reference it via
+`otel_headers_secret_arn`. The execution role auto-gains
+`secretsmanager:GetSecretValue` on that ARN.
+
+```hcl
+otel_headers_secret_arn = "arn:aws:secretsmanager:us-west-2:111122223333:secret:honeycomb-otel-headers-AbCdEf"
+```
+
+Vendor presets (Arize, Phoenix, Langfuse OTel, Weave, Langtrace, Levo,
+AgentOps) live under `proxy_config.litellm_settings.callbacks` and are
+orthogonal to the OTLP variables above; their credentials still go in
+`*_extra_secrets`.
 
 ## Tenant deployment
 

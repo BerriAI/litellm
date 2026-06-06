@@ -44,29 +44,48 @@ resource "aws_cloudwatch_log_group" "migrations" {
 # HOST/PORT/USER/NAME plus an IAM-signed token, so no DB password is needed
 # in the task definition.
 locals {
-  shared_env = [
-    { name = "IAM_TOKEN_DB_AUTH", value = "true" },
-    { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
-    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this.port) },
-    { name = "DATABASE_USER", value = var.db_username },
-    { name = "DATABASE_NAME", value = var.db_name },
-    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this.reader_endpoint },
-    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this.port) },
-    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this.primary_endpoint_address },
-    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this.port) },
-    # transit_encryption_enabled = true on the replication group means the
-    # proxy must connect via rediss://. _redis.get_redis_url_from_environment
-    # honors REDIS_SSL to flip the scheme.
-    { name = "REDIS_SSL", value = "true" },
-    # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
-    # (e.g. cache backend, request log archival, /files passthrough).
-    { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
-    { name = "S3_REGION_NAME", value = var.region },
-    # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
-    # AWS_REGION. Set both for compatibility.
-    { name = "AWS_REGION", value = var.region },
-    { name = "AWS_REGION_NAME", value = var.region },
-  ]
+  # OTel v2 is wired on by default; the proxy stays inert until
+  # otel_endpoint is set (no exporter is configured). When an endpoint is
+  # supplied, OTEL_HEADERS is sourced from Secrets Manager (otel_headers env
+  # injection lives under shared_secrets).
+  otel_enabled = var.otel_endpoint != ""
+  otel_env = local.otel_enabled ? [
+    { name = "LITELLM_OTEL_V2", value = "true" },
+    { name = "OTEL_EXPORTER", value = var.otel_exporter },
+    { name = "OTEL_ENDPOINT", value = var.otel_endpoint },
+    { name = "OTEL_SERVICE_NAME", value = var.otel_service_name != "" ? var.otel_service_name : local.name },
+    { name = "OTEL_ENVIRONMENT_NAME", value = var.env },
+  ] : []
+  otel_secrets = local.otel_enabled && var.otel_headers_secret_arn != "" ? [
+    { name = "OTEL_HEADERS", valueFrom = var.otel_headers_secret_arn },
+  ] : []
+
+  shared_env = concat(
+    [
+      { name = "IAM_TOKEN_DB_AUTH", value = "true" },
+      { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
+      { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this.port) },
+      { name = "DATABASE_USER", value = var.db_username },
+      { name = "DATABASE_NAME", value = var.db_name },
+      { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this.reader_endpoint },
+      { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this.port) },
+      { name = "REDIS_HOST", value = aws_elasticache_replication_group.this.primary_endpoint_address },
+      { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this.port) },
+      # transit_encryption_enabled = true on the replication group means the
+      # proxy must connect via rediss://. _redis.get_redis_url_from_environment
+      # honors REDIS_SSL to flip the scheme.
+      { name = "REDIS_SSL", value = "true" },
+      # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
+      # (e.g. cache backend, request log archival, /files passthrough).
+      { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
+      { name = "S3_REGION_NAME", value = var.region },
+      # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
+      # AWS_REGION. Set both for compatibility.
+      { name = "AWS_REGION", value = var.region },
+      { name = "AWS_REGION_NAME", value = var.region },
+    ],
+    local.otel_env,
+  )
 
   shared_secrets = concat(
     [
@@ -75,6 +94,7 @@ locals {
     var.litellm_license == "" ? [] : [
       { name = "LITELLM_LICENSE", valueFrom = aws_secretsmanager_secret.license[0].arn },
     ],
+    local.otel_secrets,
   )
 
   # Backend-only managed secrets. UI_PASSWORD is consumed by the management
@@ -101,20 +121,26 @@ locals {
   ]
 
   # Mirrors the helm chart's gateway.config.create / configmap pattern.
-  # ECS Fargate has no ConfigMap analogue, so we pass the YAML as a
-  # base64-encoded env var and decode it at container start via a tiny
-  # python shim that prepends the image's normal uvicorn entrypoint.
+  # ECS Fargate has no ConfigMap analogue, so the YAML is uploaded to S3
+  # (see aws_s3_object.proxy_config in s3.tf) and the container entrypoint
+  # downloads it to /tmp/litellm-config.yaml via boto3 before exec'ing
+  # uvicorn. The S3 object's etag is embedded in the task definition so a
+  # config edit forces a new task-def revision and a rolling redeploy.
   proxy_config_enabled = length(keys(var.proxy_config)) > 0
-  proxy_config_b64     = local.proxy_config_enabled ? base64encode(yamlencode(var.proxy_config)) : ""
+  proxy_config_path    = "/tmp/litellm-config.yaml"
 
   proxy_config_env = local.proxy_config_enabled ? [
-    { name = "LITELLM_PROXY_CONFIG_B64", value = local.proxy_config_b64 },
-    { name = "CONFIG_FILE_PATH", value = "/tmp/litellm-config.yaml" },
+    { name = "CONFIG_FILE_PATH", value = local.proxy_config_path },
+    { name = "LITELLM_PROXY_CONFIG_S3_BUCKET", value = aws_s3_bucket.this.bucket },
+    { name = "LITELLM_PROXY_CONFIG_S3_KEY", value = aws_s3_object.proxy_config[0].key },
+    { name = "LITELLM_PROXY_CONFIG_S3_ETAG", value = aws_s3_object.proxy_config[0].etag },
   ] : []
+
+  proxy_config_fetch_cmd = "python -c \"import os, boto3; boto3.client('s3', region_name=os.environ['AWS_REGION']).download_file(os.environ['LITELLM_PROXY_CONFIG_S3_BUCKET'], os.environ['LITELLM_PROXY_CONFIG_S3_KEY'], os.environ['CONFIG_FILE_PATH'])\""
 
   # Gateway always needs --workers wired in (no NUM_WORKERS env var support
   # in the image entrypoint). When proxy_config is enabled we also have to
-  # decode the base64 config first, so the command goes through `sh -c`;
+  # pull the config from S3 first, so the command goes through `sh -c`;
   # otherwise we keep the image's ENTRYPOINT and only override `command`.
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
@@ -122,7 +148,7 @@ locals {
   gateway_proxy_overrides = local.proxy_config_enabled ? {
     entryPoint = ["sh", "-c"]
     command = [
-      "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['CONFIG_FILE_PATH']).write_bytes(base64.b64decode(os.environ['LITELLM_PROXY_CONFIG_B64']))\" && exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}"
+      "${local.proxy_config_fetch_cmd} && exec uvicorn gateway.main:app ${local.gateway_uvicorn_args}"
     ]
     } : {
     # Mirror the image's ENTRYPOINT so we can append --workers via command.
@@ -133,7 +159,7 @@ locals {
   backend_proxy_overrides = local.proxy_config_enabled ? {
     entryPoint = ["sh", "-c"]
     command = [
-      "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['CONFIG_FILE_PATH']).write_bytes(base64.b64decode(os.environ['LITELLM_PROXY_CONFIG_B64']))\" && exec uvicorn backend.main:app ${local.backend_uvicorn_args}"
+      "${local.proxy_config_fetch_cmd} && exec uvicorn backend.main:app ${local.backend_uvicorn_args}"
     ]
   } : {}
 }

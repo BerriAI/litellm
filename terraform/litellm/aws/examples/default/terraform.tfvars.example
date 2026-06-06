@@ -79,3 +79,12 @@ env    = "stage"
 #   OPENAI_API_KEY    = "arn:aws:secretsmanager:us-west-2:111122223333:secret:openai-api-key-AbCdEf"
 #   ANTHROPIC_API_KEY = "arn:aws:secretsmanager:us-west-2:111122223333:secret:anthropic-api-key-GhIjKl"
 # }
+
+# ---------- OpenTelemetry v2 ----------
+# Set otel_endpoint to a non-empty value to enable OTel v2 on gateway and
+# backend (LITELLM_OTEL_V2=true + OTEL_EXPORTER/OTEL_ENDPOINT/OTEL_SERVICE_NAME/
+# OTEL_ENVIRONMENT_NAME). Empty disables it entirely.
+# otel_endpoint = "http://otel-collector.internal:4318"
+# otel_exporter = "otlp_http"   # otlp_grpc, console
+# otel_service_name = ""         # defaults to "<tenant>-litellm-<env>"
+# otel_headers_secret_arn = "arn:aws:secretsmanager:us-west-2:111122223333:secret:honeycomb-otel-headers-AbCdEf"
