@@ -107,6 +107,12 @@
     "api_key_env": "AIHUBMIX_API_KEY",
     "api_base_env": "AIHUBMIX_API_BASE"
   },
+  "agione": {
+    "base_url": "https://agione.pro/hyperone/xapi/api/v1",
+    "api_key_env": "AGIONE_API_KEY",
+    "api_base_env": "AGIONE_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/messages", "/v1/responses"]
+  },
   "crusoe": {
     "base_url": "https://managed-inference-api-proxy.crusoecloud.com/v1",
     "api_key_env": "CRUSOE_API_KEY",
