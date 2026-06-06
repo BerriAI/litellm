@@ -250,6 +250,7 @@ class ToolJsonSchemaBlock(TypedDict, total=False):
     type: Literal["object"]
     properties: dict
     required: List[str]
+    additionalProperties: bool
 
 
 class ToolInputSchemaBlock(TypedDict):
@@ -260,6 +261,7 @@ class ToolSpecBlock(TypedDict, total=False):
     inputSchema: Required[ToolInputSchemaBlock]
     name: Required[str]
     description: str
+    strict: bool
 
 
 class SystemToolBlock(TypedDict, total=False):
