@@ -241,6 +241,142 @@ async def test_client_secrets_success_with_mock(
         proxy_app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+@pytest.mark.asyncio
+async def test_client_secrets_transcription_rejects_disallowed_nested_model(
+    proxy_app,
+):
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["gpt-4o-realtime-preview"],
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch("litellm.proxy.proxy_server.route_request") as mock_route_request,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/client_secrets",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={
+                    "model": "gpt-4o-realtime-preview",
+                    "session": {
+                        "type": "transcription",
+                        "model": "gpt-4o-realtime-preview",
+                        "audio": {
+                            "input": {
+                                "transcription": {
+                                    "model": "gpt-realtime-whisper"
+                                }
+                            }
+                        },
+                    },
+                },
+            )
+
+        assert response.status_code == 403
+        assert "Tried to access gpt-realtime-whisper" in response.text
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_client_secrets_transcription_routes_on_nested_model(
+    proxy_app,
+    mock_add_litellm_data,
+    mock_pre_call_hook,
+):
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["gpt-4o-realtime-preview", "gpt-realtime-whisper"],
+    )
+    captured = {}
+    future_expires_at = int(time.time()) + 3600
+
+    async def _capturing_route(*args, **kwargs):
+        captured["data"] = kwargs.get("data")
+
+        async def _inner():
+            resp = MagicMock(spec=httpx.Response)
+            resp.status_code = 200
+            resp.text = (
+                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+            )
+            resp.content = (
+                f'{{"value":"upstream_ephemeral_key","expires_at":{future_expires_at}}}'
+            ).encode()
+            resp.headers = {}
+            resp.json.return_value = {
+                "value": "upstream_ephemeral_key",
+                "expires_at": future_expires_at,
+            }
+            return resp
+
+        return _inner()
+
+    try:
+        client = TestClient(proxy_app)
+        with (
+            patch(
+                "litellm.proxy.proxy_server.route_request",
+                side_effect=_capturing_route,
+            ),
+            patch(
+                "litellm.proxy.proxy_server.add_litellm_data_to_request",
+                side_effect=mock_add_litellm_data,
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.pre_call_hook = AsyncMock(side_effect=mock_pre_call_hook)
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/client_secrets",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={
+                    "model": "gpt-4o-realtime-preview",
+                    "session": {
+                        "type": "transcription",
+                        "model": "gpt-4o-realtime-preview",
+                        "audio": {
+                            "input": {
+                                "transcription": {
+                                    "model": "gpt-realtime-whisper"
+                                }
+                            }
+                        },
+                    },
+                },
+            )
+
+        assert response.status_code == 200
+        assert captured["data"]["model"] == "gpt-realtime-whisper"
+        session = captured["data"]["session"]
+        assert session["type"] == "transcription"
+        assert "model" not in session
+        assert (
+            session["audio"]["input"]["transcription"]["model"]
+            == "gpt-realtime-whisper"
+        )
+        encrypted_value = response.json()["value"]
+        decoded = _decode_realtime_token_payload(
+            decrypt_value_helper(
+                encrypted_value,
+                key="client_secret.value",
+                exception_type="debug",
+            )
+            or ""
+        )
+        assert decoded is not None
+        assert decoded["model_id"] == "gpt-realtime-whisper"
+        assert decoded["session_type"] == "transcription"
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
 def test_realtime_calls_requires_auth(proxy_app):
     """POST /v1/realtime/calls returns 401 without Authorization.
 
@@ -384,6 +520,10 @@ async def test_realtime_calls_replays_transcription_session_type(
         )
 
     assert captured["session"]["type"] == "transcription"
+    assert (
+        captured["session"]["audio"]["input"]["transcription"]["model"]
+        == "gpt-realtime-whisper"
+    )
 
 
 # --- transcription_sessions endpoint ---
