@@ -78,3 +78,32 @@ class MCPUpstreamAuthError(Exception):
             detail=detail,
             headers={"www-authenticate": challenge} if challenge else None,
         )
+
+
+class MCPUpstreamError(Exception):
+    """Raised when an upstream MCP server fails during tool listing with a
+    non-auth failure (e.g. HTTP 429/5xx, or an interrupted/cancelled listing).
+
+    Unlike :class:`MCPUpstreamAuthError` (which drives the upstream OAuth flow
+    for pass-through servers on 401/403), this exists purely so the gateway
+    surfaces the failure to the caller instead of laundering it into an
+    empty-but-successful ``tools/list`` response. Multi-server aggregators
+    absorb it per-server; single-server REST routes report it as a server
+    error.
+    """
+
+    def __init__(
+        self,
+        status_code: Optional[int],
+        server_name: str,
+        message: Optional[str] = None,
+    ) -> None:
+        self.status_code = status_code
+        self.server_name = server_name
+        super().__init__(
+            message
+            or (
+                f"Upstream MCP server {server_name!r} failed during tool listing"
+                + (f" with HTTP {status_code}" if status_code is not None else "")
+            )
+        )

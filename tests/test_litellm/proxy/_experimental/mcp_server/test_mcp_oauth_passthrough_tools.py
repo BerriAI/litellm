@@ -1,5 +1,6 @@
 """Unit tests for MCP OAuth passthrough tool-fetch behavior."""
 
+import asyncio
 import sys
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,10 +9,14 @@ import pytest
 
 sys.path.insert(0, "../../../../../")
 
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPUpstreamAuthError,
+    MCPUpstreamError,
+)
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _extract_upstream_auth_failure,
+    _extract_upstream_http_status,
 )
 from litellm.proxy._types import MCPTransport
 from litellm.types.mcp import MCPAuth
@@ -194,4 +199,117 @@ async def test_fetch_tools_from_gateway_managed_swallows_errors():
         mock_client, oauth2_server.name, server=oauth2_server
     )
     assert tools == []
+
+
+def test_extract_upstream_http_status_finds_429():
+    response = httpx.Response(
+        status_code=429,
+        headers={},
+        request=httpx.Request("GET", "https://upstream/mcp"),
+    )
+    exc = httpx.HTTPStatusError("429", request=response.request, response=response)
+    assert _extract_upstream_http_status(exc) == (429, None)
+
+
+def test_extract_upstream_http_status_walks_exception_group():
+    response = httpx.Response(
+        status_code=503,
+        headers={},
+        request=httpx.Request("GET", "https://upstream/mcp"),
+    )
+    inner = httpx.HTTPStatusError("503", request=response.request, response=response)
+    try:
+        raise ExceptionGroup("wrapped", [inner])  # noqa: F821 (PEP 654, py3.11+)
+    except Exception as group:
+        assert _extract_upstream_http_status(group) == (503, None)
+
+
+def test_extract_upstream_http_status_none_for_non_http():
+    assert _extract_upstream_http_status(RuntimeError("boom")) is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_surfaces_upstream_error_on_cancellation_with_status():
+    """A 429 that arrives as a cancel-scope cancellation must surface, not return []."""
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="o1",
+        name="mock_databricks",
+        url="https://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+    )
+    response = httpx.Response(
+        status_code=429,
+        headers={},
+        request=httpx.Request("GET", "https://upstream/mcp"),
+    )
+    upstream_429 = httpx.HTTPStatusError(
+        "429", request=response.request, response=response
+    )
+
+    async def _raise_cancel(*args, **kwargs):
+        raise asyncio.CancelledError() from upstream_429
+
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(side_effect=_raise_cancel)
+
+    with pytest.raises(MCPUpstreamError) as exc_info:
+        await manager._fetch_tools_with_timeout(mock_client, server.name, server=server)
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.server_name == "mock_databricks"
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_surfaces_error_on_bare_cancellation():
+    """An interrupted listing with no recoverable status is a failure, not success-empty."""
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="o1",
+        name="mock_databricks",
+        url="https://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+    )
+    mock_client = MagicMock()
+    mock_client.list_tools = AsyncMock(side_effect=asyncio.CancelledError())
+
+    with pytest.raises(MCPUpstreamError) as exc_info:
+        await manager._fetch_tools_with_timeout(mock_client, server.name, server=server)
+    assert exc_info.value.status_code is None
     mock_client.list_tools.assert_awaited_with(raise_on_error=False)
+
+
+@pytest.mark.asyncio
+async def test_fetch_tools_reraises_genuine_outer_cancellation():
+    """A real outer cancellation (shutdown / client disconnect) must propagate,
+    not be converted into MCPUpstreamError — otherwise cooperative cancellation
+    breaks. On 3.11+ this is detected via Task.cancelling(); on 3.10 the
+    classifier is unavailable and we re-raise unconditionally, so this contract
+    holds on every supported runtime."""
+    manager = MCPServerManager()
+    server = MCPServer(
+        server_id="o1",
+        name="mock_databricks",
+        url="https://upstream/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+    )
+
+    started = asyncio.Event()
+
+    async def _hang(*args, **kwargs):
+        started.set()
+        await asyncio.sleep(3600)
+
+    mock_client = MagicMock()
+    mock_client.list_tools = _hang
+
+    task = asyncio.create_task(
+        manager._fetch_tools_with_timeout(mock_client, server.name, server=server)
+    )
+    await started.wait()
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task

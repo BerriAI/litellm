@@ -13,7 +13,19 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 from urllib.parse import urlparse
 
 import anyio
@@ -48,7 +60,10 @@ from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
-from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPUpstreamAuthError,
+    MCPUpstreamError,
+)
 from litellm.proxy._experimental.mcp_server.elicitation_handler import (
     MCP_ELICITATION_AVAILABLE,
 )
@@ -204,19 +219,13 @@ def _should_strip_caller_authorization(
     )
 
 
-def _extract_upstream_auth_failure(
-    exc: BaseException,
-) -> Optional[Tuple[int, Optional[str]]]:
-    """Walk the exception tree looking for an HTTP 401/403 response from the
-    upstream MCP server.
+def _iter_exception_responses(exc: BaseException) -> Iterator[Any]:
+    """Yield every ``response`` object found by walking an exception tree.
 
-    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
-    may chain through ``__cause__`` / ``__context__``. We inspect all of those
-    layers for an ``httpx.Response``-bearing exception (typically
-    ``httpx.HTTPStatusError``) and extract the status code and any upstream
-    ``WWW-Authenticate`` header.
-
-    Returns ``(status_code, www_authenticate)`` on match, else ``None``.
+    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects
+    (PEP 654) and may chain through ``__cause__`` / ``__context__``. This
+    iterator visits all of those layers and yields each ``response`` attribute
+    it finds (typically the ``httpx.Response`` on an ``httpx.HTTPStatusError``).
     """
     seen: Set[int] = set()
     stack: List[BaseException] = [exc]
@@ -228,16 +237,7 @@ def _extract_upstream_auth_failure(
 
         response = getattr(current, "response", None)
         if response is not None:
-            status_code = getattr(response, "status_code", None)
-            if isinstance(status_code, int) and status_code in (401, 403):
-                www_authenticate: Optional[str] = None
-                headers = getattr(response, "headers", None)
-                if headers is not None:
-                    try:
-                        www_authenticate = headers.get("www-authenticate")
-                    except Exception:
-                        www_authenticate = None
-                return status_code, www_authenticate
+            yield response
 
         # anyio / PEP 654 ExceptionGroup
         sub_exceptions = getattr(current, "exceptions", None)
@@ -252,6 +252,58 @@ def _extract_upstream_auth_failure(
         ):
             stack.append(current.__context__)
 
+
+def _extract_upstream_http_status(
+    exc: BaseException,
+) -> Optional[Tuple[int, Optional[str]]]:
+    """Return ``(status_code, www_authenticate)`` for the first upstream
+    ``httpx.Response``-bearing exception in the tree, for ANY status code.
+
+    Returns ``None`` if no HTTP status is present.
+    """
+    for response in _iter_exception_responses(exc):
+        status_code = getattr(response, "status_code", None)
+        if isinstance(status_code, int):
+            www_authenticate: Optional[str] = None
+            headers = getattr(response, "headers", None)
+            if headers is not None:
+                try:
+                    www_authenticate = headers.get("www-authenticate")
+                except Exception:
+                    www_authenticate = None
+            return status_code, www_authenticate
+    return None
+
+
+def _extract_upstream_auth_failure(
+    exc: BaseException,
+) -> Optional[Tuple[int, Optional[str]]]:
+    """Walk the exception tree looking for an HTTP 401/403 response from the
+    upstream MCP server.
+
+    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
+    may chain through ``__cause__`` / ``__context__``. We inspect all of those
+    layers for an ``httpx.Response``-bearing exception (typically
+    ``httpx.HTTPStatusError``) and extract the status code and any upstream
+    ``WWW-Authenticate`` header.
+
+    Returns ``(status_code, www_authenticate)`` on match, else ``None``.
+    (Contract unchanged; now shares the tree-walk with
+    ``_extract_upstream_http_status``. We iterate independently rather than
+    reusing its "first response" so a non-401/403 response earlier in the tree
+    does not stop us from finding a 401/403 deeper in it.)
+    """
+    for response in _iter_exception_responses(exc):
+        status_code = getattr(response, "status_code", None)
+        if isinstance(status_code, int) and status_code in (401, 403):
+            www_authenticate: Optional[str] = None
+            headers = getattr(response, "headers", None)
+            if headers is not None:
+                try:
+                    www_authenticate = headers.get("www-authenticate")
+                except Exception:
+                    www_authenticate = None
+            return status_code, www_authenticate
     return None
 
 
@@ -2116,6 +2168,12 @@ class MCPServerManager:
             # client triggers the upstream OAuth flow. The multi-server
             # aggregator catches this explicitly to keep absorbing.
             raise
+        except MCPUpstreamError:
+            # Surface non-auth upstream failures the same way: single-server
+            # routes report a server error; multi-server aggregators absorb
+            # it per-server. Without this re-raise the generic handler below
+            # would swallow it back into [] and re-launder it as success.
+            raise
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get tools from server {server.name}: {str(e)}"
@@ -2755,11 +2813,57 @@ class MCPServerManager:
         except TimeoutError:
             verbose_logger.warning(f"Timeout while listing tools from {server_name}")
             return []
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as e:
+            # An upstream HTTP failure (e.g. 429/5xx) on a non-pass-through
+            # server surfaces through the MCP SDK's anyio TaskGroup as a
+            # cancel-scope cancellation. Do not launder that into an empty
+            # "success" — surface it as a per-server error so the REST routes
+            # report it instead of "Successfully retrieved tools".
+            upstream = _extract_upstream_http_status(e)
+            if upstream is not None:
+                status_code, _ = upstream
+                verbose_logger.info(
+                    f"Upstream MCP server {server_name} failed with HTTP "
+                    f"{status_code} (surfaced via cancellation)"
+                )
+                raise MCPUpstreamError(
+                    status_code=status_code, server_name=server_name
+                ) from e
+
+            # No recoverable HTTP status. We must not launder this into an empty
+            # success, but we also must not swallow a genuine *outer*
+            # cancellation (shutdown / client disconnect) — re-raising those
+            # keeps cooperative cancellation working.
+            #
+            # On Python 3.11+ `asyncio.Task.cancelling()` lets us tell an
+            # internally-originated cancel-scope cancellation (the upstream
+            # failure we want to surface) from a real outer cancel (which we
+            # re-raise). On Python 3.10 that API does not exist, so we cannot
+            # classify the cancellation; there we conservatively re-raise to
+            # preserve cancellation semantics rather than risk converting a real
+            # shutdown cancel into a server error. (The trade-off: an
+            # upstream-induced bare cancellation on 3.10 propagates as an error
+            # instead of a clean per-server failure — still never a false
+            # success.)
+            task = asyncio.current_task()
+            cancelling = getattr(task, "cancelling", None) if task is not None else None
+            if cancelling is None:
+                # Python 3.10 (or no running task): cannot classify — cooperate
+                # with the cancellation.
+                raise
+            if cancelling() > 0:
+                # A real outer cancellation was requested on this task.
+                raise
             verbose_logger.warning(
-                f"Task cancelled while listing tools from {server_name}"
+                f"Tool listing from {server_name} was interrupted before "
+                f"completion; surfacing as a server error (was previously "
+                f"reported as 0 tools / success)."
             )
-            return []
+            raise MCPUpstreamError(
+                status_code=None,
+                server_name=server_name,
+                message=f"Tool listing from {server_name} was interrupted",
+            ) from e
         except ConnectionError as e:
             verbose_logger.warning(
                 f"Connection error while listing tools from {server_name}: {str(e)}"
