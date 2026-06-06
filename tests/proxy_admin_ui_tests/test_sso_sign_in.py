@@ -111,6 +111,13 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
             f"http://testserver/ui/?login=success"
         )
 
+        # Verify token cookie is set with proper security attributes
+        set_cookie_header = response.headers.get("set-cookie", "")
+        assert "token=" in set_cookie_header
+        assert "path=/" in set_cookie_header.lower()
+        assert "httponly" in set_cookie_header.lower()
+        assert "samesite=lax" in set_cookie_header.lower()
+
         # Verify that the user was added to the database
         user = await prisma_client.db.litellm_usertable.find_first(
             where={"user_id": unique_user_id}

@@ -13120,7 +13120,15 @@ async def login(request: Request):  # noqa: PLR0915
 
     # Create redirect response with cookie
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
+    secure_flag = request.url.scheme == "https"
+    redirect_response.set_cookie(
+        key="token",
+        value=jwt_token,
+        path="/",
+        httponly=True,
+        samesite="lax",
+        secure=secure_flag,
+    )
     return redirect_response
 
 
@@ -13172,7 +13180,15 @@ async def login_v2(request: Request):  # noqa: PLR0915
             content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=jwt_token)
+        secure_flag = request.url.scheme == "https"
+        json_response.set_cookie(
+            key="token",
+            value=jwt_token,
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=secure_flag,
+        )
         return json_response
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -13340,7 +13356,15 @@ async def login_v3_exchange(request: Request):
             },
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=cached_data["token"])
+        secure_flag = request.url.scheme == "https"
+        json_response.set_cookie(
+            key="token",
+            value=cached_data["token"],
+            path="/",
+            httponly=True,
+            samesite="lax",
+            secure=secure_flag,
+        )
         return json_response
     except ProxyException:
         raise
@@ -13356,6 +13380,35 @@ async def login_v3_exchange(request: Request):
             param="None",
             code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+
+
+@router.get("/sso/logout", include_in_schema=False)
+async def sso_logout(request: Request):
+    """
+    Logout endpoint that clears the httpOnly token cookie and redirects
+    to the configured PROXY_LOGOUT_URL or the login page.
+    """
+    from litellm.proxy.utils import get_custom_url
+
+    logout_url = os.getenv("PROXY_LOGOUT_URL")
+    if logout_url:
+        redirect_url = logout_url
+    else:
+        base_url = get_custom_url(str(request.base_url))
+        if base_url.endswith("/"):
+            redirect_url = base_url + "ui/"
+        else:
+            redirect_url = base_url + "/ui/"
+
+    redirect_response = RedirectResponse(url=redirect_url, status_code=303)
+    secure_flag = request.url.scheme == "https"
+    redirect_response.delete_cookie(
+        key="token",
+        path="/",
+        samesite="lax",
+        secure=secure_flag,
+    )
+    return redirect_response
 
 
 @app.get("/onboarding/get_token", include_in_schema=False)
