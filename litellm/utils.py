@@ -4594,7 +4594,7 @@ def get_optional_params(  # noqa: PLR0915
                 else False
             ),
         )
-    elif custom_llm_provider == "xai":
+    elif custom_llm_provider == "xai" or custom_llm_provider == "xai_oauth":
         optional_params = litellm.XAIChatConfig().map_openai_params(
             model=model,
             non_default_params=non_default_params,
@@ -5775,6 +5775,18 @@ def _get_model_info_helper(  # noqa: PLR0915
         ]
         split_model = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
+        xai_oauth_model_alias = custom_llm_provider == "xai_oauth" or model.startswith(
+            "xai_oauth/"
+        )
+        model_cost_custom_llm_provider = custom_llm_provider
+        if xai_oauth_model_alias:
+            model_cost_custom_llm_provider = "xai"
+            model = model.replace("xai_oauth/", "xai/", 1)
+            combined_model_name = combined_model_name.replace("xai_oauth/", "xai/", 1)
+            stripped_model_name = stripped_model_name.replace("xai_oauth/", "xai/", 1)
+            combined_stripped_model_name = combined_stripped_model_name.replace(
+                "xai_oauth/", "xai/", 1
+            )
         #########################
         provider_config: Optional[BaseLLMModelInfo] = None
         if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
@@ -5840,7 +5852,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                 key = _matched_key
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    model_info=_model_info,
+                    custom_llm_provider=model_cost_custom_llm_provider,
                 ):
                     _model_info = None
             if _model_info is None:
@@ -5849,7 +5862,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5858,7 +5872,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5867,7 +5882,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5876,7 +5892,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
 
@@ -5884,6 +5901,10 @@ def _get_model_info_helper(  # noqa: PLR0915
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
+            if xai_oauth_model_alias:
+                _model_info = dict(_model_info)
+                _model_info["litellm_provider"] = "xai_oauth"
+                key = key.replace("xai/", "xai_oauth/", 1)
 
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
@@ -6634,6 +6655,13 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("XAI_API_KEY")
+        elif custom_llm_provider == "xai_oauth":
+            from litellm.llms.xai.oauth import XAIOAuthAuthenticator
+
+            if XAIOAuthAuthenticator()._read_auth_file() is not None:
+                keys_in_environment = True
+            else:
+                missing_keys.append("XAI OAuth credentials")
         elif custom_llm_provider == "ai21_chat":
             if "AI21_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8312,6 +8340,10 @@ class ProviderConfigManager:
             LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
             LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
+            LlmProviders.XAI_OAUTH: (
+                lambda: ProviderConfigManager._get_xai_oauth_config(),
+                False,
+            ),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
             LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
@@ -8503,6 +8535,12 @@ class ProviderConfigManager:
         from litellm.llms.langflow.chat.transformation import LangFlowConfig
 
         return LangFlowConfig()
+
+    @staticmethod
+    def _get_xai_oauth_config() -> BaseConfig:
+        from litellm.llms.xai.oauth import XAIOAuthChatConfig
+
+        return XAIOAuthChatConfig()
 
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
@@ -8894,6 +8932,10 @@ class ProviderConfigManager:
                 return litellm.AzureOpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
+        elif litellm.LlmProviders.XAI_OAUTH == provider:
+            from litellm.llms.xai.oauth import XAIOAuthResponsesAPIConfig
+
+            return XAIOAuthResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.CHATGPT == provider:
