@@ -1399,3 +1399,18 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+// Parent/child relationships between access groups. Used by
+// _get_models_from_access_groups to expand a parent group into its
+// transitively-included models. Resolution is depth-first with a
+// visited set; cyclic edges are logged and skipped at read time.
+model LiteLLM_AccessGroupMembership {
+  id           String   @id @default(uuid())
+  parent_group String
+  child_group  String
+  created_at   DateTime @default(now())
+
+  @@unique([parent_group, child_group])
+  @@index([parent_group])
+  @@index([child_group])
+}

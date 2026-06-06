@@ -6150,6 +6150,9 @@ async def get_available_models_for_user(
         get_key_models,
         get_team_models,
     )
+    from litellm.proxy.management_endpoints.model_access_group_management_endpoints import (
+        get_cached_group_memberships,
+    )
     from litellm.proxy.management_endpoints.team_endpoints import validate_membership
 
     # Get proxy model list and access groups
@@ -6160,12 +6163,22 @@ async def get_available_models_for_user(
         proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
 
+    # Parent->child edges for nested access groups (TTL-cached per process).
+    # Empty when no DB is configured (e.g. SDK-only mode), preserving
+    # today's flat behavior.
+    group_memberships: Dict[str, List[str]] = {}
+    if prisma_client is not None:
+        group_memberships = await get_cached_group_memberships(
+            prisma_client=prisma_client
+        )
+
     # Get key models
     key_models = get_key_models(
         user_api_key_dict=user_api_key_dict,
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
+        group_memberships=group_memberships,
     )
 
     # Get team models
@@ -6190,6 +6203,7 @@ async def get_available_models_for_user(
         proxy_model_list=proxy_model_list,
         model_access_groups=model_access_groups,
         include_model_access_groups=include_model_access_groups,
+        group_memberships=group_memberships,
     )
 
     effective_team_id = team_id or user_api_key_dict.team_id
