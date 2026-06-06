@@ -437,6 +437,60 @@ def test_transcription_sessions_requires_auth(proxy_app):
 
 
 @pytest.mark.asyncio
+async def test_transcription_sessions_rejects_disallowed_resolved_model(
+    proxy_app,
+):
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        models=["gpt-4o-realtime-preview"],
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch("litellm.proxy.proxy_server.route_request") as mock_route_request,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={
+                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
+                },
+            )
+
+        assert response.status_code == 403
+        assert "Tried to access gpt-realtime-whisper" in response.text
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcription_websocket_default_model_checks_key_scope():
+    from litellm.proxy import proxy_server
+
+    websocket = MagicMock()
+    websocket.headers = {}
+    websocket.close = AsyncMock()
+    websocket.accept = AsyncMock()
+
+    await proxy_server.realtime_websocket_endpoint(
+        websocket=websocket,
+        model=None,
+        intent="transcription",
+        user_api_key_dict=UserAPIKeyAuth(models=["gpt-4o-realtime-preview"]),
+    )
+
+    websocket.accept.assert_not_awaited()
+    websocket.close.assert_awaited_once()
+    _, close_kwargs = websocket.close.call_args
+    assert close_kwargs["code"] == 1008
+    assert "not allowed to access model" in close_kwargs["reason"]
+
+
+@pytest.mark.asyncio
 async def test_transcription_sessions_encrypts_client_secret(
     proxy_app,
     mock_route_request_transcription_sessions,

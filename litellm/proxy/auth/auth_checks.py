@@ -3120,6 +3120,27 @@ async def can_key_call_model(
         raise
 
 
+async def can_key_call_resolved_model(
+    model: str,
+    llm_model_list: Optional[list],
+    valid_token: UserAPIKeyAuth,
+    llm_router: Optional[litellm.Router],
+) -> None:
+    if valid_token.config:
+        return
+    if (
+        isinstance(valid_token.models, list)
+        and SpecialModelNames.all_team_models.value in valid_token.models
+    ):
+        return
+    await can_key_call_model(
+        model=model,
+        llm_model_list=llm_model_list,
+        valid_token=valid_token,
+        llm_router=llm_router,
+    )
+
+
 def can_org_access_model(
     model: str,
     org_object: Optional[LiteLLM_OrganizationTable],

@@ -10,6 +10,7 @@ from fastapi import status as http_status
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import can_key_call_resolved_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
@@ -410,6 +411,7 @@ async def create_realtime_transcription_session(
         add_litellm_data_to_request,
         general_settings,
         llm_router,
+        llm_model_list,
         proxy_config,
         proxy_logging_obj,
         route_request,
@@ -423,6 +425,12 @@ async def create_realtime_transcription_session(
         req = RealtimeTranscriptionSessionRequest(**body)
 
         model: str = req.resolved_model() or "gpt-realtime-whisper"
+        await can_key_call_resolved_model(
+            model=model,
+            valid_token=user_api_key_dict,
+            llm_model_list=llm_model_list,
+            llm_router=llm_router,
+        )
 
         transcription_session = {k: v for k, v in body.items() if k != "model"}
         data = {"model": model, "transcription_session": transcription_session}
@@ -464,6 +472,8 @@ async def create_realtime_transcription_session(
             "litellm.proxy.realtime_endpoints.create_realtime_transcription_session(): Exception - %s",
             str(e),
         )
+        if isinstance(e, ProxyException):
+            raise e
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", getattr(e, "message", str(e))),

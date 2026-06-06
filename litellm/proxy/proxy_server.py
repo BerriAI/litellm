@@ -254,6 +254,7 @@ from litellm.proxy.analytics_endpoints.analytics_endpoints import (
 )
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
+    can_key_call_resolved_model,
     get_team_object,
     log_db_metrics,
 )
@@ -9476,6 +9477,16 @@ async def realtime_websocket_endpoint(
             )
             return
     assert route_model is not None
+    try:
+        await can_key_call_resolved_model(
+            model=route_model,
+            llm_model_list=llm_model_list,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+    except ProxyException as e:
+        await websocket.close(code=1008, reason=e.message[:120])
+        return
     await websocket.accept(**accept_kwargs)
 
     # Only use explicit parameters, not all query params
