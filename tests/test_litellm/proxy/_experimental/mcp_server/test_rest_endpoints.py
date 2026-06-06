@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -1629,3 +1630,48 @@ class TestPreviewOpenAPITools:
             "order is out of sync, so collision suffixes (_2, _3, ...) "
             "land on different operations"
         )
+
+
+class TestConnectionErrorMessage:
+    """The test-connection endpoints turn raw transport errors into messages.
+
+    The message is returned to an admin in an API response, so it must explain
+    the failure without echoing the raw header value, which can carry a secret
+    (e.g. ``Authorization: Bearer <token>``).
+    """
+
+    def test_local_protocol_error_is_actionable_and_redacted(self):
+        secret = "Bearer sk-super-secret-token"
+        exc = httpx.LocalProtocolError(f"Illegal header value b' {secret}'")
+
+        message = rest_endpoints._connection_error_message(exc)
+
+        assert "header" in message.lower()
+        assert secret not in message
+
+    def test_connect_error_points_at_reachability(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectError("All connection attempts failed")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_timeout_error_message(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectTimeout("timed out")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_http_status_error_includes_status_code(self):
+        response = httpx.Response(status_code=503)
+        exc = httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request("POST", "http://x/"),
+            response=response,
+        )
+        message = rest_endpoints._connection_error_message(exc)
+        assert "503" in message
+
+    def test_unknown_error_falls_back_to_generic(self):
+        message = rest_endpoints._connection_error_message(RuntimeError("weird"))
+        assert "weird" not in message
+        assert "proxy logs" in message.lower()

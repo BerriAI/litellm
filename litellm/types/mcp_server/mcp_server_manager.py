@@ -42,6 +42,10 @@ class MCPServer(BaseModel):
     static_headers: Optional[Dict[str, str]] = (
         None  # static headers to forward to the MCP server
     )
+    # Admin-configured env vars. Each entry is {name, value, scope, description}.
+    # scope=="global" values are interpolated into static_headers using ${NAME}.
+    # scope=="user" values must be supplied per-user.
+    env_vars: Optional[List[Dict[str, Any]]] = None
     # OAuth-specific fields
     client_id: Optional[str] = None
     client_secret: Optional[str] = None

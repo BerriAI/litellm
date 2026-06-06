@@ -76,6 +76,7 @@ import { UserInfo } from "./view_users/types";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
 import NotificationsManager from "./molecules/notifications_manager";
+import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
 
@@ -9618,6 +9619,35 @@ export const listMCPUserCredentials = async (accessToken: string): Promise<MCPUs
   });
   if (!response.ok) return [];
   return response.json();
+};
+
+// ============================================================
+// MCP per-user env vars (/v1/mcp/server/{id}/user-env-vars)
+// ============================================================
+
+export const getMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.get<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, { accessToken });
+};
+
+export const storeMCPUserEnvVars = async (
+  accessToken: string,
+  serverId: string,
+  values: Record<string, string>,
+): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.post<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, {
+    accessToken,
+    body: { values },
+  });
+};
+
+export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {
+  // Best-effort status badges: a failure here must not break the page, so fall
+  // back to an empty list rather than surfacing the error to the caller.
+  try {
+    return await apiClient.get<MCPUserEnvVarsStatus[]>("/v1/mcp/user-env-vars/status", { accessToken });
+  } catch {
+    return [];
+  }
 };
 
 // ============================================================

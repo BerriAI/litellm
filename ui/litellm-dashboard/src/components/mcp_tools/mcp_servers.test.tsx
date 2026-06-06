@@ -15,6 +15,7 @@ vi.mock("../networking", () => ({
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
 }));
 
 // Mock NotificationsManager

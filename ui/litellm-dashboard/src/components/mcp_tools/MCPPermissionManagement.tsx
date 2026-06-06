@@ -53,6 +53,17 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         }));
         form.setFieldValue("static_headers", staticHeaders);
       }
+      if (Array.isArray(mcpServer.env_vars) && mcpServer.env_vars.length > 0) {
+        form.setFieldValue(
+          "env_vars",
+          mcpServer.env_vars.map((entry) => ({
+            name: entry.name,
+            value: entry.value ?? "",
+            scope: entry.scope ?? "global",
+            description: entry.description ?? "",
+          })),
+        );
+      }
       if (typeof mcpServer.allow_all_keys === "boolean") {
         form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
       }

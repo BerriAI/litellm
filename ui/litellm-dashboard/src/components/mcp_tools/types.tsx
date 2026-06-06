@@ -263,6 +263,41 @@ export interface MCPServer {
   /** Per-user OAuth token storage settings (interactive OAuth only) */
   token_validation?: Record<string, any> | null;
   token_storage_ttl_seconds?: number | null;
+
+  /**
+   * Admin-configured env vars interpolated into static_headers via ${NAME}.
+   * Stored as a list so the UI can preserve admin-entered ordering.
+   */
+  env_vars?: MCPEnvVar[] | null;
+}
+
+/** One environment variable entry on an MCP server. */
+export type MCPEnvVarScope = "global" | "user";
+
+export interface MCPEnvVar {
+  name: string;
+  /** For scope="global": the value used in interpolation.
+   *  For scope="user": optional placeholder/description shown to users. */
+  value: string;
+  scope: MCPEnvVarScope;
+  description?: string | null;
+}
+
+/** One required per-user env var slot returned by the user-env-vars endpoint. */
+export interface MCPUserEnvVarSpec {
+  name: string;
+  description?: string | null;
+  is_set: boolean;
+}
+
+/** Per-server per-user env var status returned by the API. */
+export interface MCPUserEnvVarsStatus {
+  server_id: string;
+  server_name?: string | null;
+  alias?: string | null;
+  required: MCPUserEnvVarSpec[];
+  missing_count: number;
+  setup_url?: string | null;
 }
 
 export interface MCPServerProps {
