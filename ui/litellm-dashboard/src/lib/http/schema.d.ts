@@ -27574,6 +27574,11 @@ export interface components {
              * @description List of models this team member can access. Pass an empty list to remove per-member model restrictions.
              */
             allowed_models?: string[] | null;
+            /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /** Role */
@@ -27599,6 +27604,8 @@ export interface components {
         TeamMemberUpdateResponse: {
             /** Allowed Models */
             allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /** Rpm Limit */
