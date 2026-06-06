@@ -15,6 +15,7 @@ from .commands.keys import keys
 
 # local imports
 from .commands.models import models
+from .commands.run import claude_code, run
 from .commands.teams import teams
 from .commands.users import users
 from .interface import interactive_shell
@@ -112,6 +113,9 @@ cli.add_command(keys)
 cli.add_command(teams)
 # Add the users command group
 cli.add_command(users)
+# Add the agent runner commands
+cli.add_command(run)
+cli.add_command(claude_code)
 
 
 if __name__ == "__main__":

@@ -91,6 +91,8 @@ def show_commands():
         ("keys", "Manage API keys"),
         ("teams", "Manage teams and team assignments"),
         ("users", "Manage users"),
+        ("run", "Run a coding agent (claude, codex, ...) through the proxy"),
+        ("claude-code", "Shortcut for `run -- claude`"),
         ("version", "Show version information"),
         ("help", "Show this help message"),
         ("quit", "Exit the interactive session"),

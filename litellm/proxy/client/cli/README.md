@@ -438,6 +438,36 @@ litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messag
 litellm-proxy http request GET /health/test_connection -H "X-Custom-Header:value"
 ```
 
+### Run a Coding Agent
+
+Run a coding agent (Claude Code, Codex, OpenCode, and others) with all of its LLM traffic routed through your LiteLLM proxy. Everything after `--` is the command to launch:
+
+```bash
+litellm-proxy run -- claude
+litellm-proxy run -- codex
+litellm-proxy run -- opencode
+```
+
+`litellm-proxy claude-code` is a shortcut for `litellm-proxy run -- claude`.
+
+The wrapper resolves your LiteLLM key (logging in via SSO when none is stored and you are at a terminal; otherwise it expects `LITELLM_PROXY_API_KEY` or `--api-key`), checks the key against the proxy so bad credentials fail immediately instead of deep inside the agent, exports the environment variables the agent reads, then replaces itself with the agent process.
+
+The command is detected from the binary name to pick the right variables. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. An unrecognized command gets both sets so it works either way.
+
+Options:
+
+- `--model`, `-m`: Model Claude Code should request (sets `ANTHROPIC_MODEL`); must resolve on your proxy. OpenAI-style agents take the model through their own flag.
+- `--small-fast-model`: Background-task model for Claude Code (sets `ANTHROPIC_SMALL_FAST_MODEL`).
+- `--skip-verify`: Skip the pre-launch key check (useful offline or with non-standard auth).
+
+Forward flags the agent owns after `--`:
+
+```bash
+litellm-proxy run --model claude-sonnet-proxy -- claude --resume
+```
+
+Whatever model the agent requests (default Claude names, or your `--model` override) must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
+
 ## Environment Variables
 
 The CLI respects the following environment variables:
