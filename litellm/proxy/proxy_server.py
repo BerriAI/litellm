@@ -249,6 +249,18 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy._lazy_features import attach_lazy_features
+from litellm.proxy.agent_settings_endpoints.pool_status_endpoints import (
+    router as agent_pool_status_router,
+)
+from litellm.proxy.agent_settings_endpoints.secrets_endpoints import (
+    router as agent_secrets_router,
+)
+from litellm.proxy.agent_settings_endpoints.vm_config_endpoints import (
+    router as agent_vm_config_router,
+)
+from litellm.proxy.agent_settings_endpoints.worker_endpoints import (
+    router as agent_workers_router,
+)
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
@@ -15731,6 +15743,11 @@ app.include_router(cache_settings_router)
 app.include_router(user_agent_analytics_router)
 app.include_router(enterprise_router)
 app.include_router(ui_discovery_endpoints_router)
+# Cloud Agents settings (LIT-2891) — VM config, secrets, self-hosted workers.
+app.include_router(agent_vm_config_router)
+app.include_router(agent_secrets_router)
+app.include_router(agent_workers_router)
+app.include_router(agent_pool_status_router)
 # Eager: /models/{name}:method overlaps with the OpenAI /models endpoint.
 app.include_router(google_router)
 

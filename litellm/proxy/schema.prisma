@@ -1399,3 +1399,83 @@ model LiteLLM_WorkflowMessage {
   @@unique([run_id, sequence_number])
   @@index([run_id])
 }
+
+// Per-team Cloud Agent VM provider configuration. Holds AWS BYOC creds
+// (encrypted via the same nacl/SecretBox path as virtual keys), provisioning
+// defaults, warm-pool settings, and the network egress allowlist that gets
+// pushed to the daemon at hydrate time.
+model LiteLLM_AgentVMConfig {
+  team_id              String   @id
+  provider             String   @default("disabled") // "ec2" | "self_hosted" | "disabled"
+  aws_auth_method      String?  // "access_keys" | "iam_role" | "instance_metadata"
+  aws_access_key_id_enc String?  // encrypted
+  aws_secret_access_key_enc String? // encrypted
+  aws_role_arn_enc     String?  // encrypted (cross-account role mode)
+  aws_region           String?
+  ami_id               String?
+  instance_type        String?
+  subnet_id            String?
+  security_group_id    String?
+  iam_instance_profile String?
+  use_spot             Boolean  @default(true)
+  max_session_minutes  Int      @default(120)
+  warm_pool_enabled    Boolean  @default(false)
+  warm_pool_size       Int      @default(0)
+  max_idle_minutes     Int      @default(30)
+  hydrate_transport    String   @default("auto") // "auto" | "ssm" | "long_poll"
+  network_access       Json     @default("{\"mode\":\"allow_all\",\"allowlist\":[]}")
+  self_hosted_enabled  Boolean  @default(false)
+  created_at           DateTime @default(now())
+  updated_at           DateTime @default(now()) @updatedAt
+}
+
+// Per-team encrypted secrets injected into agent VMs at session start. Value
+// is ALWAYS write-only: GET endpoints must never return value_enc decrypted.
+// Scope is "all" or a list of repo full_name strings; the proxy joins on
+// session.repos at hydrate time.
+model LiteLLM_AgentSecret {
+  id          String   @id @default(uuid())
+  team_id     String
+  name        String
+  value_enc   String   // base64-encoded, nacl.SecretBox encrypted, write-only
+  scope       Json     @default("\"all\"") // "all" | string[]
+  type        String   @default("env") // "env" | "file"
+  file_path   String?
+  created_at  DateTime @default(now())
+  updated_at  DateTime @default(now()) @updatedAt
+  created_by  String?
+
+  @@unique([team_id, name])
+  @@index([team_id])
+}
+
+// Self-hosted worker registrations. Each worker holds a long-lived JWT and
+// long-polls for hydrate. status is best-effort heartbeat tracking.
+model LiteLLM_AgentWorker {
+  id            String   @id @default(uuid())
+  team_id       String
+  hostname      String
+  status        String   @default("offline") // "online" | "offline"
+  last_seen_at  DateTime?
+  cpu_pct       Float?
+  mem_gb        Float?
+  active_sessions Int    @default(0)
+  worker_jwt_hash String // sha256 of issued JWT — never store raw JWT
+  created_at    DateTime @default(now())
+
+  @@index([team_id, status])
+  @@index([worker_jwt_hash])
+}
+
+// Single-use 15-minute pairing tokens that workers exchange for a long-lived
+// worker JWT during the install flow.
+model LiteLLM_AgentWorkerPairingToken {
+  token_hash  String   @id // sha256 of the raw token (raw token never persisted)
+  team_id     String
+  created_by  String
+  expires_at  DateTime
+  used_at     DateTime?
+  created_at  DateTime @default(now())
+
+  @@index([team_id])
+}
