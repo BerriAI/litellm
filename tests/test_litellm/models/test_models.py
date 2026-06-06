@@ -277,6 +277,23 @@ class TestUser:
         assert not user_with_models.has_model_access("gpt-3")
         assert user_no_models.has_model_access("any-model")
 
+    def test_password_hash_excluded_from_serialization(self):
+        from litellm.proxy._types import LiteLLM_UserTableWithKeyCount
+
+        secret = "$2b$12$abcdefghijklmnopqrstuv"
+        user = LiteLLM_UserTable(user_id="u1", user_email="a@b.c", password=secret)
+
+        assert user.password == secret
+        assert "password" not in user.model_dump()
+        assert "password" not in user.model_dump_json()
+
+        with_keys = LiteLLM_UserTableWithKeyCount(
+            user_id="u1", user_email="a@b.c", password=secret, key_count=2
+        )
+        assert with_keys.password == secret
+        assert "password" not in with_keys.model_dump()
+        assert "password" not in with_keys.model_dump_json()
+
 
 class TestVerificationToken:
     def test_verification_token_creation(self):

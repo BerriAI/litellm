@@ -8,7 +8,7 @@ Canonical definition for ``litellm_usertable``. Re-exported from
 from datetime import datetime
 from typing import Dict, List, Optional
 
-from pydantic import ConfigDict, model_validator
+from pydantic import ConfigDict, Field, model_validator
 
 from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.models.organization_membership import (
@@ -24,7 +24,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     sso_user_id: Optional[str] = None
     organization_id: Optional[str] = None
     object_permission_id: Optional[str] = None
-    password: Optional[str] = None
+    password: Optional[str] = Field(default=None, exclude=True)
     teams: List[str] = []
     user_role: Optional[str] = None
     max_budget: Optional[float] = None
