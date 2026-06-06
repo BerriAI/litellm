@@ -98,7 +98,7 @@ const appendQuery = (url: string, query: QueryParams | undefined): string => {
 
 export function createApiClient(config: ApiClientConfig): ApiClient {
   const { getBaseUrl, getAuthHeaderName, onError, fetchImpl } = config;
-  const doFetch = fetchImpl ?? fetch;
+  const doFetch: typeof fetch = (input, init) => (fetchImpl ?? fetch)(input, init);
 
   async function request<T = any>(method: HttpMethod, path: string, options: RequestOptions = {}): Promise<T> {
     const { accessToken, body, rawBody, query, headers: extraHeaders, signal } = options;
