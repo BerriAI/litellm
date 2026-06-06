@@ -243,16 +243,16 @@ async def _update_request_data_with_model_routing_hint(
     credentials = None
     if isinstance(model_hint, str) and "*" in model_hint:
         if llm_router is not None:
-            credentials = llm_router.get_deployment_credentials_with_provider(
-                model_id=model_hint
-            )
-            should_route = credentials is not None
-            if should_route and should_authorize_model_hint:
+            if should_authorize_model_hint:
                 await _authorize_model_routing_hint(
                     model=model_hint,
                     llm_router=llm_router,
                     user_api_key_dict=user_api_key_dict,
                 )
+            credentials = llm_router.get_deployment_credentials_with_provider(
+                model_id=model_hint
+            )
+            should_route = credentials is not None
     else:
         if should_authorize_model_hint:
             await _authorize_model_routing_hint(
@@ -287,7 +287,7 @@ async def _update_request_data_with_model_routing_hint(
     if not isinstance(team_models, list):
         return data
 
-    openai_credentials = None
+    model_names_to_check = []
     for model_name in team_models:
         if not isinstance(model_name, str) or model_name in {
             "all-team-models",
@@ -295,7 +295,10 @@ async def _update_request_data_with_model_routing_hint(
             "no-default-models",
         }:
             continue
+        model_names_to_check.append(model_name)
 
+    openai_credentials = None
+    for model_name in model_names_to_check:
         credentials = llm_router.get_deployment_credentials_with_provider(
             model_id=model_name
         )
@@ -309,12 +312,24 @@ async def _update_request_data_with_model_routing_hint(
         if provider != LlmProviders.OPENAI.value:
             continue
 
+        await _authorize_model_routing_hint(
+            model=model_name,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
         if openai_credentials is not None:
             return data
         openai_credentials = credentials
 
     if openai_credentials is not None:
         prepare_data_with_credentials(data=data, credentials=openai_credentials)
+    elif len(model_names_to_check) == 1:
+        await _authorize_model_routing_hint(
+            model=model_names_to_check[0],
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+        data["model"] = model_names_to_check[0]
 
     return data
 

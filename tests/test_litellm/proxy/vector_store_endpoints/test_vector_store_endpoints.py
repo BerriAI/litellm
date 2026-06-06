@@ -221,7 +221,9 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
     request.headers = {}
 
     llm_router = MagicMock()
+    llm_router.model_group_alias = {}
     llm_router.get_deployment_credentials_with_provider.side_effect = [
+        None,
         None,
         {
             "api_key": "sk-team-openai",
@@ -232,7 +234,7 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
     ]
 
     data = {"vector_store_id": "vs_123", "model": "openai/*"}
-    user_api_key_dict = UserAPIKeyAuth(team_models=["team-openai"])
+    user_api_key_dict = UserAPIKeyAuth(team_models=["openai/*", "team-openai"])
 
     result = await _update_request_data_with_model_routing_hint(
         data=data,
@@ -245,7 +247,94 @@ async def test_vector_store_file_list_wildcard_model_hint_falls_back_to_team_dep
     assert result["api_base"] == "https://api.openai.com/v1"
     assert result["model"] == "openai/gpt-4o-mini"
     assert "custom_llm_provider" not in result
-    assert llm_router.get_deployment_credentials_with_provider.call_count == 2
+    assert llm_router.get_deployment_credentials_with_provider.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_authorizes_wildcard_query_param_before_credentials():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    request = MagicMock(spec=Request)
+    request.query_params = {"model": "openai/*"}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["restricted-deployment"],
+        team_models=["openai/*"],
+    )
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data=data,
+            request=request,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    llm_router.get_deployment_credentials_with_provider.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_uses_single_team_model_for_router_routing():
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.get_model_access_groups.return_value = {}
+    llm_router.get_deployment_credentials_with_provider.return_value = None
+
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(
+        team_id="team-123",
+        team_models=["provider/*", "all-proxy-models"],
+    )
+
+    result = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert result["model"] == "provider/*"
+    assert "api_key" not in result
+    assert "api_base" not in result
+
+
+@pytest.mark.asyncio
+async def test_vector_store_file_list_authorizes_inferred_team_model():
+    from litellm.proxy.auth.auth_checks import ProxyException
+
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.headers = {}
+
+    llm_router = MagicMock()
+    llm_router.model_group_alias = {}
+    llm_router.get_deployment_credentials_with_provider.return_value = {
+        "api_key": "sk-team-openai",
+        "api_base": "https://api.openai.com/v1",
+        "custom_llm_provider": "openai",
+        "model": "openai/gpt-4o-mini",
+    }
+
+    data = {"vector_store_id": "vs_123"}
+    user_api_key_dict = UserAPIKeyAuth(
+        models=["restricted-deployment"],
+        team_models=["team-openai"],
+    )
+
+    with pytest.raises(ProxyException):
+        await _update_request_data_with_model_routing_hint(
+            data=data,
+            request=request,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
 
 
 @pytest.mark.asyncio
