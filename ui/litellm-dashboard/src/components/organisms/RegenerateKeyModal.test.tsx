@@ -251,9 +251,7 @@ describe("RegenerateKeyModal", () => {
     await user.click(screen.getByRole("button", { name: /Regenerate/ }));
 
     await waitFor(() => {
-      expect(
-        screen.getByText("Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo"),
-      ).toBeInTheDocument();
+      expect(screen.getByText("Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo")).toBeInTheDocument();
     });
     expect(mockRegenerateKeyCall).not.toHaveBeenCalled();
   });
