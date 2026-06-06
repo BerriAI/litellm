@@ -25,6 +25,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
+    BaseFileUploadStream,
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
@@ -44,6 +45,7 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
+from litellm.types.files import ResumableChunkedUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse
 from litellm.types.utils import ExtractedFileData, LlmProviders, ModelResponse
 
@@ -283,6 +285,36 @@ def _stream_openai_jsonl_to_vertex(
     return "\n".join(str_parts), first_entry
 
 
+class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
+    """Streams an OpenAI batch JSONL upload as Vertex-wrapped JSONL one row at a
+    time, so the transformed payload is never held in full.
+
+    The transform runs lazily as the HTTP client pulls each chunk, which keeps
+    peak memory at one row regardless of how large the batch file is.
+    """
+
+    def __init__(
+        self,
+        openai_file_content: FileTypes,
+        map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+    ) -> None:
+        self._openai_file_content = openai_file_content
+        self._map_openai_to_vertex_params = map_openai_to_vertex_params
+
+    def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
+        first = True
+        for entry in _iter_openai_jsonl_entries(self._openai_file_content):
+            wrapped = _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+                entry, self._map_openai_to_vertex_params
+            )
+            prefix = b"" if first else b"\n"
+            first = False
+            yield prefix + json.dumps(wrapped).encode("utf-8")
+
+    def iter_bytes(self) -> Iterator[bytes]:
+        return self._iter_vertex_jsonl_chunks()
+
+
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
     """
     Config for VertexAI Files
@@ -390,7 +422,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name = encode_gcs_object_name_for_url(object_name)
-        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
+        # Batch jsonl is streamed via a resumable session (bounded memory on
+        # large uploads); everything else is a single simple-media upload.
+        upload_type = (
+            "resumable"
+            if FilesAPIUtils.is_batch_jsonl_file(
+                create_file_data=data, extracted_file_data=extracted_file_data
+            )
+            else "media"
+        )
+        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType={upload_type}&name={encoded_object_name}"
         api_base = api_base or "https://storage.googleapis.com"
         if not api_base:
             raise ValueError("api_base is required")
@@ -450,7 +491,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         2 Cases:
         1. Handle basic file upload
-        2. Handle batch file upload (.jsonl)
+        2. Handle batch file upload (.jsonl), streamed to a GCS resumable
+           session so large uploads stay memory-bounded.
         """
         file_data = create_file_data.get("file")
         if file_data is None:
@@ -465,12 +507,17 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             create_file_data=create_file_data,
             extracted_file_data=extracted_file_data,
         ):
-            vertex_jsonl_bytes, _ = _stream_openai_jsonl_to_vertex(
-                extracted_file_data_content,
-                self._map_openai_to_vertex_params,
-                as_bytes=True,
-            )
-            return vertex_jsonl_bytes
+            return {
+                "resumable_chunked_upload": ResumableChunkedUploadConfig(
+                    body_stream=_OpenAIToVertexBatchUploadStream(
+                        extracted_file_data_content,
+                        self._map_openai_to_vertex_params,
+                    ),
+                    initiate_headers={
+                        "X-Upload-Content-Type": "application/json",
+                    },
+                )
+            }
         elif isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
         else:

@@ -138,12 +138,11 @@ class TestVertexAIBinaryFileUpload:
         ), "Binary file data should remain as bytes"
 
     @pytest.mark.asyncio
-    async def test_jsonl_file_upload_returns_utf8_bytes(self):
+    async def test_jsonl_file_upload_returns_resumable_stream(self):
         """
-        Test that JSONL batch files are transformed to UTF-8 bytes.
-
-        The transform emits bytes so the upload ships the payload to GCS without
-        a str->bytes re-encode, avoiding a full extra copy of the payload.
+        Test that JSONL batch files are transformed into a resumable-upload config
+        carrying a streaming body (not a buffered bytes payload), so the handler
+        can stream the upload to GCS in bounded chunks.
         """
         # Create mock JSONL content
         mock_jsonl_content = (
@@ -166,11 +165,13 @@ class TestVertexAIBinaryFileUpload:
             litellm_params={},
         )
 
-        assert isinstance(
-            transformed_request, bytes
-        ), f"Expected bytes for JSONL file, got {type(transformed_request)}"
+        assert (
+            isinstance(transformed_request, dict)
+            and "resumable_chunked_upload" in transformed_request
+        ), f"Expected a resumable upload config for JSONL, got {type(transformed_request)}"
 
-        decoded = json.loads(transformed_request.decode("utf-8"))
+        stream = transformed_request["resumable_chunked_upload"]["body_stream"]
+        decoded = json.loads(b"".join(stream.iter_bytes()).decode("utf-8"))
         assert (
             "request" in decoded
         ), "JSONL transform must wrap each row in {'request': ...}"
@@ -214,7 +215,7 @@ class TestVertexAIBinaryFileUpload:
             optional_params={},
             litellm_params={},
         )
-        assert isinstance(result2, bytes)
+        assert isinstance(result2, dict) and "resumable_chunked_upload" in result2
 
         # Test 3: Upload another binary file
         binary_content2 = b"\xc4\xe5\xf2\xe5\xeb"
