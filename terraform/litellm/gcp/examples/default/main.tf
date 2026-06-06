@@ -26,10 +26,10 @@
 module "litellm" {
   source = "../../"
 
-  project = var.project
-  region  = var.region
-  tenant  = var.tenant
-  env     = var.env
+  project_id = var.project_id
+  region     = var.region
+  tenant     = var.tenant
+  env        = var.env
 
   litellm_master_key = var.litellm_master_key
   litellm_license    = var.litellm_license

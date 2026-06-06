@@ -5,7 +5,7 @@
 # main.tf, or call the module from your own root config. Full per-variable
 # docs live in ../../variables.tf — the module is the source of truth.
 
-variable "project" {
+variable "project_id" {
   description = "GCP project ID."
   type        = string
 }

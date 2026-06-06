@@ -7,7 +7,7 @@ resource "random_id" "bucket_suffix" {
 }
 
 resource "google_storage_bucket" "this" {
-  name                        = "${var.project}-${local.name}-${random_id.bucket_suffix.hex}"
+  name                        = "${var.project_id}-${local.name}-${random_id.bucket_suffix.hex}"
   location                    = var.region
   uniform_bucket_level_access = true
   force_destroy               = var.gcs_force_destroy

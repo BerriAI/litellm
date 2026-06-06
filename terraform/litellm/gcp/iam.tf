@@ -21,7 +21,7 @@ resource "google_service_account" "ui_runtime" {
 # Cloud SQL client — lets the Cloud Run services connect to the instance
 # over private IP via the VPC connector.
 resource "google_project_iam_member" "runtime_cloudsql" {
-  project = var.project
+  project = var.project_id
   role    = "roles/cloudsql.client"
   member  = "serviceAccount:${google_service_account.runtime.email}"
 }

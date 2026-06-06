@@ -344,7 +344,7 @@ resource "google_cloud_run_v2_service" "ui" {
 # (LITELLM_MASTER_KEY); these IAM bindings just open up Cloud Run's invoker
 # gate so the LB request makes it to the container.
 resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
-  project  = var.project
+  project  = var.project_id
   location = google_cloud_run_v2_service.gateway.location
   name     = google_cloud_run_v2_service.gateway.name
   role     = "roles/run.invoker"
@@ -352,7 +352,7 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
-  project  = var.project
+  project  = var.project_id
   location = google_cloud_run_v2_service.backend.location
   name     = google_cloud_run_v2_service.backend.name
   role     = "roles/run.invoker"
@@ -360,7 +360,7 @@ resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
-  project  = var.project
+  project  = var.project_id
   location = google_cloud_run_v2_service.ui.location
   name     = google_cloud_run_v2_service.ui.name
   role     = "roles/run.invoker"

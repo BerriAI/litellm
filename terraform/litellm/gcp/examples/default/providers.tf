@@ -7,11 +7,11 @@
 # `google-beta` configs automatically through the module call, so project
 # and region set here flow into every resource that doesn't pass its own.
 provider "google" {
-  project = var.project
+  project = var.project_id
   region  = var.region
 }
 
 provider "google-beta" {
-  project = var.project
+  project = var.project_id
   region  = var.region
 }

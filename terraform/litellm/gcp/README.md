@@ -1,5 +1,9 @@
 # LiteLLM on GCP (Cloud Run)
 
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Flitellm&cloudshell_workspace=terraform%2Flitellm%2Fgcp%2Fexamples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
+
+The button above opens the [DeployStack](https://github.com/GoogleCloudPlatform/deploystack) installer in Cloud Shell, walks you through `TUTORIAL.md`, and runs `terraform apply` once you've answered the prompts. The rest of this README is the manual / advanced path.
+
 Deploys the componentized LiteLLM proxy on GCP:
 
 - **VPC** + Private Services Access range + a Serverless VPC Access connector
@@ -186,7 +190,7 @@ export TF_VAR_litellm_master_key="sk-..."   # the tenant's master key
 export TF_VAR_litellm_license="lic-..."     # their LITELLM_LICENSE
 
 terraform apply \
-  -var "project=my-gcp-project" \
+  -var "project_id=my-gcp-project" \
   -var "region=us-central1" \
   -var "tenant=acme" \
   -var "env=stage"

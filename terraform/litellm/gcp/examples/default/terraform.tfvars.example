@@ -1,5 +1,5 @@
-project = "my-gcp-project"
-region  = "us-central1"
+project_id = "my-gcp-project"
+region     = "us-central1"
 
 # Resource naming: every GCP resource the stack creates is named
 # `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
