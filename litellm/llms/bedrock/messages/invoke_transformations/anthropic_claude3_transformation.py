@@ -576,10 +576,45 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
         )
+        # Bedrock doesn't support `role: system` inside the messages array
+        # (Anthropic added this in the Opus 4.8 API release). Extract any
+        # inline system messages and merge them into the top-level `system`
+        # parameter, mirroring what the Anthropic chat path already does via
+        # `translate_system_message`.
+        inline_system_messages: list[str] = []
+        non_system_messages: list[Dict] = []
+        for msg in messages:
+            if isinstance(msg, dict) and msg.get("role") == "system":
+                content = msg.get("content")
+                if isinstance(content, str) and content.strip():
+                    inline_system_messages.append(content)
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text.strip():
+                                inline_system_messages.append(text)
+            else:
+                non_system_messages.append(msg)
+
+        if inline_system_messages:
+            existing_system = anthropic_messages_optional_request_params.get("system")
+            if existing_system is None:
+                merged_system = "\n\n".join(inline_system_messages)
+            elif isinstance(existing_system, str):
+                merged_system = existing_system + "\n\n" + "\n\n".join(inline_system_messages)
+            elif isinstance(existing_system, list):
+                merged_system = list(existing_system) + [
+                    {"type": "text", "text": t} for t in inline_system_messages
+                ]
+            else:
+                merged_system = existing_system
+            anthropic_messages_optional_request_params["system"] = merged_system
+
         anthropic_messages_request = AnthropicMessagesConfig.transform_anthropic_messages_request(
             self=self,
             model=model,
-            messages=messages,
+            messages=non_system_messages,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
