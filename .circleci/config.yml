@@ -111,6 +111,28 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  start_openai_record_replay_proxy:
+    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. Run after uv deps are synced."
+    steps:
+      - run:
+          name: Start record/replay proxy
+          background: true
+          command: |
+            CASSETTE_REDIS_URL="$CASSETTE_REDIS_URL" \
+            RECORDER_UPSTREAM_BASE_URL="https://api.openai.com" \
+              uv run --no-sync python tests/_openai_record_replay_proxy.py --host 0.0.0.0 --port 8090
+      - run:
+          name: Wait for record/replay proxy
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8090/__recorder_health >/dev/null 2>&1; then
+                echo "record/replay proxy is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "record/replay proxy did not become ready" >&2
+            exit 1
   setup_litellm_enterprise_pip:
     steps:
       - run:
@@ -1625,25 +1647,7 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker tag litellm-docker-database:ci my-app:latest
-      - run:
-          name: Start OpenAI image record/replay proxy
-          background: true
-          command: |
-            CASSETTE_REDIS_URL="$CASSETTE_REDIS_URL" \
-            RECORDER_UPSTREAM_BASE_URL="https://api.openai.com" \
-              uv run --no-sync python tests/_openai_record_replay_proxy.py --host 0.0.0.0 --port 8090
-      - run:
-          name: Wait for record/replay proxy
-          command: |
-            for i in $(seq 1 30); do
-              if curl -sf http://localhost:8090/__recorder_health >/dev/null 2>&1; then
-                echo "record/replay proxy is up"
-                exit 0
-              fi
-              sleep 1
-            done
-            echo "record/replay proxy did not become ready" >&2
-            exit 1
+      - start_openai_record_replay_proxy
       - run:
           name: Run Docker container
           command: |
@@ -1674,7 +1678,7 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
-              -e IMAGE_GEN_RECORDER_BASE_URL=http://host.docker.internal:8090/v1 \
+              -e RECORDER_OPENAI_BASE_URL=http://host.docker.internal:8090/v1 \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
@@ -1812,6 +1816,7 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
+      - start_openai_record_replay_proxy
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -1835,6 +1840,7 @@ jobs:
               -e DD_SITE=$DD_SITE \
               -e AWS_REGION_NAME=$AWS_REGION_NAME \
               -e COHERE_API_KEY=$COHERE_API_KEY \
+              -e RECORDER_COHERE_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.cohere.com \
               -e GCS_FLUSH_INTERVAL="1" \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
@@ -2400,6 +2406,7 @@ jobs:
           command: |
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker images | grep litellm-docker-database
+      - start_openai_record_replay_proxy
       - run:
           name: Run Docker container with test config
           command: |
@@ -2408,6 +2415,7 @@ jobs:
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e RECORDER_ANTHROPIC_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.anthropic.com \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
               -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
               -e AWS_REGION_NAME="us-east-1" \
