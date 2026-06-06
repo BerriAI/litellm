@@ -92,6 +92,8 @@ resource "google_sql_database_instance" "reader" {
 resource "google_sql_database" "this" {
   name     = var.db_name
   instance = google_sql_database_instance.writer.name
+
+  deletion_policy = "ABANDON"
 }
 
 resource "random_password" "db_password" {

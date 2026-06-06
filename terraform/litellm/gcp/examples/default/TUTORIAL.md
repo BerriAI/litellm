@@ -42,7 +42,7 @@ gcloud artifacts repositories create litellm \
   --remote-docker-repo=https://ghcr.io
 ```
 
-If the repo already exists, this command exits with a clear error and you can move on. Then set `image_registry` in `terraform.tfvars` to `<region>-docker.pkg.dev/<your-project>/litellm/berriai` before applying.
+If the repo already exists, this command exits with a clear error and you can move on. When `deploystack install` prompts for `image_registry`, enter `<region>-docker.pkg.dev/<your-project>/litellm/berriai` (substituting your region and project). The shipped default contains a `PROJECT_ID` placeholder that will fail at apply time if left unedited.
 
 ## (Optional) Set tenant secrets
 
@@ -58,7 +58,7 @@ Skip this step entirely for a trial deploy.
 
 ## Run the installer
 
-DeployStack will prompt for project, region, tenant, env, image tag, and TLS posture, then run `terraform apply`. Open `<walkthrough-editor-open-file filePath="terraform/litellm/gcp/examples/default/deploystack.json">deploystack.json</walkthrough-editor-open-file>` if you want to see the prompt definitions first.
+DeployStack will prompt for project, region, tenant, env, image tag, `image_registry`, and TLS posture, then run `terraform apply`. Open `<walkthrough-editor-open-file filePath="terraform/litellm/gcp/examples/default/deploystack.json">deploystack.json</walkthrough-editor-open-file>` if you want to see the prompt definitions first.
 
 ```bash
 deploystack install
