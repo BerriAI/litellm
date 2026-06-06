@@ -41,7 +41,8 @@ jobs:
             echo "Creating new branch: $BRANCH_NAME"
             # Create the new branch from main
             git checkout -b $BRANCH_NAME origin/main
-            # Push the new branch
-            git push origin $BRANCH_NAME
+            # Push via authenticated URL; checkout uses persist-credentials: false
+            # so the local repo has no credentials configured for `git push origin`.
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH_NAME"
             echo "Successfully created and pushed branch: $BRANCH_NAME"
           fi
