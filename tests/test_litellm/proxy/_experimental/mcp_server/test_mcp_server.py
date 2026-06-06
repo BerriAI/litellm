@@ -4970,17 +4970,64 @@ class TestGatewayCreateInitializationOptions:
         try:
             from litellm.proxy._experimental.mcp_server.mcp_context import (
                 _mcp_gateway_initialize_instructions,
+                _mcp_gateway_server_name,
             )
             from litellm.proxy._experimental.mcp_server.server import server
         except ImportError:
             pytest.skip("MCP server not available")
 
-        tok = _mcp_gateway_initialize_instructions.set(None)
+        instructions_token = _mcp_gateway_initialize_instructions.set(None)
+        server_name_token = _mcp_gateway_server_name.set(None)
         try:
             opts = server.create_initialization_options()
             assert getattr(opts, "instructions", None) is None
+            assert opts.server_name == "litellm-mcp-server"
         finally:
-            _mcp_gateway_initialize_instructions.reset(tok)
+            _mcp_gateway_initialize_instructions.reset(instructions_token)
+            _mcp_gateway_server_name.reset(server_name_token)
+
+    @pytest.mark.asyncio
+    async def test_scoped_request_uses_configured_server_alias(self):
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (
+                _gateway_initialize_instructions_request_scope,
+                global_mcp_server_manager,
+                server,
+            )
+        except ImportError:
+            pytest.skip("MCP server not available")
+
+        scoped_server = MCPServer(
+            server_id="server-123",
+            name="upstream-server",
+            alias="grafana",
+            transport=MCPTransport.http,
+            url="https://example.com/mcp",
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.server._get_allowed_mcp_servers",
+                new_callable=AsyncMock,
+                return_value=[scoped_server],
+            ),
+            patch.object(
+                global_mcp_server_manager,
+                "_ensure_upstream_initialize_instructions_cached",
+                new_callable=AsyncMock,
+            ),
+        ):
+            async with _gateway_initialize_instructions_request_scope(
+                user_api_key_auth=None,
+                mcp_servers=["grafana"],
+                client_ip=None,
+                scoped_server_endpoint=True,
+            ):
+                assert server.create_initialization_options().server_name == "grafana"
+
+        assert (
+            server.create_initialization_options().server_name == "litellm-mcp-server"
+        )
 
     def test_contextvar_set_injects_instructions(self):
         """When ContextVar has a value, it appears in InitializationOptions."""

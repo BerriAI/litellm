@@ -19,3 +19,7 @@ _mcp_active_toolset_id: ContextVar[Optional[str]] = ContextVar(
 _mcp_gateway_initialize_instructions: ContextVar[Optional[str]] = ContextVar(
     "_mcp_gateway_initialize_instructions", default=None
 )
+
+_mcp_gateway_server_name: ContextVar[Optional[str]] = ContextVar(
+    "_mcp_gateway_server_name", default=None
+)
