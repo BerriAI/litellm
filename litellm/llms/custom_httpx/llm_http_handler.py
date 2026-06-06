@@ -4032,6 +4032,18 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=url,
+            api_key=litellm_params.api_key,
+            model=model,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -4045,7 +4057,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.post(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url, headers=headers, timeout=timeout, **body_kwargs
             )
 
         except Exception as e:
@@ -4115,6 +4127,18 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=url,
+            api_key=litellm_params.api_key,
+            model=model,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -4128,7 +4152,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.post(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url, headers=headers, timeout=timeout, **body_kwargs
             )
 
         except Exception as e:

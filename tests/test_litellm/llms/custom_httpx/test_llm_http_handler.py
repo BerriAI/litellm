@@ -884,3 +884,99 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     assert post_kwargs.get("data") == b'{"input": "hi"}'
     assert "json" not in post_kwargs
     assert "stream" in post_kwargs
+
+
+def _make_compact_handler_call(signed_body, is_async):
+    """Drive (async_)compact_response_api_handler with a fully mocked provider config
+    + client, returning the kwargs the client.post was called with.
+
+    signed_body=None simulates a no-op (non-signing) provider; bytes simulates a
+    signing provider (e.g. Bedrock Mantle SigV4 / bearer).
+    """
+    from unittest.mock import MagicMock
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+    from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+    from litellm.types.router import GenericLiteLLMParams
+
+    compact_url = "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses/compact"
+    provider_config = MagicMock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = (
+        "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+    )
+    provider_config.transform_compact_response_api_request.return_value = (
+        compact_url,
+        {"model": "openai.gpt-5.5", "input": "hi"},
+    )
+    provider_config.sign_request.return_value = ({"X-Signed": "1"}, signed_body)
+    provider_config.transform_compact_response_api_response.return_value = "ok"
+
+    spec = AsyncHTTPHandler if is_async else HTTPHandler
+    mock_client = MagicMock(spec=spec)
+    if is_async:
+        mock_client.post = AsyncMock(return_value=MagicMock())
+    else:
+        mock_client.post.return_value = MagicMock()
+
+    handler = BaseLLMHTTPHandler()
+    result = handler.compact_response_api_handler(
+        model="openai.gpt-5.5",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={},
+        custom_llm_provider="bedrock_mantle",
+        litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        logging_obj=MagicMock(),
+        client=mock_client,
+        _is_async=is_async,
+    )
+    if is_async:
+        asyncio.run(result)
+    return provider_config, mock_client.post.call_args.kwargs
+
+
+def test_compact_handler_sends_json_when_not_signed():
+    """No-op provider on compact (signed_body is None) -> posts json=data, no data= bytes."""
+    provider_config, kwargs = _make_compact_handler_call(
+        signed_body=None, is_async=False
+    )
+    provider_config.sign_request.assert_called_once()
+    assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
+    assert "data" not in kwargs
+
+
+def test_compact_handler_sends_signed_bytes_when_signed():
+    """Signing provider on compact -> posts the signed bytes via data=, not json=.
+
+    Regression for the adversarial-review finding that /responses/compact bypassed
+    the SigV4 signing hook, so IAM-only Mantle callers sent unsigned bodies.
+    """
+    provider_config, kwargs = _make_compact_handler_call(
+        signed_body=b'{"model": "openai.gpt-5.5", "input": "hi"}', is_async=False
+    )
+    assert kwargs.get("data") == b'{"model": "openai.gpt-5.5", "input": "hi"}'
+    assert "json" not in kwargs
+    assert kwargs["headers"] == {"X-Signed": "1"}
+    # signing must use the compact endpoint as api_base, not the create URL
+    assert provider_config.sign_request.call_args.kwargs["api_base"].endswith(
+        "/openai/v1/responses/compact"
+    )
+
+
+def test_async_compact_handler_sends_signed_bytes_when_signed():
+    """Async compact must sign identically to sync (same omission in the async twin)."""
+    provider_config, kwargs = _make_compact_handler_call(
+        signed_body=b'{"model": "openai.gpt-5.5", "input": "hi"}', is_async=True
+    )
+    assert kwargs.get("data") == b'{"model": "openai.gpt-5.5", "input": "hi"}'
+    assert "json" not in kwargs
+    assert kwargs["headers"] == {"X-Signed": "1"}
+
+
+def test_async_compact_handler_sends_json_when_not_signed():
+    """Async no-op provider on compact -> posts json=data, no data= bytes."""
+    _provider_config, kwargs = _make_compact_handler_call(
+        signed_body=None, is_async=True
+    )
+    assert kwargs.get("json") == {"model": "openai.gpt-5.5", "input": "hi"}
+    assert "data" not in kwargs
