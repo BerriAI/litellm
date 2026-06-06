@@ -15,6 +15,7 @@ vi.mock("../networking", () => ({
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
 }));
 
 // Mock NotificationsManager
@@ -428,25 +429,23 @@ describe("MCPServers", () => {
     expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
   });
 
-  it("should show duplicate button in actions column for admin users", async () => {
-    const mockServers = [
-      {
-        server_id: "server-1",
-        server_name: "Test_Server",
-        alias: "test_server",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-        teams: [],
-        mcp_access_groups: [],
-      },
-    ];
+  const duplicableServer = {
+    server_id: "server-1",
+    server_name: "Test_Server",
+    alias: "test_server",
+    url: "https://example.com/mcp",
+    transport: "http",
+    auth_type: "none",
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    teams: [],
+    mcp_access_groups: [],
+  };
 
-    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+  it("duplicates a server from the card actions menu, opening the create modal pre-filled with a _copy suffix", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([duplicableServer]);
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
 
     const queryClient = createQueryClient();
@@ -460,29 +459,19 @@ describe("MCPServers", () => {
       expect(screen.getByText("Test_Server")).toBeInTheDocument();
     });
 
-    const duplicateButton = screen.getByRole("button", { name: /duplicate/i });
-    expect(duplicateButton).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /server actions/i }));
+
+    const duplicateItem = await screen.findByText("Duplicate");
+    fireEvent.click(duplicateItem);
+
+    await waitFor(() => {
+      expect((document.getElementById("server_name") as HTMLInputElement).value).toBe("Test_Server_copy");
+    });
+    expect((document.getElementById("alias") as HTMLInputElement).value).toBe("test_server_copy");
   });
 
-  it("should not show duplicate button for non-admin users", async () => {
-    const mockServers = [
-      {
-        server_id: "server-1",
-        server_name: "Test_Server",
-        alias: "test_server",
-        url: "https://example.com/mcp",
-        transport: "http",
-        auth_type: "none",
-        created_at: "2024-01-01T00:00:00Z",
-        created_by: "user-1",
-        updated_at: "2024-01-01T00:00:00Z",
-        updated_by: "user-1",
-        teams: [],
-        mcp_access_groups: [],
-      },
-    ];
-
-    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+  it("does not offer Duplicate in the card actions menu for non-admin users", async () => {
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([duplicableServer]);
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
 
     const queryClient = createQueryClient();
@@ -496,7 +485,11 @@ describe("MCPServers", () => {
       expect(screen.getByText("Test_Server")).toBeInTheDocument();
     });
 
-    const duplicateButton = screen.queryByRole("button", { name: /duplicate/i });
-    expect(duplicateButton).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /server actions/i }));
+
+    // The menu still opens for non-admins (Test Connection is available), but
+    // Duplicate is gated behind admin like Delete.
+    expect(await screen.findByText("Test Connection")).toBeInTheDocument();
+    expect(screen.queryByText("Duplicate")).not.toBeInTheDocument();
   });
 });

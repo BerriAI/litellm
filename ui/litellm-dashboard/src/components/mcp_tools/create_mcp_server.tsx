@@ -2,9 +2,18 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer, registerMCPServer } from "../networking";
+import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "../networking";
 import { setToken } from "@/utils/mcpTokenStore";
-import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
+import {
+  AUTH_TYPE,
+  DiscoverableMCPServer,
+  OAUTH_FLOW,
+  MCPServer,
+  MCPServerCostInfo,
+  TRANSPORT,
+  getMcpOAuthMode,
+  MCP_OAUTH2_FLOW_M2M,
+} from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -13,8 +22,9 @@ import StdioConfiguration from "./StdioConfiguration";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import OpenAPIFormSection, { OpenAPIKeyTool } from "./OpenAPIFormSection";
 import MCPLogoSelector from "./MCPLogoSelector";
+import EnvVarsSection from "./EnvVarsSection";
 import { isAdminRole } from "@/utils/roles";
-import { validateMCPServerUrl, validateMCPServerName } from "./utils";
+import { validateMCPServerUrl, validateMCPServerName, normalizeEnvVars } from "./utils";
 import NotificationsManager from "../molecules/notifications_manager";
 import { useMcpOAuthFlow } from "@/hooks/useMcpOAuthFlow";
 import { useTestMCPConnection } from "@/hooks/useTestMCPConnection";
@@ -44,7 +54,7 @@ const reduceStaticHeaders = (list: unknown): Record<string, string> => {
   if (!Array.isArray(list)) return {};
   return list.reduce((acc: Record<string, string>, entry: Record<string, string>) => {
     const header = entry?.header?.trim();
-    if (header) acc[header] = entry?.value ?? "";
+    if (header) acc[header] = (entry?.value ?? "").trim();
     return acc;
   }, {});
 };
@@ -291,9 +301,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       return;
     }
 
-    const transport = duplicateServer.spec_path
-      ? TRANSPORT.OPENAPI
-      : duplicateServer.transport || "";
+    const transport = duplicateServer.spec_path ? TRANSPORT.OPENAPI : duplicateServer.transport || "";
     setTransportType(transport);
 
     const copySuffix = "_copy";
@@ -333,9 +341,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
 
     if (duplicateServer.static_headers && Object.keys(duplicateServer.static_headers).length > 0) {
-      prefillValues.static_headers = Object.entries(duplicateServer.static_headers).map(
-        ([header, value]) => ({ header, value })
-      );
+      prefillValues.static_headers = Object.entries(duplicateServer.static_headers).map(([header, value]) => ({
+        header,
+        value,
+      }));
     }
 
     if (duplicateServer.is_byok) {
@@ -376,7 +385,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
     form.setFieldsValue(prefillValues);
     setFormValues(prefillValues);
-    setAliasManuallyEdited(false);
+    setAliasManuallyEdited(true);
   }, [isModalVisible, duplicateServer, form]);
 
   const handleCreate = async (values: Record<string, any>) => {
@@ -384,6 +393,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     try {
       const {
         static_headers: staticHeadersList,
+        env_vars: envVarsList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
         allow_all_keys: allowAllKeysRaw,
@@ -398,6 +408,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       const accessGroups = restValues.mcp_access_groups;
 
       const staticHeaders = reduceStaticHeaders(staticHeadersList);
+      const envVars = normalizeEnvVars(envVarsList);
 
       const credentialsPayload =
         credentialValues && typeof credentialValues === "object"
@@ -498,10 +509,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
         oauth_passthrough: Boolean(oauthPassthroughRaw),
         static_headers: staticHeaders,
+        env_vars: envVars,
         ...(tokenValidation !== null && { token_validation: tokenValidation }),
       };
 
-      payload.static_headers = staticHeaders;
       const includeCredentials =
         restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
 
@@ -516,19 +527,36 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? await createMCPServer(accessToken, payload)
           : await registerMCPServer(accessToken, payload);
 
-        // Cache the OAuth token in sessionStorage so the Tools tab can use it
-        // immediately without re-authenticating.  No backend DB write.
+        // Persist the token obtained via "Authorize & Fetch" once the server
+        // exists (so we have its server_id). OBO holds the per-user token in the
+        // backend, so write it to the DB (has_credentials=True). Passthrough
+        // forwards a browser-held token, so it stays in sessionStorage only.
         if (oauthTokenResponse?.access_token && response?.server_id) {
-          setToken(
-            response.server_id,
-            {
+          const oauthMode = getMcpOAuthMode({
+            auth_type: restValues.auth_type,
+            oauth2_flow: values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : null,
+            delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
+          });
+          if (oauthMode === "obo") {
+            const scope = oauthTokenResponse.scope;
+            await storeMCPOAuthUserCredential(accessToken, response.server_id, {
               access_token: oauthTokenResponse.access_token,
-              expires_in: oauthTokenResponse.expires_in,
               refresh_token: oauthTokenResponse.refresh_token,
-              token_type: oauthTokenResponse.token_type,
-            },
-            userID,
-          );
+              expires_in: oauthTokenResponse.expires_in,
+              scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
+            });
+          } else {
+            setToken(
+              response.server_id,
+              {
+                access_token: oauthTokenResponse.access_token,
+                expires_in: oauthTokenResponse.expires_in,
+                refresh_token: oauthTokenResponse.refresh_token,
+                token_type: oauthTokenResponse.token_type,
+              },
+              userID,
+            );
+          }
         }
 
         NotificationsManager.success(
@@ -1119,6 +1147,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
 
             {/* Stdio Configuration - only show for stdio transport */}
             <StdioConfiguration isVisible={transportType === "stdio"} />
+          </div>
+
+          {/* Environment Variables Section */}
+          <div className="mt-8">
+            <EnvVarsSection />
           </div>
 
           {/* Permission Management / Access Control Section */}

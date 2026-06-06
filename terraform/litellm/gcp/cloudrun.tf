@@ -26,6 +26,39 @@ locals {
     { name = "GCS_BUCKET_NAME", value = google_storage_bucket.this.name },
   ]
 
+  # OTel v2 is opt-in and gated on otel_endpoint, matching the AWS stack —
+  # nothing OTel-related is added to the container env until an endpoint is
+  # set. LITELLM_OTEL_V2 flips on alongside the OTEL_* block so the proxy
+  # never boots the instrumentation with no exporter wired in.
+  otel_enabled          = var.otel_endpoint != ""
+  otel_environment_name = var.otel_environment_name != "" ? var.otel_environment_name : var.env
+  otel_shared_endpoint_kv = local.otel_enabled ? [
+    { name = "LITELLM_OTEL_V2", value = "true" },
+    { name = "OTEL_EXPORTER", value = var.otel_exporter },
+    { name = "OTEL_ENDPOINT", value = var.otel_endpoint },
+    { name = "OTEL_ENVIRONMENT_NAME", value = local.otel_environment_name },
+    { name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", value = var.otel_capture_message_content },
+  ] : []
+  # OTel defaults are filtered out when the same key appears in
+  # *_extra_env, so a caller-supplied OTEL_SERVICE_NAME (or any other
+  # OTEL_*) takes precedence without colliding at Cloud Run apply time
+  # (Cloud Run rejects duplicate env var names).
+  gateway_otel_env_kv_raw = concat(local.otel_shared_endpoint_kv, local.otel_enabled ? [
+    { name = "OTEL_SERVICE_NAME", value = "${local.name}-gateway" },
+  ] : [])
+  backend_otel_env_kv_raw = concat(local.otel_shared_endpoint_kv, local.otel_enabled ? [
+    { name = "OTEL_SERVICE_NAME", value = "${local.name}-backend" },
+  ] : [])
+  gateway_otel_env_kv = [
+    for e in local.gateway_otel_env_kv_raw : e if !contains(keys(var.gateway_extra_env), e.name)
+  ]
+  backend_otel_env_kv = [
+    for e in local.backend_otel_env_kv_raw : e if !contains(keys(var.backend_extra_env), e.name)
+  ]
+  otel_env_secrets = local.otel_enabled && var.otel_headers_secret != "" ? [
+    { name = "OTEL_HEADERS", secret = var.otel_headers_secret, version = "latest" },
+  ] : []
+
   # Cloud Run v2 secret env vars use value_source.secret_key_ref pointing at a
   # secret resource ID. Shared between gateway and backend (the migrations
   # job has its own narrower env list — see migrations_env_secrets below).
@@ -63,13 +96,6 @@ locals {
     for k, v in var.backend_extra_secrets : { name = k, secret = v, version = "latest" }
   ]
 
-  # Shell fragments composed with && so any failure short-circuits the
-  # whole startup instead of falling through to `exec uvicorn`. The
-  # python step is only included when the caller provided a proxy_config.
-  proxy_config_fragment = local.proxy_config_enabled ? [
-    "python -c \"import os, base64, pathlib; pathlib.Path(os.environ['CONFIG_FILE_PATH']).write_bytes(base64.b64decode(os.environ['LITELLM_PROXY_CONFIG_B64']))\""
-  ] : []
-
   # Decode the Memorystore CA cert (passed as REDIS_CA_PEM_B64) to the
   # path REDIS_SSL_CA_CERTS points at, so the redis-py client can validate
   # the rediss:// handshake.
@@ -83,14 +109,12 @@ locals {
   ]
 
   gateway_args = join(" && ", concat(
-    local.proxy_config_fragment,
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec uvicorn gateway.main:app --host 0.0.0.0 --port 4000"],
+    ["exec uvicorn gateway.main:app --host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"],
   ))
 
   backend_args = join(" && ", concat(
-    local.proxy_config_fragment,
     local.redis_ca_fragment,
     local.database_url_fragment,
     ["exec uvicorn backend.main:app --host 0.0.0.0 --port 4001"],
@@ -114,9 +138,11 @@ locals {
 
 # ---------- Gateway ----------
 resource "google_cloud_run_v2_service" "gateway" {
-  name     = "${local.name}-gateway"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  name                = "${local.name}-gateway"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -149,7 +175,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.gateway_otel_env_kv, local.gateway_extra_env_kv, local.proxy_config_env)
         content {
           name  = env.value.name
           value = env.value.value
@@ -157,7 +183,7 @@ resource "google_cloud_run_v2_service" "gateway" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_secrets, local.gateway_extra_secret_kv)
+        for_each = concat(local.shared_env_secrets, local.otel_env_secrets, local.gateway_extra_secret_kv)
         content {
           name = env.value.name
           value_source {
@@ -166,6 +192,14 @@ resource "google_cloud_run_v2_service" "gateway" {
               version = env.value.version
             }
           }
+        }
+      }
+
+      dynamic "volume_mounts" {
+        for_each = local.proxy_config_enabled ? [1] : []
+        content {
+          name       = local.proxy_config_volume
+          mount_path = local.proxy_config_mount_path
         }
       }
 
@@ -189,6 +223,17 @@ resource "google_cloud_run_v2_service" "gateway" {
         timeout_seconds = 5
       }
     }
+
+    dynamic "volumes" {
+      for_each = local.proxy_config_enabled ? [1] : []
+      content {
+        name = local.proxy_config_volume
+        gcs {
+          bucket    = google_storage_bucket.proxy_config[0].name
+          read_only = true
+        }
+      }
+    }
   }
 
   depends_on = [
@@ -196,6 +241,8 @@ resource "google_cloud_run_v2_service" "gateway" {
     google_secret_manager_secret_iam_member.db_password,
     google_secret_manager_secret_iam_member.license,
     google_secret_manager_secret_iam_member.extras,
+    google_secret_manager_secret_iam_member.otel_headers,
+    google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     # Don't go live until the schema is migrated; otherwise the proxy boots,
     # fails on missing tables, and Cloud Run keeps cold-restarting.
@@ -205,9 +252,11 @@ resource "google_cloud_run_v2_service" "gateway" {
 
 # ---------- Backend ----------
 resource "google_cloud_run_v2_service" "backend" {
-  name     = "${local.name}-backend"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  name                = "${local.name}-backend"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -240,7 +289,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
+        for_each = concat(local.shared_env_kv, local.backend_default_env_kv, local.backend_otel_env_kv, local.backend_extra_env_kv, local.proxy_config_env)
         content {
           name  = env.value.name
           value = env.value.value
@@ -248,7 +297,7 @@ resource "google_cloud_run_v2_service" "backend" {
       }
 
       dynamic "env" {
-        for_each = concat(local.shared_env_secrets, local.backend_managed_env_secrets, local.backend_extra_secret_kv)
+        for_each = concat(local.shared_env_secrets, local.backend_managed_env_secrets, local.otel_env_secrets, local.backend_extra_secret_kv)
         content {
           name = env.value.name
           value_source {
@@ -257,6 +306,14 @@ resource "google_cloud_run_v2_service" "backend" {
               version = env.value.version
             }
           }
+        }
+      }
+
+      dynamic "volume_mounts" {
+        for_each = local.proxy_config_enabled ? [1] : []
+        content {
+          name       = local.proxy_config_volume
+          mount_path = local.proxy_config_mount_path
         }
       }
 
@@ -280,6 +337,17 @@ resource "google_cloud_run_v2_service" "backend" {
         timeout_seconds = 5
       }
     }
+
+    dynamic "volumes" {
+      for_each = local.proxy_config_enabled ? [1] : []
+      content {
+        name = local.proxy_config_volume
+        gcs {
+          bucket    = google_storage_bucket.proxy_config[0].name
+          read_only = true
+        }
+      }
+    }
   }
 
   depends_on = [
@@ -288,6 +356,8 @@ resource "google_cloud_run_v2_service" "backend" {
     google_secret_manager_secret_iam_member.license,
     google_secret_manager_secret_iam_member.ui_password,
     google_secret_manager_secret_iam_member.extras,
+    google_secret_manager_secret_iam_member.otel_headers,
+    google_storage_bucket_iam_member.proxy_config_runtime,
     google_sql_user.app,
     terraform_data.migration,
   ]
@@ -298,9 +368,11 @@ resource "google_cloud_run_v2_service" "backend" {
 # with zero IAM bindings, so a compromised UI container can't pivot to
 # Secret Manager / Cloud SQL via the metadata service.
 resource "google_cloud_run_v2_service" "ui" {
-  name     = "${local.name}-ui"
-  location = var.region
-  ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  name                = "${local.name}-ui"
+  location            = var.region
+  ingress             = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     service_account                  = google_service_account.ui_runtime.email
@@ -344,7 +416,7 @@ resource "google_cloud_run_v2_service" "ui" {
 # (LITELLM_MASTER_KEY); these IAM bindings just open up Cloud Run's invoker
 # gate so the LB request makes it to the container.
 resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
-  project  = var.project
+  project  = var.project_id
   location = google_cloud_run_v2_service.gateway.location
   name     = google_cloud_run_v2_service.gateway.name
   role     = "roles/run.invoker"
@@ -352,7 +424,7 @@ resource "google_cloud_run_v2_service_iam_member" "gateway_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
-  project  = var.project
+  project  = var.project_id
   location = google_cloud_run_v2_service.backend.location
   name     = google_cloud_run_v2_service.backend.name
   role     = "roles/run.invoker"
@@ -360,7 +432,7 @@ resource "google_cloud_run_v2_service_iam_member" "backend_allusers" {
 }
 
 resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
-  project  = var.project
+  project  = var.project_id
   location = google_cloud_run_v2_service.ui.location
   name     = google_cloud_run_v2_service.ui.name
   role     = "roles/run.invoker"
@@ -372,8 +444,10 @@ resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
 # assembles DATABASE_URL from the DATABASE_* env vars and runs `prisma
 # migrate deploy`. No proxy_config, no master key, no shell wrapper.
 resource "google_cloud_run_v2_job" "migrations" {
-  name     = "${local.name}-migrations"
-  location = var.region
+  name                = "${local.name}-migrations"
+  location            = var.region
+  labels              = local.labels
+  deletion_protection = false
 
   template {
     template {
