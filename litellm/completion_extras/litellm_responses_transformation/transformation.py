@@ -402,6 +402,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             instructions,
         ) = self.convert_chat_completion_messages_to_responses_api(messages)
 
+        # OpenAI's Responses API rejects an empty input. For a system-only
+        # request, carry the system message as a system-role input item instead
+        # of instructions, mirroring how non-string system content is already
+        # handled in convert_chat_completion_messages_to_responses_api.
+        if not input_items and instructions is not None:
+            input_items = [
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": instructions}],
+                }
+            ]
+            instructions = None
+
         optional_params = self._extract_extra_body_params(optional_params)
 
         # Build responses API request using the reverse transformation logic
