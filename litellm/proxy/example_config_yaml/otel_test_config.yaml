@@ -19,6 +19,7 @@ model_list:
    litellm_params:
      model: cohere/rerank-english-v3.0
      api_key: os.environ/COHERE_API_KEY
+     api_base: os.environ/RECORDER_COHERE_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to Cohere
  - model_name: fake-azure-endpoint
    litellm_params:
      model: openai/429
