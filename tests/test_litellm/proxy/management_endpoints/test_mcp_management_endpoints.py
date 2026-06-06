@@ -3858,6 +3858,26 @@ class TestComputeUserEnvVarStatus:
         assert status.missing_count == 0
         assert status.setup_url is None
 
+    def test_dual_scope_var_with_empty_global_is_required(self):
+        # SHARED_TOKEN is declared both global (empty value) and user. An empty
+        # global is not a usable fallback, so _resolve_static_headers_with_env_vars
+        # still requires the user value and the tool-call path 412s without it. The
+        # status endpoint must agree and report it required, or it would tell the
+        # user no credential is needed for a var every call rejects.
+        server = _make_env_var_server(
+            env_vars=[
+                {"name": "SHARED_TOKEN", "value": "", "scope": "global"},
+                {"name": "SHARED_TOKEN", "value": "", "scope": "user"},
+            ],
+            static_headers={"Authorization": "Bearer ${SHARED_TOKEN}"},
+        )
+        status = mgmt_endpoints._compute_user_env_var_status(
+            server=server, stored_values={}
+        )
+        assert {spec.name for spec in status.required} == {"SHARED_TOKEN"}
+        assert status.missing_count == 1
+        assert status.setup_url and "srv-1" in status.setup_url
+
 
 class TestGetMCPUserEnvVars:
     @pytest.mark.asyncio
@@ -4425,9 +4445,7 @@ def test_oauth2_flow_round_trips_on_update_and_response_models():
         UpdateMCPServerRequest,
     )
 
-    update = UpdateMCPServerRequest(
-        server_id="srv-1", oauth2_flow="client_credentials"
-    )
+    update = UpdateMCPServerRequest(server_id="srv-1", oauth2_flow="client_credentials")
     assert update.oauth2_flow == "client_credentials"
 
     row = LiteLLM_MCPServerTable(
@@ -4447,6 +4465,5 @@ def test_oauth2_flow_defaults_to_none_when_omitted():
 
     assert UpdateMCPServerRequest(server_id="srv-1").oauth2_flow is None
     assert (
-        LiteLLM_MCPServerTable(server_id="srv-1", transport="http").oauth2_flow
-        is None
+        LiteLLM_MCPServerTable(server_id="srv-1", transport="http").oauth2_flow is None
     )

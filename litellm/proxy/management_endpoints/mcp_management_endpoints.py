@@ -2217,6 +2217,11 @@ if MCP_AVAILABLE:
         global_values, user_specs = parse_admin_env_vars(
             getattr(server, "env_vars", None)
         )
+        # An empty-valued global is not a usable fallback, so it must not mark a
+        # referenced per-user var as covered, matching the empty-global filter in
+        # _resolve_static_headers_with_env_vars. Otherwise this endpoint reports no
+        # credential needed for a var every tool call still 412s on.
+        global_values = {name: value for name, value in global_values.items() if value}
 
         # A var only blocks when it's referenced by static_headers and has no
         # admin global fallback, mirroring _resolve_static_headers_with_env_vars
