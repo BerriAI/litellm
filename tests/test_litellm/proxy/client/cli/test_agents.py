@@ -12,17 +12,20 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 
-from litellm.proxy.client.cli.commands.run import (
+from litellm.proxy.client.cli.commands.agents import (
     AgentRunError,
+    agent_commands,
     agent_profile,
     build_agent_env,
-    claude_code,
-    run,
     run_agent,
     verify_proxy_key,
 )
 
-RUN_MODULE = "litellm.proxy.client.cli.commands.run"
+AGENTS_MODULE = "litellm.proxy.client.cli.commands.agents"
+
+
+def _agent_command(name):
+    return next(c for c in agent_commands() if c.name == name)
 
 
 class _FakeResponse:
@@ -86,34 +89,6 @@ class TestBuildAgentEnv:
         assert env["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert env["ANTHROPIC_AUTH_TOKEN"] == "sk-key"
         assert env["OPENAI_API_KEY"] == "sk-key"
-
-    def test_model_overrides_only_apply_to_anthropic(self):
-        anthropic = build_agent_env(
-            {},
-            "http://localhost:4000",
-            "sk-key",
-            frozenset({"anthropic"}),
-            model="claude-proxy",
-            small_fast_model="haiku-proxy",
-        )
-        assert anthropic["ANTHROPIC_MODEL"] == "claude-proxy"
-        assert anthropic["ANTHROPIC_SMALL_FAST_MODEL"] == "haiku-proxy"
-
-        openai = build_agent_env(
-            {},
-            "http://localhost:4000",
-            "sk-key",
-            frozenset({"openai"}),
-            model="claude-proxy",
-        )
-        assert "ANTHROPIC_MODEL" not in openai
-
-    def test_model_overrides_omitted_when_not_given(self):
-        env = build_agent_env(
-            {}, "http://localhost:4000", "sk-key", frozenset({"anthropic"})
-        )
-        assert "ANTHROPIC_MODEL" not in env
-        assert "ANTHROPIC_SMALL_FAST_MODEL" not in env
 
     def test_preserves_unrelated_env_and_does_not_mutate_input(self):
         base = {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
@@ -255,53 +230,79 @@ class TestRunAgent:
             run_agent("http://localhost:4000", "sk-key", [])
 
 
-class TestRunCommand:
+class TestAgentCommands:
     def setup_method(self):
         self.runner = CliRunner()
 
-    def test_launches_with_stored_key_and_forwards_args(self):
+    def test_one_command_per_known_agent(self):
+        assert {c.name for c in agent_commands()} == {"claude", "codex", "opencode"}
+
+    def test_claude_launches_with_stored_key_and_forwards_args(self):
         captured = {}
 
         def fake_run_agent(base_url, api_key, command, **kwargs):
             captured["base_url"] = base_url
             captured["api_key"] = api_key
             captured["command"] = list(command)
-            captured["model"] = kwargs.get("model")
+            captured["skip_verify"] = kwargs.get("skip_verify")
 
-        with patch(f"{RUN_MODULE}.run_agent", side_effect=fake_run_agent):
+        with patch(f"{AGENTS_MODULE}.run_agent", side_effect=fake_run_agent):
             result = self.runner.invoke(
-                run,
-                ["--model", "claude-proxy", "--", "claude", "--resume"],
+                _agent_command("claude"),
+                ["--resume", "-p", "hi"],
                 obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
             )
 
         assert result.exit_code == 0, result.output
         assert captured["api_key"] == "sk-key"
-        assert captured["command"] == ["claude", "--resume"]
-        assert captured["model"] == "claude-proxy"
+        assert captured["command"] == ["claude", "--resume", "-p", "hi"]
+        assert captured["skip_verify"] is False
         assert (
             "routing Claude Code through proxy at http://localhost:4000"
             in result.output
         )
 
     def test_codex_shows_friendly_name(self):
-        with patch(f"{RUN_MODULE}.run_agent"):
+        captured = {}
+        with patch(
+            f"{AGENTS_MODULE}.run_agent",
+            side_effect=lambda b, k, c, **kw: captured.update(command=list(c)),
+        ):
             result = self.runner.invoke(
-                run,
-                ["--", "codex"],
+                _agent_command("codex"),
+                ["exec", "do a thing"],
                 obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
             )
         assert result.exit_code == 0, result.output
+        assert captured["command"] == ["codex", "exec", "do a thing"]
         assert "routing Codex through proxy" in result.output
+
+    def test_skip_verify_is_consumed_not_forwarded(self):
+        captured = {}
+
+        def fake_run_agent(base_url, api_key, command, **kwargs):
+            captured["command"] = list(command)
+            captured["skip_verify"] = kwargs.get("skip_verify")
+
+        with patch(f"{AGENTS_MODULE}.run_agent", side_effect=fake_run_agent):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                ["--skip-verify", "--resume"],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert captured["skip_verify"] is True
+        assert captured["command"] == ["claude", "--resume"]
 
     def test_non_interactive_without_key_errors_clearly(self):
         with (
-            patch(f"{RUN_MODULE}._is_interactive", return_value=False),
-            patch(f"{RUN_MODULE}.run_agent") as mock_run,
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=False),
+            patch(f"{AGENTS_MODULE}.run_agent") as mock_run,
         ):
             result = self.runner.invoke(
-                run,
-                ["--", "claude"],
+                _agent_command("claude"),
+                [],
                 obj={"base_url": "http://localhost:4000", "api_key": None},
             )
         assert result.exit_code != 0
@@ -316,21 +317,21 @@ class TestRunCommand:
             pass
 
         with (
-            patch(f"{RUN_MODULE}._is_interactive", return_value=True),
-            patch(f"{RUN_MODULE}.login", fake_login),
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
+            patch(f"{AGENTS_MODULE}.login", fake_login),
             patch(
-                f"{RUN_MODULE}.get_stored_api_key", return_value="sk-after-login"
+                f"{AGENTS_MODULE}.get_stored_api_key", return_value="sk-after-login"
             ) as mock_get,
             patch(
-                f"{RUN_MODULE}.run_agent",
+                f"{AGENTS_MODULE}.run_agent",
                 side_effect=lambda base_url, api_key, command, **k: captured.update(
                     api_key=api_key
                 ),
             ),
         ):
             result = self.runner.invoke(
-                run,
-                ["--", "claude"],
+                _agent_command("claude"),
+                [],
                 obj={"base_url": "http://localhost:4000", "api_key": None},
             )
 
@@ -340,34 +341,13 @@ class TestRunCommand:
 
     def test_agent_run_error_becomes_click_error(self):
         with patch(
-            f"{RUN_MODULE}.run_agent",
+            f"{AGENTS_MODULE}.run_agent",
             side_effect=AgentRunError("could not reach proxy"),
         ):
             result = self.runner.invoke(
-                run,
-                ["--", "claude"],
+                _agent_command("claude"),
+                [],
                 obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
             )
         assert result.exit_code != 0
         assert "could not reach proxy" in result.output
-
-
-class TestClaudeCodeShortcut:
-    def setup_method(self):
-        self.runner = CliRunner()
-
-    def test_delegates_to_run_with_claude_prepended(self):
-        captured = {}
-
-        def fake_run_agent(base_url, api_key, command, **kwargs):
-            captured["command"] = list(command)
-
-        with patch(f"{RUN_MODULE}.run_agent", side_effect=fake_run_agent):
-            result = self.runner.invoke(
-                claude_code,
-                ["--", "--resume"],
-                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
-            )
-
-        assert result.exit_code == 0, result.output
-        assert captured["command"] == ["claude", "--resume"]

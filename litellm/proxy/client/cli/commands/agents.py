@@ -1,7 +1,7 @@
 import os
 import shutil
 import sys
-from typing import Callable, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
 import click
 import requests
@@ -11,8 +11,6 @@ from .auth import get_stored_api_key, login
 ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 ANTHROPIC_AUTH_TOKEN_ENV = "ANTHROPIC_AUTH_TOKEN"
 ANTHROPIC_API_KEY_ENV = "ANTHROPIC_API_KEY"
-ANTHROPIC_MODEL_ENV = "ANTHROPIC_MODEL"
-ANTHROPIC_SMALL_FAST_MODEL_ENV = "ANTHROPIC_SMALL_FAST_MODEL"
 OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 OPENAI_API_KEY_ENV = "OPENAI_API_KEY"
 
@@ -53,9 +51,6 @@ def build_agent_env(
     base_url: str,
     api_key: str,
     profiles: FrozenSet[str],
-    *,
-    model: Optional[str] = None,
-    small_fast_model: Optional[str] = None,
 ) -> Dict[str, str]:
     """Return a copy of base_env wired to route the agent through the proxy.
 
@@ -70,10 +65,6 @@ def build_agent_env(
         env[ANTHROPIC_BASE_URL_ENV] = root
         env[ANTHROPIC_AUTH_TOKEN_ENV] = api_key
         env.pop(ANTHROPIC_API_KEY_ENV, None)
-        if model:
-            env[ANTHROPIC_MODEL_ENV] = model
-        if small_fast_model:
-            env[ANTHROPIC_SMALL_FAST_MODEL_ENV] = small_fast_model
     if PROFILE_OPENAI in profiles:
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
         env[OPENAI_API_KEY_ENV] = api_key
@@ -115,8 +106,6 @@ def run_agent(
     api_key: str,
     command: Sequence[str],
     *,
-    model: Optional[str] = None,
-    small_fast_model: Optional[str] = None,
     skip_verify: bool = False,
     base_env: Optional[Mapping[str, str]] = None,
     which: Callable[[str], Optional[str]] = shutil.which,
@@ -129,7 +118,7 @@ def run_agent(
     AgentRunError for missing binaries, an unreachable proxy, or a rejected key.
     """
     if not command:
-        raise AgentRunError("Nothing to run. Try `litellm-proxy run -- claude`.")
+        raise AgentRunError("Nothing to run.")
 
     _, profiles = agent_profile(command[0])
     binary = which(command[0])
@@ -146,8 +135,6 @@ def run_agent(
         base_url,
         api_key,
         profiles,
-        model=model,
-        small_fast_model=small_fast_model,
     )
     launcher(binary, command, env)
 
@@ -178,86 +165,60 @@ def _resolve_api_key(ctx: click.Context) -> str:
     return api_key
 
 
-_MODEL_HELP = (
-    "Model the agent should request, exported as ANTHROPIC_MODEL for Claude Code. "
-    "Must resolve on your proxy. OpenAI-style agents take the model via their own flag."
-)
-_SMALL_FAST_MODEL_HELP = (
-    "Background-task model for Claude Code, exported as ANTHROPIC_SMALL_FAST_MODEL."
-)
 _SKIP_VERIFY_HELP = "Skip the pre-launch key check against the proxy."
 
 
-@click.command(name="run", context_settings={"ignore_unknown_options": True})
-@click.option("--model", "-m", default=None, help=_MODEL_HELP)
-@click.option("--small-fast-model", default=None, help=_SMALL_FAST_MODEL_HELP)
-@click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
-@click.argument("command", nargs=-1, type=click.UNPROCESSED, required=True)
-@click.pass_context
-def run(
-    ctx: click.Context,
-    model: Optional[str],
-    small_fast_model: Optional[str],
-    skip_verify: bool,
-    command: Sequence[str],
-):
-    """Run a coding agent wired to your LiteLLM proxy.
-
-    Everything after `--` is the command to execute, e.g.
-    `litellm-proxy run -- claude`, `litellm-proxy run -- codex`, or
-    `litellm-proxy run -- opencode`. Logs in with LiteLLM if needed, checks the
-    key against the proxy, exports the env vars the agent reads, then hands off.
-    """
-    command = list(command)
+def _launch(
+    ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool
+) -> None:
     base_url = ctx.obj["base_url"]
     api_key = _resolve_api_key(ctx)
 
-    display_name, _ = agent_profile(command[0])
+    display_name, _ = agent_profile(binary)
     click.echo(
         f"litellm: routing {display_name} through proxy at {base_url.rstrip('/')}"
     )
 
     try:
-        run_agent(
-            base_url,
-            api_key,
-            command,
-            model=model,
-            small_fast_model=small_fast_model,
-            skip_verify=skip_verify,
-        )
+        run_agent(base_url, api_key, [binary, *args], skip_verify=skip_verify)
     except AgentRunError as e:
         raise click.ClickException(str(e))
 
 
-@click.command(name="claude-code", context_settings={"ignore_unknown_options": True})
-@click.option("--model", "-m", default=None, help=_MODEL_HELP)
-@click.option("--small-fast-model", default=None, help=_SMALL_FAST_MODEL_HELP)
-@click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
-@click.argument("claude_args", nargs=-1, type=click.UNPROCESSED)
-@click.pass_context
-def claude_code(
-    ctx: click.Context,
-    model: Optional[str],
-    small_fast_model: Optional[str],
-    skip_verify: bool,
-    claude_args: Sequence[str],
-):
-    """Shortcut for `litellm-proxy run -- claude`. Extra args are forwarded to claude."""
-    ctx.invoke(
-        run,
-        model=model,
-        small_fast_model=small_fast_model,
-        skip_verify=skip_verify,
-        command=("claude", *claude_args),
+def _make_agent_command(binary: str, display_name: str) -> click.Command:
+    @click.command(
+        name=binary,
+        context_settings={"ignore_unknown_options": True},
+        short_help=f"Run {display_name} through your LiteLLM proxy",
     )
+    @click.option("--skip-verify", is_flag=True, default=False, help=_SKIP_VERIFY_HELP)
+    @click.argument("args", nargs=-1, type=click.UNPROCESSED)
+    @click.pass_context
+    def _command(ctx: click.Context, skip_verify: bool, args: Sequence[str]) -> None:
+        _launch(ctx, binary, list(args), skip_verify=skip_verify)
+
+    _command.help = (
+        f"Run {display_name} routed through your LiteLLM proxy.\n\n"
+        f"Logs in with LiteLLM if needed, verifies your key against the proxy, "
+        f"exports the env vars {binary} reads, then hands off. Any arguments are "
+        f"forwarded to `{binary}`."
+    )
+    return _command
+
+
+def agent_commands() -> List[click.Command]:
+    """Build one top-level command per known agent, e.g. `litellm-proxy claude`."""
+    return [
+        _make_agent_command(binary, name)
+        for binary, (name, _profiles) in _KNOWN_AGENTS.items()
+    ]
 
 
 __all__ = [
-    "run",
-    "claude_code",
+    "agent_commands",
     "run_agent",
     "build_agent_env",
     "verify_proxy_key",
     "agent_profile",
+    "AgentRunError",
 ]

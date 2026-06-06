@@ -440,33 +440,30 @@ litellm-proxy http request GET /health/test_connection -H "X-Custom-Header:value
 
 ### Run a Coding Agent
 
-Run a coding agent (Claude Code, Codex, OpenCode, and others) with all of its LLM traffic routed through your LiteLLM proxy. Everything after `--` is the command to launch:
+Launch a coding agent with all of its LLM traffic routed through your LiteLLM proxy. Each supported agent is its own command, so there is nothing to remember beyond the agent's name:
 
 ```bash
-litellm-proxy run -- claude
-litellm-proxy run -- codex
-litellm-proxy run -- opencode
+litellm-proxy claude
+litellm-proxy codex
+litellm-proxy opencode
 ```
 
-`litellm-proxy claude-code` is a shortcut for `litellm-proxy run -- claude`.
+Anything you type after the agent name is forwarded to it untouched, so the usual flags keep working:
 
-The wrapper resolves your LiteLLM key (logging in via SSO when none is stored and you are at a terminal; otherwise it expects `LITELLM_PROXY_API_KEY` or `--api-key`), checks the key against the proxy so bad credentials fail immediately instead of deep inside the agent, exports the environment variables the agent reads, then replaces itself with the agent process.
+```bash
+litellm-proxy claude --resume
+litellm-proxy codex exec "summarize the repo"
+```
 
-The command is detected from the binary name to pick the right variables. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`. An unrecognized command gets both sets so it works either way.
+Each command resolves your LiteLLM key (logging in via SSO when none is stored and you are at a terminal; otherwise it expects `LITELLM_PROXY_API_KEY` or `--api-key`), checks the key against the proxy so bad credentials fail immediately instead of deep inside the agent, exports the environment variables the agent reads, then replaces itself with the agent process.
 
-Options:
+The right variables are picked per agent. Claude Code gets `ANTHROPIC_BASE_URL` (the proxy root, so it appends `/v1/messages`) and `ANTHROPIC_AUTH_TOKEN`, with any stray `ANTHROPIC_API_KEY` cleared so the proxy token wins. Codex and OpenCode get `OPENAI_BASE_URL` (the proxy plus `/v1`) and `OPENAI_API_KEY`.
 
-- `--model`, `-m`: Model Claude Code should request (sets `ANTHROPIC_MODEL`); must resolve on your proxy. OpenAI-style agents take the model through their own flag.
-- `--small-fast-model`: Background-task model for Claude Code (sets `ANTHROPIC_SMALL_FAST_MODEL`).
+Options (these belong to the wrapper, so put them before the agent's own flags):
+
 - `--skip-verify`: Skip the pre-launch key check (useful offline or with non-standard auth).
 
-Forward flags the agent owns after `--`:
-
-```bash
-litellm-proxy run --model claude-sonnet-proxy -- claude --resume
-```
-
-Whatever model the agent requests (default Claude names, or your `--model` override) must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
+To pin the model, pass the agent's own model flag (for example `litellm-proxy claude --model my-proxy-model` or `litellm-proxy codex -m my-proxy-model`), or export the variable the agent reads (`ANTHROPIC_MODEL` / `ANTHROPIC_SMALL_FAST_MODEL` for Claude Code); the wrapper preserves anything you already have set. Whatever model the agent ends up requesting must exist on the proxy, since requests land on the proxy's `/v1/messages` (Anthropic) or `/v1/chat/completions` and `/v1/responses` (OpenAI) endpoints.
 
 ## Environment Variables
 

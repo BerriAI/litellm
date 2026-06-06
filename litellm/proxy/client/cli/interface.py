@@ -80,6 +80,8 @@ def styled_prompt():
 
 def show_commands():
     """Display available commands."""
+    from .commands.agents import agent_commands
+
     commands = [
         ("login", "Authenticate with the LiteLLM proxy server"),
         ("logout", "Clear stored authentication"),
@@ -91,8 +93,9 @@ def show_commands():
         ("keys", "Manage API keys"),
         ("teams", "Manage teams and team assignments"),
         ("users", "Manage users"),
-        ("run", "Run a coding agent (claude, codex, ...) through the proxy"),
-        ("claude-code", "Shortcut for `run -- claude`"),
+    ]
+    commands += [(c.name, c.get_short_help_str()) for c in agent_commands()]
+    commands += [
         ("version", "Show version information"),
         ("help", "Show this help message"),
         ("quit", "Exit the interactive session"),
