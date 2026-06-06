@@ -297,9 +297,10 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setTransportType(transport);
 
     const copySuffix = "_copy";
-    const baseName = duplicateServer.server_name || duplicateServer.alias || "";
+    const baseName = (duplicateServer.server_name || duplicateServer.alias || "").replace(/_copy$/, "");
+    const baseAlias = (duplicateServer.alias || duplicateServer.server_name || "").replace(/_copy$/, "");
     const newName = baseName + copySuffix;
-    const newAlias = (duplicateServer.alias || baseName) + copySuffix;
+    const newAlias = baseAlias + copySuffix;
 
     const prefillValues: Record<string, any> = {
       server_name: newName,
