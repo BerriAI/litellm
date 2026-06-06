@@ -68,6 +68,8 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       // fields it returns (new token, timestamps, etc.) are captured, then
       // override with the explicit form values — the user's just-submitted
       // edits must win over whatever the API echoes back.
+      // expires must come from the API (an ISO string), never the locale-
+      // formatted preview, otherwise downstream expiry parsing breaks.
       const updatedKeyData: Partial<KeyResponse> = {
         ...response,
         token: response.token || response.key_id || selectedToken.token,
@@ -75,9 +77,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
-        expires: formValues.duration
-          ? calculateExpiryPreviewFromDuration(formValues.duration) ?? selectedToken.expires
-          : selectedToken.expires,
+        expires: response.expires ?? selectedToken.expires,
       };
 
       // Update the parent component with new key data

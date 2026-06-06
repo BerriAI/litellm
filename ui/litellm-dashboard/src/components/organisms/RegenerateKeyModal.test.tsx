@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
 import { RegenerateKeyModal } from "./RegenerateKeyModal";
 import { KeyResponse } from "../key_team_helpers/key_list";
-import * as keyExpiryUtils from "@/utils/keyExpiryUtils";
 
 // Mock the networking call
 const mockRegenerateKeyCall = vi.fn();
@@ -240,17 +239,38 @@ describe("RegenerateKeyModal", () => {
     });
   });
 
-  it("should fall back to the previous expiry when preview calculation returns null", async () => {
+  it("should use the API response's ISO expires for the optimistic update", async () => {
+    const user = userEvent.setup();
+    const apiExpires = "2026-06-13T11:08:16.783000Z";
+    mockRegenerateKeyCall.mockResolvedValue({
+      key: "sk-new-regenerated-key",
+      token: "new-token-hash",
+      expires: apiExpires,
+    });
+
+    renderWithProviders(
+      <RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ expires: "2026-12-31T00:00:00Z" })} />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(mockOnKeyUpdate).toHaveBeenCalledOnce();
+    });
+
+    expect(mockOnKeyUpdate.mock.calls[0][0].expires).toBe(apiExpires);
+  });
+
+  it("should fall back to the previous expiry when the API response omits expires", async () => {
     const user = userEvent.setup();
     const previousExpires = "2026-12-31T00:00:00Z";
-    vi.spyOn(keyExpiryUtils, "calculateExpiryPreviewFromDuration").mockReturnValue(null);
     mockRegenerateKeyCall.mockResolvedValue({
       key: "sk-new-regenerated-key",
       token: "new-token-hash",
     });
 
     renderWithProviders(
-      <RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ expires: previousExpires, duration: "30d" })} />,
+      <RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ expires: previousExpires })} />,
     );
 
     await user.click(screen.getByRole("button", { name: /Regenerate/ }));
