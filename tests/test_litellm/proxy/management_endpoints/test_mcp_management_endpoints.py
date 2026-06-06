@@ -4249,11 +4249,6 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
-                AsyncMock(return_value=[]),
-            ),
-            patch.object(
-                mgmt_endpoints,
                 "get_user_env_vars_bulk",
                 AsyncMock(return_value={}),
             ),
