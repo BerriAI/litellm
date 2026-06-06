@@ -239,19 +239,10 @@ describe("RegenerateKeyModal", () => {
     });
   });
 
-  it("should fall back to the previous expiry when duration is unparseable", async () => {
-    // Regression: if calculateNewExpiryTime returns null (unrecognised suffix),
-    // the payload should fall back to the previous expires rather than null.
+  it("should reject unparseable duration values before calling regenerate", async () => {
     const user = userEvent.setup();
-    const previousExpires = "2026-12-31T00:00:00Z";
-    mockRegenerateKeyCall.mockResolvedValue({
-      key: "sk-new-regenerated-key",
-      token: "new-token-hash",
-    });
 
-    renderWithProviders(
-      <RegenerateKeyModal {...defaultProps} selectedToken={makeToken({ expires: previousExpires })} />,
-    );
+    renderWithProviders(<RegenerateKeyModal {...defaultProps} />);
 
     const durationField = screen.getByPlaceholderText("e.g. 30s, 30h, 30d");
     await user.clear(durationField);
@@ -260,11 +251,11 @@ describe("RegenerateKeyModal", () => {
     await user.click(screen.getByRole("button", { name: /Regenerate/ }));
 
     await waitFor(() => {
-      expect(mockOnKeyUpdate).toHaveBeenCalledOnce();
+      expect(
+        screen.getByText("Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo"),
+      ).toBeInTheDocument();
     });
-
-    const updateCall = mockOnKeyUpdate.mock.calls[0][0];
-    expect(updateCall.expires).toBe(previousExpires);
+    expect(mockRegenerateKeyCall).not.toHaveBeenCalled();
   });
 
   it("should pass form values to onKeyUpdate even when the API echoes back different limits", async () => {
@@ -335,6 +326,39 @@ describe("RegenerateKeyModal", () => {
       await user.click(regenerateBtn);
     }
 
+    expect(mockRegenerateKeyCall).not.toHaveBeenCalled();
+  });
+
+  it("should mark expiry as expired without pre-filling a duration", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-06-06T12:00:00Z"));
+
+    renderWithProviders(
+      <RegenerateKeyModal
+        {...defaultProps}
+        selectedToken={makeToken({ expires: "2026-06-01T12:00:00Z", duration: "" })}
+      />,
+    );
+
+    expect(screen.getByText(/\(expired\)/)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("e.g. 30s, 30h, 30d")).toHaveValue("");
+  });
+
+  it("should require a new expiration before regenerating an expired key", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-06-06T12:00:00Z"));
+    const user = userEvent.setup();
+
+    renderWithProviders(
+      <RegenerateKeyModal
+        {...defaultProps}
+        selectedToken={makeToken({ expires: "2026-06-01T12:00:00Z", duration: "" })}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /Regenerate/ }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Expiration is required for expired keys")).toBeInTheDocument();
+    });
     expect(mockRegenerateKeyCall).not.toHaveBeenCalled();
   });
 

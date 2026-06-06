@@ -7,8 +7,14 @@ import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
+import { isKeyExpired } from "@/utils/keyExpiryUtils";
 
 const { Text } = Typography;
+
+const DURATION_RULE = {
+  pattern: /^(\d+(s|m|h|d|w|mo))?$/,
+  message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+};
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -21,10 +27,17 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const { accessToken } = useAuthorized();
   const [form] = Form.useForm();
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
-  const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
-  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const keyIsExpired = isKeyExpired(selectedToken?.expires);
+  const durationValue = Form.useWatch("duration", form);
+
+  // Expired keys must get a new duration, otherwise regeneration produces a key
+  // that inherits the old (past) expiry and is immediately unusable.
+  const durationRules = keyIsExpired
+    ? [{ required: true, message: "Expiration is required for expired keys" }, DURATION_RULE]
+    : [DURATION_RULE];
 
   useEffect(() => {
     if (visible && selectedToken && accessToken) {
@@ -72,13 +85,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     }
   };
 
-  useEffect(() => {
-    if (regenerateFormData?.duration) {
-      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
-    } else {
-      setNewExpiryTime(null);
-    }
-  }, [regenerateFormData?.duration]);
+  const newExpiryTime = durationValue ? calculateNewExpiryTime(durationValue) : null;
 
   const handleRegenerateKey = async () => {
     if (!selectedToken || !accessToken) return;
@@ -193,16 +200,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           </Flex>
         </Flex>
       ) : (
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ marginTop: 4 }}
-          onValuesChange={(changedValues) => {
-            if ("duration" in changedValues) {
-              setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }));
-            }
-          }}
-        >
+        <Form form={form} layout="vertical" style={{ marginTop: 4 }}>
           <Form.Item name="key_alias" label="Key Alias">
             <Input disabled />
           </Form.Item>
@@ -230,11 +228,13 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
               <Form.Item
                 name="duration"
                 label="Expire Key"
+                rules={durationRules}
                 extra={
                   <Flex vertical gap={2}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
+                    <Text type={keyIsExpired ? "danger" : "secondary"} style={{ fontSize: 12 }}>
                       Current expiry:{" "}
                       {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
+                      {keyIsExpired && " (expired)"}
                     </Text>
                     {newExpiryTime && (
                       <Text type="success" style={{ fontSize: 12 }}>
@@ -257,12 +257,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                     Recommended: 24h to 72h for production keys
                   </Text>
                 }
-                rules={[
-                  {
-                    pattern: /^(\d+(s|m|h|d|w|mo))?$/,
-                    message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
-                  },
-                ]}
+                rules={[DURATION_RULE]}
               >
                 <Input placeholder="e.g. 24h, 2d" />
               </Form.Item>
