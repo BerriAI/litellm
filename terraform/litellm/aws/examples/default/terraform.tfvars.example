@@ -23,22 +23,17 @@ env    = "stage"
 # allow_plaintext_alb = true
 
 # Storage retention: false (default) makes `terraform destroy` refuse on a
-# non-empty bucket. Flip to true only for ephemeral / CI stacks.
-# s3_force_destroy = false
+# non-empty bucket / take an Aurora final snapshot. Flip to true only for
+# ephemeral / CI stacks where you accept losing the data.
+# s3_force_destroy    = false
+# skip_final_snapshot = false
 
-# Component images. Defaults pin all four to the same GHCR release tag —
-# bump them together when bumping LiteLLM. Override here to pull from a
-# private registry or to mix-and-match versions.
-# gateway_image    = "ghcr.io/berriai/litellm-gateway:1.86.0-dev"
-# backend_image    = "ghcr.io/berriai/litellm-backend:1.86.0-dev"
-# ui_image         = "ghcr.io/berriai/litellm-ui:1.86.0-dev"
-# migrations_image = "ghcr.io/berriai/litellm-migrations:1.86.0-dev"
-
-# Per-task sizing for the gateway. Defaults are 1 vCPU / 4 GiB / 1 worker.
-# uvicorn rule of thumb for CPU-bound work is (2 * vCPU) + 1 workers.
-# gateway_cpu         = 1024   # 1024 = 1 vCPU
-# gateway_memory      = 4096   # MiB
-# gateway_num_workers = 1
+# Component images and per-task sizing/autoscaling are NOT exposed as
+# variables in this example (it keeps the curated surface small). They
+# default to working public GHCR images. To pin images or tune
+# CPU/memory/workers/autoscaling, set those inputs directly on the
+# `module "litellm"` block in main.tf — the full list is in
+# ../../variables.tf — or call the module from your own root config.
 
 # ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
 # proxy_config = {
@@ -86,3 +81,13 @@ env    = "stage"
 #   OPENAI_API_KEY    = "arn:aws:secretsmanager:us-west-2:111122223333:secret:openai-api-key-AbCdEf"
 #   ANTHROPIC_API_KEY = "arn:aws:secretsmanager:us-west-2:111122223333:secret:anthropic-api-key-GhIjKl"
 # }
+
+# ---------- OpenTelemetry v2 ----------
+# OTel is gated on otel_endpoint: empty (default) and nothing is added to
+# the container env; set it and both gateway and backend gain
+# LITELLM_OTEL_V2=true plus the OTEL_* block (with OTEL_SERVICE_NAME
+# stamped per component). The knobs aren't surfaced as wrapper vars in
+# this example; set them directly on the `module "litellm"` block in
+# main.tf (otel_endpoint, otel_exporter, otel_environment_name,
+# otel_capture_message_content, otel_headers_secret_arn). Full docs in
+# ../../variables.tf.
