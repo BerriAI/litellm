@@ -879,6 +879,32 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials_list(servers)
 
+    async def _resolve_accessible_mcp_servers(
+        user_api_key_dict: UserAPIKeyAuth,
+    ) -> List[LiteLLM_MCPServerTable]:
+        """The server set the dashboard grid shows (GET /v1/mcp/server, no team
+        filter), returned unredacted. Callers that surface this to a client must
+        apply their own redaction; the per-user env-var status endpoint relies on
+        the raw env_vars and only ever returns is_set booleans, never secrets.
+
+        Sharing this resolution keeps the red "missing user fields" card status
+        aligned with the cards actually rendered: an admin in view_all mode sees
+        every server even when their key carries no per-server MCP grant.
+        """
+        if (
+            _get_user_mcp_management_mode() == "view_all"
+            and not _is_restricted_virtual_key_request(user_api_key_dict)
+        ):
+            return await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+
+        aggregated: Dict[str, LiteLLM_MCPServerTable] = {}
+        for auth_context in await build_effective_auth_contexts(user_api_key_dict):
+            for server in await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                user_api_key_auth=auth_context
+            ):
+                aggregated.setdefault(server.server_id, server)
+        return list(aggregated.values())
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -950,30 +976,8 @@ if MCP_AVAILABLE:
                 sanitized_team_id
             )
         else:
-            user_mcp_management_mode = _get_user_mcp_management_mode()
-
-            if user_mcp_management_mode == "view_all" and not is_restricted_virtual_key:
-                servers = (
-                    await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
-                )
-                redacted_mcp_servers = _redact_mcp_credentials_list(servers)
-            else:
-                auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
-
-                aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
-                for auth_context in auth_contexts:
-                    servers = (
-                        await global_mcp_server_manager.get_all_allowed_mcp_servers(
-                            user_api_key_auth=auth_context
-                        )
-                    )
-                    for server in servers:
-                        if server.server_id not in aggregated_servers:
-                            aggregated_servers[server.server_id] = server
-
-                redacted_mcp_servers = _redact_mcp_credentials_list(
-                    aggregated_servers.values()
-                )
+            servers = await _resolve_accessible_mcp_servers(user_api_key_dict)
+            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -2391,9 +2395,7 @@ if MCP_AVAILABLE:
         user_id = user_api_key_dict.user_id or ""
         if not user_id:
             return []
-        accessible = await get_all_mcp_servers_for_user(
-            prisma_client, user_api_key_dict
-        )
+        accessible = await _resolve_accessible_mcp_servers(user_api_key_dict)
         if not accessible:
             return []
         server_ids = [s.server_id for s in accessible]
