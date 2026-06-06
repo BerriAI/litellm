@@ -468,6 +468,152 @@ async def test_transcription_sessions_rejects_disallowed_resolved_model(
 
 
 @pytest.mark.asyncio
+async def test_transcription_sessions_rejects_disallowed_team_model_scope(
+    proxy_app,
+):
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    team = LiteLLM_TeamTableCachedObj(
+        team_id="team-a",
+        models=["gpt-4o-realtime-preview"],
+    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        team_id="team-a",
+        models=["*"],
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch("litellm.proxy.proxy_server.route_request") as mock_route_request,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new=AsyncMock(return_value=team),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_membership",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={
+                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
+                },
+            )
+
+        assert response.status_code == 403
+        assert "team" in response.text.lower()
+        assert "Tried to access gpt-realtime-whisper" in response.text
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_transcription_sessions_rejects_disallowed_project_model_scope(
+    proxy_app,
+):
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+
+    project = LiteLLM_ProjectTableCachedObj(
+        project_id="project-a",
+        models=["gpt-4o-realtime-preview"],
+        created_by="test-user",
+        updated_by="test-user",
+    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        project_id="project-a",
+        models=["*"],
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch("litellm.proxy.proxy_server.route_request") as mock_route_request,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+            patch(
+                "litellm.proxy.auth.auth_checks.get_project_object",
+                new=AsyncMock(return_value=project),
+            ),
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={
+                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
+                },
+            )
+
+        assert response.status_code == 403
+        assert "project" in response.text.lower()
+        assert "Tried to access gpt-realtime-whisper" in response.text
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_transcription_sessions_rejects_disallowed_team_member_model_scope(
+    proxy_app,
+):
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamMembership,
+        LiteLLM_TeamTableCachedObj,
+    )
+
+    team = LiteLLM_TeamTableCachedObj(team_id="team-a", models=["*"])
+    membership = LiteLLM_TeamMembership(
+        user_id="test-user",
+        team_id="team-a",
+        litellm_budget_table=LiteLLM_BudgetTable(
+            allowed_models=["gpt-4o-realtime-preview"],
+        ),
+    )
+    proxy_app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user",
+        team_id="team-a",
+        models=["*"],
+    )
+    try:
+        client = TestClient(proxy_app, raise_server_exceptions=False)
+        with (
+            patch("litellm.proxy.proxy_server.route_request") as mock_route_request,
+            patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_logging,
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_object",
+                new=AsyncMock(return_value=team),
+            ),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_team_membership",
+                new=AsyncMock(return_value=membership),
+            ),
+        ):
+            mock_logging.post_call_failure_hook = AsyncMock()
+
+            response = client.post(
+                "/v1/realtime/transcription_sessions",
+                headers={"Authorization": "Bearer sk-test-master-key"},
+                json={
+                    "input_audio_transcription": {"model": "gpt-realtime-whisper"}
+                },
+            )
+
+        assert response.status_code == 403
+        assert "Team member not allowed to access model" in response.text
+        mock_route_request.assert_not_called()
+    finally:
+        proxy_app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
 async def test_realtime_transcription_websocket_default_model_checks_key_scope():
     from litellm.proxy import proxy_server
 
@@ -482,6 +628,48 @@ async def test_realtime_transcription_websocket_default_model_checks_key_scope()
         intent="transcription",
         user_api_key_dict=UserAPIKeyAuth(models=["gpt-4o-realtime-preview"]),
     )
+
+    websocket.accept.assert_not_awaited()
+    websocket.close.assert_awaited_once()
+    _, close_kwargs = websocket.close.call_args
+    assert close_kwargs["code"] == 1008
+    assert "not allowed to access model" in close_kwargs["reason"]
+
+
+@pytest.mark.asyncio
+async def test_realtime_transcription_websocket_default_model_checks_team_scope():
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+
+    team = LiteLLM_TeamTableCachedObj(
+        team_id="team-a",
+        models=["gpt-4o-realtime-preview"],
+    )
+    websocket = MagicMock()
+    websocket.headers = {}
+    websocket.close = AsyncMock()
+    websocket.accept = AsyncMock()
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            new=AsyncMock(return_value=team),
+        ),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_membership",
+            new=AsyncMock(return_value=None),
+        ),
+    ):
+        await proxy_server.realtime_websocket_endpoint(
+            websocket=websocket,
+            model=None,
+            intent="transcription",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="test-user",
+                team_id="team-a",
+                models=["*"],
+            ),
+        )
 
     websocket.accept.assert_not_awaited()
     websocket.close.assert_awaited_once()
