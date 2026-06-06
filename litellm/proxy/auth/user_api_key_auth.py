@@ -2503,6 +2503,12 @@ async def user_api_key_auth(
     """
     Parent function to authenticate user api key / jwt token.
     """
+    from litellm.proxy.proxy_server import general_settings
+
+    if general_settings.get("auth_version") == "v2":
+        from litellm.proxy.auth.v2 import user_api_key_auth_v2
+
+        return await user_api_key_auth_v2(request=request, api_key=api_key)
 
     # Create the SERVER span and stash it on request.state BEFORE reading the
     # body. _read_request_body can raise ProxyException for malformed JSON;

@@ -15688,8 +15688,11 @@ async def get_routes():
 #     return {"token": token}
 
 
+from litellm.proxy.auth.v2.management_endpoints import router as auth_v2_router
+
 app.include_router(router)
 app.include_router(response_router)
+app.include_router(auth_v2_router)
 app.include_router(public_endpoints_router)
 app.include_router(rerank_router)
 app.include_router(ocr_router)
