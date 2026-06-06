@@ -1427,11 +1427,12 @@ def test_cache_control_not_preserved_for_non_claude_model():
         ),
         ("bedrock/amazon.titan-text-express-v1", False),
         ("arn:aws:sagemaker:us-east-1:123:endpoint/my-endpoint", False),
+        ("arn:aws:sagemaker:us-east-1:123:endpoint/my-bedrock-transcriber", False),
         (CACHE_CONTROL_NON_ANTHROPIC_MODEL, False),
     ],
 )
 def test_is_bedrock_arn_model(model, expected):
-    """is_bedrock_arn_model requires both an ARN and the bedrock service in the string."""
+    """is_bedrock_arn_model requires an ARN with bedrock in the service field, not just anywhere."""
     assert LiteLLMAnthropicMessagesAdapter.is_bedrock_arn_model(model) is expected
 
 
