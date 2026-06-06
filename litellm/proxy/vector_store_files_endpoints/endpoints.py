@@ -254,7 +254,7 @@ async def _update_request_data_with_model_routing_hint(
             )
             should_route = credentials is not None
     else:
-        if should_authorize_model_hint:
+        if isinstance(model_hint, str) and should_authorize_model_hint:
             await _authorize_model_routing_hint(
                 model=model_hint,
                 llm_router=llm_router,
