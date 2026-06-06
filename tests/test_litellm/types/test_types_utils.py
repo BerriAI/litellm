@@ -75,6 +75,24 @@ def test_usage_dump():
     assert new_usage.prompt_tokens_details.web_search_requests == 1
 
 
+def test_usage_server_tool_use_dict_is_coerced_and_round_trips():
+    from litellm.types.utils import ServerToolUse, Usage
+
+    current_usage = Usage(
+        completion_tokens=1,
+        prompt_tokens=1,
+        total_tokens=2,
+        server_tool_use={"web_search_requests": 1},
+    )
+
+    assert isinstance(current_usage.server_tool_use, ServerToolUse)
+    assert current_usage.server_tool_use.web_search_requests == 1
+
+    new_usage = Usage(**current_usage.model_dump())
+    assert isinstance(new_usage.server_tool_use, ServerToolUse)
+    assert new_usage.server_tool_use.web_search_requests == 1
+
+
 def test_usage_completion_tokens_details_text_tokens():
     from litellm.types.utils import Usage
 
