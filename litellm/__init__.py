@@ -16,8 +16,17 @@ import os
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
 
+
+def _dev_env_hot_reload_enabled() -> bool:
+    """The proxy exports this flag when started with ``--reload``. A reloaded
+    worker is a fresh process that inherits the reloader's environment, so an
+    edited ``.env`` value stays masked by the stale inherited one unless we
+    let the file win; overriding makes the edit take effect on reload."""
+    return os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True"
+
+
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
-    _dotenv.load_dotenv()
+    _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from typing import (
     Callable,
