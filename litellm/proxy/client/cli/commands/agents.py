@@ -29,6 +29,8 @@ _INSTALL_DOCS: Dict[str, str] = {
     "opencode": "https://opencode.ai/docs",
 }
 
+CODEX_PROXY_PROVIDER = "litellm"
+
 
 class AgentRunError(Exception):
     """Raised for any user-actionable failure while preparing to run an agent."""
@@ -69,6 +71,48 @@ def build_agent_env(
         env[OPENAI_BASE_URL_ENV] = root + "/v1"
         env[OPENAI_API_KEY_ENV] = api_key
     return env
+
+
+def _codex_proxy_args(base_url: str) -> List[str]:
+    """Codex `-c` overrides that point it at the proxy.
+
+    Codex ignores OPENAI_BASE_URL (it always dials api.openai.com), so the env
+    profile alone cannot route it. It does honor a custom provider, so define one
+    inline; supports_websockets=false forces the HTTP/SSE Responses transport
+    because the proxy does not speak the Responses WebSocket protocol. The key is
+    read from OPENAI_API_KEY, which build_agent_env already exports.
+    """
+    root = base_url.rstrip("/") + "/v1"
+    provider = f"model_providers.{CODEX_PROXY_PROVIDER}"
+    return [
+        "-c",
+        f'model_provider="{CODEX_PROXY_PROVIDER}"',
+        "-c",
+        f'{provider}.name="LiteLLM proxy"',
+        "-c",
+        f'{provider}.base_url="{root}"',
+        "-c",
+        f'{provider}.env_key="{OPENAI_API_KEY_ENV}"',
+        "-c",
+        f'{provider}.wire_api="responses"',
+        "-c",
+        f"{provider}.supports_websockets=false",
+    ]
+
+
+_PROXY_ARGS: Dict[str, Callable[[str], List[str]]] = {
+    "codex": _codex_proxy_args,
+}
+
+
+def agent_launch_args(command: str, base_url: str) -> List[str]:
+    """Extra CLI args an agent needs to actually honor the proxy.
+
+    Claude Code and OpenCode respect the exported env vars, so they get nothing
+    here; Codex needs its provider pointed via config overrides.
+    """
+    builder = _PROXY_ARGS.get(os.path.basename(command))
+    return builder(base_url) if builder else []
 
 
 def verify_proxy_key(
@@ -136,7 +180,8 @@ def run_agent(
         api_key,
         profiles,
     )
-    launcher(binary, command, env)
+    extra_args = agent_launch_args(command[0], base_url)
+    launcher(binary, [command[0], *extra_args, *command[1:]], env)
 
 
 def _is_interactive() -> bool:
@@ -218,6 +263,7 @@ __all__ = [
     "agent_commands",
     "run_agent",
     "build_agent_env",
+    "agent_launch_args",
     "verify_proxy_key",
     "agent_profile",
     "AgentRunError",

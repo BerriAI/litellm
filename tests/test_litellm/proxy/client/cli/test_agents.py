@@ -15,6 +15,7 @@ sys.path.insert(
 from litellm.proxy.client.cli.commands.agents import (
     AgentRunError,
     agent_commands,
+    agent_launch_args,
     agent_profile,
     build_agent_env,
     run_agent,
@@ -99,6 +100,30 @@ class TestBuildAgentEnv:
         assert base == {"PATH": "/usr/bin", "ANTHROPIC_API_KEY": "real-key"}
 
 
+class TestAgentLaunchArgs:
+    def test_claude_and_opencode_get_no_extra_args(self):
+        assert agent_launch_args("claude", "http://localhost:4000") == []
+        assert agent_launch_args("opencode", "http://localhost:4000") == []
+
+    def test_unknown_agent_gets_no_extra_args(self):
+        assert agent_launch_args("mytool", "http://localhost:4000") == []
+
+    def test_codex_points_provider_at_proxy_over_http(self):
+        args = agent_launch_args("codex", "http://localhost:4000/")
+        joined = " ".join(args)
+        assert 'model_provider="litellm"' in args
+        assert 'model_providers.litellm.base_url="http://localhost:4000/v1"' in args
+        assert 'model_providers.litellm.env_key="OPENAI_API_KEY"' in args
+        assert 'model_providers.litellm.wire_api="responses"' in args
+        assert "model_providers.litellm.supports_websockets=false" in args
+        assert joined.count("-c") == 6
+
+    def test_codex_uses_basename(self):
+        assert agent_launch_args("/usr/local/bin/codex", "http://localhost:4000") == (
+            agent_launch_args("codex", "http://localhost:4000")
+        )
+
+
 class TestVerifyProxyKey:
     def test_ok_status_passes_and_uses_models_endpoint(self):
         captured = {}
@@ -178,6 +203,38 @@ class TestRunAgent:
         assert calls["env"]["OPENAI_BASE_URL"] == "http://localhost:4000/v1"
         assert calls["env"]["OPENAI_API_KEY"] == "sk-key"
         assert "ANTHROPIC_BASE_URL" not in calls["env"]
+
+    def test_codex_injects_proxy_provider_args_before_user_args(self):
+        calls = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["codex", "exec", "do a thing"],
+            base_env={},
+            which=lambda name: "/usr/local/bin/codex",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(args=tuple(a)),
+        )
+        args = calls["args"]
+        assert args[0] == "codex"
+        assert args[-2:] == ("exec", "do a thing")
+        assert 'model_provider="litellm"' in args
+        assert 'model_providers.litellm.base_url="http://localhost:4000/v1"' in args
+        # overrides must precede the codex subcommand so codex parses them
+        assert args.index('model_provider="litellm"') < args.index("exec")
+
+    def test_claude_launches_without_injected_args(self):
+        calls = {}
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude", "--resume"],
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            verify=lambda *a: None,
+            launcher=lambda p, a, e: calls.update(args=tuple(a)),
+        )
+        assert calls["args"] == ("claude", "--resume")
 
     def test_missing_binary_raises_with_install_hint(self):
         with pytest.raises(AgentRunError, match="claude.*Install it first"):
