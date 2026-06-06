@@ -569,6 +569,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         setHasToolAllowlistInteraction(false);
         setAliasManuallyEdited(false);
         setLogoUrl(undefined);
+        setToolNameToDisplayName({});
+        setToolNameToDescription({});
         setModalVisible(false);
         onCreateSuccess(response);
       }
@@ -591,6 +593,8 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     setHasToolAllowlistInteraction(false);
     setAliasManuallyEdited(false);
     setLogoUrl(undefined);
+    setToolNameToDisplayName({});
+    setToolNameToDescription({});
     setModalVisible(false);
   };
 

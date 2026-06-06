@@ -1517,11 +1517,6 @@
       "count": 1
     }
   },
-  "src/components/organisms/RegenerateKeyModal.tsx": {
-    "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
   "src/components/organisms/create_key_button.test.tsx": {
     "@typescript-eslint/no-require-imports": {
       "count": 2
