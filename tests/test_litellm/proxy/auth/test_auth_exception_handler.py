@@ -293,5 +293,8 @@ async def test_auth_failure_without_resolved_identity_still_logs():
             )
 
     logged = mock_hook.call_args[1]["user_api_key_dict"]
-    assert logged.api_key == "sk-unknown"
+    # Raw key must NOT land on the object — it would be promoted into telemetry
+    # as litellm.api_key.hash and leak a real sk-... to anyone reading the trace.
+    assert logged.api_key != "sk-unknown"
+    assert logged.api_key == UserAPIKeyAuth(api_key="sk-unknown").api_key
     assert logged.request_route == "/v1/chat/completions"

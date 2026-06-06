@@ -114,7 +114,9 @@ class UserAPIKeyAuthExceptionHandler:
             )
             user_api_key_dict.parent_otel_span = parent_otel_span
             user_api_key_dict.request_route = route
-            user_api_key_dict.api_key = user_api_key_dict.api_key or api_key
+            user_api_key_dict.api_key = (
+                user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
+            )
 
             # Stamp identity onto the request's server span now, before the request
             # is rejected; the OTEL failure hooks don't touch the server span, so
