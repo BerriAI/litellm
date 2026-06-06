@@ -10,6 +10,15 @@ vi.mock("../networking", () => ({
   regenerateKeyCall: (...args: unknown[]) => mockRegenerateKeyCall(...args),
 }));
 
+const mockNotificationFromBackend = vi.fn();
+const mockNotificationSuccess = vi.fn();
+vi.mock("../molecules/notifications_manager", () => ({
+  default: {
+    fromBackend: (...args: unknown[]) => mockNotificationFromBackend(...args),
+    success: (...args: unknown[]) => mockNotificationSuccess(...args),
+  },
+}));
+
 const makeToken = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
   ({
     token: "token-hash-123",
@@ -297,6 +306,7 @@ describe("RegenerateKeyModal", () => {
       expect(screen.getByText("Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo")).toBeInTheDocument();
     });
     expect(mockRegenerateKeyCall).not.toHaveBeenCalled();
+    expect(mockNotificationFromBackend).not.toHaveBeenCalled();
   });
 
   it("should pass form values to onKeyUpdate even when the API echoes back different limits", async () => {
@@ -401,6 +411,8 @@ describe("RegenerateKeyModal", () => {
       expect(screen.getByText("Expiration is required for expired keys")).toBeInTheDocument();
     });
     expect(mockRegenerateKeyCall).not.toHaveBeenCalled();
+    // Form validation rejections must not surface a backend-style toast.
+    expect(mockNotificationFromBackend).not.toHaveBeenCalled();
   });
 
   it("should pass the correct token identifier to regenerateKeyCall", async () => {

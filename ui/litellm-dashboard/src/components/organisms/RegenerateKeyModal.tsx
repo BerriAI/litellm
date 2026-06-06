@@ -87,9 +87,14 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
 
       setIsRegenerating(false);
     } catch (error) {
+      setIsRegenerating(false); // Reset regenerating state on error
+      // Ant Design form validation rejections surface inline under the field;
+      // don't also raise a backend-style toast for them.
+      if (error && typeof error === "object" && "errorFields" in error) {
+        return;
+      }
       console.error("Error regenerating key:", error);
       NotificationManager.fromBackend(error);
-      setIsRegenerating(false); // Reset regenerating state on error
     }
   };
 
