@@ -77,6 +77,8 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/daily/",
     # CloudZero cost-export admin (init / settings / export / dry-run / delete)
     "/cloudzero/",
+    # Mavvrik cost-export admin (init / settings / export / dry-run / delete)
+    "/mavvrik/",
     # Caching admin
     "/cache/",
     "/caching/",

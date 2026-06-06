@@ -444,6 +444,7 @@ from litellm.proxy.rerank_endpoints.endpoints import router as rerank_router
 from litellm.proxy.response_api_endpoints.endpoints import router as response_router
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.search_endpoints.endpoints import router as search_router
+from litellm.proxy.spend_tracking.mavvrik_endpoints import router as mavvrik_router
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
@@ -7752,7 +7753,7 @@ class ProxyStartupEvent:
         )
 
     @classmethod
-    async def _initialize_spend_tracking_background_jobs(
+    async def _initialize_spend_tracking_background_jobs(  # noqa: PLR0915
         cls, scheduler: AsyncIOScheduler
     ):
         """
@@ -7816,6 +7817,70 @@ class ProxyStartupEvent:
                         "Failed to register VantageLogger from DB settings: %s", e
                     )
             await VantageLogger.init_vantage_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Mavvrik Background Job
+        ########################################################
+        from litellm.proxy.spend_tracking.mavvrik_endpoints import (  # noqa: PLC0415
+            is_mavvrik_setup,
+        )
+
+        try:
+            _mavvrik_ready = await is_mavvrik_setup()
+        except Exception as _e:
+            verbose_proxy_logger.warning(
+                "mavvrik: skipping startup — is_mavvrik_setup() failed: %s", _e
+            )
+            _mavvrik_ready = False
+
+        if _mavvrik_ready:
+            from litellm.constants import (  # noqa: PLC0415
+                MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+            )
+            from litellm.integrations.mavvrik import (  # noqa: PLC0415
+                Client,
+                Orchestrator,
+                Uploader,
+            )
+            from litellm.integrations.mavvrik.settings import Settings  # noqa: PLC0415
+
+            try:
+                settings = Settings()
+                data = await settings.load()
+                api_key = str(data.get("api_key") or os.getenv("MAVVRIK_API_KEY", ""))
+                api_endpoint = str(
+                    data.get("api_endpoint") or os.getenv("MAVVRIK_API_ENDPOINT", "")
+                )
+                connection_id = str(
+                    data.get("connection_id") or os.getenv("MAVVRIK_CONNECTION_ID", "")
+                )
+                if api_key and api_endpoint and connection_id:
+                    client = Client(
+                        api_key=api_key,
+                        api_endpoint=api_endpoint,
+                        connection_id=connection_id,
+                    )
+                    uploader = Uploader(client=client)
+                    orchestrator = Orchestrator(client=client, uploader=uploader)
+                    scheduler.add_job(
+                        orchestrator.run,
+                        "interval",
+                        minutes=MAVVRIK_EXPORT_INTERVAL_MINUTES,
+                        id=MAVVRIK_EXPORT_USAGE_DATA_JOB_NAME,
+                        replace_existing=True,
+                    )
+                    verbose_proxy_logger.info(
+                        "mavvrik: background export job scheduled on startup"
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        "mavvrik: credentials incomplete, background job not scheduled"
+                    )
+            except Exception as e:
+                verbose_proxy_logger.error(
+                    "mavvrik: failed to schedule background job on startup: %s", e
+                )
 
         ########################################################
         # Prometheus Background Job
@@ -15711,6 +15776,7 @@ app.include_router(ui_sso_router)
 app.include_router(organization_router)
 app.include_router(customer_router)
 app.include_router(spend_management_router)
+app.include_router(mavvrik_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(callback_management_endpoints_router)
