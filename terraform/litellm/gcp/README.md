@@ -110,9 +110,13 @@ Unix socket.
 ### `proxy_config`
 
 Mirrors the helm chart's `gateway.config.proxy_config`. The map is
-YAML-encoded and base64-passed to gateway, backend, and the migration job;
-each container decodes it to `/tmp/litellm-config.yaml` at startup and sets
-`CONFIG_FILE_PATH`.
+YAML-encoded and uploaded to a dedicated GCS bucket as `config.yaml`, then
+mounted read-only into the gateway and backend at `/etc/litellm` via Cloud
+Run v2's gcsfuse volume. `CONFIG_FILE_PATH` points at the mount path. A
+hash of the YAML rides along as an env var so an edit to `proxy_config`
+forces a new Cloud Run revision; without it the new file would sit in the
+bucket unread until the next unrelated revision rollover. The migrations
+job doesn't get the config (it only runs `prisma migrate deploy`).
 
 ```hcl
 proxy_config = {
@@ -167,6 +171,33 @@ every secret referenced. **Pass the bare secret resource ID only** —
 reject the version suffix; version is always resolved as `latest`. If
 you need a pinned version, edit `local.gateway_extra_secret_kv` in
 `cloudrun.tf` directly to set `version = "3"` for the entry in question.
+
+### OpenTelemetry v2
+
+`LITELLM_OTEL_V2=true` is wired into both the gateway and backend by default
+(see [OpenTelemetry v2 docs](https://docs.litellm.ai/docs/observability/opentelemetry_v2)).
+The flag is dormant until `otel_endpoint` is non-empty; with an empty
+endpoint nothing exports and the integration is effectively off.
+
+```hcl
+otel_endpoint         = "https://otel.example.com:4318"
+otel_exporter         = "otlp_http"  # or otlp_grpc
+otel_environment_name = "prod"       # default: var.env
+otel_headers_secret   = "projects/my-gcp-project/secrets/otel-headers"
+```
+
+`OTEL_SERVICE_NAME` is set per component (`${tenant}-litellm-${env}-gateway`
+and `-backend`) so spans land tagged with the right hop. `OTEL_HEADERS`
+is wired as a Secret Manager `secret_key_ref` since it typically carries
+the collector's auth token; create the secret with the literal header
+string, e.g. `Authorization=Bearer <token>`. Any `OTEL_*` key set in
+`gateway_extra_env` / `backend_extra_env` overrides the default for that
+service.
+
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` defaults to
+`no_content` — flip `otel_capture_message_content =
+"prompt_and_completion"` only after auditing what lands in the backend,
+since prompts and completions are typically sensitive.
 
 ## Tenant deployment
 

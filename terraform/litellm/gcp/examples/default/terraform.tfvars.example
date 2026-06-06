@@ -75,3 +75,11 @@ env    = "stage"
 #   OPENAI_API_KEY    = "projects/my-gcp-project/secrets/openai-api-key"
 #   ANTHROPIC_API_KEY = "projects/my-gcp-project/secrets/anthropic-api-key"
 # }
+
+# ---------- OpenTelemetry v2 ----------
+# LITELLM_OTEL_V2=true is always set on the gateway and backend; nothing
+# exports until you point them at a collector. To enable export, set
+# otel_endpoint (and optionally otel_exporter, otel_headers_secret,
+# otel_environment_name, otel_capture_message_content) directly on the
+# `module "litellm"` block in main.tf — these aren't wrapper vars in this
+# example. Full docs in ../../variables.tf.

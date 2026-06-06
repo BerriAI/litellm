@@ -69,3 +69,13 @@ resource "google_secret_manager_secret_iam_member" "extras" {
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.runtime.email}"
 }
+
+# OTEL_HEADERS secret accessor — only created when var.otel_headers_secret
+# is set. Carries the OTLP collector's auth header(s).
+resource "google_secret_manager_secret_iam_member" "otel_headers" {
+  count = var.otel_headers_secret == "" ? 0 : 1
+
+  secret_id = var.otel_headers_secret
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.runtime.email}"
+}

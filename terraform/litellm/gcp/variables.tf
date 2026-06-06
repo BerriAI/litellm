@@ -394,12 +394,89 @@ variable "backend_extra_secrets" {
 variable "proxy_config" {
   description = <<-EOT
     LiteLLM proxy config (contents of config.yaml). Mirrors the helm chart's
-    `gateway.config.proxy_config`. Passed to gateway, backend, and the
-    migration job as a base64-encoded env var and decoded to
-    /tmp/litellm-config.yaml at container start; CONFIG_FILE_PATH is set
-    automatically. Reference env-injected secrets from the YAML via
-    `os.environ/<NAME>`. Leave empty ({}) to skip.
+    `gateway.config.proxy_config`. YAML-encoded and uploaded to a dedicated
+    GCS bucket as `config.yaml`, then mounted read-only into the gateway
+    and backend at `/etc/litellm` via Cloud Run v2's gcsfuse volume;
+    CONFIG_FILE_PATH is set automatically. A hash of the YAML is wired in
+    as an env var so a config-only edit forces a new revision (gcsfuse
+    surfaces the new object on container restart). Reference env-injected
+    secrets from the YAML via `os.environ/<NAME>`. Leave empty ({}) to
+    skip — the bucket isn't created and no volume is mounted.
   EOT
   type        = any
   default     = {}
+}
+
+# ---------- OpenTelemetry v2 ----------
+#
+# https://docs.litellm.ai/docs/observability/opentelemetry_v2
+#
+# OTel v2 is wired into the gateway and backend by default (LITELLM_OTEL_V2=true
+# is added to shared_env) but is dormant until otel_endpoint is non-empty. Leave
+# otel_endpoint = "" to ship without any OTel exporter; the proxy will boot with
+# the flag flipped on but no destination configured, which is functionally
+# equivalent to "off" because nothing is exported.
+
+variable "otel_endpoint" {
+  description = <<-EOT
+    OTLP collector URL (e.g. https://otel.example.com:4318 for HTTP, or
+    your collector's :4317 for gRPC). When empty the gateway/backend boot
+    with LITELLM_OTEL_V2=true but no exporter wired in, which is
+    functionally off. When set, OTEL_EXPORTER and OTEL_ENDPOINT are
+    injected and spans ship to the collector.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_exporter" {
+  description = <<-EOT
+    OTel exporter protocol. Ignored when otel_endpoint is empty. `otlp_http`
+    is the safer default (works through a vanilla L7 ingress); `otlp_grpc`
+    needs the collector reachable over h2 and the `grpcio` extra installed
+    in the proxy image.
+  EOT
+  type        = string
+  default     = "otlp_http"
+  validation {
+    condition     = contains(["otlp_http", "otlp_grpc", "console"], var.otel_exporter)
+    error_message = "otel_exporter must be one of: otlp_http, otlp_grpc, console."
+  }
+}
+
+variable "otel_headers_secret" {
+  description = <<-EOT
+    Optional Secret Manager secret resource ID
+    (`projects/<project>/secrets/<name>`) whose latest version is the
+    value of OTEL_HEADERS — used for collector auth, e.g.
+    `Authorization=Bearer <token>`. Mounted as an env-var secret_key_ref;
+    the runtime SA auto-gains roles/secretmanager.secretAccessor.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_environment_name" {
+  description = <<-EOT
+    Value for OTEL_ENVIRONMENT_NAME (becomes `deployment.environment` on
+    every span). Defaults to var.env so spans land tagged with the
+    deployment env without extra wiring.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_capture_message_content" {
+  description = <<-EOT
+    Value for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT. Default
+    `no_content` matches the litellm default; flip to `prompt_and_completion`
+    only when you've audited what's about to land in your observability
+    backend, because raw prompts/completions are typically sensitive.
+  EOT
+  type        = string
+  default     = "no_content"
+  validation {
+    condition     = contains(["no_content", "prompt_and_completion"], var.otel_capture_message_content)
+    error_message = "otel_capture_message_content must be one of: no_content, prompt_and_completion."
+  }
 }
