@@ -3217,6 +3217,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
             except Exception as e:
+                verbose_logger.exception(f"Error creating file: {e}")
                 raise self._handle_error(e=e, provider_config=provider_config)
         elif isinstance(transformed_request, str) or isinstance(
             transformed_request, bytes
@@ -3562,6 +3563,8 @@ class BaseLLMHTTPHandler:
         resp = httpx_client.send(req, follow_redirects=False)
         resp.read()
         if resp.status_code not in ((200, 201) if is_final else (308,)):
+            # 4xx/5xx raise here; the ValueError catches an unexpected success
+            # status (e.g. a 200 where the protocol expects a 308 between chunks).
             resp.raise_for_status()
             raise ValueError(f"resumable upload: unexpected status {resp.status_code}")
         return resp
@@ -3642,6 +3645,8 @@ class BaseLLMHTTPHandler:
         resp = await httpx_client.send(req, follow_redirects=False)
         await resp.aread()
         if resp.status_code not in ((200, 201) if is_final else (308,)):
+            # 4xx/5xx raise here; the ValueError catches an unexpected success
+            # status (e.g. a 200 where the protocol expects a 308 between chunks).
             resp.raise_for_status()
             raise ValueError(f"resumable upload: unexpected status {resp.status_code}")
         return resp

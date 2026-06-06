@@ -228,6 +228,13 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
         return
 
     if hasattr(content, "read"):
+        # Rewind seekable handles (BytesIO, temp files) so the body can be
+        # replayed on a retry; a non-seekable stream cannot be re-read.
+        if hasattr(content, "seek"):
+            try:
+                content.seek(0)
+            except (OSError, ValueError):
+                pass
         for raw in content:
             line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             line = line.strip()

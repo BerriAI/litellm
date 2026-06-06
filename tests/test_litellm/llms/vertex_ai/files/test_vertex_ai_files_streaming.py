@@ -433,6 +433,19 @@ class TestResumableStreamBody:
         second = b"".join(stream.iter_bytes())
         assert first == second and len(first) > 0
 
+    def test_stream_is_reiterable_for_seekable_file_like_input(self):
+        # A seekable handle (BytesIO, temp file) must be rewound between calls;
+        # otherwise the first iter_bytes() exhausts it and a retry would upload
+        # an empty body silently.
+        cfg = VertexAIFilesConfig()
+        raw = _make_openai_jsonl_bytes(40)
+        stream = _OpenAIToVertexBatchUploadStream(
+            io.BytesIO(raw), cfg._map_openai_to_vertex_params
+        )
+        first = b"".join(stream.iter_bytes())
+        second = b"".join(stream.iter_bytes())
+        assert first == second and len(first) > 0
+
 
 class TestResumableChunking:
     def test_intermediate_chunks_are_exactly_chunk_size(self):
