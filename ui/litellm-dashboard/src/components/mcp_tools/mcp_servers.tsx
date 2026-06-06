@@ -65,6 +65,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isModalVisible, setModalVisible] = useState(false);
   const [isDiscoveryVisible, setDiscoveryVisible] = useState(false);
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
+  const [duplicateServer, setDuplicateServer] = useState<MCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
   const isInternalUser = userRole === "Internal User";
@@ -164,6 +165,17 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     filterServers(selectedTeam, selectedMcpAccessGroup);
   }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
 
+  function handleDelete(server_id: string) {
+    setServerToDelete(server_id);
+    setIsDeleteModalOpen(true);
+  }
+
+  const handleDuplicate = (server: MCPServer) => {
+    setDuplicateServer(server);
+    setPrefillData(null);
+    setModalVisible(true);
+  };
+
   const columns = React.useMemo(
     () =>
       mcpServerColumns(
@@ -181,14 +193,10 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         (server: MCPServer) => setByokModalServer(server),
         recheckServerHealth,
         recheckingServerIds,
+        isAdminRole(userRole ?? "") ? handleDuplicate : undefined,
       ),
     [userRole, isLoadingHealth, recheckServerHealth, recheckingServerIds],
   );
-
-  function handleDelete(server_id: string) {
-    setServerToDelete(server_id);
-    setIsDeleteModalOpen(true);
-  }
 
   const confirmDelete = async () => {
     if (serverIdToDelete == null || accessToken == null) {
@@ -221,6 +229,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleCreateSuccess = (newMcpServer: MCPServer) => {
     setFilteredServers((prev) => [...prev, newMcpServer]);
     setModalVisible(false);
+    setDuplicateServer(null);
     refetch();
   };
 
@@ -305,12 +314,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         accessToken={accessToken}
         onCreateSuccess={handleCreateSuccess}
         isModalVisible={isModalVisible}
-        setModalVisible={setModalVisible}
+        setModalVisible={(visible) => {
+          setModalVisible(visible);
+          if (!visible) {
+            setDuplicateServer(null);
+          }
+        }}
         availableAccessGroups={uniqueMcpAccessGroups}
         prefillData={prefillData}
+        duplicateServer={duplicateServer}
         onBackToDiscovery={() => {
           setModalVisible(false);
           setPrefillData(null);
+          setDuplicateServer(null);
           setDiscoveryVisible(true);
         }}
       />

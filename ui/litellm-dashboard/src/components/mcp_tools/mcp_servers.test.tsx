@@ -427,4 +427,76 @@ describe("MCPServers", () => {
     // The server list refresh must NOT trigger a second health check
     expect(networking.fetchMCPServerHealth).toHaveBeenCalledTimes(1);
   });
+
+  it("should show duplicate button in actions column for admin users", async () => {
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test_Server",
+        alias: "test_server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test_Server")).toBeInTheDocument();
+    });
+
+    const duplicateButton = screen.getByRole("button", { name: /duplicate/i });
+    expect(duplicateButton).toBeInTheDocument();
+  });
+
+  it("should not show duplicate button for non-admin users", async () => {
+    const mockServers = [
+      {
+        server_id: "server-1",
+        server_name: "Test_Server",
+        alias: "test_server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "none",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+        teams: [],
+        mcp_access_groups: [],
+      },
+    ];
+
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MCPServers accessToken="123" userRole="Internal User" userID="user-1" />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test_Server")).toBeInTheDocument();
+    });
+
+    const duplicateButton = screen.queryByRole("button", { name: /duplicate/i });
+    expect(duplicateButton).not.toBeInTheDocument();
+  });
 });

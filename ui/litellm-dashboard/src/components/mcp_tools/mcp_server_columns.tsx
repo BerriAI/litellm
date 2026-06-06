@@ -2,7 +2,7 @@ import { useState } from "react";
 import { ColumnDef } from "@tanstack/react-table";
 import { MCPServer } from "./types";
 import { Icon } from "@tremor/react";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
+import { DuplicateIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { getMaskedAndFullUrl } from "./utils";
 import { Tooltip } from "antd";
 import { CheckOutlined } from "@ant-design/icons";
@@ -90,6 +90,7 @@ export const mcpServerColumns = (
   onByokConnect?: (server: MCPServer) => void,
   onRecheckHealth?: (serverId: string) => void,
   recheckingServerIds?: Set<string>,
+  onDuplicate?: (server: MCPServer) => void,
 ): ColumnDef<MCPServer>[] => [
   {
     accessorKey: "server_id",
@@ -307,6 +308,17 @@ export const mcpServerColumns = (
             <Icon icon={PencilAltIcon} size="sm" />
           </button>
         </Tooltip>
+        {onDuplicate && (
+          <Tooltip title="Duplicate">
+            <button
+              onClick={() => onDuplicate(row.original)}
+              aria-label="Duplicate"
+              className="p-1.5 rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+            >
+              <Icon icon={DuplicateIcon} size="sm" />
+            </button>
+          </Tooltip>
+        )}
         <Tooltip title="Delete">
           <button
             onClick={() => onDelete(row.original.server_id)}
