@@ -1,0 +1,50 @@
+INFO:     Started server process [12901]
+INFO:     Waiting for application startup.
+
+   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
+   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
+   ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
+   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+
+[92m00:50:48 - LiteLLM Proxy:INFO[0m: proxy_server.py:4472 - background_health_check_config enabled=False shared=False interval_seconds=300 max_concurrency=None details=True health_check_routing=False
+[92m00:50:48 - LiteLLM Router:INFO[0m: router.py:951 - Routing strategy: simple-shuffle
+[92m00:50:48 - LiteLLM Proxy:INFO[0m: proxy_server.py:723 - SESSION REUSE: Created shared aiohttp session for connection pooling (ID: 140129861946976, limit=1000, limit_per_host=500)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:4000 (Press CTRL+C to quit)
+[92m00:51:10 - LiteLLM Proxy:ERROR[0m: auth_exception_handler.py:95 - litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - No api key passed in.
+Requester IP Address:127.0.0.1
+Traceback (most recent call last):
+  File "/workspace/litellm/proxy/auth/user_api_key_auth.py", line 1091, in _user_api_key_auth_builder
+    raise Exception("No api key passed in.")
+Exception: No api key passed in.
+
+[1;37m#------------------------------------------------------------#[0m
+[1;37m#                                                            #[0m
+[1;37m#         'The worst thing about this product is...'          #[0m
+[1;37m#        https://github.com/BerriAI/litellm/issues/new        #[0m
+[1;37m#                                                            #[0m
+[1;37m#------------------------------------------------------------#[0m
+
+ Thank you for using LiteLLM! - Krrish & Ishaan
+
+
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+
+
+[32mLiteLLM: Proxy initialized with Config, Set models:[0m
+[32m    gpt-4o[0m
+[32m    gpt-4o-mini[0m
+[32m    gpt-3.5-turbo[0m
+INFO:     127.0.0.1:33812 - "GET /health HTTP/1.1" 401 Unauthorized
+[92m00:51:16 - LiteLLM:INFO[0m: utils.py:4083 - 
+LiteLLM completion() model= gpt-4o-mini; provider = openai
+[92m00:51:16 - LiteLLM:INFO[0m: utils.py:4083 - 
+LiteLLM completion() model= gpt-4o; provider = openai
+[92m00:51:16 - LiteLLM:INFO[0m: utils.py:4083 - 
+LiteLLM completion() model= gpt-3.5-turbo; provider = openai
+INFO:     127.0.0.1:43016 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43020 - "GET /models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56512 - "GET / HTTP/1.1" 200 OK

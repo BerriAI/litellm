@@ -1,0 +1,38 @@
+model_list:
+  # OpenAI Models - use with OPENAI_API_KEY env var
+  - model_name: gpt-4o
+    litellm_params:
+      model: gpt-4o
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: gpt-4o-mini
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  
+  # Anthropic Models - use with ANTHROPIC_API_KEY env var
+  - model_name: claude-3-5-sonnet-20241022
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+  - model_name: claude-3-haiku-20240307
+    litellm_params:
+      model: anthropic/claude-3-haiku-20240307
+
+# Basic proxy settings for development
+general_settings:
+  master_key: sk-1234  # Development master key
+  store_model_in_db: false  # Simpler for development
+  database_url: null  # No database for simple development
+  
+# Enable detailed logging for development
+litellm_settings:
+  set_verbose: true
+  
+# Router settings
+router_settings:
+  routing_strategy: simple-shuffle
+  
+# Development server settings
+server_settings:
+  host: 0.0.0.0
+  port: 4000
