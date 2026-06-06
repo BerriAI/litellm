@@ -32,8 +32,6 @@ _PRISMA_TO_PG_TABLE: Dict[str, str] = {
 
 def update_metrics(existing_metrics: SpendMetrics, record: Any) -> SpendMetrics:
     """Update metrics with new record data."""
-    # Coerce nullable DB fields to 0 to prevent TypeError on None + None/int
-    # when keys have no spend data. See: #29773
     existing_metrics.spend += record.spend or 0
     existing_metrics.prompt_tokens += record.prompt_tokens or 0
     existing_metrics.completion_tokens += record.completion_tokens or 0
@@ -698,8 +696,6 @@ _GROUP_DATE_ENDPOINT_API_KEY = 30  # 0b0011110
 
 def _record_to_spend_metrics(record: Any) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row."""
-    # Coerce nullable DB fields to 0 to prevent TypeError on None + None/int
-    # when keys have no spend data. See: #29773
     prompt_tokens = record.prompt_tokens or 0
     completion_tokens = record.completion_tokens or 0
     return SpendMetrics(
