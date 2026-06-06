@@ -1,0 +1,14 @@
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  drop_params: True
+  telemetry: False
+  
+general_settings:
+  master_key: sk-1234
+  store_model_in_db: True
+  database_url: "postgresql://litellm:devpass123@localhost:5432/litellm_dev"

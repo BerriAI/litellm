@@ -1,0 +1,46 @@
+model_list:
+  # OpenAI models for testing (requires OPENAI_API_KEY)
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 500
+      timeout: 300
+      
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+      rpm: 200
+      timeout: 300
+
+  # Anthropic models for testing (requires ANTHROPIC_API_KEY)  
+  - model_name: claude-3-5-sonnet
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+      rpm: 100
+      timeout: 300
+
+  # Simple embedding model
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: openai/text-embedding-3-small
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      mode: embedding
+      base_model: text-embedding-3-small
+
+litellm_settings:
+  drop_params: True
+  num_retries: 3
+  request_timeout: 600
+  telemetry: False
+  
+general_settings:
+  master_key: sk-1234  # Authentication key for proxy access
+  store_model_in_db: False  # Disable database requirement for development
+  
+# Enable detailed logging for development
+environment_variables:
+  LITELLM_LOG: DEBUG

@@ -1,0 +1,951 @@
+2026-06-06 02:20:29,771 - litellm_proxy_extras - INFO - Running prisma migrate deploy
+2026-06-06 02:20:36,047 - litellm_proxy_extras - INFO - prisma migrate deploy stdout: Environment variables loaded from ../../.env
+Prisma schema loaded from schema.prisma
+Datasource "client": PostgreSQL database "litellm_dev", schema "public" at "localhost:5432"
+
+123 migrations found in prisma/migrations
+
+Applying migration `20250326162113_baseline`
+Applying migration `20250326171002_add_daily_user_table`
+Applying migration `20250327180120_add_api_requests_to_daily_user_table`
+Applying migration `20250329084805_new_cron_job_table`
+Applying migration `20250331215456_track_success_and_failed_requests_daily_agg_table`
+Applying migration `20250411215431_add_managed_file_table`
+Applying migration `20250412081753_team_member_permissions`
+Applying migration `20250415151647_add_cache_read_write_tokens_daily_spend_transactions`
+Applying migration `20250415191926_add_daily_team_table`
+Applying migration `20250416115320_add_tag_table_to_db`
+Applying migration `20250416151339_drop_tag_uniqueness_requirement`
+Applying migration `20250416185146_add_allowed_routes_litellm_verification_token`
+Applying migration `20250425182129_add_session_id`
+Applying migration `20250430193429_add_managed_vector_stores`
+Applying migration `20250507161526_add_mcp_table_to_db`
+Applying migration `20250507161527_add_health_check_fields_to_mcp_servers`
+Applying migration `20250507184818_add_mcp_key_team_permission_mgmt`
+Applying migration `20250508072103_add_status_to_spendlogs`
+Applying migration `20250509141545_use_big_int_for_daily_spend_tables`
+Applying migration `20250510142544_add_session_id_index_spend_logs`
+Applying migration `20250514142245_add_guardrails_table`
+Applying migration `20250522223020_managed_object_table`
+Applying migration `20250526154401_allow_null_entity_id`
+Applying migration `20250528185438_add_vector_stores_to_object_permissions`
+Applying migration `20250603210143_cascade_budget_changes`
+Applying migration `20250618225828_add_health_check_table`
+Applying migration `20250625145206_cascade_budget_and_loosen_managed_file_json`
+Applying migration `20250625213625_add_status_to_managed_object_table`
+Applying migration `20250707212517_add_mcp_info_column_mcp_servers`
+Applying migration `20250707230009_add_mcp_namespaced_tool_name`
+Applying migration `20250711220620_add_stdio_mcp`
+Applying migration `20250718125714_add_litellm_params_to_vector_stores`
+Applying migration `20250802162330_prompt_table`
+Applying migration `20250806095134_rename_alias_to_server_name_mcp_table`
+Applying migration `20250918083359_drop_spec_version_column_from_mcp_table`
+Applying migration `20250926194702_unnamed_migration`
+Applying migration `20251003165142_add_allowed_tools_to_mcp`
+Applying migration `20251003190954_extra_headers_to_mcp_table`
+Applying migration `20251006143948_add_mcp_tool_permissions`
+Applying migration `20251011084309_add_tag_table`
+Applying migration `20251023141814_add_search_tool_table`
+Applying migration `20251031181430_add_cache_config_table`
+Applying migration `20251101131415_add_managed_vector_store_index_table`
+Applying migration `20251103072422_add_static_headers`
+Applying migration `20251104220043_add_credentials_to_mcp_servers`
+Applying migration `20251113000000_add_project_table`
+Applying migration `20251113000001_add_project_fields`
+Applying migration `20251114173537_add_request_id_to_daily_tag_spend`
+Applying migration `20251114180624_Add_org_usage_table`
+Applying migration `20251114182247_agents_table`
+Applying migration `20251119131227_add_prompt_versioning`
+Applying migration `20251122125322_Add organization_id to spend logs`
+Applying migration `20251204124859_add_end_user_spend_table`
+Applying migration `20251204142718_add_agent_permissions`
+Applying migration `20251209112246_add_ui_settings_table`
+Applying migration `20251210125210_add_storage_backend_to_managed_files`
+Applying migration `20251210205007_add_daily_agent_spend_table`
+Applying migration `20251211100212_schema_sync`
+Applying migration `20251219110931_add_deleted_keys_and_deleted_teams_tables`
+Applying migration `20251220144550_schema_update`
+Applying migration `20260102131258_add_metadata_urls_to_mcp_servers`
+Applying migration `20260105151539_add_allow_all_keys_to_mcp_servers`
+Applying migration `20260106155622_add_endpoint_to_daily_activity_tables`
+Applying migration `20260107111013_add_router_settings_to_keys_teams`
+Applying migration `20260108_add_user_email_lower_idx`
+Applying migration `20260116142756_update_deleted_keys_teams_table_routing_settings`
+Applying migration `20260123131407_add_policy_tables_and_policies_field`
+Applying migration `20260131150814_add_team_user_to_vector_stores`
+Applying migration `20260203120000_add_deprecated_verification_token_table`
+Applying migration `20260205091235_allow_team_guardrail_config`
+Applying migration `20260205144610_add_soft_budget_to_team_table`
+Applying migration `20260207093506_add_available_on_public_internet_to_mcp_servers`
+Applying migration `20260207110613_add_soft_budget_to_deleted_teams_table`
+Applying migration `20260209085821_add_verificationtoken_indexes`
+Applying migration `20260212103349_adjust_tags_policy_table`
+Applying migration `20260212143306_add_access_group_table`
+Applying migration `20260213105436_add_managed_vector_store_table`
+Applying migration `20260213170952_access_group_change_to_model_name`
+Applying migration `20260214094754_schema_sync`
+Applying migration `20260214163027_add_pipeline_to_policy_table`
+Applying migration `20260214185341_object_permissions_for_end_users`
+Applying migration `20260218231534_add_last_active_to_key_table`
+Applying migration `20260219105005_add_project_id_to_deleted_keys`
+Applying migration `20260219181415_baseline_diff`
+Applying migration `20260220124742_add_spec_path_to_mcp_servers`
+Applying migration `20260220153844_add_composite_index_aggregate_tables`
+Applying migration `20260221000000_ensure_project_id_verification_token`
+Applying migration `20260221183800_add_policy_versioning`
+Applying migration `20260222000000_add_batch_processed_to_managed_object_table`
+Applying migration `20260224201417_spend_logs_request_duration`
+Applying migration `20260224203854_add_agent_object_permissions_table`
+Applying migration `20260226000000_add_blocked_tools_to_object_permission`
+Applying migration `20260226120000_add_spend_log_tool_index`
+Applying migration `20260226202727_add_agent_id_to_delete_keys`
+Applying migration `20260228000000_add_claude_code_plugin_table`
+Applying migration `20260228100000_add_spend_logs_composite_index`
+Applying migration `20260228110000_mcp_default_public_internet_true`
+Applying migration `20260228170127_support_team_based_guardrails`
+Applying migration `20260303000000_update_tool_table_policies`
+Applying migration `20260304175016_add_spend_to_agent_table`
+Applying migration `20260305000000_add_agent_headers`
+Applying migration `20260305000000_add_rate_limits_to_agents`
+Applying migration `20260306175056_add_configs_override_table`
+Applying migration `20260306233848_schema_sync`
+Applying migration `20260309000000_add_mcp_approval_status`
+Applying migration `20260309000001_add_mcp_source_url`
+Applying migration `20260312124619_schema_sync`
+Applying migration `20260318140652_add_index_to_team_table`
+Applying migration `20260319000000_restore_mcp_approval_fields`
+Applying migration `20260321000000_add_mcp_toolsets`
+Applying migration `20260331000000_add_prompt_environment_and_created_by`
+Applying migration `20260401000000_add_budget_limits`
+Applying migration `20260401000000_add_team_member_model_scope`
+Applying migration `20260414140000_add_mcp_server_instructions`
+Applying migration `20260415120000_health_check_latest_per_model_index`
+Applying migration `20260418000000_add_adaptive_router_tables`
+Applying migration `20260421120000_add_memory_table`
+Applying migration `20260421135425_add_team_membership_total_spend`
+Applying migration `20260429120000_search_tools_on_object_permission`
+Applying migration `20260429161855_workflow_runs_tables`
+Applying migration `20260501195714_managed_resource_team_owner`
+Applying migration `20260513120000_add_delegate_auth_to_upstream_to_mcp_servers`
+Applying migration `20260514120000_add_blocked_to_proxy_model_table`
+
+The following migrations have been applied:
+
+migrations/
+  └─ 20250326162113_baseline/
+    └─ migration.sql
+  └─ 20250326171002_add_daily_user_table/
+    └─ migration.sql
+  └─ 20250327180120_add_api_requests_to_daily_user_table/
+    └─ migration.sql
+  └─ 20250329084805_new_cron_job_table/
+    └─ migration.sql
+  └─ 20250331215456_track_success_and_failed_requests_daily_agg_table/
+    └─ migration.sql
+  └─ 20250411215431_add_managed_file_table/
+    └─ migration.sql
+  └─ 20250412081753_team_member_permissions/
+    └─ migration.sql
+  └─ 20250415151647_add_cache_read_write_tokens_daily_spend_transactions/
+    └─ migration.sql
+  └─ 20250415191926_add_daily_team_table/
+    └─ migration.sql
+  └─ 20250416115320_add_tag_table_to_db/
+    └─ migration.sql
+  └─ 20250416151339_drop_tag_uniqueness_requirement/
+    └─ migration.sql
+  └─ 20250416185146_add_allowed_routes_litellm_verification_token/
+    └─ migration.sql
+  └─ 20250425182129_add_session_id/
+    └─ migration.sql
+  └─ 20250430193429_add_managed_vector_stores/
+    └─ migration.sql
+  └─ 20250507161526_add_mcp_table_to_db/
+    └─ migration.sql
+  └─ 20250507161527_add_health_check_fields_to_mcp_servers/
+    └─ migration.sql
+  └─ 20250507184818_add_mcp_key_team_permission_mgmt/
+    └─ migration.sql
+  └─ 20250508072103_add_status_to_spendlogs/
+    └─ migration.sql
+  └─ 20250509141545_use_big_int_for_daily_spend_tables/
+    └─ migration.sql
+  └─ 20250510142544_add_session_id_index_spend_logs/
+    └─ migration.sql
+  └─ 20250514142245_add_guardrails_table/
+    └─ migration.sql
+  └─ 20250522223020_managed_object_table/
+    └─ migration.sql
+  └─ 20250526154401_allow_null_entity_id/
+    └─ migration.sql
+  └─ 20250528185438_add_vector_stores_to_object_permissions/
+    └─ migration.sql
+  └─ 20250603210143_cascade_budget_changes/
+    └─ migration.sql
+  └─ 20250618225828_add_health_check_table/
+    └─ migration.sql
+  └─ 20250625145206_cascade_budget_and_loosen_managed_file_json/
+    └─ migration.sql
+  └─ 20250625213625_add_status_to_managed_object_table/
+    └─ migration.sql
+  └─ 20250707212517_add_mcp_info_column_mcp_servers/
+    └─ migration.sql
+  └─ 20250707230009_add_mcp_namespaced_tool_name/
+    └─ migration.sql
+  └─ 20250711220620_add_stdio_mcp/
+    └─ migration.sql
+  └─ 20250718125714_add_litellm_params_to_vector_stores/
+    └─ migration.sql
+  └─ 20250802162330_prompt_table/
+    └─ migration.sql
+  └─ 20250806095134_rename_alias_to_server_name_mcp_table/
+    └─ migration.sql
+  └─ 20250918083359_drop_spec_version_column_from_mcp_table/
+    └─ migration.sql
+  └─ 20250926194702_unnamed_migration/
+    └─ migration.sql
+  └─ 20251003165142_add_allowed_tools_to_mcp/
+    └─ migration.sql
+  └─ 20251003190954_extra_headers_to_mcp_table/
+    └─ migration.sql
+  └─ 20251006143948_add_mcp_tool_permissions/
+    └─ migration.sql
+  └─ 20251011084309_add_tag_table/
+    └─ migration.sql
+  └─ 20251023141814_add_search_tool_table/
+    └─ migration.sql
+  └─ 20251031181430_add_cache_config_table/
+    └─ migration.sql
+  └─ 20251101131415_add_managed_vector_store_index_table/
+    └─ migration.sql
+  └─ 20251103072422_add_static_headers/
+    └─ migration.sql
+  └─ 20251104220043_add_credentials_to_mcp_servers/
+    └─ migration.sql
+  └─ 20251113000000_add_project_table/
+    └─ migration.sql
+  └─ 20251113000001_add_project_fields/
+    └─ migration.sql
+  └─ 20251114173537_add_request_id_to_daily_tag_spend/
+    └─ migration.sql
+  └─ 20251114180624_Add_org_usage_table/
+    └─ migration.sql
+  └─ 20251114182247_agents_table/
+    └─ migration.sql
+  └─ 20251119131227_add_prompt_versioning/
+    └─ migration.sql
+  └─ 20251122125322_Add organization_id to spend logs/
+    └─ migration.sql
+  └─ 20251204124859_add_end_user_spend_table/
+    └─ migration.sql
+  └─ 20251204142718_add_agent_permissions/
+    └─ migration.sql
+  └─ 20251209112246_add_ui_settings_table/
+    └─ migration.sql
+  └─ 20251210125210_add_storage_backend_to_managed_files/
+    └─ migration.sql
+  └─ 20251210205007_add_daily_agent_spend_table/
+    └─ migration.sql
+  └─ 20251211100212_schema_sync/
+    └─ migration.sql
+  └─ 20251219110931_add_deleted_keys_and_deleted_teams_tables/
+    └─ migration.sql
+  └─ 20251220144550_schema_update/
+    └─ migration.sql
+  └─ 20260102131258_add_metadata_urls_to_mcp_servers/
+    └─ migration.sql
+  └─ 20260105151539_add_allow_all_keys_to_mcp_servers/
+    └─ migration.sql
+  └─ 20260106155622_add_endpoint_to_daily_activity_tables/
+    └─ migration.sql
+  └─ 20260107111013_add_router_settings_to_keys_teams/
+    └─ migration.sql
+  └─ 20260108_add_user_email_lower_idx/
+    └─ migration.sql
+  └─ 20260116142756_update_deleted_keys_teams_table_routing_settings/
+    └─ migration.sql
+  └─ 20260123131407_add_policy_tables_and_policies_field/
+    └─ migration.sql
+  └─ 20260131150814_add_team_user_to_vector_stores/
+    └─ migration.sql
+  └─ 20260203120000_add_deprecated_verification_token_table/
+    └─ migration.sql
+  └─ 20260205091235_allow_team_guardrail_config/
+    └─ migration.sql
+  └─ 20260205144610_add_soft_budget_to_team_table/
+    └─ migration.sql
+  └─ 20260207093506_add_available_on_public_internet_to_mcp_servers/
+    └─ migration.sql
+  └─ 20260207110613_add_soft_budget_to_deleted_teams_table/
+    └─ migration.sql
+  └─ 20260209085821_add_verificationtoken_indexes/
+    └─ migration.sql
+  └─ 20260212103349_adjust_tags_policy_table/
+    └─ migration.sql
+  └─ 20260212143306_add_access_group_table/
+    └─ migration.sql
+  └─ 20260213105436_add_managed_vector_store_table/
+    └─ migration.sql
+  └─ 20260213170952_access_group_change_to_model_name/
+    └─ migration.sql
+  └─ 20260214094754_schema_sync/
+    └─ migration.sql
+  └─ 20260214163027_add_pipeline_to_policy_table/
+    └─ migration.sql
+  └─ 20260214185341_object_permissions_for_end_users/
+    └─ migration.sql
+  └─ 20260218231534_add_last_active_to_key_table/
+    └─ migration.sql
+  └─ 20260219105005_add_project_id_to_deleted_keys/
+    └─ migration.sql
+  └─ 20260219181415_baseline_diff/
+    └─ migration.sql
+  └─ 20260220124742_add_spec_path_to_mcp_servers/
+    └─ migration.sql
+  └─ 20260220153844_add_composite_index_aggregate_tables/
+    └─ migration.sql
+  └─ 20260221000000_ensure_project_id_verification_token/
+    └─ migration.sql
+  └─ 20260221183800_add_policy_versioning/
+    └─ migration.sql
+  └─ 20260222000000_add_batch_processed_to_managed_object_table/
+    └─ migration.sql
+  └─ 20260224201417_spend_logs_request_duration/
+    └─ migration.sql
+  └─ 20260224203854_add_agent_object_permissions_table/
+    └─ migration.sql
+  └─ 20260226000000_add_blocked_tools_to_object_permission/
+    └─ migration.sql
+  └─ 20260226120000_add_spend_log_tool_index/
+    └─ migration.sql
+  └─ 20260226202727_add_agent_id_to_delete_keys/
+    └─ migration.sql
+  └─ 20260228000000_add_claude_code_plugin_table/
+    └─ migration.sql
+  └─ 20260228100000_add_spend_logs_composite_index/
+    └─ migration.sql
+  └─ 20260228110000_mcp_default_public_internet_true/
+    └─ migration.sql
+  └─ 20260228170127_support_team_based_guardrails/
+    └─ migration.sql
+  └─ 20260303000000_update_tool_table_policies/
+    └─ migration.sql
+  └─ 20260304175016_add_spend_to_agent_table/
+    └─ migration.sql
+  └─ 20260305000000_add_agent_headers/
+    └─ migration.sql
+  └─ 20260305000000_add_rate_limits_to_agents/
+    └─ migration.sql
+  └─ 20260306175056_add_configs_override_table/
+    └─ migration.sql
+  └─ 20260306233848_schema_sync/
+    └─ migration.sql
+  └─ 20260309000000_add_mcp_approval_status/
+    └─ migration.sql
+  └─ 20260309000001_add_mcp_source_url/
+    └─ migration.sql
+  └─ 20260312124619_schema_sync/
+    └─ migration.sql
+  └─ 20260318140652_add_index_to_team_table/
+    └─ migration.sql
+  └─ 20260319000000_restore_mcp_approval_fields/
+    └─ migration.sql
+  └─ 20260321000000_add_mcp_toolsets/
+    └─ migration.sql
+  └─ 20260331000000_add_prompt_environment_and_created_by/
+    └─ migration.sql
+  └─ 20260401000000_add_budget_limits/
+    └─ migration.sql
+  └─ 20260401000000_add_team_member_model_scope/
+    └─ migration.sql
+  └─ 20260414140000_add_mcp_server_instructions/
+    └─ migration.sql
+  └─ 20260415120000_health_check_latest_per_model_index/
+    └─ migration.sql
+  └─ 20260418000000_add_adaptive_router_tables/
+    └─ migration.sql
+  └─ 20260421120000_add_memory_table/
+    └─ migration.sql
+  └─ 20260421135425_add_team_membership_total_spend/
+    └─ migration.sql
+  └─ 20260429120000_search_tools_on_object_permission/
+    └─ migration.sql
+  └─ 20260429161855_workflow_runs_tables/
+    └─ migration.sql
+  └─ 20260501195714_managed_resource_team_owner/
+    └─ migration.sql
+  └─ 20260513120000_add_delegate_auth_to_upstream_to_mcp_servers/
+    └─ migration.sql
+  └─ 20260514120000_add_blocked_to_proxy_model_table/
+    └─ migration.sql
+      
+All migrations have been successfully applied.
+
+2026-06-06 02:20:36,048 - litellm_proxy_extras - INFO - prisma migrate deploy completed
+2026-06-06 02:20:36,048 - litellm_proxy_extras - INFO - Running post-migration sanity check...
+2026-06-06 02:20:36,049 - litellm_proxy_extras - INFO - Generating migration diff between DB and schema.prisma...
+2026-06-06 02:20:41,083 - litellm_proxy_extras - INFO - Migration diff created at /tmp/litellm_migration_diff_elhr3mg_/migration.sql
+2026-06-06 02:20:41,084 - litellm_proxy_extras - INFO - Running prisma db execute to apply the migration diff...
+2026-06-06 02:20:46,139 - litellm_proxy_extras - INFO - prisma db execute stdout: Script executed successfully.
+
+2026-06-06 02:20:46,139 - litellm_proxy_extras - INFO - ✅ Migration diff applied successfully
+2026-06-06 02:20:46,139 - litellm_proxy_extras - INFO - ✅ Post-migration sanity check completed
+[92m02:20:46 - LiteLLM Proxy:DEBUG[0m: litellm_license.py:29 - License Str value - None
+[92m02:20:46 - LiteLLM Proxy:DEBUG[0m: litellm_license.py:104 - litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License=None
+[92m02:20:46 - LiteLLM Proxy:DEBUG[0m: litellm_license.py:114 - litellm.proxy.auth.litellm_license.py::is_premium() - Updated 'self.license_str' - None
+[92m02:20:46 - LiteLLM Proxy:INFO[0m: proxy_server.py:1572 - Using packaged UI directory: /workspace/litellm/proxy/_experimental/out
+[92m02:20:46 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:1464 - Detected restructured UI via pattern: found 404/index.html
+[92m02:20:46 - LiteLLM Proxy:INFO[0m: proxy_server.py:1684 - Skipping UI restructuring: /workspace/litellm/proxy/_experimental/out is already pre-restructured
+[92m02:20:46 - LiteLLM:DEBUG[0m: logging_callback_manager.py:349 - Custom logger of type _PROXY_VirtualKeyModelMaxBudgetLimiter, key: _PROXY_VirtualKeyModelMaxBudgetLimiter already exists in [<litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f6a88914680>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f6a7b7dba70>], not adding again..
+INFO:     Will watch for changes in these directories: ['/workspace']
+INFO:     Uvicorn running on http://0.0.0.0:4000 (Press CTRL+C to quit)
+WARNING:  --reload-include and --reload-exclude have no effect unless watchfiles is installed.
+INFO:     Started reloader process [14611] using StatReload
+[1;33mLiteLLM Proxy: Using default (v1) migration resolver. If your deployment has seen schema thrashing during rolling deploys, try --use_v2_migration_resolver (safer: avoids the diff-and-force recovery that caused the thrash).[0m
+INFO:     Started server process [14720]
+INFO:     Waiting for application startup.
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:771 - litellm.proxy.proxy_server.py::startup() - CHECKING PREMIUM USER - False
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:784 - worker_config: {"model": null, "alias": null, "api_base": null, "api_version": "2025-02-01-preview", "debug": false, "detailed_debug": true, "temperature": null, "max_tokens": null, "request_timeout": null, "max_budget": null, "telemetry": true, "drop_params": false, "add_function_to_prompt": false, "headers": null, "save": false, "config": "simple_config.yaml", "use_queue": false}
+
+   ██╗     ██╗████████╗███████╗██╗     ██╗     ███╗   ███╗
+   ██║     ██║╚══██╔══╝██╔════╝██║     ██║     ████╗ ████║
+   ██║     ██║   ██║   █████╗  ██║     ██║     ██╔████╔██║
+   ██║     ██║   ██║   ██╔══╝  ██║     ██║     ██║╚██╔╝██║
+   ███████╗██║   ██║   ███████╗███████╗███████╗██║ ╚═╝ ██║
+   ╚══════╝╚═╝   ╚═╝   ╚══════╝╚══════╝╚══════╝╚═╝     ╚═╝
+
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4234 - [94m setting litellm.drop_params=True[0m
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4234 - [94m setting litellm.telemetry=False[0m
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4751 - _alerting_callbacks: {'REDACTED', 'store_model_in_db': True, 'REDACTED'}
+[92m02:20:54 - LiteLLM Proxy:INFO[0m: proxy_server.py:4472 - background_health_check_config enabled=False shared=False interval_seconds=300 max_concurrency=None details=True health_check_routing=False
+[92m02:20:54 - LiteLLM:DEBUG[0m: utils.py:5745 - checking potential_model_names in litellm.model_cost: {'split_model': 'f63d96ae291f609a72eaea40358582ba39e4227a5f981ac81f2aab75d356afc5', 'combined_model_name': 'f63d96ae291f609a72eaea40358582ba39e4227a5f981ac81f2aab75d356afc5', 'stripped_model_name': 'f63d96ae291f609a72eaea40358582ba39e4227a5f981ac81f2aab75d356afc5', 'combined_stripped_model_name': 'f63d96ae291f609a72eaea40358582ba39e4227a5f981ac81f2aab75d356afc5', 'custom_llm_provider': None}
+[92m02:20:54 - LiteLLM:DEBUG[0m: utils.py:6059 - Error getting model info: This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json
+[92m02:20:54 - LiteLLM:DEBUG[0m: utils.py:2950 - added/updated model=f63d96ae291f609a72eaea40358582ba39e4227a5f981ac81f2aab75d356afc5 in litellm.model_cost: f63d96ae291f609a72eaea40358582ba39e4227a5f981ac81f2aab75d356afc5
+[92m02:20:54 - LiteLLM:DEBUG[0m: utils.py:5745 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-4o-mini', 'combined_model_name': 'openai/gpt-4o-mini', 'stripped_model_name': 'openai/gpt-4o-mini', 'combined_stripped_model_name': 'openai/gpt-4o-mini', 'custom_llm_provider': 'openai'}
+[92m02:20:54 - LiteLLM:DEBUG[0m: utils.py:2950 - added/updated model=gpt-4o-mini in litellm.model_cost: gpt-4o-mini
+[92m02:20:54 - LiteLLM Router:DEBUG[0m: router.py:8261 - 
+Initialized Model List ['gpt-4o-mini']
+[92m02:20:54 - LiteLLM Router:INFO[0m: router.py:951 - Routing strategy: simple-shuffle
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:4727 - Policy engine: no policies in config, skipping
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: utils.py:2789 - Creating Prisma Client..
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: utils.py:2933 - Success - Created Prisma Client
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: utils.py:4172 - PrismaClient: connect() called Attempting to Connect to DB
+[92m02:20:54 - LiteLLM Proxy:DEBUG[0m: utils.py:4176 - PrismaClient: DB not connected, Attempting to Connect to DB
+query-engine ac9d7041ed77bcc8a8dbd2ab6616b39013829574
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: prisma_client.py:355 - IAM token auth not enabled, skipping token refresh task
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: utils.py:4748 - Started Prisma DB health watchdog (interval=30s, reconnect_cooldown=15s, probe_timeout=5.0s, reconnect_timeout=30.0s)
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: utils.py:4489 - Found prisma-query-engine at PID 14735.
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: utils.py:4493 - Watching engine PID 14735 via waitpid thread.
+[92m02:20:55 - LiteLLM:DEBUG[0m: logging_callback_manager.py:349 - Custom logger of type SkillsInjectionHook, key: SkillsInjectionHook-max_iterations=10-sandbox_timeout=120-message_logging=True-turn_off_message_logging=False already exists in [<litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f631b513ad0>, <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740>, <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0>, <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590>, <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0>], not adding again..
+[92m02:20:55 - LiteLLM:DEBUG[0m: logging_callback_manager.py:349 - Custom logger of type _ProxyDBLogger, key: _ProxyDBLogger-message_logging=True-turn_off_message_logging=False already exists in [<bound method Router.deployment_callback_on_success of <litellm.router.Router object at 0x7f631c9579b0>>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f6310264d40>, <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0>], not adding again..
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:894 - About to initialize semantic tool filter
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:897 - litellm_settings keys = ['drop_params', 'telemetry']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7239 - Semantic tool filter not configured or not enabled, skipping initialization
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:904 - After semantic tool filter initialization
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:918 - prisma_client: <litellm.proxy.utils.PrismaClient object at 0x7f631b6f5df0>
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: proxy_server.py:7531 - Tag spend update job scheduled at 29s interval (2.2x main job interval)
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: hanging_request_check.py:148 - Checking for hanging requests....
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: utils.py:5529 - Starting spend logs queue monitor (threshold: 100, poll_interval: 2.0s)
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5069 - len new_models: 0
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aim
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.akto
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aporia_ai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.azure
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.block_code_execution
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.custom_code
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.dynamoai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.enkryptai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.grayswan
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.guardrails_ai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.hiddenlayer
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.ibm_guardrails
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.javelin
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.lasso
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_security
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.microsoft_purview
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.model_armor
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.noma
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.onyx
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.openai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pangea
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pillar
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.prompt_security
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.promptguard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qohash
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qualifire
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.rubrik
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.semantic_guard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.tool_policy
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.unified_guardrail
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.xecguard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:175 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aim
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.aim: ['aim']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.akto
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.akto: ['akto']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.aporia_ai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.aporia_ai: ['aporia']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.azure
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.azure: ['azure/prompt_shield', 'azure/text_moderations']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.block_code_execution
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.block_code_execution: ['block_code_execution']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.crowdstrike_aidr: ['crowdstrike_aidr']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.custom_code
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.custom_code: ['custom_code']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.dynamoai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.dynamoai: ['dynamoai']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.enkryptai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.enkryptai: ['enkryptai']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api: ['generic_guardrail_api']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.grayswan
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.grayswan: ['grayswan']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.guardrails_ai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.guardrails_ai: ['guardrails_ai']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.hiddenlayer
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.hiddenlayer: ['hiddenlayer']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.ibm_guardrails
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.ibm_guardrails: ['ibm_guardrails']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.javelin
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.javelin: ['javelin']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.lasso
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.lasso: ['lasso']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter: ['litellm_content_filter']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:112 - Found initialize_guardrail function in litellm.proxy.guardrails.guardrail_hooks.llm_as_a_judge
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.mcp_end_user_permission: ['mcp_end_user_permission']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer: ['mcp_jwt_signer']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.mcp_security
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.mcp_security: ['mcp_security']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.microsoft_purview
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.microsoft_purview: ['microsoft_purview']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.model_armor
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.model_armor: ['model_armor']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.noma
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.noma: ['noma', 'noma_v2']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.onyx
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.onyx: ['onyx']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.openai
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.openai: ['openai_moderation']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pangea
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.pangea: ['pangea']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs: ['panw_prisma_airs']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.pillar
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.pillar: ['pillar']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.prompt_security
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.prompt_security: ['prompt_security']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.promptguard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.promptguard: ['promptguard']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qohash
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.qohash: ['qostodian_nexus']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.qualifire
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.qualifire: ['qualifire']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.rubrik
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.rubrik: ['rubrik']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.semantic_guard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.semantic_guard: ['semantic_guard']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.tool_policy
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:112 - Found initialize_guardrail function in litellm.proxy.guardrails.guardrail_hooks.tool_policy
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.unified_guardrail
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.xecguard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.xecguard: ['xecguard']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:94 - Discovering guardrails in: litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:103 - Found guardrail_initializer_registry in litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard: ['zscaler_ai_guard']
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: guardrail_registry.py:123 - Discovered 40 guardrail initializers: ['aim', 'akto', 'aporia', 'azure/prompt_shield', 'azure/text_moderations', 'block_code_execution', 'crowdstrike_aidr', 'custom_code', 'dynamoai', 'enkryptai', 'generic_guardrail_api', 'grayswan', 'guardrails_ai', 'hiddenlayer', 'ibm_guardrails', 'javelin', 'lasso', 'litellm_content_filter', 'llm_as_a_judge', 'mcp_end_user_permission', 'mcp_jwt_signer', 'mcp_security', 'microsoft_purview', 'model_armor', 'noma', 'noma_v2', 'onyx', 'openai_moderation', 'pangea', 'panw_prisma_airs', 'pillar', 'prompt_security', 'promptguard', 'qostodian_nexus', 'qualifire', 'rubrik', 'semantic_guard', 'tool_policy', 'xecguard', 'zscaler_ai_guard']
+[92m02:20:55 - LiteLLM:DEBUG[0m: create_views.py:245 - Estimated Row count of LiteLLM_SpendLogs = [{'reltuples': -1}]
+[92m02:20:55 - LiteLLM:DEBUG[0m: create_views.py:255 - Should create views
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: proxy_server.py:873 - Password migration: No plaintext passwords found
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6315 - guardrails from the DB []
+[92m02:20:55 - LiteLLM:DEBUG[0m: create_views.py:51 - LiteLLM_VerificationTokenView Created!
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: policy_registry.py:578 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m02:20:55 - LiteLLM Proxy:INFO[0m: attachment_registry.py:482 - Synced 0 attachments from DB to in-memory registry
+[92m02:20:55 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6361 - Successfully synced policies and attachments from DB
+[92m02:20:55 - LiteLLM:DEBUG[0m: create_views.py:74 - MonthlyGlobalSpend Created!
+[92m02:20:56 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3223 - Loading MCP servers from database into registry...
+[92m02:20:56 - LiteLLM:DEBUG[0m: create_views.py:105 - Last30dKeysBySpend Created!
+[92m02:20:56 - LiteLLM:INFO[0m: mcp_server_manager.py:3244 - Found 0 MCP servers in database
+[92m02:20:56 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3317 - MCP registry refreshed (0 servers in registry)
+[92m02:20:56 - LiteLLM:DEBUG[0m: create_views.py:131 - Last30dModelsBySpend Created!
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2691 - initializing pass through endpoints
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.agentops
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.arize
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.arize: ['arize_phoenix']
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.azure_sentinel
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.bitbucket
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.bitbucket: ['bitbucket']
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.compression_interception
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.deepeval
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.dotprompt
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.dotprompt: ['dotprompt']
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.focus
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.generic_prompt_management
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.generic_prompt_management: ['generic_prompt_management']
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.gitlab
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:65 - Found prompt_initializer_registry in litellm.integrations.gitlab: ['gitlab']
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.levo
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.litellm_agent
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.otel
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.prometheus_helpers
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.vantage
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.weave
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:54 - Discovering prompt integrations in: litellm.integrations.websearch_interception
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: prompt_registry.py:76 - Discovered 5 prompt initializers: ['arize_phoenix', 'bitbucket', 'dotprompt', 'generic_prompt_management', 'gitlab']
+[92m02:20:56 - LiteLLM:DEBUG[0m: create_views.py:155 - MonthlyGlobalSpendPerKey Created!
+[92m02:20:56 - LiteLLM Proxy:INFO[0m: proxy_server.py:6504 - Loading 0 search tool(s) from database into router
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6524 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m02:20:56 - LiteLLM:DEBUG[0m: create_views.py:183 - MonthlyGlobalSpendPerUserPerKey Created!
+[92m02:20:56 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:329 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6381 - Successfully synced tool policy from DB
+[92m02:20:56 - LiteLLM:DEBUG[0m: create_views.py:204 - DailyTagSpend Created!
+[92m02:20:56 - LiteLLM:DEBUG[0m: create_views.py:225 - Last30dTopEndUsersSpend Created!
+[92m02:20:56 - LiteLLM:DEBUG[0m: focus_logger.py:167 - No Focus export logger registered; skipping scheduler
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7823 - key_rotation_enabled: False
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7857 - Key rotation disabled (set LITELLM_KEY_ROTATION_ENABLED=true to enable)
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7888 - expired_ui_session_key_cleanup_enabled: False
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:7933 - Expired UI session key cleanup disabled (set LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)
+[92m02:20:56 - LiteLLM Proxy:INFO[0m: proxy_server.py:7686 - Batch cost check job scheduled successfully
+[92m02:20:56 - LiteLLM Proxy:INFO[0m: proxy_server.py:7717 - Responses cost check job scheduled successfully
+[92m02:20:56 - LiteLLM Proxy:INFO[0m: proxy_server.py:7736 - APScheduler started with memory leak prevention settings: removed jitter, increased intervals, misfire_grace_time=3600
+[92m02:20:56 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:8101 - LiteLLM: Pyroscope profiling is disabled (set LITELLM_ENABLE_PYROSCOPE=true to enable).
+[92m02:20:56 - LiteLLM Proxy:INFO[0m: proxy_server.py:723 - SESSION REUSE: Created shared aiohttp session for connection pooling (ID: 140063397006224, limit=1000, limit_per_host=500)
+INFO:     Application startup complete.
+[92m02:21:07 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:570 - populate_request_with_path_params: No vector_store_id present in path=/health
+[92m02:21:08 - LiteLLM Proxy:ERROR[0m: auth_exception_handler.py:95 - litellm.proxy.proxy_server.user_api_key_auth(): Exception occured - No api key passed in.
+Requester IP Address:127.0.0.1
+Traceback (most recent call last):
+  File "/workspace/litellm/proxy/auth/user_api_key_auth.py", line 1091, in _user_api_key_auth_builder
+    raise Exception("No api key passed in.")
+Exception: No api key passed in.
+[92m02:21:08 - LiteLLM:DEBUG[0m: logging_callback_manager.py:349 - Custom logger of type _ProxyDBLogger, key: _ProxyDBLogger-message_logging=True-turn_off_message_logging=False already exists in [<bound method Router.deployment_callback_on_success of <litellm.router.Router object at 0x7f631c9579b0>>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f6310264d40>, <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0>, <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740>, <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0>, <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590>, <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0>, <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0>, <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0>, <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0>, <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0>, <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0>], not adding again..
+[92m02:21:08 - LiteLLM:DEBUG[0m: utils.py:485 - Initialized litellm callbacks, Async Success Callbacks: [<bound method Router.deployment_callback_on_success of <litellm.router.Router object at 0x7f631c9579b0>>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f6310264d40>, <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0>, <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740>, <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0>, <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590>, <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0>, <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0>, <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0>, <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0>, <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0>, <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0>]
+[92m02:21:08 - LiteLLM:DEBUG[0m: litellm_logging.py:563 - self.optional_params: {}
+[92m02:21:08 - LiteLLM:DEBUG[0m: litellm_logging.py:563 - self.optional_params: {}
+[92m02:21:08 - LiteLLM:DEBUG[0m: litellm_logging.py:1170 - [92m{'litellm_trace_id': 'c998bee1-35bd-4d9d-bb21-83e76ffd7d97', 'litellm_call_id': '3eb1c38a-c8b9-4551-bd7a-13cce1ec866c', 'input': '', 'litellm_params': {'acompletion': None, 'api_key': None, 'force_timeout': 600, 'logger_fn': None, 'verbose': False, 'custom_llm_provider': None, 'api_base': '', 'data_residency': None, 'litellm_call_id': '3eb1c38a-c8b9-4551-bd7a-13cce1ec866c', 'model_alias_map': None, 'completion_call_id': None, 'aembedding': None, 'metadata': {'user_api_key_hash': None, 'user_api_key_alias': None, 'user_api_key_spend': 0.0, 'user_api_key_max_budget': None, 'user_api_key_team_id': None, 'user_api_key_project_id': None, 'user_api_key_project_alias': None, 'user_api_key_user_id': None, 'user_api_key_org_id': None, 'user_api_key_org_alias': None, 'user_api_key_team_alias': None, 'user_api_key_end_user_id': None, 'user_api_key_user_email': None, 'user_api_key_request_route': '/health', 'user_api_key_budget_reset_at': None, 'user_api_key_auth_metadata': {}}, 'model_info': None, 'proxy_server_request': None, 'preset_cache_key': None, 'no-log': None, 'stream_response': {}, 'input_cost_per_token': None, 'input_cost_per_second': None, 'output_cost_per_token': None, 'output_cost_per_second': None, 'cost_per_query': None, 'cooldown_time': None, 'text_completion': None, 'azure_ad_token_provider': None, 'user_continue_message': None, 'base_model': None, 'litellm_trace_id': None, 'litellm_session_id': None, 'hf_model_name': None, 'custom_prompt_dict': None, 'litellm_metadata': None, 'disable_add_transform_inline_image_block': None, 'drop_params': None, 'prompt_id': None, 'prompt_variables': None, 'async_call': None, 'ssl_verify': None, 'merge_reasoning_content_in_choices': None, 'api_version': None, 'max_retries': None, 'use_litellm_proxy': None, 'litellm_request_debug': None}, 'applied_guardrails': [], 'model': '', 'messages': [{'role': 'user', 'content': 'default-message-value'}], 'optional_params': {}, 'start_time': datetime.datetime(2026, 6, 6, 2, 21, 8, 25621), 'stream': False, 'user': '', 'call_type': '/health', 'completion_start_time': None, 'standard_callback_dynamic_params': {}, 'stream_options': None, 'litellm_no_upstream_llm_call': True, 'api_key': '', 'additional_args': {}, 'log_event_type': 'pre_api_call'}[0m
+
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <bound method Router.async_deployment_callback_on_failure of <litellm.router.Router object at 0x7f631c9579b0>> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f631b513ad0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: litellm_logging.py:3023 - Logging Details LiteLLM-Failure Call: [<bound method Router.deployment_callback_on_failure of <litellm.router.Router object at 0x7f631c9579b0>>, <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f631b513ad0>, <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740>, <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0>, <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590>, <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0>, <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0>, <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0>, <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0>, <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0>, <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0>]
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:149 - Enters prisma db call, response_cost: 0.0, token: None; user_id: None; team_id: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: spend_tracking_utils.py:113 - getting payload for SpendLogs, available keys in metadata: ['user_api_key_hash', 'user_api_key_alias', 'user_api_key_spend', 'user_api_key_max_budget', 'user_api_key_team_id', 'user_api_key_project_id', 'user_api_key_project_alias', 'user_api_key_user_id', 'user_api_key_org_id', 'user_api_key_org_alias', 'user_api_key_team_alias', 'user_api_key_end_user_id', 'user_api_key_user_email', 'user_api_key_request_route', 'user_api_key_budget_reset_at', 'user_api_key_auth_metadata', 'user_api_key', 'status', 'error_information']
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: spend_tracking_utils.py:465 - SpendTable: created payload - request_id: 3eb1c38a-c8b9-4551-bd7a-13cce1ec866c, model: , spend: 0
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:753 - Writing spend log to db - request_id: 3eb1c38a-c8b9-4551-bd7a-13cce1ec866c, spend: 0.0
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:223 - Runs spend update on all tables
+
+[1;37m#------------------------------------------------------------#[0m
+[1;37m#                                                            #[0m
+[1;37m#           'I get frustrated when the product...'            #[0m
+[1;37m#        https://github.com/BerriAI/litellm/issues/new        #[0m
+[1;37m#                                                            #[0m
+[1;37m#------------------------------------------------------------#[0m
+
+ Thank you for using LiteLLM! - Krrish & Ishaan
+
+
+
+[1;31mGive Feedback / Get Help: https://github.com/BerriAI/litellm/issues/new[0m
+
+
+[32mLiteLLM: Proxy initialized with Config, Set models:[0m
+[32m    gpt-4o-mini[0m
+INFO:     127.0.0.1:41282 - "GET /health HTTP/1.1" 401 Unauthorized
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:589 - track_cost_callback: team_id is None or prisma_client is None. Not tracking spend for team
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:643 - track_cost_callback: org_id is None or prisma_client is None. Not tracking spend for org
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:717 - Failed to parse request_tags JSON: []
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <bound method Router.deployment_callback_on_failure of <litellm.router.Router object at 0x7f631c9579b0>> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM Router:DEBUG[0m: router.py:7297 - Router: Entering 'deployment_callback_on_failure'
+[92m02:21:08 - LiteLLM Router:DEBUG[0m: router.py:7349 - Router: Exiting 'deployment_callback_on_failure' without cooldown. No model_info found.
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1990 - Logged request status: failure
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:63 - Adding update to queue: {'_2026-06-06_None___': {'user_id': '', 'date': '2026-06-06', 'api_key': 'None', 'model': '', 'model_group': '', 'mcp_namespaced_tool_name': None, 'custom_llm_provider': '', 'endpoint': None, 'prompt_tokens': 0, 'completion_tokens': 0, 'spend': 0.0, 'api_requests': 1, 'successful_requests': 0, 'failed_requests': 1, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}}
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:2155 - end_user is None or empty for request. Skipping incrementing end user spend.
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1990 - Logged request status: failure
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:63 - Adding update to queue: {'_2026-06-06_None___': {'team_id': '', 'date': '2026-06-06', 'api_key': 'None', 'model': '', 'model_group': '', 'mcp_namespaced_tool_name': None, 'custom_llm_provider': '', 'endpoint': None, 'prompt_tokens': 0, 'completion_tokens': 0, 'spend': 0.0, 'api_requests': 1, 'successful_requests': 0, 'failed_requests': 1, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}}
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f631b513ad0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:2112 - organization_id is None for request. Skipping incrementing organization spend.
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1990 - Logged request status: failure
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:08 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1149 - User Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1194 - End-User Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1209 - KEY Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1250 - Team Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1298 - Team Membership Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1372 - Org Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1465 - Tag Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1465 - Agent Spend transactions: {}
+[92m02:21:08 - LiteLLM Proxy:INFO[0m: daily_spend_update_queue.py:90 - Spend tracking - flushed 1 daily spend update items from in-memory queue
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {'_2026-06-06_None___': {'user_id': '', 'date': '2026-06-06', 'api_key': 'None', 'model': '', 'model_group': '', 'mcp_namespaced_tool_name': None, 'custom_llm_provider': '', 'endpoint': None, 'prompt_tokens': 0, 'completion_tokens': 0, 'spend': 0.0, 'api_requests': 1, 'successful_requests': 0, 'failed_requests': 1, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily User Spend transactions: 1
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1784 - Processed 1 daily user transactions in 0.01s
+[92m02:21:08 - LiteLLM Proxy:INFO[0m: daily_spend_update_queue.py:90 - Spend tracking - flushed 1 daily spend update items from in-memory queue
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {'_2026-06-06_None___': {'team_id': '', 'date': '2026-06-06', 'api_key': 'None', 'model': '', 'model_group': '', 'mcp_namespaced_tool_name': None, 'custom_llm_provider': '', 'endpoint': None, 'prompt_tokens': 0, 'completion_tokens': 0, 'spend': 0.0, 'api_requests': 1, 'successful_requests': 0, 'failed_requests': 1, 'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0}}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily Team Spend transactions: 1
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1784 - Processed 1 daily team transactions in 0.00s
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily Org Spend transactions: 0
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily org spend update
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily End_user Spend transactions: 0
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily end_user spend update
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily Agent Spend transactions: 0
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily agent spend update
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: utils.py:5377 - Spend Logs transactions: 1
+[92m02:21:08 - LiteLLM Proxy:INFO[0m: utils.py:5259 - Spend tracking - processing 1 spend logs for DB write
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: utils.py:5296 - Flushed 1 logs to the DB.
+[92m02:21:08 - LiteLLM Proxy:DEBUG[0m: utils.py:5305 - 1 logs processed. Remaining in queue: 0
+[92m02:21:12 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:570 - populate_request_with_path_params: No vector_store_id present in path=/health
+[92m02:21:12 - LiteLLM:DEBUG[0m: user_api_key_auth.py:1187 - api key not found in cache.
+[92m02:21:12 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1778 - centralized auth: user fetch swallowed (ValueError: User doesn't exist in db. 'user_id'=default_user_id. Create user via `/user/new` call. Got error - )
+[92m02:21:12 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4412 - Vector store registry not found, skipping vector store access check
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:5745 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-4o-mini', 'combined_model_name': 'openai/gpt-4o-mini', 'stripped_model_name': 'gpt-4o-mini', 'combined_stripped_model_name': 'openai/gpt-4o-mini', 'custom_llm_provider': 'openai'}
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:485 - 
+
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:485 - [92mRequest to litellm:[0m
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:485 - [92mlitellm.acompletion(REDACTED', use_in_pass_through=False, use_litellm_proxy=False, merge_reasoning_content_in_choices=False, model='openai/gpt-4o-mini', messages=[{'role': 'user', 'content': "Hey how's it going?"}], max_tokens=5, litellm_logging_obj=<litellm.litellm_core_utils.litellm_logging.Logging object at 0x7f63102675f0>, litellm_metadata={'tags': ['litellm-internal-health-check'], 'user_api_key_hash': 'litellm-internal-health-check', 'user_api_key_alias': 'litellm-internal-health-check', 'user_api_key_spend': 0.0, 'user_api_key_max_budget': None, 'user_api_key_team_id': 'litellm-internal-health-check', 'user_api_key_project_id': None, 'user_api_key_project_alias': None, 'user_api_key_user_id': None, 'user_api_key_org_id': None, 'user_api_key_org_alias': None, 'user_api_key_team_alias': 'litellm-internal-health-check', 'user_api_key_end_user_id': None, 'user_api_key_user_email': None, 'user_api_key_request_route': None, 'user_api_key_budget_reset_at': None, 'user_api_key_auth_metadata': {}, 'user_REDACTED', 'agent_id': None, 'user_api_end_user_max_budget': None, 'user_api_key_auth': UserAPIKeyAuth(token='litellm-internal-health-check', key_name=None, key_alias='litellm-internal-health-check', spend=0.0, max_budget=None, expires=None, models=[], aliases={}, config={}, user_id=None, team_id='litellm-internal-health-check', agent_id=None, project_id=None, max_parallel_requests=None, metadata={}, tpm_limit=None, rpm_limit=None, budget_duration=None, budget_reset_at=None, allowed_cache_controls=[], allowed_routes=[], permissions={}, model_spend={}, model_max_budget={}, soft_budget_cooldown=False, blocked=None, litellm_budget_table=None, org_id=None, created_at=None, created_by=None, updated_at=None, updated_by=None, last_active=None, object_permission_id=None, object_permission=None, access_group_ids=None, rotation_count=0, auto_rotate=False, rotation_interval=None, last_rotation_at=None, key_rotation_at=None, router_settings=None, budget_limits=None, team_spend=None, team_alias='litellm-internal-health-check', team_tpm_limit=None, team_rpm_limit=None, team_max_budget=None, team_soft_budget=None, team_models=[], team_blocked=False, soft_budget=None, team_model_aliases=None, team_member=None, team_metadata=None, team_object_permission_id=None, team_member_spend=None, team_member_tpm_limit=None, team_member_rpm_limit=None, end_user_id=None, end_user_tpm_limit=None, end_user_rpm_limit=None, end_user_max_budget=None, end_user_model_max_budget=None, organization_alias=None, organization_max_budget=None, organization_tpm_limit=None, organization_rpm_limit=None, organization_metadata=None, project_alias=None, project_metadata=None, last_refreshed_at=None, REDACTED', user_role=None, allowed_model_region=None, parent_otel_span=None, rpm_limit_per_model=None, tpm_limit_per_model=None, user_tpm_limit=None, user_rpm_limit=None, user_email=None, user_spend=None, user_max_budget=None, request_route=None, budget_reservation=None, user=None, created_by_user=None, end_user_object_permission=None, team_object_permission=None, jwt_claims=None)}, cache={'no-cache': True})[0m
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:485 - 
+
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:485 - ASYNC kwargs[caching]: False; litellm.cache: None; kwargs.get('cache'): {'no-cache': True}
+[92m02:21:12 - LiteLLM:DEBUG[0m: main.py:542 - 🔄 NO SHARED SESSION: acompletion called without shared_session
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:5745 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-4o-mini', 'combined_model_name': 'openai/gpt-4o-mini', 'stripped_model_name': 'gpt-4o-mini', 'combined_stripped_model_name': 'openai/gpt-4o-mini', 'custom_llm_provider': 'openai'}
+[92m02:21:12 - LiteLLM:INFO[0m: utils.py:4083 - 
+LiteLLM completion() model= gpt-4o-mini; provider = openai
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:4086 - 
+LiteLLM: Params passed to completion() {'model': 'gpt-4o-mini', 'functions': None, 'function_call': None, 'temperature': None, 'top_p': None, 'n': None, 'stream': None, 'stream_options': None, 'stop': None, 'max_tokens': 5, 'max_completion_tokens': None, 'modalities': None, 'prediction': None, 'audio': None, 'presence_penalty': None, 'frequency_penalty': None, 'logit_bias': None, 'user': None, 'custom_llm_provider': 'openai', 'response_format': None, 'seed': None, 'tools': None, 'tool_choice': None, 'max_retries': None, 'logprobs': None, 'top_logprobs': None, 'extra_headers': None, 'api_version': None, 'parallel_tool_calls': None, 'drop_params': None, 'allowed_openai_params': None, 'reasoning_effort': None, 'verbosity': None, 'additional_drop_params': None, 'messages': [{'role': 'user', 'content': "Hey how's it going?"}], 'thinking': None, 'web_search_options': None, 'safety_identifier': None, 'service_tier': None}
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:4089 - 
+LiteLLM: Non-Default params passed to completion() {'max_tokens': 5}
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:485 - Final returned optional params: {'max_tokens': 5, 'extra_body': {}}
+[92m02:21:12 - LiteLLM:DEBUG[0m: litellm_logging.py:563 - self.optional_params: {'max_tokens': 5, 'extra_body': {}}
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:5745 - checking potential_model_names in litellm.model_cost: {'split_model': 'gpt-4o-mini', 'combined_model_name': 'openai/gpt-4o-mini', 'stripped_model_name': 'gpt-4o-mini', 'combined_stripped_model_name': 'openai/gpt-4o-mini', 'custom_llm_provider': 'openai'}
+[92m02:21:12 - LiteLLM:DEBUG[0m: http_handler.py:943 - Using AiohttpTransport...
+[92m02:21:12 - LiteLLM:DEBUG[0m: http_handler.py:1011 - Creating AiohttpTransport...
+[92m02:21:12 - LiteLLM:DEBUG[0m: http_handler.py:1025 - NEW SESSION: Creating new ClientSession (no shared session provided)
+[92m02:21:12 - LiteLLM:DEBUG[0m: litellm_logging.py:1170 - [92m
+
+POST Request Sent from LiteLLM:
+curl -X POST \
+https://api.openai.com/v1/ \
+-H 'Authorization: Be****IA' \
+-d '{'model': 'gpt-4o-mini', 'messages': [{'role': 'user', 'content': "Hey how's it going?"}], 'max_tokens': 5, 'extra_body': {}}'
+[0m
+
+[92m02:21:12 - LiteLLM:DEBUG[0m: exception_mapping_utils.py:2498 - Logging Details: logger_fn - None | callable(logger_fn) - False
+[92m02:21:12 - LiteLLM:DEBUG[0m: litellm_logging.py:3023 - Logging Details LiteLLM-Failure Call: [<bound method Router.deployment_callback_on_failure of <litellm.router.Router object at 0x7f631c9579b0>>, <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120>, <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0>, <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f631b513ad0>, <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740>, <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0>, <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590>, <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0>, <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0>, <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0>, <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0>, <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0>, <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0>]
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <bound method Router.deployment_callback_on_failure of <litellm.router.Router object at 0x7f631c9579b0>> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM Router:DEBUG[0m: router.py:7297 - Router: Entering 'deployment_callback_on_failure'
+[92m02:21:12 - LiteLLM Router:DEBUG[0m: router.py:7349 - Router: Exiting 'deployment_callback_on_failure' without cooldown. No model_info found.
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f631b513ad0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <bound method Router.async_deployment_callback_on_failure of <litellm.router.Router object at 0x7f631c9579b0>> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: utils.py:485 - Custom Logger Error - Traceback (most recent call last):
+  File "/workspace/litellm/llms/openai/openai.py", line 930, in acompletion
+    headers, response = await self.make_openai_chat_completion_request(
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/litellm/litellm_core_utils/logging_utils.py", line 297, in async_wrapper
+    result = await func(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/litellm/llms/openai/openai.py", line 461, in make_openai_chat_completion_request
+    raise e
+  File "/workspace/litellm/llms/openai/openai.py", line 438, in make_openai_chat_completion_request
+    await openai_aclient.chat.completions.with_raw_response.create(
+  File "/workspace/.venv/lib/python3.12/site-packages/openai/_legacy_response.py", line 384, in wrapped
+    return cast(LegacyAPIResponse[R], await func(*args, **kwargs))
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/.venv/lib/python3.12/site-packages/openai/resources/chat/completions/completions.py", line 2714, in create
+    return await self._post(
+           ^^^^^^^^^^^^^^^^^
+  File "/workspace/.venv/lib/python3.12/site-packages/openai/_base_client.py", line 1913, in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/.venv/lib/python3.12/site-packages/openai/_base_client.py", line 1698, in request
+    raise self._make_status_error_from_response(err.response) from None
+openai.AuthenticationError: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-proj-********************************************************************************************************************************************************nGIA. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'code': 'invalid_api_key', 'param': None}, 'status': 401}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/litellm/main.py", line 637, in acompletion
+    response = await init_response
+               ^^^^^^^^^^^^^^^^^^^
+  File "/workspace/litellm/llms/openai/openai.py", line 990, in acompletion
+    raise OpenAIError(
+litellm.llms.openai.common_utils.OpenAIError: Error code: 401 - {'error': {'message': 'Incorrect API key provided: sk-proj-********************************************************************************************************************************************************nGIA. You can find your API key at https://platform.openai.com/account/api-keys.', 'type': 'invalid_request_error', 'code': 'invalid_api_key', 'param': None}, 'status': 401}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/litellm/utils.py", line 1899, in wrapper_async
+    result = await original_function(*args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/litellm/main.py", line 656, in acompletion
+    raise exception_type(
+          ^^^^^^^^^^^^^^^
+  File "/workspace/litellm/litellm_core_utils/exception_mapping_utils.py", line 2466, in exception_type
+    raise e
+  File "/workspace/litellm/litellm_core_utils/exception_mapping_utils.py", line 552, in exception_type
+    raise AuthenticationError(
+litellm.exceptions.AuthenticationError: litellm.AuthenticationError: AuthenticationError: OpenAIException - Incorrect API key provided: sk-proj-********************************************************************************************************************************************************nGIA. You can find your API key at https://platform.openai.com/account/api-keys.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/workspace/litellm/integrations/custom_logger.py", line 524, in async_log_event
+    await callback_func(
+  File "/workspace/litellm/router.py", line 7363, in async_deployment_callback_on_failure
+    deployment_name = kwargs["litellm_params"]["metadata"].get(
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'NoneType' object has no attribute 'get'
+
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.litellm_skills.main.SkillsInjectionHook object at 0x7f631fd82120> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.model_max_budget_limiter._PROXY_VirtualKeyModelMaxBudgetLimiter object at 0x7f631ba784a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.proxy_track_cost_callback._ProxyDBLogger object at 0x7f631b513ad0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_limiter._PROXY_MaxBudgetLimiter object at 0x7f631b513740> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.parallel_request_limiter_v3._PROXY_MaxParallelRequestsHandler_v3 object at 0x7f631b5139e0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.cache_control_check._PROXY_CacheControlCheck object at 0x7f631b513590> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.responses_id_security.ResponsesIDSecurity object at 0x7f631b5135c0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_iterations_limiter._PROXY_MaxIterationsHandler object at 0x7f631b5134a0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm.proxy.hooks.max_budget_per_session_limiter._PROXY_MaxBudgetPerSessionHandler object at 0x7f6310266ff0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_files._PROXY_LiteLLMManagedFiles object at 0x7f631b5137d0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm_enterprise.proxy.hooks.managed_vector_stores._PROXY_LiteLLMManagedVectorStores object at 0x7f631b5133b0> is disabled via headers. Disable callbacks from headers: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:37 - Dynamically disabled callbacks from x-litellm-disable-callbacks: None
+[92m02:21:12 - LiteLLM:DEBUG[0m: callback_controls.py:38 - Checking if <litellm._service_logger.ServiceLogging object at 0x7f631ba7bcb0> is disabled via headers. Disable callbacks from headers: None
+INFO:     127.0.0.1:49090 - "GET /health HTTP/1.1" 200 OK
+[92m02:21:17 - LiteLLM Proxy:DEBUG[0m: http_parsing_utils.py:570 - populate_request_with_path_params: No vector_store_id present in path=/v1/models
+[92m02:21:17 - LiteLLM Proxy:DEBUG[0m: user_api_key_auth.py:1778 - centralized auth: user fetch swallowed (ValueError: User doesn't exist in db. 'user_id'=default_user_id. Create user via `/user/new` call. Got error - )
+[92m02:21:17 - LiteLLM Proxy:DEBUG[0m: auth_checks.py:4412 - Vector store registry not found, skipping vector store access check
+[92m02:21:17 - LiteLLM Proxy:DEBUG[0m: model_checks.py:137 - ALL KEY MODELS - 0
+[92m02:21:17 - LiteLLM Proxy:DEBUG[0m: model_checks.py:172 - ALL TEAM MODELS - 0
+INFO:     127.0.0.1:49104 - "GET /v1/models HTTP/1.1" 200 OK
+INFO:     127.0.0.1:46156 - "HEAD /ui/ HTTP/1.1" 200 OK
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: spend_update_queue.py:39 - Aggregating updates by entity type: []
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1149 - User Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1194 - End-User Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1209 - KEY Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1250 - Team Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1298 - Team Membership Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1372 - Org Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1465 - Tag Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1465 - Agent Spend transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily User Spend transactions: 0
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily user spend update
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily Team Spend transactions: 0
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily team spend update
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily Org Spend transactions: 0
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily org spend update
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily End_user Spend transactions: 0
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily end_user spend update
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1609 - Daily Agent Spend transactions: 0
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: db_spend_update_writer.py:1642 - No new transactions to process for daily agent spend update
+[92m02:21:21 - LiteLLM Proxy:DEBUG[0m: utils.py:5377 - Spend Logs transactions: 0
+[92m02:21:24 - LiteLLM Proxy:DEBUG[0m: daily_spend_update_queue.py:99 - Aggregated daily spend update transactions: {}
+[92m02:21:25 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:5069 - len new_models: 0
+[92m02:21:25 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6315 - guardrails from the DB []
+[92m02:21:25 - LiteLLM Proxy:INFO[0m: policy_registry.py:578 - Synced 0 production policies and 0 draft/published (by ID) from DB to in-memory registry
+[92m02:21:25 - LiteLLM Proxy:INFO[0m: attachment_registry.py:482 - Synced 0 attachments from DB to in-memory registry
+[92m02:21:25 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6361 - Successfully synced policies and attachments from DB
+[92m02:21:25 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3223 - Loading MCP servers from database into registry...
+[92m02:21:25 - LiteLLM:INFO[0m: mcp_server_manager.py:3244 - Found 0 MCP servers in database
+[92m02:21:25 - LiteLLM:DEBUG[0m: mcp_server_manager.py:3317 - MCP registry refreshed (0 servers in registry)
+[92m02:21:25 - LiteLLM Proxy:DEBUG[0m: pass_through_endpoints.py:2691 - initializing pass through endpoints
+[92m02:21:25 - LiteLLM Proxy:INFO[0m: proxy_server.py:6504 - Loading 0 search tool(s) from database into router
+[92m02:21:25 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6524 - No search tools found in database, keeping config-loaded search tools (if any)
+[92m02:21:25 - LiteLLM Proxy:INFO[0m: tool_registry_writer.py:329 - ToolPolicyRegistry: synced 0 tool policies and 0 object permissions from DB
+[92m02:21:25 - LiteLLM Proxy:DEBUG[0m: proxy_server.py:6381 - Successfully synced tool policy from DB
