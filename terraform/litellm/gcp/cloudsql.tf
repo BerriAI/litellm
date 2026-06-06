@@ -108,6 +108,8 @@ resource "google_sql_user" "app" {
   name     = var.db_username
   instance = google_sql_database_instance.writer.name
   password = random_password.db_password.result
+
+  deletion_policy = "ABANDON"
 }
 
 resource "google_secret_manager_secret" "db_password" {
