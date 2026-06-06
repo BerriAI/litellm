@@ -2155,33 +2155,13 @@ export const adminspendByProvider = async (
   endTime: string | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/spend/provider` : `/global/spend/provider`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    if (keyToken) {
-      url += `&api_key=${keyToken}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    const data = await apiClient.get(`/global/spend/provider`, {
+      accessToken,
+      query: {
+        ...(startTime && endTime ? { start_date: startTime, end_date: endTime } : {}),
+        ...(keyToken ? { api_key: keyToken } : {}),
       },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    });
     console.log(data);
     return data;
   } catch (error) {
@@ -2196,29 +2176,10 @@ export const adminGlobalActivity = async (
   endTime: string | undefined,
 ) => {
   try {
-    let url = proxyBaseUrl ? `${proxyBaseUrl}/global/activity` : `/global/activity`;
-
-    if (startTime && endTime) {
-      url += `?start_date=${startTime}&end_date=${endTime}`;
-    }
-
-    const requestOptions = {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      },
-    };
-
-    const response = await fetch(url, requestOptions);
-
-    if (!response.ok) {
-      const errorData = await response.json();
-      const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
-      throw new Error(errorMessage);
-    }
-
-    const data = await response.json();
+    const data = await apiClient.get(`/global/activity`, {
+      accessToken,
+      query: startTime && endTime ? { start_date: startTime, end_date: endTime } : undefined,
+    });
     console.log(data);
     return data;
   } catch (error) {
@@ -3858,73 +3819,35 @@ export const listGuardrailSubmissions = async (
   accessToken: string,
   params?: { status?: string; team_id?: string; team_guardrail?: boolean; search?: string },
 ): Promise<ListGuardrailSubmissionsResponse> => {
-  const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/submissions` : `/guardrails/submissions`;
-  const searchParams = new URLSearchParams();
-  if (params?.status) searchParams.set("status", params.status);
-  if (params?.team_id) searchParams.set("team_id", params.team_id);
-  if (params?.team_guardrail !== undefined) searchParams.set("team_guardrail", String(params.team_guardrail));
-  if (params?.search) searchParams.set("search", params.search);
-  const fullUrl = searchParams.toString() ? `${url}?${searchParams.toString()}` : url;
-  const response = await fetch(fullUrl, {
-    method: "GET",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
+  return apiClient.get<ListGuardrailSubmissionsResponse>(`/guardrails/submissions`, {
+    accessToken,
+    query: {
+      ...(params?.status ? { status: params.status } : {}),
+      ...(params?.team_id ? { team_id: params.team_id } : {}),
+      ...(params?.team_guardrail !== undefined ? { team_guardrail: params.team_guardrail } : {}),
+      ...(params?.search ? { search: params.search } : {}),
     },
   });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
 };
 
 export const approveGuardrailSubmission = async (
   accessToken: string,
   guardrailId: string,
 ): Promise<{ guardrail_id: string; status: string; message: string }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`
-    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
+  return apiClient.post<{ guardrail_id: string; status: string; message: string }>(
+    `/guardrails/submissions/${encodeURIComponent(guardrailId)}/approve`,
+    { accessToken },
+  );
 };
 
 export const rejectGuardrailSubmission = async (
   accessToken: string,
   guardrailId: string,
 ): Promise<{ guardrail_id: string; status: string; message: string }> => {
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`
-    : `/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-    },
-  });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage = deriveErrorMessage(errorData);
-    handleError(errorMessage);
-    throw new Error(errorMessage);
-  }
-  return response.json();
+  return apiClient.post<{ guardrail_id: string; status: string; message: string }>(
+    `/guardrails/submissions/${encodeURIComponent(guardrailId)}/reject`,
+    { accessToken },
+  );
 };
 
 // Guardrails / Policies usage (dashboard)
