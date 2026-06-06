@@ -16,7 +16,6 @@ from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from fastapi import HTTPException
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy._types import UserAPIKeyAuth
@@ -549,11 +548,7 @@ class TestHookHeaderMergePriority:
         captured_extra_headers: Dict[str, Any] = {}
 
         async def fake_create_mcp_client(
-            server,
-            mcp_auth_header=None,
-            extra_headers=None,
-            stdio_env=None,
-            subject_token=None,
+            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
         ):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
@@ -593,11 +588,7 @@ class TestHookHeaderMergePriority:
         captured_extra_headers: Dict[str, Any] = {}
 
         async def fake_create_mcp_client(
-            server,
-            mcp_auth_header=None,
-            extra_headers=None,
-            stdio_env=None,
-            subject_token=None,
+            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
         ):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
@@ -643,11 +634,7 @@ class TestHookHeaderMergePriority:
         captured_extra_headers: Dict[str, Any] = {}
 
         async def fake_create_mcp_client(
-            server,
-            mcp_auth_header=None,
-            extra_headers=None,
-            stdio_env=None,
-            subject_token=None,
+            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
         ):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
@@ -703,11 +690,7 @@ class TestHookHeaderMergePriority:
         captured_extra_headers: Dict[str, Any] = {}
 
         async def fake_create_mcp_client(
-            server,
-            mcp_auth_header=None,
-            extra_headers=None,
-            stdio_env=None,
-            subject_token=None,
+            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
         ):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
@@ -755,11 +738,7 @@ class TestHookHeaderMergePriority:
         captured_extra_headers: Dict[str, Any] = {}
 
         async def fake_create_mcp_client(
-            server,
-            mcp_auth_header=None,
-            extra_headers=None,
-            stdio_env=None,
-            subject_token=None,
+            server, mcp_auth_header=None, extra_headers=None, stdio_env=None, **kwargs
         ):
             captured_extra_headers["value"] = extra_headers
             mock_client = MagicMock()
@@ -826,3 +805,87 @@ class TestUserAPIKeyAuthJwtClaims:
         auth.jwt_claims = claims
         assert auth.jwt_claims == claims
         assert auth.jwt_claims["groups"] == ["admin"]
+
+
+class TestMcpRateLimitServerNameSurfacing:
+    """
+    The per-MCP-server rate limiter only sees the request `data` dict, so the
+    server identity must be surfaced into it. These tests pin the contract
+    between pre_call_tool_check, _convert_mcp_to_llm_format, and the limiter.
+    """
+
+    def setup_method(self):
+        self.proxy_logging = ProxyLogging(user_api_key_cache=MagicMock())
+
+    def test_convert_mcp_to_llm_format_surfaces_rate_limit_server_name(self):
+        request_obj = MagicMock()
+        request_obj.tool_name = "list_repos"
+        request_obj.arguments = {"org": "acme"}
+
+        result = self.proxy_logging._convert_mcp_to_llm_format(
+            request_obj, {"mcp_rate_limit_server_name": "github"}
+        )
+
+        assert result["mcp_server_name"] == "github"
+
+    def test_convert_mcp_to_llm_format_server_name_none_when_absent(self):
+        request_obj = MagicMock()
+        request_obj.tool_name = "list_repos"
+        request_obj.arguments = {}
+
+        result = self.proxy_logging._convert_mcp_to_llm_format(request_obj, {})
+
+        assert result["mcp_server_name"] is None
+
+    @pytest.mark.asyncio
+    async def test_pre_call_tool_check_resolves_alias_for_rate_limit(self):
+        """
+        The rate-limit server key must be the alias when set (falling back to
+        server_name), matching how an admin keys mcp_rpm_limit in config.
+        """
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="test-id",
+            name="gh",
+            alias="gh",
+            server_name="github_full_name",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+        )
+
+        captured = {}
+
+        def capture_convert(request_obj, kwargs):
+            captured["kwargs"] = kwargs
+            return {"model": "fake"}
+
+        proxy_logging = MagicMock(spec=ProxyLogging)
+        proxy_logging._create_mcp_request_object_from_kwargs = MagicMock(
+            return_value=MagicMock()
+        )
+        proxy_logging._convert_mcp_to_llm_format = MagicMock(
+            side_effect=capture_convert
+        )
+        proxy_logging.pre_call_hook = AsyncMock(return_value=None)
+        proxy_logging._convert_mcp_hook_response_to_kwargs = MagicMock(
+            return_value={"arguments": {}}
+        )
+
+        with patch.object(manager, "check_allowed_or_banned_tools", return_value=True):
+            with patch.object(
+                manager,
+                "check_tool_permission_for_key_team",
+                new_callable=AsyncMock,
+            ):
+                with patch.object(manager, "validate_allowed_params"):
+                    await manager.pre_call_tool_check(
+                        name="list_repos",
+                        arguments={},
+                        server_name="github_full_name",
+                        user_api_key_auth=None,
+                        proxy_logging_obj=proxy_logging,
+                        server=server,
+                    )
+
+        assert captured["kwargs"]["mcp_rate_limit_server_name"] == "gh"

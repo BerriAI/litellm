@@ -48,4 +48,16 @@ class A2AProviderConfigManager:
 
             return BedrockAgentCoreA2AConfig()
 
+        if custom_llm_provider == "langflow":
+            from litellm.a2a_protocol.providers.langflow.config import LangFlowA2AConfig
+
+            return LangFlowA2AConfig()
+
+        if custom_llm_provider == "watsonx_orchestrate":
+            from litellm.a2a_protocol.providers.watsonx_orchestrate.config import (
+                WatsonxOrchestrateA2AConfig,
+            )
+
+            return WatsonxOrchestrateA2AConfig()
+
         return None

@@ -1,6 +1,16 @@
 import { useDisableUsageIndicator } from "@/app/(dashboard)/hooks/useDisableUsageIndicator";
 import { Badge } from "@tremor/react";
-import { AlertTriangle, Calendar, ChevronDown, ChevronUp, Loader2, Minus, TrendingUp, UserCheck, Users } from "lucide-react";
+import {
+  AlertTriangle,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  Minus,
+  TrendingUp,
+  UserCheck,
+  Users,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 import { getRemainingUsers, getLicenseInfo, LicenseInfo } from "./networking";
 
@@ -26,7 +36,7 @@ interface UsageData {
 // Calculate days until expiration
 const getDaysUntilExpiration = (expirationDate: string | null): number | null => {
   if (!expirationDate) return null;
-  const expDate = new Date(expirationDate + 'T00:00:00Z'); // Force UTC midnight
+  const expDate = new Date(expirationDate + "T00:00:00Z"); // Force UTC midnight
   const now = new Date();
   now.setHours(0, 0, 0, 0); // Normalize to local midnight
   const diffTime = expDate.getTime() - now.getTime();
@@ -81,9 +91,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
   }, [accessToken]);
 
   // Calculate license expiration metrics
-  const daysUntilExpiration = licenseInfo?.expiration_date
-    ? getDaysUntilExpiration(licenseInfo.expiration_date)
-    : null;
+  const daysUntilExpiration = licenseInfo?.expiration_date ? getDaysUntilExpiration(licenseInfo.expiration_date) : null;
   const isLicenseExpired = daysUntilExpiration !== null && daysUntilExpiration < 0;
   const isLicenseExpiringSoon = daysUntilExpiration !== null && daysUntilExpiration >= 0 && daysUntilExpiration < 30;
 
@@ -185,16 +193,20 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
               </span>
             )}
             {licenseInfo?.expiration_date && daysUntilExpiration !== null && (
-              <span className={cn(
-                "flex-shrink-0",
-                isLicenseExpired && "text-red-500",
-                isLicenseExpiringSoon && "text-yellow-500",
-              )}>
+              <span
+                className={cn(
+                  "flex-shrink-0",
+                  isLicenseExpired && "text-red-500",
+                  isLicenseExpiringSoon && "text-yellow-500",
+                )}
+              >
                 {daysUntilExpiration < 0 ? "Exp!" : `${daysUntilExpiration}d`}
               </span>
             )}
             {!data ||
-              (data.total_users === null && data.total_teams === null && !licenseInfo && <span className="truncate">Usage</span>)}
+              (data.total_users === null && data.total_teams === null && !licenseInfo && (
+                <span className="truncate">Usage</span>
+              ))}
           </div>
         </button>
       </div>
@@ -283,11 +295,13 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   <Calendar className="h-3 w-3" />
                   <span className="font-medium">License</span>
                 </div>
-                <div className={cn(
-                  "flex items-center gap-1 text-xs",
-                  isLicenseExpired && "text-red-600",
-                  isLicenseExpiringSoon && "text-yellow-600",
-                )}>
+                <div
+                  className={cn(
+                    "flex items-center gap-1 text-xs",
+                    isLicenseExpired && "text-red-600",
+                    isLicenseExpiringSoon && "text-yellow-600",
+                  )}
+                >
                   {isLicenseExpired ? (
                     <AlertTriangle className="h-3 w-3" />
                   ) : isLicenseExpiringSoon ? (
@@ -441,7 +455,9 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 </span>
               )}
               {!data ||
-                (data.total_users === null && data.total_teams === null && !licenseInfo && <span className="truncate">Usage</span>)}
+                (data.total_users === null && data.total_teams === null && !licenseInfo && (
+                  <span className="truncate">Usage</span>
+                ))}
             </div>
           </div>
         </button>

@@ -299,11 +299,8 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             or litellm.openai_key
             or get_secret_str("OPENAI_API_KEY")
         )
-        headers.update(
-            {
-                "Authorization": f"Bearer {api_key}",
-            }
-        )
+        headers.setdefault("Content-Type", "application/json")
+        headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
     def get_complete_url(

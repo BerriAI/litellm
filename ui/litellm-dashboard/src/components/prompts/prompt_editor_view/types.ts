@@ -29,4 +29,3 @@ export interface PromptEditorViewProps {
   accessToken: string | null;
   initialPromptData?: any;
 }
-

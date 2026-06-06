@@ -70,10 +70,7 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
 
       {onMockTestFallbacksChange && (
         <div className="flex items-center gap-1">
-          <Checkbox
-            checked={mockTestFallbacks ?? false}
-            onChange={(e) => onMockTestFallbacksChange(e.target.checked)}
-          >
+          <Checkbox checked={mockTestFallbacks ?? false} onChange={(e) => onMockTestFallbacksChange(e.target.checked)}>
             <span className="font-medium">Simulate failure to test fallbacks</span>
           </Checkbox>
           <Popover
@@ -82,8 +79,8 @@ const AdditionalModelSettings: React.FC<AdditionalModelSettingsProps> = ({
             content={
               <div style={{ maxWidth: 340 }}>
                 <Typography.Paragraph className="text-sm" style={{ marginBottom: 8 }}>
-                  Causes the first request to fail so the router tries fallbacks (if configured). Use
-                  this to verify your fallback setup.
+                  Causes the first request to fail so the router tries fallbacks (if configured). Use this to verify
+                  your fallback setup.
                 </Typography.Paragraph>
                 <Typography.Paragraph className="text-sm" style={{ marginBottom: 0 }}>
                   Behavior can differ when keys, teams, or router settings are configured.{" "}

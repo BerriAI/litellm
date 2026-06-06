@@ -47,7 +47,10 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
+    build_env_var_setup_url,
+    collect_env_var_references,
     get_server_prefix,
+    parse_admin_env_vars,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
@@ -111,12 +114,16 @@ if MCP_AVAILABLE:
         create_mcp_server,
         delete_mcp_server,
         delete_user_credential,
+        delete_user_env_vars,
         get_all_mcp_servers_for_user,
         get_mcp_server,
         get_mcp_servers,
         get_mcp_submissions,
+        get_user_env_vars,
+        get_user_env_vars_bulk,
         get_user_oauth_credential,
         list_user_oauth_credentials,
+        merge_user_env_vars,
         reject_mcp_server,
         store_user_credential,
         store_user_oauth_credential,
@@ -139,6 +146,7 @@ if MCP_AVAILABLE:
         LitellmUserRoles,
         MakeMCPServersPublicRequest,
         MCPApprovalStatus,
+        MCPEnvVarScope,
         MCPOAuthUserCredentialRequest,
         MCPOAuthUserCredentialStatus,
         MCPSubmissionsSummary,
@@ -146,6 +154,9 @@ if MCP_AVAILABLE:
         MCPUserCredentialListItem,
         MCPUserCredentialRequest,
         MCPUserCredentialResponse,
+        MCPUserEnvVarSpec,
+        MCPUserEnvVarsRequest,
+        MCPUserEnvVarsStatus,
         NewMCPServerRequest,
         RejectMCPServerRequest,
         SpecialMCPServerName,
@@ -473,6 +484,27 @@ if MCP_AVAILABLE:
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
 
+    def _redact_global_env_var_values(mcp_server: LiteLLM_MCPServerTable) -> None:
+        """Blank admin-supplied ``scope="global"`` env var secrets in place.
+
+        Global entries hold the admin's plaintext credential (API key,
+        password, ...) and must never reach non-admin callers. Per-user
+        entries only carry a placeholder the user fills in themselves, so
+        their value is left intact.
+        """
+        for env_var in mcp_server.env_vars or []:
+            if env_var.scope == MCPEnvVarScope.global_:
+                env_var.value = ""
+
+    def _user_is_full_admin(user_api_key_dict: UserAPIKeyAuth) -> bool:
+        """True only for ``PROXY_ADMIN``; ``PROXY_ADMIN_VIEW_ONLY`` returns False.
+
+        Global env var secrets pre-fill the admin edit form, so a full admin
+        must see them, but a read-only admin gets the same redacted view as
+        any other non-managing caller.
+        """
+        return user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+
     def _is_restricted_virtual_key_request(user_api_key_dict: UserAPIKeyAuth) -> bool:
         """Best-effort detection for route-restricted virtual keys.
 
@@ -513,6 +545,11 @@ if MCP_AVAILABLE:
         sanitized.authorization_url = None
         sanitized.token_url = None
         sanitized.registration_url = None
+        # Drop env vars entirely rather than only blanking global values: the
+        # names alone (DB_PASSWORD, GITHUB_API_KEY, ...) leak what secrets the
+        # admin configured. Non-admins get the per-user vars they must fill in
+        # from the dedicated /user-env-vars/status endpoint instead.
+        sanitized.env_vars = None
         return sanitized
 
     def _sanitize_mcp_server_list_for_non_admin(
@@ -544,6 +581,7 @@ if MCP_AVAILABLE:
         sanitized.allowed_tools = []
         sanitized.mcp_access_groups = []
         sanitized.teams = []
+        sanitized.env_vars = None
 
         sanitized.authorization_url = None
         sanitized.token_url = None
@@ -659,6 +697,7 @@ if MCP_AVAILABLE:
             registration_url=payload.registration_url,
             allow_all_keys=payload.allow_all_keys,
             available_on_public_internet=payload.available_on_public_internet,
+            timeout=payload.timeout,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -975,6 +1014,10 @@ if MCP_AVAILABLE:
         if not _user_has_admin_view(user_api_key_dict):
             return _sanitize_mcp_server_list_for_non_admin(redacted_mcp_servers)
 
+        if not _user_is_full_admin(user_api_key_dict):
+            for server in redacted_mcp_servers:
+                _redact_global_env_var_values(server)
+
         return redacted_mcp_servers
 
     @router.get(
@@ -1143,7 +1186,11 @@ if MCP_AVAILABLE:
             "Database not connected. Connect a database to your proxy"
         )
 
-        return await get_mcp_submissions(prisma_client)
+        submissions = await get_mcp_submissions(prisma_client)
+        if not _user_is_full_admin(user_api_key_dict):
+            for item in submissions.items:
+                _redact_global_env_var_values(item)
+        return submissions
 
     @router.put(
         "/server/{server_id}/approve",
@@ -1362,6 +1409,8 @@ if MCP_AVAILABLE:
             return _sanitize_mcp_server_for_virtual_key(redacted)
         if not _user_has_admin_view(user_api_key_dict):
             return _sanitize_mcp_server_for_non_admin(redacted)
+        if not _user_is_full_admin(user_api_key_dict):
+            _redact_global_env_var_values(redacted)
         return redacted
 
     @router.post(
@@ -1431,23 +1480,34 @@ if MCP_AVAILABLE:
         payload.submitted_by = None
         payload.submitted_at = None
 
-        # Attempt to create the mcp server
+        # The database write is the commit point: if it fails nothing was
+        # persisted and the request is a genuine failure.
         try:
             new_mcp_server = await create_mcp_server(
                 prisma_client,
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
-            await global_mcp_server_manager.add_server(new_mcp_server)
-
-            # Ensure registry is up to date by reloading from database
-            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(f"Error creating mcp server: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error creating mcp server: {str(e)}"},
             )
+
+        # Registry refresh is best-effort: the row is already committed, so a
+        # failure here (e.g. an unrelated malformed row in the table) must not
+        # surface as a 500 and orphan the created server, which would push the
+        # caller to retry and create duplicates.
+        try:
+            await global_mcp_server_manager.add_server(new_mcp_server)
+            await global_mcp_server_manager.reload_servers_from_database()
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"MCP server {new_mcp_server.server_id} created but in-memory "
+                f"registry refresh failed: {str(e)}"
+            )
+
         return _redact_mcp_credentials(new_mcp_server)
 
     @router.post(
@@ -1542,7 +1602,7 @@ if MCP_AVAILABLE:
                         master_key,
                         algorithms=["HS256"],
                         # UI session cookies may omit exp; don't require it.
-                        options={"verify_exp": False},
+                        options={"verify_exp": False, "verify_aud": False},
                     )
                     if decoded.get("login_method") in ("sso", "username_password"):
                         cookie_key = decoded.get("key", "")
@@ -2104,6 +2164,249 @@ if MCP_AVAILABLE:
                 )
             )
         return items
+
+    # ── Per-user MCP env var endpoints ────────────────────────────────────────
+
+    async def _authorize_and_fetch_mcp_server(
+        prisma_client,
+        user_api_key_dict: UserAPIKeyAuth,
+        server_id: str,
+    ) -> LiteLLM_MCPServerTable:
+        """Return the MCP server the caller may manage env vars for.
+
+        Admins look the server up directly. Non-admins reuse the access-scoped
+        listing that already loads every server they can see, so we don't issue
+        a second per-server query just to re-fetch a record the authorization
+        check produced. A non-admin who can't see the server gets 403 (never
+        404) so server ids can't be enumerated.
+        """
+        if _user_has_admin_view(user_api_key_dict):
+            server = await get_mcp_server(prisma_client, server_id)
+            if server is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": f"MCP Server {server_id} not found"},
+                )
+            return server
+        accessible = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        for server in accessible:
+            if server.server_id == server_id:
+                return server
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": (
+                    f"User does not have permission to access mcp server with id {server_id}. "
+                    "You can only manage env vars for mcp servers that you have access to."
+                )
+            },
+        )
+
+    def _compute_user_env_var_status(
+        *,
+        server: LiteLLM_MCPServerTable,
+        stored_values: Dict[str, str],
+    ) -> MCPUserEnvVarsStatus:
+        """Build a status object for one server given the user's stored values.
+
+        Stored credentials are write-only: the response reports only whether
+        each value ``is_set`` and never echoes the decrypted secret back, so a
+        leaked token can't be used to exfiltrate the raw upstream credential.
+        """
+        global_values, user_specs = parse_admin_env_vars(
+            getattr(server, "env_vars", None)
+        )
+        # An empty-valued global is not a usable fallback, so it must not mark a
+        # referenced per-user var as covered, matching the empty-global filter in
+        # _resolve_static_headers_with_env_vars. Otherwise this endpoint reports no
+        # credential needed for a var every tool call still 412s on.
+        global_values = {name: value for name, value in global_values.items() if value}
+
+        # A var only blocks when it's referenced by static_headers and has no
+        # admin global fallback, mirroring _resolve_static_headers_with_env_vars
+        # (globals win the merge) so the status endpoint never asks the user for
+        # credentials a tool call wouldn't actually require.
+        static_headers = getattr(server, "static_headers", None) or {}
+        if isinstance(static_headers, str):
+            try:
+                static_headers = json.loads(static_headers) or {}
+            except (ValueError, TypeError):
+                static_headers = {}
+        referenced = collect_env_var_references(strings=static_headers.values())
+        user_var_names = {spec["name"] for spec in user_specs}
+        blocking = {
+            name for name in (referenced & user_var_names) if name not in global_values
+        }
+
+        required: List[MCPUserEnvVarSpec] = []
+        missing_count = 0
+        for spec in user_specs:
+            name = spec["name"]
+            if name not in blocking:
+                continue
+            value = stored_values.get(name)
+            is_set = bool(value)
+            if not is_set:
+                missing_count += 1
+            required.append(
+                MCPUserEnvVarSpec(
+                    name=name,
+                    description=spec.get("description"),
+                    is_set=is_set,
+                )
+            )
+
+        return MCPUserEnvVarsStatus(
+            server_id=server.server_id,
+            server_name=getattr(server, "server_name", None),
+            alias=getattr(server, "alias", None),
+            required=required,
+            missing_count=missing_count,
+            setup_url=build_env_var_setup_url(server.server_id) if required else None,
+        )
+
+    @router.get(
+        "/server/{server_id}/user-env-vars",
+        description="Return the calling user's per-user MCP env var status for this server.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def get_mcp_user_env_vars(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> MCPUserEnvVarsStatus:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
+        stored = await get_user_env_vars(prisma_client, user_id, server_id)
+        return _compute_user_env_var_status(server=server, stored_values=stored)
+
+    @router.post(
+        "/server/{server_id}/user-env-vars",
+        description=(
+            "Store the calling user's per-user MCP env var values for this "
+            "server. Submitted values are merged over any previously stored "
+            "values, so you only send the fields you want to set or change; a "
+            "variable omitted (or sent empty) keeps its stored value. Use "
+            "DELETE to clear all stored values."
+        ),
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def store_mcp_user_env_vars(
+        server_id: str,
+        payload: MCPUserEnvVarsRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> MCPUserEnvVarsStatus:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
+        # Only known per-user var names declared by the admin are accepted —
+        # never persist arbitrary keys the user invents. Submitted values are
+        # merged over the existing set so a user updating one credential does
+        # not have to re-enter the others (which are write-only and never shown
+        # back); an omitted/empty field keeps its stored value.
+        _, user_specs = parse_admin_env_vars(getattr(server, "env_vars", None))
+        allowed_names = {spec["name"] for spec in user_specs}
+        updates = {
+            k: v for k, v in payload.values.items() if k in allowed_names and v != ""
+        }
+        merged = await merge_user_env_vars(
+            prisma_client, user_id, server_id, updates, allowed_names
+        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            invalidate_user_env_vars_cache,
+        )
+
+        invalidate_user_env_vars_cache(user_id, server_id)
+        return _compute_user_env_var_status(server=server, stored_values=merged)
+
+    @router.delete(
+        "/server/{server_id}/user-env-vars",
+        description="Clear the calling user's per-user MCP env var values for this server.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=MCPUserEnvVarsStatus,
+    )
+    @management_endpoint_wrapper
+    async def clear_mcp_user_env_vars(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> MCPUserEnvVarsStatus:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "User ID not found in token"},
+            )
+        server = await _authorize_and_fetch_mcp_server(
+            prisma_client, user_api_key_dict, server_id
+        )
+        await delete_user_env_vars(prisma_client, user_id, server_id)
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            invalidate_user_env_vars_cache,
+        )
+
+        invalidate_user_env_vars_cache(user_id, server_id)
+        return _compute_user_env_var_status(server=server, stored_values={})
+
+    @router.get(
+        "/user-env-vars/status",
+        description="Per-user MCP env var status across every server the user can access. "
+        "Used by the dashboard to highlight servers with missing per-user vars.",
+        dependencies=[Depends(user_api_key_auth)],
+        response_model=List[MCPUserEnvVarsStatus],
+    )
+    @management_endpoint_wrapper
+    async def list_mcp_user_env_var_status(
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ) -> List[MCPUserEnvVarsStatus]:
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
+        user_id = user_api_key_dict.user_id or ""
+        if not user_id:
+            return []
+        accessible = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
+        if not accessible:
+            return []
+        server_ids = [s.server_id for s in accessible]
+        stored_bulk = await get_user_env_vars_bulk(prisma_client, user_id, server_ids)
+        statuses: List[MCPUserEnvVarsStatus] = []
+        for server in accessible:
+            stored = stored_bulk.get(server.server_id, {})
+            status_obj = _compute_user_env_var_status(
+                server=server, stored_values=stored
+            )
+            if status_obj.required:
+                statuses.append(status_obj)
+        return statuses
 
     @router.put(
         "/server",

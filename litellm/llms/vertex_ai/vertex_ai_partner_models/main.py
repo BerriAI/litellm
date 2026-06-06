@@ -41,6 +41,7 @@ class PartnerModelPrefixes(str, Enum):
     MINIMAX_PREFIX = "minimaxai/"
     MOONSHOT_PREFIX = "moonshotai/"
     ZAI_PREFIX = "zai-org/"
+    GEMMA_MAAS_PREFIX = "google/gemma-"
 
 
 class VertexAIPartnerModels(VertexBase):
@@ -68,6 +69,7 @@ class VertexAIPartnerModels(VertexBase):
             or model.startswith(PartnerModelPrefixes.MINIMAX_PREFIX)
             or model.startswith(PartnerModelPrefixes.MOONSHOT_PREFIX)
             or model.startswith(PartnerModelPrefixes.ZAI_PREFIX)
+            or model.startswith(PartnerModelPrefixes.GEMMA_MAAS_PREFIX)
         ):
             return True
         return False
@@ -82,6 +84,7 @@ class VertexAIPartnerModels(VertexBase):
             PartnerModelPrefixes.MINIMAX_PREFIX,
             PartnerModelPrefixes.MOONSHOT_PREFIX,
             PartnerModelPrefixes.ZAI_PREFIX,
+            PartnerModelPrefixes.GEMMA_MAAS_PREFIX,
         ]
         if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
             return True

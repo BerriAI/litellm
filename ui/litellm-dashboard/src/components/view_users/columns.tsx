@@ -60,8 +60,7 @@ export const columns = (
       enableSorting: false,
       cell: ({ row }) => {
         const isScimInactive =
-          (row.original.metadata as Record<string, unknown> | null | undefined)
-            ?.scim_active === false;
+          (row.original.metadata as Record<string, unknown> | null | undefined)?.scim_active === false;
         if (isScimInactive) {
           return (
             <Tooltip title="Deactivated via SCIM (external identity provider). The user's virtual keys are blocked.">

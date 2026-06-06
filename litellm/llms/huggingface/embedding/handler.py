@@ -239,7 +239,7 @@ class HuggingFaceEmbedding(BaseLLM):
         model_response.model = model
         input_tokens = 0
         for text in input:
-            input_tokens += len(encoding.encode(text))
+            input_tokens += len(encoding.encode(text, disallowed_special=()))
 
         setattr(
             model_response,

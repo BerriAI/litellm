@@ -1510,6 +1510,17 @@ class LiteLLMAnthropicMessagesAdapter:
                         return "thinking", ChatCompletionThinkingBlock(
                             type="thinking", thinking=thinking, signature=signature
                         )
+            # OpenAI-compatible reasoning backends (e.g. vLLM/SGLang reasoning
+            # parsers) populate ``reasoning_content`` without ``thinking_blocks``.
+            # ``Delta`` deletes the ``thinking_blocks`` attribute when unset, so the
+            # branch above is skipped entirely; open a ``thinking`` block here so the
+            # matching ``thinking_delta`` stream is not emitted into a text block.
+            elif isinstance(choice, StreamingChoices) and getattr(
+                choice.delta, "reasoning_content", None
+            ):
+                return "thinking", ChatCompletionThinkingBlock(
+                    type="thinking", thinking="", signature=""
+                )
 
         return "text", TextBlock(type="text", text="")
 

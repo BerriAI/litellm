@@ -80,12 +80,12 @@ const McpOAuthCallbackContent = () => {
     <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
       <div className="max-w-lg w-full rounded-lg bg-white shadow-md p-8 text-center space-y-4">
         <h1 className="text-xl font-semibold text-slate-900">LiteLLM MCP OAuth</h1>
-          <p className="text-sm text-slate-700">
-            Authorization complete. You may close this window and return to the LiteLLM dashboard.
-          </p>
-          <p className="text-xs text-slate-500">
-            If the window does not close automatically, everything is still saved—you can close it manually.
-          </p>
+        <p className="text-sm text-slate-700">
+          Authorization complete. You may close this window and return to the LiteLLM dashboard.
+        </p>
+        <p className="text-xs text-slate-500">
+          If the window does not close automatically, everything is still saved—you can close it manually.
+        </p>
       </div>
     </div>
   );

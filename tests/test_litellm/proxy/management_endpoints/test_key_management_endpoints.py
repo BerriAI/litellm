@@ -3094,6 +3094,249 @@ async def test_generate_key_with_object_permission():
     assert "object_permission" not in key_data
 
 
+@pytest.mark.asyncio
+async def test_generate_key_team_member_inherits_org_skips_membership_check():
+    """Regression: a team member creating a key for an org-scoped team must not
+    be blocked by the org-membership check.
+
+    When ``organization_id`` is inherited from the key's team (via
+    ``apply_enterprise_key_management_params`` -> ``add_team_organization_id``),
+    the caller already passed team-level authorization. Requiring an explicit
+    ``LiteLLM_OrganizationMembership`` row on top of that broke the normal admin
+    workflow (admins only add users to teams). This asserts the org-membership
+    check is skipped when the org id came from the caller's team.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    org_id = "org-from-team"
+
+    # Team belongs to an org; caller is a team member but NOT an explicit member
+    # of that organization (the regression scenario).
+    mock_team_table = MagicMock()
+    mock_team_table.organization_id = org_id
+    mock_team_table.metadata = None
+
+    mock_validate_org = AsyncMock()
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "alice",
+            "team_id": "team-1",
+        }
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_search_tools_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
+            mock_validate_org,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_org_object",
+            new_callable=AsyncMock,
+            return_value=MagicMock(litellm_budget_table=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_org_key_limits",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            mock_generate_key,
+        ),
+    ):
+        result = await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                user_id="alice",
+                team_id="team-1",
+                organization_id=org_id,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="alice",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+            ),
+            litellm_changed_by=None,
+            team_table=mock_team_table,
+        )
+
+    # Key creation proceeded for the team member ...
+    mock_generate_key.assert_awaited_once()
+    assert result is not None
+    # ... and the org-membership check was bypassed because organization_id was
+    # inherited from the caller's team.
+    mock_validate_org.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_generate_key_foreign_org_without_team_still_enforces_membership():
+    """VERIA-55: a caller assigning a key to an organization that was NOT
+    inherited from a team must still pass the org-membership check.
+
+    This guards the IDOR fix: ``team_table is None`` (or an org id that does not
+    match the team) means the org id did not come from team context, so the
+    explicit membership validation must run.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    foreign_org_id = "someone-elses-org"
+
+    mock_validate_org = AsyncMock()
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "alice",
+            "team_id": None,
+        }
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
+            mock_validate_org,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_org_object",
+            new_callable=AsyncMock,
+            return_value=MagicMock(litellm_budget_table=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_org_key_limits",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            mock_generate_key,
+        ),
+    ):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                user_id="alice",
+                organization_id=foreign_org_id,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="alice",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+            ),
+            litellm_changed_by=None,
+            team_table=None,
+        )
+
+    # No team context -> the org-membership check must still run.
+    mock_validate_org.assert_awaited_once()
+    assert mock_validate_org.call_args.kwargs["organization_id"] == foreign_org_id
+
+
+@pytest.mark.asyncio
+async def test_generate_key_foreign_org_with_mismatched_team_still_enforces_membership():
+    """VERIA-55: when a team is present but its organization_id differs from the
+    organization_id on the key request, the org-membership check must still run."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import GenerateKeyRequest, LitellmUserRoles
+    from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _common_key_generation_helper,
+    )
+
+    team_org_id = "other-org"
+    foreign_org_id = "someone-elses-org"
+
+    mock_team_table = MagicMock()
+    mock_team_table.organization_id = team_org_id
+    mock_team_table.metadata = None
+
+    mock_validate_org = AsyncMock()
+    mock_generate_key = AsyncMock(
+        return_value={
+            "key": "sk-test-key",
+            "expires": None,
+            "user_id": "alice",
+            "team_id": "team-1",
+        }
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_mcp_servers_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.validate_key_search_tools_against_team",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm_enterprise.proxy.management_endpoints.key_management_endpoints.apply_enterprise_key_management_params",
+            side_effect=lambda data, team_table: data,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._validate_caller_can_assign_key_org",
+            mock_validate_org,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_org_object",
+            new_callable=AsyncMock,
+            return_value=MagicMock(litellm_budget_table=None),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_org_key_limits",
+            new_callable=AsyncMock,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.generate_key_helper_fn",
+            mock_generate_key,
+        ),
+    ):
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                user_id="alice",
+                team_id="team-1",
+                organization_id=foreign_org_id,
+            ),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="alice",
+                user_role=LitellmUserRoles.INTERNAL_USER.value,
+            ),
+            litellm_changed_by=None,
+            team_table=mock_team_table,
+        )
+
+    mock_validate_org.assert_awaited_once()
+    assert mock_validate_org.call_args.kwargs["organization_id"] == foreign_org_id
+
+
 # ============================================
 # Organization Key Limit Tests
 # ============================================
@@ -11296,3 +11539,132 @@ async def test_ghsa_q775_admin_bypasses_budget_ceiling():
             litellm_changed_by=None,
         )
         assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_ui_session_token_team_key_exempt_from_budget_ceiling():
+    """
+    Regression: a UI/CLI session token (team_id=litellm-dashboard) creating a
+    TEAM key (data.team_id set) is exempt from the delegated-authority ceiling.
+    The session max_budget is a per-session chat spend cap (max_ui_session_budget,
+    default $0.25), not a delegation authority, and the team key's spend is bounded
+    by the team budget at request time. This is the team-admin key-creation flow
+    blocked since v1.86.x. Calls the helper directly so the ceiling runs (mocking
+    out _common_key_generation_helper would mock out the check under test).
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500, team_id="team-abc")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+    ):
+        try:
+            await _common_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                team_table=MagicMock(),
+            )
+        except (HTTPException, ProxyException) as err:
+            msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+            assert (
+                "cannot exceed" not in msg.lower()
+            ), "UI/CLI session token creating a team key must be exempt from the ceiling"
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_ui_session_token_personal_key_still_capped():
+    """
+    Security regression for GHSA-q775: the session-token exemption must NOT extend
+    to personal keys. A UI/CLI session token (team_id=litellm-dashboard) creating a
+    key with no data.team_id is still bound by the ceiling; otherwise a session
+    token - or a leaked one, whose blast radius is the $0.25 chat cap - could mint
+    an arbitrary-budget personal key, the exact escalation GHSA-q775 closed. Unlike
+    a team key, nothing else bounds a personal key's spend.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption():
+    """
+    Security regression for GHSA-q775: the team-key exemption must key off the
+    team_id the CALLER supplied, not one injected by default_key_generate_params.
+    With default_key_generate_params.team_id set, a UI session token's personal-key
+    request (no team_id) would otherwise have team_id auto-filled before the ceiling
+    check, flipping is_ui_session_team_key to True and bypassing the ceiling. The
+    request must still be rejected. Mirrors how _requested_max_budget is captured
+    before defaults run.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500)
+    assert data.team_id is None
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+        patch("litellm.default_key_generate_params", {"team_id": "injected-team"}),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await _common_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                team_table=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()

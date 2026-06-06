@@ -996,7 +996,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             excluded_keys=["thoughtSignature"],
                         ):
                             assistant_content.append(gemini_tool_call_part)
-                    last_message_with_tool_calls = assistant_msg
+                    # Only record this as the active tool-call message when it actually
+                    # carries tool calls. The `if` guard above is also entered for a
+                    # text-only assistant message (`assistant_msg.get("tool_calls", [])
+                    # is not None` is True for an empty list), so without this check a
+                    # later assistant message with no tool calls would clobber the
+                    # reference. The following tool result would then be matched against
+                    # an assistant message that has no tool_calls, raising "Missing
+                    # corresponding tool call for tool response message".
+                    if (
+                        assistant_msg.get("tool_calls")
+                        or assistant_msg.get("function_call") is not None
+                    ):
+                        last_message_with_tool_calls = assistant_msg
 
                 ## HANDLE SERVER-SIDE TOOL INVOCATIONS (context circulation)
                 _psf = assistant_msg.get("provider_specific_fields")
@@ -1107,6 +1119,61 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
                 data_dict[k].update(v)
             else:
                 data_dict[k] = v
+
+
+def _has_google_maps_tool(tools: Optional[Any]) -> bool:
+    """Return True if any tool object in the list has a 'googleMaps' key."""
+    if not isinstance(tools, list):
+        return False
+    return any(
+        isinstance(t, dict) and VertexToolName.GOOGLE_MAPS.value in t for t in tools
+    )
+
+
+def _rewrite_mime_type_to_response_format(generation_config: GenerationConfig) -> None:
+    """
+    Convert response_mime_type + response_json_schema/response_schema to the newer
+    responseFormat structure when googleMaps is present in tools.
+
+    The Gemini API rejects the combination of googleMaps + response_mime_type:
+    'application/json' with the error:
+        "Google Maps tool with a response mime type: 'application/json' is unsupported"
+
+    The newer responseFormat field supports this combination on both the Gemini API
+    (generativelanguage.googleapis.com) and Vertex AI endpoints.
+
+    Before:
+        generationConfig: {
+            response_mime_type: "application/json",
+            response_json_schema: {...}
+        }
+
+    After:
+        generationConfig: {
+            responseFormat: {
+                "text": {"mimeType": "APPLICATION_JSON", "schema": {...}}
+            }
+        }
+    """
+    schema = generation_config.pop("response_json_schema", None)  # type: ignore[misc]
+    if schema is None:
+        schema = generation_config.pop("response_schema", None)  # type: ignore[misc]
+    generation_config.pop("response_mime_type", None)  # type: ignore[misc]
+
+    response_format: Dict[str, Any] = {"text": {"mimeType": "APPLICATION_JSON"}}
+    if schema is not None:
+        response_format["text"]["schema"] = schema
+    generation_config["responseFormat"] = response_format  # type: ignore[typeddict-unknown-key]
+
+
+def _rewrite_google_maps_response_format(data: RequestBody) -> None:
+    generation_config = cast(Optional[GenerationConfig], data.get("generationConfig"))
+    if (
+        isinstance(generation_config, dict)
+        and _has_google_maps_tool(data.get("tools"))
+        and generation_config.get("response_mime_type") == "application/json"
+    ):
+        _rewrite_mime_type_to_response_format(generation_config)
 
 
 def _transform_request_body(  # noqa: PLR0915
@@ -1234,6 +1301,7 @@ def _transform_request_body(  # noqa: PLR0915
         if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
         _pop_and_merge_extra_body(data, optional_params)
+        _rewrite_google_maps_response_format(data)
     except Exception as e:
         raise e
 

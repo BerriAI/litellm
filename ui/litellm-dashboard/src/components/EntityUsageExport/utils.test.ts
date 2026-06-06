@@ -1669,7 +1669,6 @@ describe("EntityUsageExport utils", () => {
         expect(result[0].metrics.spend).toBe(20.3);
         expect(result[1].metrics.spend).toBe(15.5);
       });
-
     });
 
     describe("generateDailyData with aggregated data", () => {

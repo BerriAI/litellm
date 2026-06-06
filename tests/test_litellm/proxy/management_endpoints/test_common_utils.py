@@ -482,6 +482,33 @@ class TestSetObjectMetadataField:
             _set_object_metadata_field(team, "model_rpm_limit", {"x": 1})
         assert team.metadata == {"model_rpm_limit": {"x": 1}}
 
+    def test_mcp_rpm_limit_is_hoisted_into_metadata(self):
+        """
+        Per-MCP-server rpm limits are stored in the metadata JSON column, not a
+        dedicated DB column. The key/team management endpoints rely on
+        LiteLLM_ManagementEndpoint_MetadataFields to move the request field into
+        metadata; this regression guards that mcp_rpm_limit is in that list and
+        round-trips through the same loop the endpoints use.
+        """
+        from litellm.proxy._types import LiteLLM_ManagementEndpoint_MetadataFields
+
+        assert "mcp_rpm_limit" in LiteLLM_ManagementEndpoint_MetadataFields
+
+        from types import SimpleNamespace
+
+        team = LiteLLM_TeamTable(team_id="t1", metadata={})
+        mcp_rpm_limit = {"github": 100}
+        data = SimpleNamespace(mcp_rpm_limit=mcp_rpm_limit)
+
+        with patch(
+            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+        ):
+            for field in LiteLLM_ManagementEndpoint_MetadataFields:
+                if getattr(data, field, None) is not None:
+                    _set_object_metadata_field(team, field, getattr(data, field))
+
+        assert team.metadata["mcp_rpm_limit"] == mcp_rpm_limit
+
 
 class TestRequireCallerUserIdForNonAdmin:
     """

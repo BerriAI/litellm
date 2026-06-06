@@ -733,7 +733,7 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -799,7 +799,7 @@ def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoi
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -849,7 +849,7 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -893,7 +893,7 @@ def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -948,7 +948,7 @@ def test_non_proxy_admin_denies_auth_pass_through_without_allowlist():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -987,7 +987,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -1021,7 +1021,7 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -2602,3 +2602,72 @@ def test_legitimate_passthrough_routes_still_classified_as_llm_route(route):
     assert (
         RouteChecks.is_llm_api_route(route=route) is True
     ), f"{route!r} should be classified as an LLM API route"
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/search_tools/list",
+        "/search_tools/ui/available_providers",
+    ],
+)
+def test_internal_user_can_read_search_tools(route):
+    """Regression for LIT-3150: internal users must be able to view search tools,
+    the same way they can view vector stores."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    RouteChecks.non_proxy_admin_allowed_routes_check(
+        user_obj=user_obj,
+        _user_role=LitellmUserRoles.INTERNAL_USER.value,
+        route=route,
+        request=request,
+        valid_token=valid_token,
+        request_data={},
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/search_tools",  # create
+        "/search_tools/abc123",  # update / delete / get-by-id
+        "/search_tools/test_connection",
+    ],
+)
+def test_internal_user_blocked_from_search_tool_writes(route):
+    """Read access must not leak the search-tool management write routes to
+    internal users; only proxy admins create/update/delete/test them."""
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="user@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    with pytest.raises(Exception) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route=route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+    assert "Only proxy admin" in str(exc_info.value)
+    assert f"Route={route}" in str(exc_info.value)
+    assert "Your role=internal_user" in str(exc_info.value)

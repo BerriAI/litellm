@@ -30,6 +30,10 @@ from litellm.types.utils import Usage, ModelResponse
 from abc import ABC, abstractmethod
 from openai import OpenAI
 
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+from tests._live_test_helpers import _skip_live_prompt_caching_test  # noqa: E402
+
 
 def _usage_format_tests(usage: litellm.Usage):
     """
@@ -960,6 +964,7 @@ class BaseLLMChatTest(ABC):
 
     @pytest.mark.flaky(retries=4, delay=1)
     def test_prompt_caching(self):
+        _skip_live_prompt_caching_test()
         print("test_prompt_caching")
         litellm.set_verbose = True
         from litellm.utils import supports_prompt_caching

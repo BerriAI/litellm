@@ -12,7 +12,6 @@ import os
 import pytest
 import asyncio
 
-
 # Path to your service account JSON file
 SERVICE_ACCOUNT_FILE = "path/to/your/service-account.json"
 
@@ -95,6 +94,15 @@ async def call_spend_logs_endpoint():
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 
+def _is_vertex_quota_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "429" in message
+        or "Too Many Requests" in message
+        or "RESOURCE_EXHAUSTED" in message
+    )
+
+
 @pytest.mark.asyncio()
 async def test_basic_vertex_ai_pass_through_with_spendlog():
 
@@ -103,13 +111,18 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
 
     vertexai.init(
         project="litellm-ci-cd",
-        location="us-central1",
+        location="global",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
     )
 
-    model = GenerativeModel(model_name="gemini-2.5-flash-lite")
-    response = model.generate_content("hi")
+    model = GenerativeModel(model_name="gemini-3.1-flash-lite")
+    try:
+        response = model.generate_content("hi")
+    except Exception as exc:
+        if _is_vertex_quota_error(exc):
+            pytest.skip("Vertex AI quota exhausted")
+        raise
 
     print("response", response)
 
@@ -143,12 +156,12 @@ async def test_basic_vertex_ai_pass_through_streaming_with_spendlog():
 
     vertexai.init(
         project="litellm-ci-cd",
-        location="us-central1",
+        location="global",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
     )
 
-    model = GenerativeModel(model_name="gemini-2.5-flash-lite")
+    model = GenerativeModel(model_name="gemini-3.1-flash-lite")
     response = model.generate_content("hi", stream=True)
 
     for chunk in response:
@@ -182,7 +195,7 @@ async def test_vertex_ai_pass_through_endpoint_context_caching():
 
     vertexai.init(
         project="litellm-ci-cd",
-        location="us-central1",
+        location="global",
         api_endpoint=f"{LITE_LLM_ENDPOINT}/vertex_ai",
         api_transport="rest",
     )
@@ -204,7 +217,7 @@ async def test_vertex_ai_pass_through_endpoint_context_caching():
     ]
 
     cached_content = caching.CachedContent.create(
-        model_name="gemini-2.5-flash-lite-001",
+        model_name="gemini-3.1-flash-lite",
         system_instruction=system_instruction,
         contents=contents,
         ttl=datetime.timedelta(minutes=60),

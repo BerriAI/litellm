@@ -328,7 +328,24 @@ class ContentFilterGuardrail(CustomGuardrail):
         return result
 
     @staticmethod
-    def _resolve_category_file_path(file_path: str) -> str:
+    def _assert_within_categories_dir(path: str, categories_dir: str) -> None:
+        """Raise ValueError if path escapes the categories directory."""
+        resolved = os.path.realpath(path)
+        allowed = os.path.realpath(categories_dir)
+        try:
+            common = os.path.commonpath([resolved, allowed])
+        except ValueError:
+            # commonpath() raises ValueError on Windows when paths span different drives
+            raise ValueError(
+                f"Category file path '{path}' is outside the allowed categories directory"
+            )
+        if common != allowed:
+            raise ValueError(
+                f"Category file path '{path}' is outside the allowed "
+                f"categories directory '{categories_dir}'"
+            )
+
+    def _resolve_category_file_path(self, file_path: str) -> str:
         """
         Resolve a category file path that may be relative.
 
@@ -339,12 +356,17 @@ class ContentFilterGuardrail(CustomGuardrail):
         file isn't found.
 
         Resolution order:
-        1. Return as-is if absolute or already exists.
-        2. Try joining the full path relative to this module's directory.
+        1. Return as-is if absolute or already exists (jailed to module dir).
+        2. Try joining the full path relative to this module's directory (jailed).
         3. Progressively strip leading path components and try each suffix
-           relative to this module's directory (handles paths like
-           "litellm/proxy/.../policy_templates/file.yaml" by finding the
-           "policy_templates/file.yaml" suffix that exists).
+           relative to this module's directory (jailed).
+
+        The directory jail can be disabled for deployments that legitimately
+        store category files outside the package (e.g. mounted volumes) by
+        setting the environment variable
+        ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS=true``.  Use only in
+        trusted environments where the proxy configuration cannot be influenced
+        by untrusted input.
 
         Args:
             file_path: The file path to resolve (absolute or relative).
@@ -352,15 +374,33 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             The resolved absolute-ish path, or the original path if
             resolution fails (caller should check existence).
-        """
-        if os.path.isabs(file_path) or os.path.exists(file_path):
-            return file_path
 
+        Raises:
+            ValueError: If the resolved path escapes the module directory
+                and ``LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS`` is not set.
+        """
         module_dir = os.path.dirname(__file__)
+        allow_external = (
+            os.environ.get("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "").lower()
+            == "true"
+        )
+
+        if os.path.isabs(file_path) or os.path.exists(file_path):
+            if not allow_external:
+                self._assert_within_categories_dir(file_path, module_dir)
+            else:
+                verbose_proxy_logger.warning(
+                    "LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS is set — "
+                    "skipping directory jail for category_file '%s'",
+                    file_path,
+                )
+            return file_path
 
         # Try the full relative path joined to the module directory
         candidate = os.path.join(module_dir, file_path)
         if os.path.exists(candidate):
+            if not allow_external:
+                self._assert_within_categories_dir(candidate, module_dir)
             return candidate
 
         # Progressively strip leading components to find a matching suffix
@@ -369,8 +409,17 @@ class ContentFilterGuardrail(CustomGuardrail):
             suffix = os.path.join(*parts[i:])
             candidate = os.path.join(module_dir, suffix)
             if os.path.exists(candidate):
+                if not allow_external:
+                    self._assert_within_categories_dir(candidate, module_dir)
                 return candidate
 
+        # File not found via any resolution strategy — jail the module-relative
+        # path anyway to reject traversal attempts (e.g. "../../../../etc/passwd")
+        # regardless of CWD or whether the target file exists.
+        if not allow_external:
+            self._assert_within_categories_dir(
+                os.path.join(module_dir, file_path), module_dir
+            )
         return file_path
 
     def _load_categories(self, categories: List[ContentFilterCategoryConfig]) -> None:
@@ -395,6 +444,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
                 continue
 
+            # Prevent path traversal via category_name (e.g. "../../etc/passwd")
+            if not re.match(r"^[a-zA-Z0-9_\-]+$", category_name):
+                verbose_proxy_logger.warning(
+                    f"Category name '{category_name}' contains invalid characters, skipping"
+                )
+                continue
+
             enabled = cat_config.get("enabled", True)
             action = cat_config.get("action")
             severity_threshold = (
@@ -411,7 +467,13 @@ class ContentFilterGuardrail(CustomGuardrail):
 
             # Load category file (custom or default)
             if custom_file:
-                category_file_path = self._resolve_category_file_path(custom_file)
+                try:
+                    category_file_path = self._resolve_category_file_path(custom_file)
+                except ValueError as e:
+                    verbose_proxy_logger.warning(
+                        f"Category {category_name}: invalid category_file path, skipping. {e}"
+                    )
+                    continue
             else:
                 # Try .yaml first, then .json (e.g. harm_toxic_abuse.json)
                 yaml_path = os.path.join(categories_dir, f"{category_name}.yaml")

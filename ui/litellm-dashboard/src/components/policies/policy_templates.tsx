@@ -55,9 +55,7 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
         <div className={`p-2 rounded-lg ${iconBg}`}>
           <Icon className={`h-6 w-6 ${iconColor}`} />
         </div>
-        <span
-          className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${getComplexityStyle()}`}
-        >
+        <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${getComplexityStyle()}`}>
           {complexity} Complexity
         </span>
       </div>
@@ -81,9 +79,7 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
       {inherits && (
         <div className="mb-4 text-xs">
           <span className="text-gray-500">Inherits from: </span>
-          <span className="font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded">
-            {inherits}
-          </span>
+          <span className="font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded">{inherits}</span>
         </div>
       )}
 
@@ -103,12 +99,7 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
         </div>
       </div>
 
-      <Button
-        type="primary"
-        block
-        className="mt-auto"
-        onClick={onUseTemplate}
-      >
+      <Button type="primary" block className="mt-auto" onClick={onUseTemplate}>
         Use Template
       </Button>
     </Card>
@@ -131,7 +122,12 @@ const iconMap: Record<string, React.ComponentType<React.SVGProps<SVGSVGElement>>
   CheckCircleIcon: CheckCircleIcon,
 };
 
-const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpenAiSuggestion, onTemplatesLoaded, accessToken }) => {
+const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
+  onUseTemplate,
+  onOpenAiSuggestion,
+  onTemplatesLoaded,
+  accessToken,
+}) => {
   const [templates, setTemplates] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
@@ -206,19 +202,12 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpen
     <div className="space-y-6">
       <div className="flex justify-between items-end">
         <div>
-          <h2 className="text-lg font-medium text-gray-900">
-            Policy Templates
-          </h2>
+          <h2 className="text-lg font-medium text-gray-900">Policy Templates</h2>
           <p className="text-sm text-gray-500 mt-1">
-            Start with a pre-configured policy template to quickly set up
-            guardrails for your organization.
+            Start with a pre-configured policy template to quickly set up guardrails for your organization.
           </p>
         </div>
-        <Button
-          type="default"
-          onClick={onOpenAiSuggestion}
-          className="flex items-center gap-1.5"
-        >
+        <Button type="default" onClick={onOpenAiSuggestion} className="flex items-center gap-1.5">
           <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
           </svg>
@@ -232,14 +221,9 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpen
           <div className="w-52 flex-shrink-0">
             <div className="sticky top-4">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-gray-900">
-                  Categories
-                </span>
+                <span className="text-sm font-semibold text-gray-900">Categories</span>
                 {selectedTags.size > 0 && (
-                  <button
-                    onClick={handleClearAll}
-                    className="text-xs text-blue-600 hover:text-blue-800"
-                  >
+                  <button onClick={handleClearAll} className="text-xs text-blue-600 hover:text-blue-800">
                     Clear all
                   </button>
                 )}
@@ -249,21 +233,14 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpen
                   <label
                     key={tag}
                     className={`flex items-center justify-between px-2 py-1.5 rounded-md cursor-pointer transition-colors ${
-                      selectedTags.has(tag)
-                        ? "bg-blue-50"
-                        : "hover:bg-gray-50"
+                      selectedTags.has(tag) ? "bg-blue-50" : "hover:bg-gray-50"
                     }`}
                   >
                     <div className="flex items-center gap-2">
-                      <Checkbox
-                        checked={selectedTags.has(tag)}
-                        onChange={() => handleTagToggle(tag)}
-                      />
+                      <Checkbox checked={selectedTags.has(tag)} onChange={() => handleTagToggle(tag)} />
                       <span className="text-sm text-gray-700">{tag}</span>
                     </div>
-                    <span className="text-xs text-gray-400 font-medium">
-                      {count}
-                    </span>
+                    <span className="text-xs text-gray-400 font-medium">{count}</span>
                   </label>
                 ))}
               </div>
@@ -299,10 +276,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({ onUseTemplate, onOpen
           {filteredTemplates.length === 0 && (
             <div className="text-center py-12 text-gray-500">
               <p>No templates match the selected filters.</p>
-              <button
-                onClick={handleClearAll}
-                className="text-blue-600 hover:text-blue-800 mt-2 text-sm"
-              >
+              <button onClick={handleClearAll} className="text-blue-600 hover:text-blue-800 mt-2 text-sm">
                 Clear all filters
               </button>
             </div>

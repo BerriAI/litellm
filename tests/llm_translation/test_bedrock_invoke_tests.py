@@ -3,7 +3,6 @@ import pytest
 import sys
 import os
 
-
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
@@ -40,6 +39,15 @@ class TestBedrockInvokeNovaJson(BaseLLMChatTest):
             pytest.skip(
                 f"Skipping non-JSON test: {request.function.__name__} does not contain 'json'"
             )
+
+    def test_json_response_pydantic_obj(self):
+        if os.environ.get("LITELLM_RUN_LIVE_BEDROCK_NOVA_JSON_TESTS") != "1":
+            pytest.skip("Live Bedrock Nova response-schema E2E tests are opt-in")
+        if os.environ.get("CASSETTE_REDIS_URL"):
+            pytest.skip(
+                "Live Bedrock Nova response-schema E2E tests cannot run under VCR replay"
+            )
+        super().test_json_response_pydantic_obj()
 
 
 def test_nova_invoke_remove_empty_system_messages():

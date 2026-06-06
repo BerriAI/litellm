@@ -1,11 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { all_admin_roles } from "@/utils/roles";
 
@@ -49,9 +44,7 @@ export const projectKeys = createQueryKeys("projects");
 
 // ── Fetch function ───────────────────────────────────────────────────────────
 
-const fetchProjects = async (
-  accessToken: string,
-): Promise<ProjectResponse[]> => {
+const fetchProjects = async (accessToken: string): Promise<ProjectResponse[]> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl}/project/list`;
 

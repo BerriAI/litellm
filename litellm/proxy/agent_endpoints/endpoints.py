@@ -319,36 +319,34 @@ async def create_agent(
 
     Example Request:
     ```bash
-    curl -X POST "http://localhost:4000/agents" \\
+    curl -X POST "http://localhost:4000/v1/agents" \\
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "agent": {
-                "agent_name": "my-custom-agent",
-                "agent_card_params": {
-                    "protocolVersion": "1.0",
-                    "name": "Hello World Agent",
-                    "description": "Just a hello world agent",
-                    "url": "http://localhost:9999/",
-                    "version": "1.0.0",
-                    "defaultInputModes": ["text"],
-                    "defaultOutputModes": ["text"],
-                    "capabilities": {
-                        "streaming": true
-                    },
-                    "skills": [
-                        {
-                            "id": "hello_world",
-                            "name": "Returns hello world",
-                            "description": "just returns hello world",
-                            "tags": ["hello world"],
-                            "examples": ["hi", "hello world"]
-                        }
-                    ]
+            "agent_name": "my-custom-agent",
+            "agent_card_params": {
+                "protocolVersion": "1.0",
+                "name": "Hello World Agent",
+                "description": "Just a hello world agent",
+                "url": "http://localhost:9999/",
+                "version": "1.0.0",
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+                "capabilities": {
+                    "streaming": true
                 },
-                "litellm_params": {
-                    "make_public": true
-                }
+                "skills": [
+                    {
+                        "id": "hello_world",
+                        "name": "Returns hello world",
+                        "description": "just returns hello world",
+                        "tags": ["hello world"],
+                        "examples": ["hi", "hello world"]
+                    }
+                ]
+            },
+            "litellm_params": {
+                "make_public": true
             }
         }'
     ```
@@ -441,7 +439,7 @@ async def get_agent_by_id(
 
     Example Request:
     ```bash
-    curl -X GET "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X GET "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>"
     ```
     """
@@ -535,28 +533,26 @@ async def update_agent(
 
     Example Request:
     ```bash
-    curl -X PUT "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X PUT "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "agent": {
-                "agent_name": "updated-agent",
-                "agent_card_params": {
-                    "protocolVersion": "1.0",
-                    "name": "Updated Agent",
-                    "description": "Updated description",
-                    "url": "http://localhost:9999/",
-                    "version": "1.1.0",
-                    "defaultInputModes": ["text"],
-                    "defaultOutputModes": ["text"],
-                    "capabilities": {
-                        "streaming": true
-                    },
-                    "skills": []
+            "agent_name": "updated-agent",
+            "agent_card_params": {
+                "protocolVersion": "1.0",
+                "name": "Updated Agent",
+                "description": "Updated description",
+                "url": "http://localhost:9999/",
+                "version": "1.1.0",
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+                "capabilities": {
+                    "streaming": true
                 },
-                "litellm_params": {
-                    "make_public": false
-                }
+                "skills": []
+            },
+            "litellm_params": {
+                "make_public": false
             }
         }'
     ```
@@ -645,28 +641,26 @@ async def patch_agent(
 
     Example Request:
     ```bash
-    curl -X PUT "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X PATCH "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>" \\
         -H "Content-Type: application/json" \\
         -d '{
-            "agent": {
-                "agent_name": "updated-agent",
-                "agent_card_params": {
-                    "protocolVersion": "1.0",
-                    "name": "Updated Agent",
-                    "description": "Updated description",
-                    "url": "http://localhost:9999/",
-                    "version": "1.1.0",
-                    "defaultInputModes": ["text"],
-                    "defaultOutputModes": ["text"],
-                    "capabilities": {
-                        "streaming": true
-                    },
-                    "skills": []
+            "agent_name": "updated-agent",
+            "agent_card_params": {
+                "protocolVersion": "1.0",
+                "name": "Updated Agent",
+                "description": "Updated description",
+                "url": "http://localhost:9999/",
+                "version": "1.1.0",
+                "defaultInputModes": ["text"],
+                "defaultOutputModes": ["text"],
+                "capabilities": {
+                    "streaming": true
                 },
-                "litellm_params": {
-                    "make_public": false
-                }
+                "skills": []
+            },
+            "litellm_params": {
+                "make_public": false
             }
         }'
     ```
@@ -753,7 +747,7 @@ async def delete_agent(
 
     Example Request:
     ```bash
-    curl -X DELETE "http://localhost:4000/agents/123e4567-e89b-12d3-a456-426614174000" \\
+    curl -X DELETE "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000" \\
         -H "Authorization: Bearer <your_api_key>"
     ```
 

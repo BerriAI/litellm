@@ -41,6 +41,7 @@ from litellm.integrations.datadog.datadog_handler import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.llms.custom_httpx.http_handler import (
+    MaskedHTTPStatusError,
     _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -66,6 +67,22 @@ from ..additional_logging_utils import AdditionalLoggingUtils
 DD_LOGGED_SUCCESS_SERVICE_TYPES = [
     ServiceTypes.RESET_BUDGET_JOB,
 ]
+
+
+def _resolve_dd_batch_size() -> int:
+    raw = os.getenv("DD_BATCH_SIZE")
+    if raw is None:
+        return DD_MAX_BATCH_SIZE
+    try:
+        value = int(raw)
+    except ValueError:
+        verbose_logger.warning(
+            "Datadog: ignoring invalid DD_BATCH_SIZE=%r, using %s",
+            raw,
+            DD_MAX_BATCH_SIZE,
+        )
+        return DD_MAX_BATCH_SIZE
+    return max(1, min(value, DD_MAX_BATCH_SIZE))
 
 
 class DataDogLogger(
@@ -128,7 +145,9 @@ class DataDogLogger(
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
             super().__init__(
-                **kwargs, flush_lock=self.flush_lock, batch_size=DD_MAX_BATCH_SIZE
+                **kwargs,
+                flush_lock=self.flush_lock,
+                batch_size=_resolve_dd_batch_size(),
             )
         except Exception as e:
             verbose_logger.exception(
@@ -339,27 +358,13 @@ class DataDogLogger(
                     "[DATADOG MOCK] Mock mode enabled - API calls will be intercepted"
                 )
 
-            response = await self.async_send_compressed_data(batch_to_send)
-            if response.status_code == 413:
-                verbose_logger.exception(DD_ERRORS.DATADOG_413_ERROR.value)
-                self.log_queue = batch_to_send + self.log_queue
-                return
-
-            response.raise_for_status()
-            if response.status_code != 202:
-                raise Exception(
-                    f"Response from datadog API status_code: {response.status_code}, text: {response.text}"
-                )
+            undelivered = await self._send_with_413_split(batch_to_send)
+            if undelivered:
+                self.log_queue = undelivered + self.log_queue
 
             if self.is_mock_mode:
                 verbose_logger.debug(
                     f"[DATADOG MOCK] Batch of {len(batch_to_send)} events successfully mocked"
-                )
-            else:
-                verbose_logger.debug(
-                    "Datadog: Response from datadog API status_code: %s, text: %s",
-                    response.status_code,
-                    response.text,
                 )
 
         except Exception as e:
@@ -367,6 +372,62 @@ class DataDogLogger(
             verbose_logger.exception(
                 f"Datadog Error sending batch API - {str(e)}\n{traceback.format_exc()}"
             )
+
+    async def _send_with_413_split(self, batch: List) -> List:
+        """
+        Send a batch, halving any sub-batch that 413s (payload too large) and retrying the
+        halves, since Datadog enforces a 5MB uncompressed limit per request.
+
+        A 413 surfaces as a raised MaskedHTTPStatusError (httpx raise_for_status), not a
+        returned response, so both paths are handled. A lone event that still 413s is
+        dropped to avoid wedging the queue on an undeliverable payload. Returns the events
+        that could not be delivered because of a non-413 (transient) error, so the caller
+        re-queues only those and never the events already accepted by Datadog.
+        """
+        pending: List[List] = [batch]
+        while pending:
+            chunk = pending.pop()
+            if not chunk:
+                continue
+            try:
+                response = await self.async_send_compressed_data(chunk)
+            except Exception as e:
+                if isinstance(e, MaskedHTTPStatusError) and e.status_code == 413:
+                    response = e.response
+                else:
+                    verbose_logger.exception(
+                        f"Datadog Error sending batch API - {str(e)}"
+                    )
+                    return self._undelivered(chunk, pending)
+
+            if response.status_code == 413:
+                if len(chunk) == 1:
+                    verbose_logger.error(DD_ERRORS.DATADOG_413_ERROR.value)
+                    continue
+                mid = len(chunk) // 2
+                pending.append(chunk[mid:])
+                pending.append(chunk[:mid])
+                continue
+
+            if response.status_code != 202:
+                verbose_logger.error(
+                    "Datadog: unexpected response status_code=%s, text=%s",
+                    response.status_code,
+                    response.text,
+                )
+                return self._undelivered(chunk, pending)
+
+            verbose_logger.debug(
+                "Datadog: delivered %s events, status_code=%s, text=%s",
+                len(chunk),
+                response.status_code,
+                response.text,
+            )
+        return []
+
+    @staticmethod
+    def _undelivered(chunk: List, pending: List[List]) -> List:
+        return chunk + [event for remaining in reversed(pending) for event in remaining]
 
     async def flush_queue(self):
         if self.flush_lock is None:

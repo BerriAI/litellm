@@ -12,7 +12,7 @@ interface TestVectorStoreTabProps {
 
 const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, vectorStores }) => {
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | undefined>(
-    vectorStores.length > 0 ? vectorStores[0].vector_store_id : undefined
+    vectorStores.length > 0 ? vectorStores[0].vector_store_id : undefined,
   );
 
   if (!accessToken) {
@@ -65,9 +65,7 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, ve
         </div>
       </Card>
 
-      {selectedVectorStoreId && (
-        <VectorStoreTester vectorStoreId={selectedVectorStoreId} accessToken={accessToken} />
-      )}
+      {selectedVectorStoreId && <VectorStoreTester vectorStoreId={selectedVectorStoreId} accessToken={accessToken} />}
     </div>
   );
 };

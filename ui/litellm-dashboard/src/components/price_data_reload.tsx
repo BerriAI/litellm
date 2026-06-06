@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { Button, Popconfirm, Modal, InputNumber, Space, Typography, Tag, Card, Tooltip, Divider } from "antd";
-import { ReloadOutlined, ClockCircleOutlined, StopOutlined, CloudOutlined, DatabaseOutlined, InfoCircleOutlined, WarningOutlined } from "@ant-design/icons";
+import {
+  ReloadOutlined,
+  ClockCircleOutlined,
+  StopOutlined,
+  CloudOutlined,
+  DatabaseOutlined,
+  InfoCircleOutlined,
+  WarningOutlined,
+} from "@ant-design/icons";
 import {
   reloadModelCostMap,
   scheduleModelCostMapReload,

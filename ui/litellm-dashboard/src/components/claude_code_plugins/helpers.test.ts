@@ -41,11 +41,7 @@ describe("extractCategories", () => {
   });
 
   it("extracts and sorts unique categories", () => {
-    const plugins = [
-      { category: "Development" },
-      { category: "Analytics" },
-      { category: "Development" },
-    ];
+    const plugins = [{ category: "Development" }, { category: "Analytics" }, { category: "Development" }];
     expect(extractCategories(plugins)).toEqual(["All", "Analytics", "Development", "Other"]);
   });
 

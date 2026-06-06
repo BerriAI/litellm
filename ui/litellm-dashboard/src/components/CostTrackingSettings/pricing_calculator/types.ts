@@ -36,4 +36,3 @@ export interface MultiModelResult {
     monthly_margin: number | null;
   };
 }
-

@@ -34,8 +34,7 @@ export const useWorker = (): UseWorkerReturn => {
     }
   }, [selectedWorkerId, workers]);
 
-  const selectedWorker =
-    workers.find((w) => w.worker_id === selectedWorkerId) ?? null;
+  const selectedWorker = workers.find((w) => w.worker_id === selectedWorkerId) ?? null;
 
   const selectWorker = useCallback(
     (workerId: string) => {

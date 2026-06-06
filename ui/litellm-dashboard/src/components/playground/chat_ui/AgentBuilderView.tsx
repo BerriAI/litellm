@@ -1,6 +1,14 @@
 "use client";
 
-import { CommentOutlined, DeleteOutlined, ExperimentOutlined, LinkOutlined, PlusOutlined, RobotOutlined, SaveOutlined } from "@ant-design/icons";
+import {
+  CommentOutlined,
+  DeleteOutlined,
+  ExperimentOutlined,
+  LinkOutlined,
+  PlusOutlined,
+  RobotOutlined,
+  SaveOutlined,
+} from "@ant-design/icons";
 import { Button, Input, Modal, Select, Spin, Tabs } from "antd";
 import React, { useCallback, useEffect, useState } from "react";
 import CodeBlock from "@/app/(dashboard)/api-reference/components/CodeBlock";
@@ -64,9 +72,10 @@ function ConnectTabContent({
   onCreateKey,
 }: ConnectTabContentProps) {
   const baseUrl = proxyBaseUrl ?? getConnectTabBaseUrl(proxySettings, customProxyBaseUrl);
-  const apiKeyForCurl =
-    createdKeyValue ?
-      createdKeyValue.startsWith("Bearer ") ? createdKeyValue : `Bearer ${createdKeyValue}`
+  const apiKeyForCurl = createdKeyValue
+    ? createdKeyValue.startsWith("Bearer ")
+      ? createdKeyValue
+      : `Bearer ${createdKeyValue}`
     : "Bearer sk-1234";
   const curlExample = `curl -L -X POST '${baseUrl}/v1/chat/completions' \\
 -H 'x-litellm-api-key: ${apiKeyForCurl}' \\
@@ -101,12 +110,7 @@ function ConnectTabContent({
           Create a virtual key that can only call this agent. The key will be scoped to you (user_id) and restricted to
           the model <span className="font-mono text-gray-800">{agentName}</span>.
         </p>
-        <Button
-          type="primary"
-          onClick={onCreateKey}
-          loading={creatingKey}
-          disabled={disabledPersonalKeyCreation}
-        >
+        <Button type="primary" onClick={onCreateKey} loading={creatingKey} disabled={disabledPersonalKeyCreation}>
           Create key for this agent
         </Button>
         {disabledPersonalKeyCreation && (
@@ -125,6 +129,14 @@ function ConnectTabContent({
 function getAgentModelId(agent: AgentModel): string | null {
   const info = agent.model_info as { id?: string } | null | undefined;
   return info?.id ?? null;
+}
+
+// Selection key that always resolves to a non-null string. Prefers the DB
+// id (stable across renames and unique across teams) but falls back to
+// `model_name` so config-file-defined agents — which have no `model_info.id`
+// — remain selectable.
+function getAgentSelectionKey(agent: AgentModel): string {
+  return getAgentModelId(agent) ?? agent.model_name;
 }
 
 function parseUnderlyingModel(litellmModel: string | undefined): string | undefined {
@@ -191,22 +203,25 @@ export default function AgentBuilderView({
   const [deleting, setDeleting] = useState(false);
 
   const effectiveApiKey = apiKey || accessToken || "";
-  const selectedAgent = selectedId === NEW_AGENT_ID ? null : agentModels.find((a) => a.model_name === selectedId) ?? null;
+  const selectedAgent =
+    selectedId === NEW_AGENT_ID ? null : agentModels.find((a) => getAgentSelectionKey(a) === selectedId) ?? null;
   const isNewAgent = selectedId === NEW_AGENT_ID;
   const selectedAgentModelId = selectedAgent ? getAgentModelId(selectedAgent) : null;
 
-  const loadAgents = useCallback(async () => {
-    if (!accessToken || !userID || !userRole) return;
+  const loadAgents = useCallback(async (): Promise<AgentModel[]> => {
+    if (!accessToken || !userID || !userRole) return [];
     setLoadingAgents(true);
     try {
       const list = await fetchAvailableAgentModels(accessToken, userID, userRole);
       setAgentModels(list);
-      if (!selectedId || (selectedId !== NEW_AGENT_ID && !list.some((a) => a.model_name === selectedId))) {
-        setSelectedId(list.length > 0 ? list[0].model_name : null);
+      if (!selectedId || (selectedId !== NEW_AGENT_ID && !list.some((a) => getAgentSelectionKey(a) === selectedId))) {
+        setSelectedId(list.length > 0 ? getAgentSelectionKey(list[0]) : null);
       }
+      return list;
     } catch (e) {
       console.error(e);
       NotificationsManager.fromBackend("Failed to load agents");
+      return [];
     } finally {
       setLoadingAgents(false);
     }
@@ -267,7 +282,13 @@ export default function AgentBuilderView({
       setDraftMaxTokens(typeof p?.max_tokens === "number" ? p.max_tokens : 4096);
       const rawTools = selectedAgent.litellm_params?.tools;
       const tools: MCPToolEntry[] = Array.isArray(rawTools)
-        ? rawTools.filter((t): t is MCPToolEntry => t && typeof t === "object" && (t as MCPToolEntry).type === "mcp" && typeof (t as MCPToolEntry).server_url === "string")
+        ? rawTools.filter(
+            (t): t is MCPToolEntry =>
+              t &&
+              typeof t === "object" &&
+              (t as MCPToolEntry).type === "mcp" &&
+              typeof (t as MCPToolEntry).server_url === "string",
+          )
         : [];
       setDraftTools(tools);
     }
@@ -297,7 +318,7 @@ export default function AgentBuilderView({
     }
     setSaving(true);
     try {
-      await modelCreateCall(accessToken, {
+      const response = await modelCreateCall(accessToken, {
         model_name: draftName.trim(),
         litellm_params: {
           model: `litellm_agent/${draftUnderlyingModel}`,
@@ -308,9 +329,15 @@ export default function AgentBuilderView({
         },
         model_info: {},
       });
-      const newName = draftName.trim();
-      await loadAgents();
-      setSelectedId(newName);
+      // /model/new returns the row with `model_id` at the top level.
+      // Prefer that id over name-matching so we land on the just-created
+      // agent even when its public name collides with another team's.
+      const createdId: string | null = response?.model_id ?? response?.model_info?.id ?? null;
+      const list = await loadAgents();
+      const created = createdId
+        ? list.find((a) => getAgentModelId(a) === createdId) ?? list.find((a) => a.model_name === draftName.trim())
+        : list.find((a) => a.model_name === draftName.trim());
+      setSelectedId(created ? getAgentSelectionKey(created) : list[0] ? getAgentSelectionKey(list[0]) : null);
       setActiveTab("chat");
     } catch (e) {
       NotificationsManager.fromBackend("Failed to save agent");
@@ -342,8 +369,10 @@ export default function AgentBuilderView({
         selectedAgentModelId,
       );
       NotificationsManager.success("Agent updated successfully");
-      await loadAgents();
-      setSelectedId(draftName.trim());
+      const list = await loadAgents();
+      const stillSelected = list.find((a) => getAgentModelId(a) === selectedAgentModelId);
+      const target = stillSelected ?? list[0];
+      setSelectedId(target ? getAgentSelectionKey(target) : null);
     } catch (e) {
       NotificationsManager.fromBackend("Failed to update agent");
     } finally {
@@ -387,9 +416,9 @@ export default function AgentBuilderView({
         try {
           await modelDeleteCall(accessToken, selectedAgentModelId);
           NotificationsManager.success("Agent deleted");
-          await loadAgents();
-          const remaining = agentModels.filter((a) => a.model_name !== selectedAgent.model_name);
-          setSelectedId(remaining.length > 0 ? remaining[0].model_name : null);
+          const list = await loadAgents();
+          const remaining = list.filter((a) => getAgentModelId(a) !== selectedAgentModelId);
+          setSelectedId(remaining.length > 0 ? getAgentSelectionKey(remaining[0]) : null);
         } catch (e) {
           NotificationsManager.fromBackend("Failed to delete agent");
         } finally {
@@ -401,9 +430,7 @@ export default function AgentBuilderView({
 
   if (!accessToken || !userID || !userRole) {
     return (
-      <div className="flex h-full items-center justify-center p-8 text-gray-500">
-        Sign in to use Agent Builder.
-      </div>
+      <div className="flex h-full items-center justify-center p-8 text-gray-500">Sign in to use Agent Builder.</div>
     );
   }
 
@@ -412,24 +439,25 @@ export default function AgentBuilderView({
       <div className="flex flex-shrink-0 flex-col border-b border-gray-200">
         <div className="flex h-12 items-center justify-between px-4">
           <span className="text-sm font-medium text-gray-900">Agent Builder</span>
-        {isNewAgent ? (
-          <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            onClick={handleSaveAgent}
-            loading={saving}
-            disabled={!draftName?.trim() || !draftUnderlyingModel}
-          >
-            Save Agent
-          </Button>
-        ) : (
-          <span className="text-xs text-gray-500">Build Agents that pass your compliance requirements.</span>
-        )}
+          {isNewAgent ? (
+            <Button
+              type="primary"
+              icon={<SaveOutlined />}
+              onClick={handleSaveAgent}
+              loading={saving}
+              disabled={!draftName?.trim() || !draftUnderlyingModel}
+            >
+              Save Agent
+            </Button>
+          ) : (
+            <span className="text-xs text-gray-500">Build Agents that pass your compliance requirements.</span>
+          )}
         </div>
         <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
           <ExperimentOutlined className="flex-shrink-0 text-amber-600" />
           <span>
-            Agent Builder is experimental and may change or be removed without notice. We’d love your feedback—email us at{" "}
+            Agent Builder is experimental and may change or be removed without notice. We’d love your feedback—email us
+            at{" "}
             <a href="mailto:product@berri.ai" className="font-medium text-amber-900 underline hover:text-amber-700">
               product@berri.ai
             </a>
@@ -452,21 +480,24 @@ export default function AgentBuilderView({
               </div>
             ) : (
               <>
-                {agentModels.map((agent) => (
-                  <button
-                    key={agent.model_name}
-                    type="button"
-                    onClick={() => setSelectedId(agent.model_name)}
-                    className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
-                      selectedId === agent.model_name
-                        ? "border-blue-500 bg-blue-50 text-blue-800"
-                        : "border-transparent hover:bg-gray-50"
-                    }`}
-                  >
-                    <div className="font-medium truncate">{agent.model_name}</div>
-                    <div className="text-[10px] text-gray-500 truncate">litellm_agent</div>
-                  </button>
-                ))}
+                {agentModels.map((agent) => {
+                  const key = getAgentSelectionKey(agent);
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => setSelectedId(key)}
+                      className={`mb-1 w-full rounded-md border-l-2 px-3 py-2 text-left text-sm transition-colors ${
+                        selectedId === key
+                          ? "border-blue-500 bg-blue-50 text-blue-800"
+                          : "border-transparent hover:bg-gray-50"
+                      }`}
+                    >
+                      <div className="font-medium truncate">{agent.model_name}</div>
+                      <div className="text-[10px] text-gray-500 truncate">litellm_agent</div>
+                    </button>
+                  );
+                })}
                 <button
                   type="button"
                   onClick={handleAddAgent}
@@ -502,11 +533,12 @@ export default function AgentBuilderView({
                     ),
                     children: (
                       <div className="h-full overflow-y-auto p-6">
-                        {(isNewAgent || selectedAgent) ? (
+                        {isNewAgent || selectedAgent ? (
                           <div className="mx-auto max-w-xl space-y-4">
                             {!selectedAgentModelId && selectedAgent && (
                               <div className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                                This agent cannot be updated or deleted here (missing model id). Manage it from Models &amp; Endpoints.
+                                This agent cannot be updated or deleted here (missing model id). Manage it from Models
+                                &amp; Endpoints.
                               </div>
                             )}
                             <div>
@@ -577,7 +609,9 @@ export default function AgentBuilderView({
                               />
                               {selectedAgent && draftTools.length > 0 && (
                                 <p className="mt-1 text-xs text-gray-500">
-                                  {draftTools.length} MCP server{draftTools.length !== 1 ? "s" : ""} saved. Use the same <code className="rounded bg-gray-100 px-1">tools</code> array in chat completions when calling this agent.
+                                  {draftTools.length} MCP server{draftTools.length !== 1 ? "s" : ""} saved. Use the same{" "}
+                                  <code className="rounded bg-gray-100 px-1">tools</code> array in chat completions when
+                                  calling this agent.
                                 </p>
                               )}
                             </div>

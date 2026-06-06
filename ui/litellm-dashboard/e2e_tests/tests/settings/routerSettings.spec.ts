@@ -86,17 +86,16 @@ test.describe("Router Settings - Fallbacks", () => {
     await modal.getByRole("button", { name: /Save All Configurations/i }).click();
 
     // Success toast
-    await expect(page.getByText(/fallback configuration\(s\) added successfully/i).first())
-      .toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/fallback configuration\(s\) added successfully/i).first()).toBeVisible({
+      timeout: 10_000,
+    });
 
     // Modal closes, and a single row contains BOTH the primary and the fallback
     // model — stronger than asserting each name appears somewhere in tbody,
     // which could be satisfied by leftover rows from prior runs.
     await expect(modal).not.toBeVisible({ timeout: 5_000 });
 
-    const newRow = page.locator("table tbody tr")
-      .filter({ hasText: PRIMARY })
-      .filter({ hasText: FALLBACK });
+    const newRow = page.locator("table tbody tr").filter({ hasText: PRIMARY }).filter({ hasText: FALLBACK });
     await expect(newRow).toHaveCount(1, { timeout: 10_000 });
   });
 });

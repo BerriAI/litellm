@@ -17,6 +17,10 @@ from litellm.proxy.auth.auth_utils import (
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
+from litellm.proxy.hooks.rate_limiter_utils import (
+    ProxyHTTPRateLimitError,
+    resolve_llm_provider_for_rate_limit,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -73,7 +77,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if max_parallel_requests == 0 or tpm_limit == 0 or rpm_limit == 0:
                 # base case
                 raise self.raise_rate_limit_error(
-                    additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}"
+                    additional_details=f"{CommonProxyErrors.max_parallel_request_limit_reached.value}. Hit limit for {rate_limit_type}. Current limits: max_parallel_requests: {max_parallel_requests}, tpm_limit: {tpm_limit}, rpm_limit: {rpm_limit}",
+                    requested_model=data.get("model") if data else None,
                 )
             new_val = {
                 "current_requests": 1,
@@ -95,10 +100,16 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             values_to_update_in_cache.append((request_count_api_key, new_val))
 
         else:
-            raise HTTPException(
+            requested_model = data.get("model") if data else None
+            resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                requested_model
+            )
+            raise ProxyHTTPRateLimitError(
                 status_code=429,
                 detail=f"LiteLLM Rate Limit Handler for rate limit type = {rate_limit_type}. {CommonProxyErrors.max_parallel_request_limit_reached.value}. current rpm: {current['current_rpm']}, rpm limit: {rpm_limit}, current tpm: {current['current_tpm']}, tpm limit: {tpm_limit}, current max_parallel_requests: {current['current_requests']}, max_parallel_requests: {max_parallel_requests}",
                 headers={"retry-after": str(self.time_to_next_minute())},
+                model=resolved_model,
+                llm_provider=llm_provider,
             )
 
         await self.internal_usage_cache.async_batch_set_cache(
@@ -122,18 +133,31 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
         return seconds_to_next_minute
 
     def raise_rate_limit_error(
-        self, additional_details: Optional[str] = None
+        self,
+        additional_details: Optional[str] = None,
+        requested_model: Optional[str] = None,
     ) -> HTTPException:
         """
-        Raise an HTTPException with a 429 status code and a retry-after header
+        Raise an HTTPException with a 429 status code and a retry-after header.
+
+        ``requested_model`` is resolved via :func:`get_llm_provider` so the
+        raised exception carries ``llm_provider`` for downstream loggers
+        (Prometheus failure metric, observability callbacks). Falls back to
+        ``llm_provider="litellm_proxy"`` when the model is missing or
+        unparseable — see ``resolve_llm_provider_for_rate_limit``.
         """
         error_message = "Max parallel request limit reached"
         if additional_details is not None:
             error_message = error_message + " " + additional_details
-        raise HTTPException(
+        resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+            requested_model
+        )
+        raise ProxyHTTPRateLimitError(
             status_code=429,
-            detail=f"Max parallel request limit reached {additional_details}",
+            detail=error_message,
             headers={"retry-after": str(self.time_to_next_minute())},
+            model=resolved_model,
+            llm_provider=llm_provider,
         )
 
     async def get_all_cache_objects(
@@ -225,7 +249,8 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             # if above -> raise error
             if current_global_requests >= global_max_parallel_requests:
                 return self.raise_rate_limit_error(
-                    additional_details=f"Hit Global Limit: Limit={global_max_parallel_requests}, current: {current_global_requests}"
+                    additional_details=f"Hit Global Limit: Limit={global_max_parallel_requests}, current: {current_global_requests}",
+                    requested_model=data.get("model") if data else None,
                 )
             # if below -> increment
             else:

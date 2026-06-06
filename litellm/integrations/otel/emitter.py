@@ -13,6 +13,7 @@ from litellm.integrations.otel.mappers.base import AttributeMapper, SpanData
 from litellm.integrations.otel.model.payloads import (
     GuardrailSpanData,
     LLMCallSpanData,
+    MCPToolCallSpanData,
     ServiceSpanData,
 )
 from litellm.integrations.otel.plumbing.providers import to_otel_span_kind
@@ -22,6 +23,7 @@ from litellm.integrations.otel.model.spans import (
     SpanRole,
     guardrail_span_name,
     llm_call_span_name,
+    mcp_tool_call_span_name,
     service_span_name,
 )
 
@@ -30,6 +32,7 @@ from litellm.integrations.otel.model.spans import (
 # have no builder here.
 _NAME_BUILDERS: dict[SpanRole, Callable[..., str]] = {
     SpanRole.LLM_CALL: llm_call_span_name,
+    SpanRole.MCP_TOOL_CALL: mcp_tool_call_span_name,
     SpanRole.GUARDRAIL: guardrail_span_name,
     # DB_CALL and SERVICE are both built from ServiceSpanData; they differ only in
     # span kind (CLIENT vs INTERNAL) and attribute vocabulary, not in naming.
@@ -121,10 +124,14 @@ class SpanEmitter:
         Return the span, or ``None`` if it was deduplicated away. ``tracer``
         overrides the bound tracer for this span, used for per-request routing.
         """
-        # Only LLM-call spans carry a dedup key; LLM-call and service spans
-        # carry an ``error`` field. ``isinstance`` narrows the type for mypy and
-        # keeps the engine free of duck-typed attribute reads.
-        dedup_key = data.identity.call_id if isinstance(data, LLMCallSpanData) else None
+        # LLM-call and MCP tool-call spans carry a dedup key (their request's
+        # call id), so a sync+async double-firing coalesces. ``isinstance`` narrows
+        # the type for mypy and keeps the engine free of duck-typed attribute reads.
+        dedup_key = (
+            data.identity.call_id
+            if isinstance(data, (LLMCallSpanData, MCPToolCallSpanData))
+            else None
+        )
         if self._seen(dedup_key, role):
             return None
         span = self.start_span(
@@ -160,7 +167,15 @@ class SpanEmitter:
                 span.set_attribute(key, value)
         error = (
             data.error
-            if isinstance(data, (LLMCallSpanData, ServiceSpanData, GuardrailSpanData))
+            if isinstance(
+                data,
+                (
+                    LLMCallSpanData,
+                    MCPToolCallSpanData,
+                    ServiceSpanData,
+                    GuardrailSpanData,
+                ),
+            )
             else None
         )
         if error and (error.error_type or error.message):

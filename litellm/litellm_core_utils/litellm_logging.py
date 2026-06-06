@@ -3503,7 +3503,9 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             return None
 
-    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_anthropic_messages_response_logging(
+        self, result: Any
+    ) -> Union[ModelResponse, ResponsesAPIResponse]:
         """
         Handles logging for Anthropic messages responses.
 
@@ -3522,6 +3524,15 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ModelResponse):
             return result
+        elif isinstance(
+            result,
+            (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
+        ):
+            # anthropic_messages() can route to OpenAI Responses API; in that path
+            # the assembled streaming result is one of these terminal events rather than
+            # a ModelResponse. Return the inner response so downstream handlers
+            # (_transform_usage_objects, normalize_logging_result) can process it.
+            return result.response
 
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
@@ -5300,8 +5311,12 @@ class StandardLoggingPayloadSetup:
                     tb_lines[:MAXIMUM_TRACEBACK_LINES_TO_LOG]
                 )  # Limit to first 100 lines
 
-        # Get additional error details
-        error_message = str(original_exception)
+        explicit_message = getattr(original_exception, "message", None)
+        error_message = (
+            explicit_message
+            if isinstance(explicit_message, str) and explicit_message
+            else str(original_exception)
+        )
 
         return StandardLoggingPayloadErrorInformation(
             error_code=error_status,

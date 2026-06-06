@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Any, Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 from typing_extensions import Required, TypedDict
 
@@ -171,6 +171,9 @@ class GeminiImageGenerationParameters(BaseModel):
     aspectRatio: Optional[str] = None
     """Aspect ratio for generated images (e.g., '1:1', '16:9', '9:16', '4:3', '3:4')"""
 
+    imageSize: Optional[str] = None
+    """Image size for generated images (e.g., '1K', '2K')"""
+
     personGeneration: Optional[str] = None
     """Controls person generation in images"""
 
@@ -230,10 +233,11 @@ class GeminiImageGenerationResponse(TypedDict):
 
 
 # Video Generation Types
-class GeminiVideoGenerationInstance(TypedDict):
+class GeminiVideoGenerationInstance(TypedDict, total=False):
     """Instance data for Gemini video generation request"""
 
-    prompt: str
+    prompt: Required[str]
+    image: Dict[str, Any]
 
 
 class GeminiVideoGenerationParameters(BaseModel):
@@ -260,11 +264,6 @@ class GeminiVideoGenerationParameters(BaseModel):
 
     negativePrompt: Optional[str] = None
     """Text describing what not to include in the video."""
-
-    image: Optional[Any] = None
-    """
-    An initial image to animate (Image object).
-    """
 
     lastFrame: Optional[Any] = None
     """

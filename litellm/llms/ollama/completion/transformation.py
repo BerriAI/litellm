@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, 
 from httpx._models import Headers, Response
 
 import litellm
-from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_str_from_messages,
 )
@@ -17,19 +17,17 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUsageBlock
 from litellm.types.utils import (
     Delta,
     GenericStreamingChunk,
-    ModelInfoBase,
     ModelResponse,
     ModelResponseStream,
     ProviderField,
     StreamingChoices,
 )
 
-from ..common_utils import OllamaError, _convert_image
+from ..common_utils import OllamaError, OllamaModelInfo, _convert_image
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -224,59 +222,18 @@ class OllamaConfig(BaseConfig):
         )
 
     def get_model_info(
-        self, model: str, api_base: Optional[str] = None
-    ) -> ModelInfoBase:
+        self,
+        model: str,
+        api_base: Optional[str] = None,
+        api_key: Optional[str] = None,
+    ) -> Any:
         """
         curl http://localhost:11434/api/show -d '{
           "name": "mistral"
         }'
         """
-        if model.startswith("ollama/") or model.startswith("ollama_chat/"):
-            model = model.split("/", 1)[1]
-        api_base = (
-            api_base or get_secret_str("OLLAMA_API_BASE") or "http://localhost:11434"
-        )
-        api_key = self.get_api_key()
-        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-
-        try:
-            response = litellm.module_level_client.post(
-                url=f"{api_base}/api/show",
-                json={"name": model},
-                headers=headers,
-            )
-        except Exception as e:
-            verbose_logger.debug(
-                "OllamaError: Could not get model info for %s from %s. Error: %s",
-                model,
-                api_base,
-                e,
-            )
-            return ModelInfoBase(
-                key=model,
-                litellm_provider="ollama",
-                mode="chat",
-                input_cost_per_token=0.0,
-                output_cost_per_token=0.0,
-                max_tokens=None,
-                max_input_tokens=None,
-                max_output_tokens=None,
-            )
-
-        model_info = response.json()
-
-        _max_tokens: Optional[int] = self._get_max_tokens(model_info)
-
-        return ModelInfoBase(
-            key=model,
-            litellm_provider="ollama",
-            mode="chat",
-            supports_function_calling=self._supports_function_calling(model_info),
-            input_cost_per_token=0.0,
-            output_cost_per_token=0.0,
-            max_tokens=_max_tokens,
-            max_input_tokens=_max_tokens,
-            max_output_tokens=_max_tokens,
+        return OllamaModelInfo().get_model_info(
+            model=model, api_base=api_base, api_key=api_key
         )
 
     def get_error_class(

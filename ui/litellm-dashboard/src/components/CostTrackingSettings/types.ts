@@ -50,4 +50,3 @@ export interface CostEstimateResponse {
   output_cost_per_token: number | null;
   provider: string | null;
 }
-

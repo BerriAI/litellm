@@ -110,12 +110,8 @@ const SpendByProvider: React.FC<SpendByProviderProps> = ({ loading, isDateChangi
                       </div>
                     </TableCell>
                     <TableCell>${formatNumberWithCommas(provider.spend, 2)}</TableCell>
-                    <TableCell className="text-green-600">
-                      {provider.successful_requests.toLocaleString()}
-                    </TableCell>
-                    <TableCell className="text-red-600">
-                      {provider.failed_requests.toLocaleString()}
-                    </TableCell>
+                    <TableCell className="text-green-600">{provider.successful_requests.toLocaleString()}</TableCell>
+                    <TableCell className="text-red-600">{provider.failed_requests.toLocaleString()}</TableCell>
                     <TableCell>{provider.tokens.toLocaleString()}</TableCell>
                   </TableRow>
                 ))}

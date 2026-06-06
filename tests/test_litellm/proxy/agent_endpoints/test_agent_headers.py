@@ -14,7 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helper: build a minimal mock agent
 # ---------------------------------------------------------------------------
@@ -305,6 +304,97 @@ async def test_convention_unrelated_prefix_not_forwarded():
 
     headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
     assert headers is None
+
+
+# ---------------------------------------------------------------------------
+# Databricks App OAuth M2M injection
+# ---------------------------------------------------------------------------
+
+
+def _mock_databricks_token_client(access_token="dbx-oauth-token"):
+    response = MagicMock()
+    response.raise_for_status = MagicMock()
+    response.json = MagicMock(
+        return_value={"access_token": access_token, "expires_in": 3600}
+    )
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    return client
+
+
+@pytest.mark.asyncio
+async def test_databricks_oauth_header_injected():
+    """A databricks_oauth block mints an outbound Bearer Authorization header."""
+    from litellm.proxy.agent_endpoints import databricks_oauth
+
+    databricks_oauth.databricks_app_oauth_token_cache.flush_cache()
+
+    mock_agent = _make_mock_agent()
+    mock_agent.litellm_params = {
+        "databricks_oauth": {
+            "client_id": "cid",
+            "client_secret": "secret",
+            "workspace_url": "https://dbc.cloud.databricks.com",
+        }
+    }
+    mock_request = _make_mock_request()
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=_mock_databricks_token_client("minted-token"),
+    ):
+        mock_asend = await _invoke(mock_agent, mock_request, None)
+
+    headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
+    assert headers is not None
+    assert headers.get("Authorization") == "Bearer minted-token"
+
+
+@pytest.mark.asyncio
+async def test_databricks_oauth_overrides_static_authorization():
+    """The minted OAuth token wins over a statically configured Authorization."""
+    from litellm.proxy.agent_endpoints import databricks_oauth
+
+    databricks_oauth.databricks_app_oauth_token_cache.flush_cache()
+
+    mock_agent = _make_mock_agent(static_headers={"Authorization": "Bearer static-pat"})
+    mock_agent.litellm_params = {
+        "databricks_oauth": {
+            "client_id": "cid",
+            "client_secret": "secret",
+            "workspace_url": "https://dbc.cloud.databricks.com",
+        }
+    }
+    mock_request = _make_mock_request()
+
+    with patch(
+        "litellm.proxy.agent_endpoints.databricks_oauth.get_async_httpx_client",
+        return_value=_mock_databricks_token_client("oauth-wins"),
+    ):
+        mock_asend = await _invoke(mock_agent, mock_request, None)
+
+    headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
+    assert headers is not None
+    assert headers.get("Authorization") == "Bearer oauth-wins"
+
+
+@pytest.mark.asyncio
+async def test_non_databricks_agent_skips_oauth_resolution():
+    """Agents without a databricks_oauth block never enter the OAuth path."""
+    mock_agent = _make_mock_agent(static_headers={"x-custom": "v"})
+    mock_agent.litellm_params = {"require_trace_id_on_calls_to_agent": False}
+    mock_request = _make_mock_request()
+
+    with patch(
+        "litellm.proxy.agent_endpoints.a2a_endpoints.resolve_databricks_app_auth_header",
+        new_callable=AsyncMock,
+    ) as mock_resolve:
+        mock_asend = await _invoke(mock_agent, mock_request, None)
+
+    mock_resolve.assert_not_called()
+    headers = mock_asend.call_args.kwargs.get("agent_extra_headers")
+    assert headers == {"x-custom": "v"}
+    assert "Authorization" not in headers
 
 
 # ---------------------------------------------------------------------------

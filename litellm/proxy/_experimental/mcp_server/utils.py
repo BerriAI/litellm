@@ -2,12 +2,25 @@
 MCP Server Utilities
 """
 
+import json
 import re
-from typing import Any, Dict, Iterator, Mapping, Optional, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+)
 
 import hashlib
 import importlib
 import os
+from urllib.parse import quote
 
 # Constants
 LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
@@ -160,6 +173,36 @@ def lookup_mcp_server_auth_in_headers(
             if key in normalized_headers:
                 return normalized_headers[key]
     return None
+
+
+MCP_TOOL_ALLOWLIST_ENFORCED_KEY = "tool_allowlist_enforced"
+
+
+def _parse_mcp_info_dict(mcp_info: Any) -> Optional[Dict[str, Any]]:
+    if mcp_info is None:
+        return None
+    if isinstance(mcp_info, dict):
+        return mcp_info
+    if isinstance(mcp_info, str):
+        try:
+            parsed = json.loads(mcp_info)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def is_server_tool_allowlist_enforced(mcp_server: Any) -> bool:
+    mcp_info = _parse_mcp_info_dict(getattr(mcp_server, "mcp_info", None))
+    if not mcp_info:
+        return False
+    return bool(mcp_info.get(MCP_TOOL_ALLOWLIST_ENFORCED_KEY))
+
+
+def server_applies_tool_allowlist(mcp_server: Any) -> bool:
+    """Whether server-level allowed_tools whitelist filtering is active."""
+    allowed_tools = getattr(mcp_server, "allowed_tools", None) or []
+    return is_server_tool_allowlist_enforced(mcp_server) or bool(allowed_tools)
 
 
 def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
@@ -337,6 +380,130 @@ def validate_mcp_server_name(
             )
         else:
             raise Exception(error_message)
+
+
+class MCPMissingUserEnvVarsError(Exception):
+    """Raised when an MCP request can't be built because the calling user has
+    not supplied one or more required per-user environment variables.
+
+    The error message is user-facing and includes a URL the user can visit
+    to fill them in.
+    """
+
+    def __init__(
+        self,
+        *,
+        server_id: str,
+        server_name: Optional[str],
+        missing: List[str],
+        setup_url: str,
+    ) -> None:
+        self.server_id = server_id
+        self.server_name = server_name
+        self.missing = missing
+        self.setup_url = setup_url
+        label = server_name or server_id
+        bullet_list = "\n".join(f"- {name}" for name in missing)
+        message = (
+            f'Cannot connect to MCP server "{label}".\n\n'
+            f"Your administrator configured this server to require per-user "
+            f"variables, but you haven't set the following yet:\n"
+            f"{bullet_list}\n\n"
+            f"Set your credentials here:\n"
+            f"{setup_url}"
+        )
+        super().__init__(message)
+
+
+# Pattern for ``${NAME}`` substitution. Matches the standard env-var
+# identifier rules — letters, digits, underscores, can't start with a digit.
+_ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def parse_admin_env_vars(
+    env_vars: Optional[Iterable[Any]],
+) -> Tuple[Dict[str, str], List[Dict[str, Any]]]:
+    """Split admin-configured env var entries into globals and per-user specs.
+
+    Accepts the raw value of ``MCPServer.env_vars`` (list of dicts or Pydantic
+    models). Returns:
+
+    - ``global_values``: ``{name: value}`` for entries with ``scope=="global"``.
+    - ``user_specs``: list of ``{name, description}`` for entries with
+      ``scope=="user"`` — these are the names the user must fill in.
+
+    Unknown / malformed entries are skipped silently.
+    """
+    global_values: Dict[str, str] = {}
+    user_specs: List[Dict[str, Any]] = []
+    if not env_vars:
+        return global_values, user_specs
+    for raw in env_vars:
+        if raw is None:
+            continue
+        if hasattr(raw, "model_dump"):
+            entry = raw.model_dump()
+        elif isinstance(raw, dict):
+            entry = raw
+        else:
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str) or not name:
+            continue
+        scope = entry.get("scope") or "global"
+        if scope == "user":
+            user_specs.append({"name": name, "description": entry.get("description")})
+        else:
+            value = entry.get("value")
+            global_values[name] = "" if value is None else str(value)
+    return global_values, user_specs
+
+
+def find_env_var_references(value: str) -> Set[str]:
+    """Return the set of ``${NAME}`` identifiers referenced inside ``value``."""
+    if not value:
+        return set()
+    return set(_ENV_VAR_PATTERN.findall(value))
+
+
+def collect_env_var_references(*, strings: Iterable[str]) -> Set[str]:
+    """Union of every ``${NAME}`` reference across a collection of strings."""
+    refs: Set[str] = set()
+    for s in strings:
+        if isinstance(s, str):
+            refs |= find_env_var_references(s)
+    return refs
+
+
+def interpolate_env_vars(value: str, variables: Mapping[str, str]) -> str:
+    """Replace ``${NAME}`` references in ``value`` with the matching mapping
+    entry. Unknown names are left untouched so callers can detect them via
+    ``find_env_var_references`` on the result if needed.
+    """
+    if not value:
+        return value
+
+    def _sub(match: "re.Match[str]") -> str:
+        name = match.group(1)
+        if name in variables:
+            return variables[name]
+        return match.group(0)
+
+    return _ENV_VAR_PATTERN.sub(_sub, value)
+
+
+def interpolate_headers(
+    headers: Mapping[str, str], variables: Mapping[str, str]
+) -> Dict[str, str]:
+    """Return a copy of ``headers`` with every value passed through ``interpolate_env_vars``."""
+    return {k: interpolate_env_vars(v, variables) for k, v in headers.items()}
+
+
+def build_env_var_setup_url(server_id: str) -> str:
+    """The frontend URL where a user can fill in their per-user env vars."""
+    base = os.environ.get("PROXY_BASE_URL", "").rstrip("/")
+    path = f"/ui/?page=mcp-servers&fill_env_vars={quote(server_id, safe='')}"
+    return f"{base}{path}" if base else path
 
 
 def merge_mcp_headers(

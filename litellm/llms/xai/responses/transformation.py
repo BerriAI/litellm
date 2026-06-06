@@ -4,6 +4,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 from litellm.types.llms.xai import XAIWebSearchTool, XAIXSearchTool
@@ -212,16 +213,17 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Validate environment and set up headers for XAI API.
 
-        Uses XAI_API_KEY from environment or litellm_params.
+        Uses the shared xAI key resolver with Responses API legacy precedence.
         """
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
-            litellm_params.api_key or litellm.api_key or get_secret_str("XAI_API_KEY")
+        api_key = XAIModelInfo.get_api_key(
+            litellm_params.api_key, legacy_generic_before_env=True
         )
 
         if not api_key:
             raise ValueError(
-                "XAI API key is required. Set XAI_API_KEY environment variable or pass api_key parameter."
+                "XAI API key is required. Set api_key, litellm.xai_key, "
+                "litellm.api_key, or XAI_API_KEY."
             )
 
         headers.update(

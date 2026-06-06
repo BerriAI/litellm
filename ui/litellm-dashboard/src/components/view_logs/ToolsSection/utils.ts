@@ -25,20 +25,20 @@ function parseData(input: any): any {
 function extractToolsFromRequest(log: LogEntry): ToolDefinition[] {
   // Check proxy_server_request first (most complete), then messages
   const requestData = parseData(log.proxy_server_request || log.messages);
-  
+
   if (!requestData) return [];
-  
+
   // Handle array format (messages array)
   if (Array.isArray(requestData)) {
     // Tools are not typically in messages array, return empty
     return [];
   }
-  
+
   // Handle object format (request body)
   if (typeof requestData === "object" && requestData.tools) {
     return Array.isArray(requestData.tools) ? requestData.tools : [];
   }
-  
+
   return [];
 }
 
@@ -62,9 +62,7 @@ function extractToolCallsFromResponse(log: LogEntry): ToolCall[] {
 
   // Anthropic format: response.content[].type === "tool_use"
   if (Array.isArray(responseData.content)) {
-    const toolUseBlocks = responseData.content.filter(
-      (block: any) => block.type === "tool_use"
-    );
+    const toolUseBlocks = responseData.content.filter((block: any) => block.type === "tool_use");
     if (toolUseBlocks.length > 0) {
       return toolUseBlocks.map((block: any) => ({
         id: block.id,
@@ -125,17 +123,15 @@ function parseSafeJson(jsonString: string): Record<string, any> {
 export function parseToolsFromLog(log: LogEntry): ParsedTool[] {
   // Get tools from request
   const requestTools = extractToolsFromRequest(log);
-  
+
   if (requestTools.length === 0) {
     return [];
   }
-  
+
   // Get tool calls from response
   const toolCalls = extractToolCallsFromResponse(log);
-  const calledToolNames = new Set(
-    toolCalls.map((tc: ToolCall) => tc.function?.name).filter(Boolean)
-  );
-  
+  const calledToolNames = new Set(toolCalls.map((tc: ToolCall) => tc.function?.name).filter(Boolean));
+
   // Map tool calls by name for quick lookup
   const toolCallMap = new Map<string, any>();
   toolCalls.forEach((tc: ToolCall) => {
@@ -148,16 +144,13 @@ export function parseToolsFromLog(log: LogEntry): ParsedTool[] {
       });
     }
   });
-  
+
   // Parse each tool definition
   // Handle both OpenAI format (tool.function.name) and Anthropic format (tool.name + tool.input_schema)
   return requestTools.map((tool: any, index: number) => {
-    const name =
-      tool.function?.name || tool.name || `Tool ${index + 1}`;
-    const description =
-      tool.function?.description || tool.description || "";
-    const parameters =
-      tool.function?.parameters || tool.input_schema || {};
+    const name = tool.function?.name || tool.name || `Tool ${index + 1}`;
+    const description = tool.function?.description || tool.description || "";
+    const parameters = tool.function?.parameters || tool.input_schema || {};
 
     return {
       index: index + 1,

@@ -14,6 +14,7 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     check_complete_credentials,
     get_end_user_id_from_request_body,
+    get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
     get_model_from_request,
@@ -90,6 +91,22 @@ class TestGetKeyModelRpmLimit:
         )
         result = get_key_model_rpm_limit(user_api_key_dict)
         assert result == {}
+
+
+class TestGetKeyMcpRpmLimit:
+    def test_empty_dict_limits_are_returned(self):
+        key_override = UserAPIKeyAuth(
+            api_key="sk-123",
+            metadata={"mcp_rpm_limit": {}},
+            team_metadata={"mcp_rpm_limit": {"github": 50}},
+        )
+        assert get_key_mcp_rpm_limit(key_override) == {}
+
+        team_empty = UserAPIKeyAuth(
+            api_key="sk-123",
+            team_metadata={"mcp_rpm_limit": {}},
+        )
+        assert get_key_mcp_rpm_limit(team_empty) == {}
 
 
 class TestGetKeyModelTpmLimit:
@@ -379,6 +396,62 @@ def test_get_model_from_request_extracts_video_id_model():
             route="/v1/videos/{video_id}",
         )
         == "video-model"
+    )
+
+
+def test_get_model_from_request_resolves_video_id_model_with_router():
+    from litellm.types.videos.utils import encode_video_id_with_provider
+
+    provider_video_id = (
+        "projects/test-project/locations/us-central1/publishers/google/models/"
+        "veo-3.1-generate-001/operations/operation-id"
+    )
+    video_id = encode_video_id_with_provider(
+        video_id=provider_video_id,
+        provider="vertex_ai",
+        model_id="veo-3.1-generate-001",
+    )
+    llm_router = MagicMock()
+    llm_router.resolve_model_name_from_model_id.return_value = (
+        "gcp/google/veo-3.1-generate-001"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"video_id": video_id},
+            route="/v1/videos/{video_id}",
+            llm_router=llm_router,
+        )
+        == "gcp/google/veo-3.1-generate-001"
+    )
+    llm_router.resolve_model_name_from_model_id.assert_called_once_with(
+        "veo-3.1-generate-001"
+    )
+
+
+def test_get_model_from_request_resolves_character_id_model_with_router():
+    from litellm.types.videos.utils import encode_character_id_with_provider
+
+    character_id = encode_character_id_with_provider(
+        character_id="character-provider-id",
+        provider="vertex_ai",
+        model_id="veo-3.1-generate-001",
+    )
+    llm_router = MagicMock()
+    llm_router.resolve_model_name_from_model_id.return_value = (
+        "gcp/google/veo-3.1-generate-001"
+    )
+
+    assert (
+        get_model_from_request(
+            request_data={"character_id": character_id},
+            route="/v1/videos/characters/{character_id}",
+            llm_router=llm_router,
+        )
+        == "gcp/google/veo-3.1-generate-001"
+    )
+    llm_router.resolve_model_name_from_model_id.assert_called_once_with(
+        "veo-3.1-generate-001"
     )
 
 

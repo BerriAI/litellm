@@ -5,6 +5,7 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import _can_object_call_model, can_key_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -189,6 +190,148 @@ def _replace_file_id_in_response(response, original_file_id: str):
         response.file_id = original_file_id
 
     return response
+
+
+async def _authorize_model_routing_hint(
+    *,
+    model: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+) -> None:
+    if user_api_key_dict is None:
+        return
+
+    key_models = getattr(user_api_key_dict, "models", None)
+    if not (isinstance(key_models, list) and "all-team-models" in key_models):
+        await can_key_call_model(
+            model=model,
+            llm_model_list=None,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+
+    team_models = getattr(user_api_key_dict, "team_models", None)
+    if isinstance(team_models, list) and len(team_models) > 0:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=team_models,
+            team_model_aliases=user_api_key_dict.team_model_aliases,
+            team_id=user_api_key_dict.team_id,
+            object_type="team",
+        )
+
+
+async def _update_request_data_with_model_routing_hint(
+    data: Dict,
+    request: Request,
+    llm_router: Optional["Router"] = None,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
+) -> Dict:
+    if data.get("api_key") is not None or data.get("api_base") is not None:
+        return data
+
+    user_controlled_model_hint = request.query_params.get(
+        "model"
+    ) or request.headers.get("x-litellm-model")
+    model_hint = data.get("model") or user_controlled_model_hint
+    should_authorize_model_hint = (
+        isinstance(model_hint, str) and model_hint == user_controlled_model_hint
+    )
+
+    should_route = False
+    credentials = None
+    if isinstance(model_hint, str) and "*" in model_hint:
+        if llm_router is not None:
+            if should_authorize_model_hint:
+                await _authorize_model_routing_hint(
+                    model=model_hint,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                )
+            credentials = llm_router.get_deployment_credentials_with_provider(
+                model_id=model_hint
+            )
+            should_route = credentials is not None
+    else:
+        if isinstance(model_hint, str) and should_authorize_model_hint:
+            await _authorize_model_routing_hint(
+                model=model_hint,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
+        (
+            should_route,
+            _model_used,
+            _original_file_id,
+            credentials,
+        ) = handle_model_based_routing(
+            file_id="",
+            request=request,
+            llm_router=llm_router,
+            data=data,
+            check_file_id_encoding=False,
+        )
+
+    if should_route and credentials is not None:
+        prepare_data_with_credentials(
+            data=data,
+            credentials=credentials,
+        )
+        return data
+
+    if llm_router is None or user_api_key_dict is None:
+        return data
+
+    team_models = getattr(user_api_key_dict, "team_models", None) or []
+    if not isinstance(team_models, list):
+        return data
+
+    model_names_to_check = []
+    for model_name in team_models:
+        if not isinstance(model_name, str) or model_name in {
+            "all-team-models",
+            "all-proxy-models",
+            "no-default-models",
+        }:
+            continue
+        model_names_to_check.append(model_name)
+
+    openai_credentials = None
+    for model_name in model_names_to_check:
+        credentials = llm_router.get_deployment_credentials_with_provider(
+            model_id=model_name
+        )
+        if credentials is None:
+            continue
+
+        provider = credentials.get("custom_llm_provider")
+        model = credentials.get("model")
+        if provider is None and isinstance(model, str) and "/" in model:
+            provider = model.split("/", 1)[0]
+        if provider != LlmProviders.OPENAI.value:
+            continue
+
+        await _authorize_model_routing_hint(
+            model=model_name,
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+        if openai_credentials is not None:
+            return data
+        openai_credentials = credentials
+
+    if openai_credentials is not None:
+        prepare_data_with_credentials(data=data, credentials=openai_credentials)
+    elif len(model_names_to_check) == 1:
+        await _authorize_model_routing_hint(
+            model=model_names_to_check[0],
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+        )
+        data["model"] = model_names_to_check[0]
+
+    return data
 
 
 def _update_request_data_with_litellm_managed_vector_store_registry(
@@ -486,6 +629,13 @@ async def vector_store_file_list(
         llm_router=llm_router,
         managed_vector_store=managed_vector_store,
         should_lookup_registry=False,
+    )
+
+    data = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)

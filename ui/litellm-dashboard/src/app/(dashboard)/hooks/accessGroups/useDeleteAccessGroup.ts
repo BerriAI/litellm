@@ -1,19 +1,11 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { accessGroupKeys } from "./useAccessGroups";
 
 // ── Fetch function ───────────────────────────────────────────────────────────
 
-const deleteAccessGroup = async (
-  accessToken: string,
-  accessGroupId: string,
-): Promise<void> => {
+const deleteAccessGroup = async (accessToken: string, accessGroupId: string): Promise<void> => {
   const baseUrl = getProxyBaseUrl();
   const url = `${baseUrl}/v1/access_group/${encodeURIComponent(accessGroupId)}`;
 

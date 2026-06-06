@@ -1,11 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Button, Drawer } from "antd";
-import {
-  CheckOutlined,
-  CopyOutlined,
-  LeftOutlined,
-  RightOutlined,
-} from "@ant-design/icons";
+import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "../constants";
@@ -126,7 +121,7 @@ export function LogDetailsDrawer({
       return allSessionLogs
         .map((row) => ({
           ...row,
-          request_duration_ms: row.request_duration_ms ?? (Date.parse(row.endTime) - Date.parse(row.startTime)),
+          request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
         }))
         .sort((a, b) => {
           const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
@@ -154,9 +149,10 @@ export function LogDetailsDrawer({
   useEffect(() => {
     if (!isSessionMode || !sessionLogs.length) return;
     if (!selectedSessionRequestId || !sessionLogs.some((row) => row.request_id === selectedSessionRequestId)) {
-      const fallbackRequestId = logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
-        ? logEntry.request_id
-        : sessionLogs[0].request_id;
+      const fallbackRequestId =
+        logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
+          ? logEntry.request_id
+          : sessionLogs[0].request_id;
       setSelectedSessionRequestId(fallbackRequestId);
     }
   }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
@@ -212,12 +208,10 @@ export function LogDetailsDrawer({
   const environment = metadata?.user_api_key_team_alias || "default";
 
   const totalSessionCost = sessionLogs.reduce((sum, row) => sum + (row.spend || 0), 0);
-  const sessionStart = sessionLogs.length > 0
-    ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime())))
-    : null;
-  const sessionEnd = sessionLogs.length > 0
-    ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime())))
-    : null;
+  const sessionStart =
+    sessionLogs.length > 0 ? new Date(Math.min(...sessionLogs.map((r) => new Date(r.startTime).getTime()))) : null;
+  const sessionEnd =
+    sessionLogs.length > 0 ? new Date(Math.max(...sessionLogs.map((r) => new Date(r.endTime).getTime()))) : null;
   const sessionDurationSeconds =
     sessionStart && sessionEnd ? ((sessionEnd.getTime() - sessionStart.getTime()) / 1000).toFixed(2) : "0.00";
   const llmCount = sessionLogs.filter(
@@ -227,8 +221,7 @@ export function LogDetailsDrawer({
   const mcpCount = sessionLogs.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length;
   const logsForList = isSessionMode ? sessionLogs : currentLog ? [currentLog] : [];
   const leftPanelId = isSessionMode ? sessionId || "" : currentLog?.request_id || "";
-  const leftPanelDisplayId =
-    leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
+  const leftPanelDisplayId = leftPanelId.length > 14 ? `${leftPanelId.slice(0, 11)}...` : leftPanelId;
 
   const handleCopyLeftPanelId = async () => {
     if (!leftPanelId) return;
@@ -236,7 +229,9 @@ export function LogDetailsDrawer({
       await navigator.clipboard.writeText(leftPanelId);
       setCopiedLeftPanelId(true);
       setTimeout(() => setCopiedLeftPanelId(false), 1200);
-    } catch { /* clipboard unavailable in non-secure contexts */ }
+    } catch {
+      /* clipboard unavailable in non-secure contexts */
+    }
   };
 
   if (!currentLog || !enrichedLog) return null;
@@ -257,30 +252,27 @@ export function LogDetailsDrawer({
       }}
     >
       <div style={{ height: "100%" }} className="flex relative">
-          {!isSidebarCollapsed ? (
-            <Button
-              type="text"
-              size="small"
-              icon={<LeftOutlined />}
-              onClick={() => setIsSidebarCollapsed(true)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
-              aria-label="Collapse trace sidebar"
-            />
-          ) : (
-            <Button
-              type="text"
-              size="small"
-              icon={<RightOutlined />}
-              onClick={() => setIsSidebarCollapsed(false)}
-              className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
-              aria-label="Expand trace sidebar"
-            />
-          )}
-          {!isSidebarCollapsed && (
-          <div
-            className="border-r border-slate-200 bg-slate-50 flex flex-col"
-            style={{ width: SIDEBAR_WIDTH_PX }}
-          >
+        {!isSidebarCollapsed ? (
+          <Button
+            type="text"
+            size="small"
+            icon={<LeftOutlined />}
+            onClick={() => setIsSidebarCollapsed(true)}
+            className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+            aria-label="Collapse trace sidebar"
+          />
+        ) : (
+          <Button
+            type="text"
+            size="small"
+            icon={<RightOutlined />}
+            onClick={() => setIsSidebarCollapsed(false)}
+            className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
+            aria-label="Expand trace sidebar"
+          />
+        )}
+        {!isSidebarCollapsed && (
+          <div className="border-r border-slate-200 bg-slate-50 flex flex-col" style={{ width: SIDEBAR_WIDTH_PX }}>
             <div className="pl-12 pr-3 py-2 border-b border-slate-200 bg-white">
               <div className="flex items-start justify-between gap-2">
                 <div>
@@ -310,10 +302,11 @@ export function LogDetailsDrawer({
                   isSessionMode
                     ? llmCount
                     : logsForList.filter(
-                        (row) =>
-                          !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
+                        (row) => !MCP_CALL_TYPES.includes(row.call_type) && !AGENT_CALL_TYPES.includes(row.call_type),
                       ).length,
-                  isSessionMode ? agentCount : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
+                  isSessionMode
+                    ? agentCount
+                    : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
                   isSessionMode ? mcpCount : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
                 ].map((count, i) => {
                   const label = [" LLM", " Agent", " MCP"][i];
@@ -326,9 +319,7 @@ export function LogDetailsDrawer({
                   ) : null;
                 })}
                 <span className="mx-1.5">·</span>
-                {isSessionMode
-                  ? getSpendString(totalSessionCost)
-                  : getSpendString(currentLog.spend || 0)}
+                {isSessionMode ? getSpendString(totalSessionCost) : getSpendString(currentLog.spend || 0)}
                 {isSessionMode && (
                   <>
                     <span className="mx-1.5">·</span>
@@ -382,27 +373,27 @@ export function LogDetailsDrawer({
               )}
             </div>
           </div>
-          )}
+        )}
 
-          <div className="flex-1 flex flex-col overflow-hidden">
-            <DrawerHeader
-              log={currentLog}
-              onClose={onClose}
-              onPrevious={selectPreviousLog}
-              onNext={selectNextLog}
-              statusLabel={statusLabel}
-              statusColor={statusColor}
-              environment={environment}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          <DrawerHeader
+            log={currentLog}
+            onClose={onClose}
+            onPrevious={selectPreviousLog}
+            onNext={selectNextLog}
+            statusLabel={statusLabel}
+            statusColor={statusColor}
+            environment={environment}
+          />
+          <div className="flex-1 overflow-y-auto">
+            <LogDetailContent
+              logEntry={enrichedLog}
+              isLoadingDetails={isLoadingDetails}
+              accessToken={accessToken ?? null}
             />
-            <div className="flex-1 overflow-y-auto">
-              <LogDetailContent
-                logEntry={enrichedLog}
-                isLoadingDetails={isLoadingDetails}
-                accessToken={accessToken ?? null}
-              />
-            </div>
           </div>
         </div>
+      </div>
     </Drawer>
   );
 }

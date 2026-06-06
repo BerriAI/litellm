@@ -29,6 +29,7 @@ from litellm.constants import (
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_legacy_defs
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
@@ -80,7 +81,6 @@ from litellm.types.utils import (
 from litellm.utils import (
     ModelResponse,
     Usage,
-    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
@@ -335,50 +335,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return any(
             v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
         )
-
-    @staticmethod
-    def _supports_model_capability(model: str, key: str) -> bool:
-        """Check a boolean capability ``key`` in the model map.
-
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
-        """
-        try:
-            if _supports_factory(
-                model=model,
-                custom_llm_provider="anthropic",
-                key=key,
-            ):
-                return True
-        except Exception:
-            pass
-        candidates = [model]
-        for prefix in (
-            "bedrock/converse/",
-            "bedrock/invoke/",
-            "bedrock/",
-            "vertex_ai/",
-        ):
-            if model.startswith(prefix):
-                candidates.append(model[len(prefix) :])
-        try:
-            from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-            base = BedrockModelInfo.get_base_model(model)
-            if base:
-                candidates.append(base)
-                candidates.append(f"bedrock/{base}")
-        except Exception:
-            pass
-        try:
-            for cand in candidates:
-                if cand in litellm.model_cost and (
-                    litellm.model_cost[cand].get(key) is True
-                ):
-                    return True
-        except Exception:
-            pass
-        return False
 
     @staticmethod
     def _supports_effort_level(model: str, level: str) -> bool:
@@ -680,6 +636,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if "properties" not in _input_schema:
                     _input_schema["properties"] = {}
 
+            # Inline legacy / OpenAPI $refs before the allow-list filter strips
+            # their backing def blocks (https://github.com/BerriAI/litellm/issues/26692).
+            _input_schema = unpack_legacy_defs(_input_schema, copy=True)
+
             _allowed_properties = set(AnthropicInputSchema.__annotations__.keys())
             input_schema_filtered = {
                 k: v for k, v in _input_schema.items() if k in _allowed_properties
@@ -913,7 +873,39 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         anthropic_tools = []
         mcp_servers = []
         for tool in tools:
-            if "input_schema" in tool:  # assume in anthropic format
+            if tool.get("type") == "namespace":
+                # Namespace is a grouping container (e.g. codex's multi_agent_v1).
+                # Extract its nested tools and map them individually.
+                for nested in tool.get("tools") or []:
+                    if "input_schema" in nested:
+                        # Already in Anthropic format.
+                        anthropic_tools.append(nested)
+                    elif "function" not in nested and "name" in nested:
+                        # Flat format: {type, name, description, parameters, ...}.
+                        # Normalize to OpenAI-wrapped format before mapping.
+                        wrapped = cast(
+                            ChatCompletionToolParam,
+                            {
+                                "type": nested.get("type", "function"),
+                                "function": {
+                                    k: v for k, v in nested.items() if k != "type"
+                                },
+                            },
+                        )
+                        nested_tool, nested_mcp = self._map_tool_helper(wrapped)
+                        if nested_tool is not None:
+                            anthropic_tools.append(nested_tool)
+                        if nested_mcp is not None:
+                            mcp_servers.append(nested_mcp)
+                    elif "function" in nested:
+                        nested_tool, nested_mcp = self._map_tool_helper(
+                            cast(ChatCompletionToolParam, nested)
+                        )
+                        if nested_tool is not None:
+                            anthropic_tools.append(nested_tool)
+                        if nested_mcp is not None:
+                            mcp_servers.append(nested_mcp)
+            elif "input_schema" in tool:  # assume in anthropic format
                 anthropic_tools.append(tool)
             else:  # assume openai tool call
                 new_tool, mcp_server_tool = self._map_tool_helper(tool)
@@ -1973,6 +1965,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
+        optional_params.pop("client_metadata", None)
 
         data = {
             "model": model,

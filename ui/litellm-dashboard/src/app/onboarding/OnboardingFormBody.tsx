@@ -9,13 +9,7 @@ type OnboardingFormBodyProps = {
   onSubmit: (values: { password: string }) => void;
 };
 
-export function OnboardingFormBody({
-  variant,
-  userEmail,
-  isPending,
-  claimError,
-  onSubmit,
-}: OnboardingFormBodyProps) {
+export function OnboardingFormBody({ variant, userEmail, isPending, claimError, onSubmit }: OnboardingFormBodyProps) {
   const [form] = Form.useForm();
 
   React.useEffect(() => {
@@ -28,9 +22,7 @@ export function OnboardingFormBody({
         <Typography.Title level={5} className="text-center mb-5">
           🚅 LiteLLM
         </Typography.Title>
-        <Typography.Title level={3}>
-          {variant === "reset_password" ? "Reset Password" : "Sign Up"}
-        </Typography.Title>
+        <Typography.Title level={3}>{variant === "reset_password" ? "Reset Password" : "Sign Up"}</Typography.Title>
         <Typography.Text>
           {variant === "reset_password"
             ? "Reset your password to access Admin UI."
@@ -45,12 +37,7 @@ export function OnboardingFormBody({
             description={
               <div className="flex justify-between items-center">
                 <span>SSO is under the Enterprise Tier.</span>
-                <Button
-                  type="primary"
-                  size="small"
-                  href="https://forms.gle/W3U4PZpJGFHWtHyA9"
-                  target="_blank"
-                >
+                <Button type="primary" size="small" href="https://forms.gle/W3U4PZpJGFHWtHyA9" target="_blank">
                   Get Free Trial
                 </Button>
               </div>
@@ -59,7 +46,12 @@ export function OnboardingFormBody({
           />
         )}
 
-        <Form className="mt-10 mb-5" layout="vertical" form={form} onFinish={(values) => onSubmit({ password: values.password })}>
+        <Form
+          className="mt-10 mb-5"
+          layout="vertical"
+          form={form}
+          onFinish={(values) => onSubmit({ password: values.password })}
+        >
           <Form.Item label="Email Address" name="user_email">
             <Input type="email" disabled />
           </Form.Item>
@@ -68,18 +60,12 @@ export function OnboardingFormBody({
             label="Password"
             name="password"
             rules={[{ required: true, message: "password required to sign up" }]}
-            help={
-              variant === "reset_password"
-                ? "Enter your new password"
-                : "Create a password for your account"
-            }
+            help={variant === "reset_password" ? "Enter your new password" : "Create a password for your account"}
           >
             <Input.Password />
           </Form.Item>
 
-          {claimError && (
-            <Alert type="error" message={claimError} showIcon className="mb-4" />
-          )}
+          {claimError && <Alert type="error" message={claimError} showIcon className="mb-4" />}
 
           <div className="mt-10">
             <Button htmlType="submit" loading={isPending}>

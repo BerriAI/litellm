@@ -55,10 +55,16 @@ export function DrawerHeader({
       }}
     >
       {/* Row 0: Model + Provider with Logo */}
-      <ModelProviderSection model={log.model} providerLogo={providerInfo?.logo} providerName={providerInfo?.displayName} />
+      <ModelProviderSection
+        model={log.model}
+        providerLogo={providerInfo?.logo}
+        providerName={providerInfo?.displayName}
+      />
 
       {/* Row 1: Request ID + Actions */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}>
+      <div
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}
+      >
         <RequestIdSection requestId={log.request_id} />
         <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
       </div>

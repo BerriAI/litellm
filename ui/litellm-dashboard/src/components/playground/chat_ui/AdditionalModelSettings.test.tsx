@@ -63,10 +63,7 @@ describe("AdditionalModelSettings", () => {
     };
 
     const { rerender } = render(
-      <AdditionalModelSettings
-        mockTestFallbacks={currentValue}
-        onMockTestFallbacksChange={handleChange}
-      />,
+      <AdditionalModelSettings mockTestFallbacks={currentValue} onMockTestFallbacksChange={handleChange} />,
     );
 
     const fallbacksCheckbox = screen.getByRole("checkbox", {
@@ -83,12 +80,7 @@ describe("AdditionalModelSettings", () => {
       expect(onMockTestFallbacksChange).toHaveBeenCalledWith(true);
     });
 
-    rerender(
-      <AdditionalModelSettings
-        mockTestFallbacks={currentValue}
-        onMockTestFallbacksChange={handleChange}
-      />,
-    );
+    rerender(<AdditionalModelSettings mockTestFallbacks={currentValue} onMockTestFallbacksChange={handleChange} />);
 
     await act(async () => {
       await user.click(screen.getByRole("checkbox", { name: /Simulate failure to test fallbacks/i }));

@@ -12,11 +12,7 @@ interface SearchConnectionTestProps {
   onTestComplete?: () => void;
 }
 
-const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
-  litellmParams,
-  accessToken,
-  onTestComplete,
-}) => {
+const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({ litellmParams, accessToken, onTestComplete }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [testResult, setTestResult] = useState<{
     status: "success" | "error";
@@ -151,7 +147,10 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
             </Text>
             {testResult.test_query && (
               <Text style={{ fontSize: "14px", color: "#666", marginTop: "8px", display: "block" }}>
-                Test query: <code style={{ backgroundColor: "#f0f0f0", padding: "2px 6px", borderRadius: "4px" }}>{testResult.test_query}</code>
+                Test query:{" "}
+                <code style={{ backgroundColor: "#f0f0f0", padding: "2px 6px", borderRadius: "4px" }}>
+                  {testResult.test_query}
+                </code>
               </Text>
             )}
             {testResult.results_count !== undefined && (
@@ -192,7 +191,9 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
                 <div style={{ marginTop: "8px" }}>
                   <Text style={{ fontSize: "13px", color: "#666" }}>
                     Error type:{" "}
-                    <code style={{ backgroundColor: "#ffebee", padding: "2px 6px", borderRadius: "4px", color: "#d32f2f" }}>
+                    <code
+                      style={{ backgroundColor: "#ffebee", padding: "2px 6px", borderRadius: "4px", color: "#d32f2f" }}
+                    >
                       {testResult.error_type}
                     </code>
                   </Text>
@@ -252,7 +253,9 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
                 <li style={{ marginBottom: "6px" }}>Verify your API key is correct and active</li>
                 <li style={{ marginBottom: "6px" }}>Check if the search provider service is operational</li>
                 <li style={{ marginBottom: "6px" }}>Ensure you have sufficient credits/quota with the provider</li>
-                <li style={{ marginBottom: "6px" }}>Review the provider&apos;s documentation for any additional requirements</li>
+                <li style={{ marginBottom: "6px" }}>
+                  Review the provider&apos;s documentation for any additional requirements
+                </li>
               </ul>
             </div>
           </div>
@@ -269,4 +272,3 @@ const SearchConnectionTest: React.FC<SearchConnectionTestProps> = ({
 };
 
 export default SearchConnectionTest;
-

@@ -1084,6 +1084,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "imageConfig",
 ]
 
 OpenAIImageEditOptionalParams = Literal[
@@ -1891,7 +1892,7 @@ class OpenAIRealtimeStreamResponseOutputItemContent(TypedDict, total=False):
     """The ID of the previous conversation item for reference"""
     text: str
     """The text content, used for 'input_text' / 'text' / 'output_text' content types"""
-    transcript: str
+    transcript: Optional[str]
     """The transcript content, used for 'input_audio' / 'audio' content types"""
     type: Literal[
         "input_audio",
@@ -1997,7 +1998,7 @@ class OpenAIRealtimeResponseContentPart(TypedDict, total=False):
     text: str
     """The text content, if type is 'text' or 'output_text'"""
 
-    transcript: str
+    transcript: Optional[str]
     """The transcript content, if type is 'audio' or 'output_audio'"""
 
     type: Union[

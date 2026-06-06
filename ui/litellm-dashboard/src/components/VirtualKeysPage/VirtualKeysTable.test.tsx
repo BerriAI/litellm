@@ -554,7 +554,6 @@ it("should display 'Default Proxy Admin' for created_by when value is 'default_u
   });
 });
 
-
 it("should display created_by_user email in 'Created By' column when available", async () => {
   const keyWithCreatedByUser = {
     ...mockKey,
@@ -819,7 +818,14 @@ describe("pagination display – total count and page count", () => {
     } as any);
 
     mockUseFilterLogic.mockReturnValue({
-      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filters: {
+        "Team ID": "",
+        "Organization ID": "",
+        "Key Alias": "",
+        "User ID": "",
+        "Sort By": "created_at",
+        "Sort Order": "desc",
+      },
       filteredKeys: [mockKey],
       filteredTotalCount: null,
       allTeams: [mockTeam],
@@ -850,7 +856,14 @@ describe("pagination display – total count and page count", () => {
     } as any);
 
     mockUseFilterLogic.mockReturnValue({
-      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filters: {
+        "Team ID": "",
+        "Organization ID": "",
+        "Key Alias": "aaaaa",
+        "User ID": "",
+        "Sort By": "created_at",
+        "Sort Order": "desc",
+      },
       filteredKeys: [mockKey],
       filteredTotalCount: 1,
       allTeams: [mockTeam],
@@ -881,7 +894,14 @@ describe("pagination display – total count and page count", () => {
     } as any);
 
     mockUseFilterLogic.mockReturnValue({
-      filters: { "Team ID": "", "Organization ID": "", "Key Alias": "aaaaa", "User ID": "", "Sort By": "created_at", "Sort Order": "desc" },
+      filters: {
+        "Team ID": "",
+        "Organization ID": "",
+        "Key Alias": "aaaaa",
+        "User ID": "",
+        "Sort By": "created_at",
+        "Sort Order": "desc",
+      },
       filteredKeys: [mockKey],
       filteredTotalCount: 1,
       allTeams: [mockTeam],
@@ -997,9 +1017,7 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
     renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent(
-        "Active",
-      );
+      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Active");
     });
   });
 
@@ -1024,9 +1042,7 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
     renderWithProviders(<VirtualKeysTable {...defaultMockProps} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent(
-        "Blocked",
-      );
+      expect(screen.getByTestId(`key-status-${mockKey.token_id}`)).toHaveTextContent("Blocked");
     });
     expect(screen.queryByText(/Blocked by SCIM/i)).not.toBeInTheDocument();
   });
@@ -1041,9 +1057,7 @@ describe("Status column reflects key.blocked / scim_blocked metadata", () => {
         "Sort By": "created_at",
         "Sort Order": "desc",
       },
-      filteredKeys: [
-        { ...mockKey, blocked: true, metadata: { scim_blocked: true } },
-      ],
+      filteredKeys: [{ ...mockKey, blocked: true, metadata: { scim_blocked: true } }],
       filteredTotalCount: null,
       allTeams: [mockTeam],
       allOrganizations: [mockOrganization],

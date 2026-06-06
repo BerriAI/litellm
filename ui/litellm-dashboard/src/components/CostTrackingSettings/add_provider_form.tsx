@@ -45,7 +45,9 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
           size="large"
           optionFilterProp="children"
           filterOption={(input, option) =>
-            String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+            String(option?.label ?? "")
+              .toLowerCase()
+              .includes(input.toLowerCase())
           }
         >
           {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
@@ -94,11 +96,7 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
       </Form.Item>
 
       <div className="flex items-center justify-end space-x-3 pt-6 border-t border-gray-100">
-        <Button 
-          variant="primary"
-          onClick={onAddProvider} 
-          disabled={!selectedProvider || !newDiscount}
-        >
+        <Button variant="primary" onClick={onAddProvider} disabled={!selectedProvider || !newDiscount}>
           Add Provider Discount
         </Button>
       </div>
@@ -107,4 +105,3 @@ const AddProviderForm: React.FC<AddProviderFormProps> = ({
 };
 
 export default AddProviderForm;
-

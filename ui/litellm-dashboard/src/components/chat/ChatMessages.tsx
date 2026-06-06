@@ -63,10 +63,7 @@ function MarkdownCodeRenderer({
       {String(children).replace(/\n$/, "")}
     </SyntaxHighlighter>
   ) : (
-    <code
-      className={`${className ?? ""} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`}
-      {...props}
-    >
+    <code className={`${className ?? ""} px-1.5 py-0.5 rounded bg-gray-100 text-sm font-mono`} {...props}>
       {children}
     </code>
   );
@@ -123,14 +120,16 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
   if (editing) {
     return (
       <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end" }}>
-        <div style={{
-          width: "72%",
-          background: "#fff",
-          border: "1.5px solid #1677ff",
-          borderRadius: 12,
-          overflow: "hidden",
-          boxShadow: "0 0 0 3px rgba(22,119,255,0.1)",
-        }}>
+        <div
+          style={{
+            width: "72%",
+            background: "#fff",
+            border: "1.5px solid #1677ff",
+            borderRadius: 12,
+            overflow: "hidden",
+            boxShadow: "0 0 0 3px rgba(22,119,255,0.1)",
+          }}
+        >
           <textarea
             ref={textareaRef}
             value={editValue}
@@ -151,18 +150,28 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
               minHeight: 40,
             }}
           />
-          <div style={{
-            display: "flex",
-            justifyContent: "flex-end",
-            gap: 8,
-            padding: "6px 10px 8px",
-            borderTop: "1px solid #f0f0f0",
-          }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: 8,
+              padding: "6px 10px 8px",
+              borderTop: "1px solid #f0f0f0",
+            }}
+          >
             <button
-              onClick={() => { setEditValue(message.content); setEditing(false); }}
+              onClick={() => {
+                setEditValue(message.content);
+                setEditing(false);
+              }}
               style={{
-                padding: "4px 12px", borderRadius: 6, border: "1px solid #d1d5db",
-                background: "#fff", color: "#374151", fontSize: 13, cursor: "pointer",
+                padding: "4px 12px",
+                borderRadius: 6,
+                border: "1px solid #d1d5db",
+                background: "#fff",
+                color: "#374151",
+                fontSize: 13,
+                cursor: "pointer",
               }}
             >
               Cancel
@@ -171,10 +180,14 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
               onClick={handleSave}
               disabled={!editValue.trim()}
               style={{
-                padding: "4px 12px", borderRadius: 6, border: "none",
+                padding: "4px 12px",
+                borderRadius: 6,
+                border: "none",
                 background: editValue.trim() ? "#1677ff" : "#f3f4f6",
                 color: editValue.trim() ? "#fff" : "#9ca3af",
-                fontSize: 13, fontWeight: 500, cursor: editValue.trim() ? "pointer" : "not-allowed",
+                fontSize: 13,
+                fontWeight: 500,
+                cursor: editValue.trim() ? "pointer" : "not-allowed",
               }}
             >
               Save &amp; Send
@@ -196,16 +209,29 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
         {hovered && !isStreaming && onEdit && (
           <Tooltip title="Edit message">
             <button
-              onClick={() => { setEditValue(message.content); setEditing(true); }}
+              onClick={() => {
+                setEditValue(message.content);
+                setEditing(true);
+              }}
               style={{
-                background: "none", border: "none", cursor: "pointer",
-                padding: "4px 6px", borderRadius: 5,
-                color: "#9ca3af", fontSize: 13, flexShrink: 0,
-                display: "flex", alignItems: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: "4px 6px",
+                borderRadius: 5,
+                color: "#9ca3af",
+                fontSize: 13,
+                flexShrink: 0,
+                display: "flex",
+                alignItems: "center",
                 transition: "color 0.15s",
               }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#6b7280"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af"; }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.color = "#6b7280";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.color = "#9ca3af";
+              }}
             >
               <EditOutlined />
             </button>
@@ -226,9 +252,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
           {message.content}
         </div>
       </div>
-      <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-        {formatTimestamp(message.timestamp)}
-      </span>
+      <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{formatTimestamp(message.timestamp)}</span>
     </div>
   );
 }
@@ -242,13 +266,7 @@ interface AssistantBubbleProps {
   mcpEvents?: ChatMessage["mcpEvents"];
 }
 
-function AssistantBubble({
-  message,
-  isLastMessage,
-  isStreaming,
-  isTypingIndicator,
-  mcpEvents,
-}: AssistantBubbleProps) {
+function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicator, mcpEvents }: AssistantBubbleProps) {
   // Ref to control ReasoningContent collapse on streaming end.
   // ReasoningContent manages its own expanded state; we use a key to
   // remount it (collapsed by default) when streaming finishes.
@@ -266,11 +284,9 @@ function AssistantBubble({
     prevStreamingRef.current = isStreaming;
   }, [isStreaming]);
 
-  const showReasoningPlaceholder =
-    isLastMessage && isStreaming && !message.reasoningContent;
+  const showReasoningPlaceholder = isLastMessage && isStreaming && !message.reasoningContent;
 
-  const showReasoning =
-    !!message.reasoningContent || showReasoningPlaceholder;
+  const showReasoning = !!message.reasoningContent || showReasoningPlaceholder;
 
   if (isTypingIndicator) {
     return (
@@ -292,16 +308,12 @@ function AssistantBubble({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", maxWidth: "80%" }}>
-      {showReasoning && (
-        showReasoningPlaceholder ? (
+      {showReasoning &&
+        (showReasoningPlaceholder ? (
           <ThinkingPlaceholder />
         ) : (
-          <ReasoningContent
-            key={reasoningKeyRef.current}
-            reasoningContent={message.reasoningContent!}
-          />
-        )
-      )}
+          <ReasoningContent key={reasoningKeyRef.current} reasoningContent={message.reasoningContent!} />
+        ))}
 
       <div
         style={{
@@ -319,9 +331,7 @@ function AssistantBubble({
         >
           {mainContent}
         </ReactMarkdown>
-        {stoppedSuffix && (
-          <span style={{ color: "#9ca3af", fontStyle: "italic" }}> [stopped]</span>
-        )}
+        {stoppedSuffix && <span style={{ color: "#9ca3af", fontStyle: "italic" }}> [stopped]</span>}
       </div>
 
       <CopyButton text={mainContent} />
@@ -338,12 +348,15 @@ function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch(() => {
-      // clipboard not available (non-HTTPS or permission denied) — silently no-op
-    });
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      })
+      .catch(() => {
+        // clipboard not available (non-HTTPS or permission denied) — silently no-op
+      });
   };
 
   return (
@@ -440,8 +453,7 @@ interface ToolCardProps {
 }
 
 function ToolCard({ message }: ToolCardProps) {
-  const redactedArgs =
-    message.toolArgs ? redactSensitiveValues(message.toolArgs) : undefined;
+  const redactedArgs = message.toolArgs ? redactSensitiveValues(message.toolArgs) : undefined;
 
   return (
     <div style={{ maxWidth: "80%" }}>
@@ -457,9 +469,7 @@ function ToolCard({ message }: ToolCardProps) {
           header={
             <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
               <ToolOutlined style={{ color: "#6b7280" }} />
-              <span style={{ color: "#374151", fontWeight: 500 }}>
-                {message.toolName ?? "Tool call"}
-              </span>
+              <span style={{ color: "#374151", fontWeight: 500 }}>{message.toolName ?? "Tool call"}</span>
             </span>
           }
           key="tool"
@@ -527,9 +537,7 @@ function ToolCard({ message }: ToolCardProps) {
           )}
         </Panel>
       </Collapse>
-      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>
-        {formatTimestamp(message.timestamp)}
-      </div>
+      <div style={{ fontSize: 11, color: "#9ca3af", marginTop: 4 }}>{formatTimestamp(message.timestamp)}</div>
     </div>
   );
 }
@@ -548,11 +556,7 @@ const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage })
 
   const lastIndex = messages.length - 1;
   const lastMsg = messages[lastIndex] ?? null;
-  const isTypingIndicator =
-    isStreaming &&
-    lastMsg !== null &&
-    lastMsg.role === "assistant" &&
-    lastMsg.content === "";
+  const isTypingIndicator = isStreaming && lastMsg !== null && lastMsg.role === "assistant" && lastMsg.content === "";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
@@ -579,7 +583,6 @@ const ChatMessages: React.FC<Props> = ({ messages, isStreaming, onEditMessage })
           />
         );
       })}
-
     </div>
   );
 };

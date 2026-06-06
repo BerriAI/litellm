@@ -23,7 +23,7 @@ export function ToolsSection({ log }: ToolsSectionProps) {
   // Calculate summary stats
   const totalTools = tools.length;
   const calledTools = tools.filter((t) => t.called).length;
-  
+
   // Get preview of first 2 tool names
   const toolNamePreview = tools
     .slice(0, 2)

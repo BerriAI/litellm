@@ -8,7 +8,7 @@ import { PolicyAttachmentCreateRequest } from "./types";
  */
 export function buildAttachmentData(
   formValues: Record<string, any>,
-  scopeType: "global" | "specific"
+  scopeType: "global" | "specific",
 ): PolicyAttachmentCreateRequest {
   const data: PolicyAttachmentCreateRequest = {
     policy_name: formValues.policy_name,

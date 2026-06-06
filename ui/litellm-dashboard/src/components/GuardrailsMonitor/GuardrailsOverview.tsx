@@ -1,10 +1,4 @@
-import {
-  DownloadOutlined,
-  RiseOutlined,
-  SafetyOutlined,
-  SettingOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+import { DownloadOutlined, RiseOutlined, SafetyOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Card, Col, Row, Spin, Table, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
@@ -22,12 +16,7 @@ interface GuardrailsOverviewProps {
   onSelectGuardrail: (id: string) => void;
 }
 
-type SortKey =
-  | "failRate"
-  | "requestsEvaluated"
-  | "avgLatency"
-  | "falsePositiveRate"
-  | "falseNegativeRate";
+type SortKey = "failRate" | "requestsEvaluated" | "avgLatency" | "falsePositiveRate" | "falseNegativeRate";
 
 const providerColors: Record<string, string> = {
   Bedrock: "bg-orange-100 text-orange-700 border-orange-200",
@@ -38,17 +27,11 @@ const providerColors: Record<string, string> = {
 
 function computeMetricsFromRows(data: PerformanceRow[]) {
   const totalRequests = data.reduce((sum, r) => sum + r.requestsEvaluated, 0);
-  const totalBlocked = data.reduce(
-    (sum, r) => sum + Math.round((r.requestsEvaluated * r.failRate) / 100),
-    0
-  );
-  const passRate =
-    totalRequests > 0 ? ((1 - totalBlocked / totalRequests) * 100).toFixed(1) : "0";
+  const totalBlocked = data.reduce((sum, r) => sum + Math.round((r.requestsEvaluated * r.failRate) / 100), 0);
+  const passRate = totalRequests > 0 ? ((1 - totalBlocked / totalRequests) * 100).toFixed(1) : "0";
   const withLat = data.filter((r) => r.avgLatency != null);
   const avgLatency =
-    withLat.length > 0
-      ? Math.round(withLat.reduce((sum, r) => sum + (r.avgLatency ?? 0), 0) / withLat.length)
-      : 0;
+    withLat.length > 0 ? Math.round(withLat.reduce((sum, r) => sum + (r.avgLatency ?? 0), 0) / withLat.length) : 0;
   return { totalRequests, totalBlocked, passRate, avgLatency, count: data.length };
 }
 
@@ -62,7 +45,11 @@ export function GuardrailsOverview({
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
 
-  const { data: guardrailsData, isLoading: guardrailsLoading, error: guardrailsError } = useQuery({
+  const {
+    data: guardrailsData,
+    isLoading: guardrailsLoading,
+    error: guardrailsError,
+  } = useQuery({
     queryKey: ["guardrails-usage-overview", startDate, endDate],
     queryFn: () => getGuardrailsUsageOverview(accessToken!, startDate, endDate),
     enabled: !!accessToken,
@@ -75,7 +62,9 @@ export function GuardrailsOverview({
         totalRequests: guardrailsData.totalRequests ?? 0,
         totalBlocked: guardrailsData.totalBlocked ?? 0,
         passRate: String(guardrailsData.passRate ?? 0),
-        avgLatency: activeData.length ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length) : 0,
+        avgLatency: activeData.length
+          ? Math.round(activeData.reduce((s, r) => s + (r.avgLatency ?? 0), 0) / activeData.length)
+          : 0,
         count: activeData.length,
       };
     }
@@ -139,13 +128,8 @@ export function GuardrailsOverview({
       sorter: true,
       sortOrder: sortBy === "failRate" ? (sortDir === "desc" ? "descend" : "ascend") : null,
       render: (v: number, row) => (
-        <span
-          className={
-            v > 15 ? "text-red-600" : v > 5 ? "text-amber-600" : "text-green-600"
-          }
-        >
-          {v}%
-          {row.trend === "up" && <span className="ml-1 text-xs text-red-400">↑</span>}
+        <span className={v > 15 ? "text-red-600" : v > 5 ? "text-amber-600" : "text-green-600"}>
+          {v}%{row.trend === "up" && <span className="ml-1 text-xs text-red-400">↑</span>}
           {row.trend === "down" && <span className="ml-1 text-xs text-green-400">↓</span>}
         </span>
       ),
@@ -176,11 +160,7 @@ export function GuardrailsOverview({
         <span className="inline-flex items-center gap-1.5">
           <span
             className={`w-2 h-2 rounded-full ${
-              status === "healthy"
-                ? "bg-green-500"
-                : status === "warning"
-                  ? "bg-amber-500"
-                  : "bg-red-500"
+              status === "healthy" ? "bg-green-500" : status === "warning" ? "bg-amber-500" : "bg-red-500"
             }`}
           />
           <span className="text-xs text-gray-600 capitalize">{status}</span>
@@ -206,9 +186,7 @@ export function GuardrailsOverview({
             <SafetyOutlined className="text-lg text-indigo-500" />
             <h1 className="text-xl font-semibold text-gray-900">Guardrails Monitor</h1>
           </div>
-          <p className="text-sm text-gray-500">
-            Monitor guardrail performance across all requests
-          </p>
+          <p className="text-sm text-gray-500">Monitor guardrail performance across all requests</p>
         </div>
         <div className="flex items-center gap-3">
           <Button type="default" icon={<DownloadOutlined />} title="Coming soon">
@@ -242,11 +220,7 @@ export function GuardrailsOverview({
             label="Avg. latency added"
             value={`${metrics.avgLatency}ms`}
             valueColor={
-              metrics.avgLatency > 150
-                ? "text-red-600"
-                : metrics.avgLatency > 50
-                  ? "text-amber-600"
-                  : "text-green-600"
+              metrics.avgLatency > 150 ? "text-red-600" : metrics.avgLatency > 50 ? "text-amber-600" : "text-green-600"
             }
           />
         </Col>
@@ -259,10 +233,7 @@ export function GuardrailsOverview({
         <ScoreChart data={chartData} />
       </div>
 
-      <Card
-        className="border border-gray-200 rounded-lg bg-white"
-        styles={{ body: { padding: 0 } }}
-      >
+      <Card className="border border-gray-200 rounded-lg bg-white" styles={{ body: { padding: 0 } }}>
         {(isLoading || error) && (
           <div className="px-6 py-4 border-b border-gray-200 flex items-center gap-2">
             {isLoading && <Spin size="small" />}
@@ -274,9 +245,7 @@ export function GuardrailsOverview({
             <Typography.Title level={5} className="!mb-0 text-gray-900">
               Guardrail Performance
             </Typography.Title>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Click a guardrail to view details, logs, and configuration
-            </p>
+            <p className="text-xs text-gray-500 mt-0.5">Click a guardrail to view details, logs, and configuration</p>
           </div>
           <div className="flex items-center gap-2">
             <Button

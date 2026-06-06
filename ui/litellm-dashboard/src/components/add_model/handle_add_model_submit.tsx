@@ -39,10 +39,18 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
 
       // Handle pricing conversion before processing other fields
       // Use explicit checks to allow 0 (zero cost models for budget bypass)
-      if (formValues.input_cost_per_token !== undefined && formValues.input_cost_per_token !== null && formValues.input_cost_per_token !== "") {
+      if (
+        formValues.input_cost_per_token !== undefined &&
+        formValues.input_cost_per_token !== null &&
+        formValues.input_cost_per_token !== ""
+      ) {
         formValues.input_cost_per_token = Number(formValues.input_cost_per_token) / 1000000;
       }
-      if (formValues.output_cost_per_token !== undefined && formValues.output_cost_per_token !== null && formValues.output_cost_per_token !== "") {
+      if (
+        formValues.output_cost_per_token !== undefined &&
+        formValues.output_cost_per_token !== null &&
+        formValues.output_cost_per_token !== ""
+      ) {
         formValues.output_cost_per_token = Number(formValues.output_cost_per_token) / 1000000;
       }
 
@@ -52,8 +60,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         formValues.cache_read_input_token_cost !== null &&
         formValues.cache_read_input_token_cost !== ""
       ) {
-        formValues.cache_read_input_token_cost =
-          Number(formValues.cache_read_input_token_cost) / 1000000;
+        formValues.cache_read_input_token_cost = Number(formValues.cache_read_input_token_cost) / 1000000;
       } else if (
         formValues.input_cost_per_token !== undefined &&
         formValues.input_cost_per_token !== null &&
@@ -73,8 +80,7 @@ export const prepareModelAddRequest = async (formValues: Record<string, any>, ac
         formValues.cache_creation_input_token_cost !== null &&
         formValues.cache_creation_input_token_cost !== ""
       ) {
-        formValues.cache_creation_input_token_cost =
-          Number(formValues.cache_creation_input_token_cost) / 1000000;
+        formValues.cache_creation_input_token_cost = Number(formValues.cache_creation_input_token_cost) / 1000000;
       } else {
         delete formValues.cache_creation_input_token_cost;
       }

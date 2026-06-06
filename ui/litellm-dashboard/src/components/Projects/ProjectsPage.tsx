@@ -129,11 +129,7 @@ export function ProjectsPage() {
       title: "Status",
       dataIndex: "blocked",
       key: "status",
-      render: (blocked: boolean) => (
-        <Tag color={blocked ? "red" : "green"}>
-          {blocked ? "Blocked" : "Active"}
-        </Tag>
-      ),
+      render: (blocked: boolean) => <Tag color={blocked ? "red" : "green"}>{blocked ? "Blocked" : "Active"}</Tag>,
     },
     {
       title: "Created",
@@ -153,46 +149,25 @@ export function ProjectsPage() {
   ];
 
   if (selectedProjectId) {
-    return (
-      <ProjectDetail
-        projectId={selectedProjectId}
-        onBack={() => setSelectedProjectId(null)}
-      />
-    );
+    return <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />;
   }
 
   return (
-    <Content
-      style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
-    >
-      <Flex
-        justify="space-between"
-        align="center"
-        style={{ marginBottom: 16 }}
-      >
+    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
+      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
         <Space direction="vertical" size={0}>
           <Title level={2} style={{ margin: 0 }}>
             Projects
           </Title>
-          <Text type="secondary">
-            Manage projects within your teams
-          </Text>
+          <Text type="secondary">Manage projects within your teams</Text>
         </Space>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          onClick={() => setIsCreateModalVisible(true)}
-        >
+        <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalVisible(true)}>
           Create Project
         </Button>
       </Flex>
 
       <Card styles={{ body: { padding: 0 } }}>
-        <Flex
-          justify="space-between"
-          align="center"
-          style={{ padding: "12px 16px" }}
-        >
+        <Flex justify="space-between" align="center" style={{ padding: "12px 16px" }}>
           <Input
             prefix={<SearchIcon size={16} />}
             placeholder="Search projects by name, ID, description, or team..."
@@ -220,10 +195,7 @@ export function ProjectsPage() {
         />
       </Card>
 
-      <CreateProjectModal
-        isOpen={isCreateModalVisible}
-        onClose={() => setIsCreateModalVisible(false)}
-      />
+      <CreateProjectModal isOpen={isCreateModalVisible} onClose={() => setIsCreateModalVisible(false)} />
     </Content>
   );
 }

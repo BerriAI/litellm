@@ -6,9 +6,7 @@ import { CollapsibleMessage } from "./CollapsibleMessage";
 
 describe("CollapsibleMessage", () => {
   it("should return null when content is empty", () => {
-    const { container } = render(
-      <CollapsibleMessage label="SYSTEM" content="" />
-    );
+    const { container } = render(<CollapsibleMessage label="SYSTEM" content="" />);
     expect(container.innerHTML).toBe("");
   });
 
@@ -24,25 +22,13 @@ describe("CollapsibleMessage", () => {
   });
 
   it("should show content when defaultExpanded is true", () => {
-    render(
-      <CollapsibleMessage
-        label="SYSTEM"
-        content="Visible text"
-        defaultExpanded={true}
-      />
-    );
+    render(<CollapsibleMessage label="SYSTEM" content="Visible text" defaultExpanded={true} />);
     expect(screen.getByText("Visible text")).toBeInTheDocument();
   });
 
   it("should toggle expanded state when header is clicked", async () => {
     const user = userEvent.setup();
-    render(
-      <CollapsibleMessage
-        label="SYSTEM"
-        content="Toggle me"
-        defaultExpanded={false}
-      />
-    );
+    render(<CollapsibleMessage label="SYSTEM" content="Toggle me" defaultExpanded={false} />);
 
     // Content is rendered in DOM but collapsed by default
     expect(screen.getByText("Toggle me")).toBeInTheDocument();

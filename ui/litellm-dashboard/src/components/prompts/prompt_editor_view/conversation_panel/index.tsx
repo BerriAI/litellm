@@ -61,9 +61,7 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
         <MessageInput
           inputMessage={inputMessage}
           isLoading={isLoading}
-          isDisabled={
-            isLoading || !inputMessage.trim() || (extractedVariables.length > 0 && !allVariablesFilled)
-          }
+          isDisabled={isLoading || !inputMessage.trim() || (extractedVariables.length > 0 && !allVariablesFilled)}
           onInputChange={setInputMessage}
           onSend={handleSendMessage}
           onKeyDown={handleKeyDown}
@@ -75,4 +73,3 @@ const ConversationPanel: React.FC<ConversationPanelProps> = ({ prompt, accessTok
 };
 
 export default ConversationPanel;
-

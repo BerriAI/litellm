@@ -1,3 +1,4 @@
+from base_google_genai_proxy_sdk_test import BaseGoogleGenAIProxySDKTest
 from base_google_test import BaseGoogleGenAITest
 import sys
 import os
@@ -11,7 +12,7 @@ import unittest.mock
 import json
 
 
-class TestGoogleGenAIStudio(BaseGoogleGenAITest):
+class TestGoogleGenAIStudio(BaseGoogleGenAITest, BaseGoogleGenAIProxySDKTest):
     """Test Google GenAI Studio"""
 
     @property
@@ -19,6 +20,10 @@ class TestGoogleGenAIStudio(BaseGoogleGenAITest):
         return {
             "model": "gemini/gemini-2.5-flash-lite",
         }
+
+    @property
+    def proxy_model_name(self) -> str:
+        return "gemini-2.5-flash-lite"
 
 
 @pytest.mark.asyncio

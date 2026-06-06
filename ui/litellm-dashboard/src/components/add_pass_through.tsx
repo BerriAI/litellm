@@ -4,24 +4,11 @@
 
 import React, { useState } from "react";
 import { Button, TextInput, Switch } from "@tremor/react";
-import {
-  Card,
-  Title,
-  Subtitle,
-} from "@tremor/react";
+import { Card, Title, Subtitle } from "@tremor/react";
 import { createPassThroughEndpoint } from "./networking";
-import {
-  Modal,
-  Form,
-  Select as Select2,
-  Tooltip,
-  Alert,
-} from "antd";
+import { Modal, Form, Select as Select2, Tooltip, Alert } from "antd";
 import NumericalInput from "./shared/numerical_input";
-import {
-  InfoCircleOutlined,
-  ApiOutlined,
-} from "@ant-design/icons";
+import { InfoCircleOutlined, ApiOutlined } from "@ant-design/icons";
 import KeyValueInput from "./key_value_input";
 import QueryParamInput from "./query_param_input";
 import { passThroughItem } from "./pass_through_settings";
@@ -56,7 +43,9 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
   const [includeSubpath, setIncludeSubpath] = useState(true);
   const [authEnabled, setAuthEnabled] = useState(false);
   const [selectedMethods, setSelectedMethods] = useState<string[]>([]);
-  const [guardrails, setGuardrails] = useState<Record<string, { request_fields?: string[]; response_fields?: string[] } | null>>({});
+  const [guardrails, setGuardrails] = useState<
+    Record<string, { request_fields?: string[]; response_fields?: string[] } | null>
+  >({});
   const handleCancel = () => {
     form.resetFields();
     setPathValue("");
@@ -82,20 +71,20 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
     setIsLoading(true);
     try {
       // Remove auth field if not premium user
-      if (!premiumUser && 'auth' in formValues) {
+      if (!premiumUser && "auth" in formValues) {
         delete formValues.auth;
       }
-      
+
       // Add guardrails to formValues (only if not empty)
       if (guardrails && Object.keys(guardrails).length > 0) {
         formValues.guardrails = guardrails;
       }
-      
+
       // Add methods to formValues (only if specific methods are selected)
       if (selectedMethods && selectedMethods.length > 0) {
         formValues.methods = selectedMethods;
       }
-      
+
       console.log(`formValues: ${JSON.stringify(formValues)}`);
 
       const response = await createPassThroughEndpoint(accessToken, formValues);
@@ -227,8 +216,8 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
                   name="methods"
                   extra={
                     <div className="text-xs text-gray-500 mt-1">
-                      {selectedMethods.length === 0 
-                        ? "All HTTP methods supported (default)" 
+                      {selectedMethods.length === 0
+                        ? "All HTTP methods supported (default)"
                         : `Only ${selectedMethods.join(", ")} requests will be routed to this endpoint`}
                     </div>
                   }
@@ -335,11 +324,7 @@ const AddPassThroughEndpoint: React.FC<AddFallbacksProps> = ({
             />
 
             {/* Guardrails Section */}
-            <PassThroughGuardrailsSection
-              accessToken={accessToken}
-              value={guardrails}
-              onChange={setGuardrails}
-            />
+            <PassThroughGuardrailsSection accessToken={accessToken} value={guardrails} onChange={setGuardrails} />
 
             {/* Billing Section */}
             <Card className="p-6">

@@ -140,12 +140,7 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                 {
                   key: "garden",
                   label: "Guardrail Garden",
-                  children: (
-                    <GuardrailGarden
-                      accessToken={accessToken}
-                      onGuardrailCreated={handleSuccess}
-                    />
-                  ),
+                  children: <GuardrailGarden accessToken={accessToken} onGuardrailCreated={handleSuccess} />,
                 },
                 {
                   key: "guardrails",

@@ -10,6 +10,7 @@ keeps a plain-base64 fallback on read so existing rows continue to work.
 
 import base64
 import json
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -18,13 +19,18 @@ from litellm.proxy._experimental.mcp_server.db import (
     _decode_user_credential,
     get_user_credential,
     get_user_oauth_credential,
+    is_oauth_credential_expired,
     list_user_oauth_credentials,
+    resolve_valid_user_oauth_token,
     rotate_mcp_user_credentials_master_key,
+    rotate_mcp_user_env_vars_master_key,
     store_user_credential,
     store_user_oauth_credential,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
-
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_value_helper,
+    encrypt_value_helper,
+)
 
 SALT_KEY = "test-salt-key-for-byok-credential-tests-1234"
 
@@ -399,4 +405,241 @@ async def test_rotate_skips_undecodable_rows():
     # Only one update call — the good row.
     assert prisma.db.litellm_mcpusercredentials.update.call_count == 1
     where = prisma.db.litellm_mcpusercredentials.update.call_args.kwargs["where"]
+    assert where["user_id_server_id"]["server_id"] == "srv-ok"
+
+
+# ── Expiry buffer + refresh-on-expiry (OBO list-refresh regression) ───────────
+
+
+def _oauth_cred(access_token="at-live", refresh_token=None, expires_in_seconds=None):
+    cred = {"type": "oauth2", "access_token": access_token}
+    if refresh_token is not None:
+        cred["refresh_token"] = refresh_token
+    if expires_in_seconds is not None:
+        cred["expires_at"] = (
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+        ).isoformat()
+    return cred
+
+
+def test_expiry_no_buffer_treats_soon_to_expire_as_valid():
+    # Without a buffer, a token with 30s of life left is still valid.
+    cred = _oauth_cred(expires_in_seconds=30)
+    assert is_oauth_credential_expired(cred) is False
+    assert is_oauth_credential_expired(cred, buffer_seconds=0) is False
+
+
+def test_expiry_buffer_treats_soon_to_expire_as_expired():
+    # With a 60s buffer, the same 30s-of-life token must be treated as expired
+    # so callers refresh before it lapses mid-request.
+    cred = _oauth_cred(expires_in_seconds=30)
+    assert is_oauth_credential_expired(cred, buffer_seconds=60) is True
+    # A token comfortably beyond the buffer stays valid.
+    assert (
+        is_oauth_credential_expired(
+            _oauth_cred(expires_in_seconds=600), buffer_seconds=60
+        )
+        is False
+    )
+
+
+def test_expiry_past_is_expired_regardless_of_buffer():
+    cred = _oauth_cred(expires_in_seconds=-10)
+    assert is_oauth_credential_expired(cred) is True
+    assert is_oauth_credential_expired(cred, buffer_seconds=60) is True
+
+
+def test_expiry_missing_expires_at_is_never_expired():
+    assert is_oauth_credential_expired(_oauth_cred()) is False
+    assert is_oauth_credential_expired(_oauth_cred(), buffer_seconds=60) is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_valid_token_without_refreshing(monkeypatch):
+    # A token good for 10 minutes must be returned as-is, with no refresh call.
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    refresh = AsyncMock()
+    monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
+
+    cred = _oauth_cred(
+        access_token="at-live", refresh_token="rt-1", expires_in_seconds=600
+    )
+    result = await resolve_valid_user_oauth_token(
+        user_id="alice", server=MagicMock(), cred=cred, prisma_client=MagicMock()
+    )
+
+    assert result is cred
+    assert result["access_token"] == "at-live"
+    refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_refreshes_expired_token_with_refresh_token(monkeypatch):
+    # The core regression: an expired OBO cred with a refresh_token must mint a
+    # new token rather than returning None (which left the UI tool list empty).
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    refreshed = _oauth_cred(
+        access_token="at-fresh", refresh_token="rt-2", expires_in_seconds=3600
+    )
+    refresh = AsyncMock(return_value=refreshed)
+    monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
+
+    expired = _oauth_cred(
+        access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5
+    )
+    result = await resolve_valid_user_oauth_token(
+        user_id="alice", server=MagicMock(), cred=expired, prisma_client=MagicMock()
+    )
+
+    refresh.assert_awaited_once()
+    assert result["access_token"] == "at-fresh"
+
+
+@pytest.mark.asyncio
+async def test_resolve_refreshes_token_expiring_within_buffer(monkeypatch):
+    # A token still technically valid (30s left) but inside the 60s buffer must
+    # be proactively refreshed, not handed back.
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    refreshed = _oauth_cred(access_token="at-fresh", expires_in_seconds=3600)
+    refresh = AsyncMock(return_value=refreshed)
+    monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
+
+    soon = _oauth_cred(
+        access_token="at-soon", refresh_token="rt-1", expires_in_seconds=30
+    )
+    result = await resolve_valid_user_oauth_token(
+        user_id="alice", server=MagicMock(), cred=soon, prisma_client=MagicMock()
+    )
+
+    refresh.assert_awaited_once()
+    assert result["access_token"] == "at-fresh"
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_none_when_expired_without_refresh_token(monkeypatch):
+    # No refresh_token means nothing to refresh with — return None, never call refresh.
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    refresh = AsyncMock()
+    monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
+
+    expired = _oauth_cred(access_token="at-dead", expires_in_seconds=-5)
+    result = await resolve_valid_user_oauth_token(
+        user_id="alice", server=MagicMock(), cred=expired, prisma_client=MagicMock()
+    )
+
+    assert result is None
+    refresh.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_none_when_refresh_fails(monkeypatch):
+    # A failed refresh (provider returns nothing usable) must surface as None.
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    refresh = AsyncMock(return_value=None)
+    monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
+
+    expired = _oauth_cred(
+        access_token="at-dead", refresh_token="rt-1", expires_in_seconds=-5
+    )
+    result = await resolve_valid_user_oauth_token(
+        user_id="alice", server=MagicMock(), cred=expired, prisma_client=MagicMock()
+    )
+
+    refresh.assert_awaited_once()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_returns_none_for_missing_credential(monkeypatch):
+    import litellm.proxy._experimental.mcp_server.db as db_mod
+
+    refresh = AsyncMock()
+    monkeypatch.setattr(db_mod, "refresh_user_oauth_token", refresh)
+
+    assert (
+        await resolve_valid_user_oauth_token(
+            user_id="alice", server=MagicMock(), cred=None, prisma_client=MagicMock()
+        )
+        is None
+    )
+    assert (
+        await resolve_valid_user_oauth_token(
+            user_id="alice",
+            server=MagicMock(),
+            cred={"type": "oauth2"},
+            prisma_client=MagicMock(),
+        )
+        is None
+    )
+    refresh.assert_not_called()
+
+
+# ── per-user env-var rotation ─────────────────────────────────────────────────
+
+
+def _env_var_row(values_b64: str, user_id="alice", server_id="srv-1"):
+    row = MagicMock()
+    row.values_b64 = values_b64
+    row.user_id = user_id
+    row.server_id = server_id
+    return row
+
+
+@pytest.mark.asyncio
+async def test_rotate_user_env_vars_re_encrypts_with_new_key(monkeypatch):
+    # Encrypt env vars under the current salt, rotate to a new key, then confirm
+    # the stored ciphertext round-trips under the NEW key.
+    values = {"API_KEY": "sk-secret", "REGION": "us-east-1"}
+    encrypted_old = encrypt_value_helper(json.dumps(values))
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(
+        return_value=[_env_var_row(encrypted_old)]
+    )
+    prisma.db.litellm_mcpuserenvvars.update = AsyncMock()
+
+    new_master_key = "rotated-env-key-1111-2222-3333-4444"
+    await rotate_mcp_user_env_vars_master_key(
+        prisma_client=prisma, new_master_key=new_master_key
+    )
+
+    new_stored = prisma.db.litellm_mcpuserenvvars.update.call_args.kwargs["data"][
+        "values_b64"
+    ]
+    assert new_stored != encrypted_old, "rotation must produce different ciphertext"
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", new_master_key)
+    decrypted = decrypt_value_helper(
+        value=new_stored,
+        key="mcp_user_env_vars",
+        exception_type="debug",
+        return_original_value=False,
+    )
+    assert json.loads(decrypted) == values
+
+
+@pytest.mark.asyncio
+async def test_rotate_user_env_vars_skips_undecryptable_rows():
+    # A corrupt row must be skipped (not overwritten) so recoverable data is
+    # preserved and one bad row does not abort the rest of the rotation.
+    good = _env_var_row(
+        encrypt_value_helper(json.dumps({"A": "1"})), server_id="srv-ok"
+    )
+    bad = _env_var_row("!!! not encrypted !!!", server_id="srv-corrupt")
+
+    prisma = MagicMock()
+    prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[bad, good])
+    prisma.db.litellm_mcpuserenvvars.update = AsyncMock()
+
+    await rotate_mcp_user_env_vars_master_key(
+        prisma_client=prisma, new_master_key="new-key-xxxx"
+    )
+
+    assert prisma.db.litellm_mcpuserenvvars.update.call_count == 1
+    where = prisma.db.litellm_mcpuserenvvars.update.call_args.kwargs["where"]
     assert where["user_id_server_id"]["server_id"] == "srv-ok"

@@ -64,7 +64,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
                 mode={filterMode === "single" ? undefined : "multiple"}
                 style={{ width: "100%" }}
                 placeholder={filterPlaceholder}
-                value={filterMode === "single" ? (selectedFilters[0] ?? undefined) : selectedFilters}
+                value={filterMode === "single" ? selectedFilters[0] ?? undefined : selectedFilters}
                 onChange={(value: any) => {
                   if (filterMode === "single") {
                     onFiltersChange?.(value ? [value] : []);

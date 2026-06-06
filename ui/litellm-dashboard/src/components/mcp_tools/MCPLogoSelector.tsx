@@ -59,7 +59,9 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
             src={value}
             alt="Selected logo"
             className="w-10 h-10 object-contain rounded"
-            onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+            onError={(e) => {
+              (e.target as HTMLImageElement).style.display = "none";
+            }}
           />
           <div className="flex-1 min-w-0">
             <div className="text-xs text-gray-500 truncate">{value}</div>
@@ -86,9 +88,10 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
                 type="button"
                 onClick={() => handleSelect(logo.url)}
                 className={`flex items-center justify-center p-2 rounded-lg border transition-all cursor-pointer
-                  ${isSelected
-                    ? "border-blue-500 bg-blue-50 shadow-sm"
-                    : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
+                  ${
+                    isSelected
+                      ? "border-blue-500 bg-blue-50 shadow-sm"
+                      : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
                   }`}
                 style={{ width: 40, height: 40 }}
               >
