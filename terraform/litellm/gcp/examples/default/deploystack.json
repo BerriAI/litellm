@@ -28,6 +28,11 @@
       "default": "v1.86.0-dev"
     },
     {
+      "name": "image_registry",
+      "description": "Artifact Registry path prefix for the four litellm-* images. Format: <region>-docker.pkg.dev/<project>/litellm/berriai, pointing at the remote repo you created above. The ghcr.io/berriai default does NOT work; Cloud Run rejects ghcr.io URIs at apply time",
+      "default": "us-central1-docker.pkg.dev/PROJECT_ID/litellm/berriai"
+    },
+    {
       "name": "allow_plaintext_lb",
       "description": "Skip TLS on the load balancer (HTTP-only). Set true for trial/dev. For production, leave false and add lb_domains to terraform.tfvars after the first apply",
       "default": "true",
