@@ -347,6 +347,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }));
     }
 
+    if (duplicateServer.env_vars && duplicateServer.env_vars.length > 0) {
+      prefillValues.env_vars = duplicateServer.env_vars.map((v) => ({
+        name: v.name,
+        value: v.value,
+        scope: v.scope,
+        description: v.description || "",
+      }));
+    }
+
     if (duplicateServer.is_byok) {
       prefillValues.is_byok = true;
       prefillValues.byok_description = duplicateServer.byok_description || [];
