@@ -5,6 +5,7 @@ from fastapi.responses import ORJSONResponse
 
 import litellm
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import _can_object_call_model, can_key_call_model
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.openai_endpoint_utils import (
@@ -191,7 +192,37 @@ def _replace_file_id_in_response(response, original_file_id: str):
     return response
 
 
-def _update_request_data_with_model_routing_hint(
+async def _authorize_model_routing_hint(
+    *,
+    model: str,
+    llm_router: Optional["Router"],
+    user_api_key_dict: Optional[UserAPIKeyAuth],
+) -> None:
+    if user_api_key_dict is None:
+        return
+
+    key_models = getattr(user_api_key_dict, "models", None)
+    if not (isinstance(key_models, list) and "all-team-models" in key_models):
+        await can_key_call_model(
+            model=model,
+            llm_model_list=None,
+            valid_token=user_api_key_dict,
+            llm_router=llm_router,
+        )
+
+    team_models = getattr(user_api_key_dict, "team_models", None)
+    if isinstance(team_models, list) and len(team_models) > 0:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=team_models,
+            team_model_aliases=user_api_key_dict.team_model_aliases,
+            team_id=user_api_key_dict.team_id,
+            object_type="team",
+        )
+
+
+async def _update_request_data_with_model_routing_hint(
     data: Dict,
     request: Request,
     llm_router: Optional["Router"] = None,
@@ -200,10 +231,12 @@ def _update_request_data_with_model_routing_hint(
     if data.get("api_key") is not None or data.get("api_base") is not None:
         return data
 
-    model_hint = (
-        data.get("model")
-        or request.query_params.get("model")
-        or request.headers.get("x-litellm-model")
+    user_controlled_model_hint = request.query_params.get(
+        "model"
+    ) or request.headers.get("x-litellm-model")
+    model_hint = data.get("model") or user_controlled_model_hint
+    should_authorize_model_hint = (
+        isinstance(model_hint, str) and model_hint == user_controlled_model_hint
     )
 
     should_route = False
@@ -214,7 +247,19 @@ def _update_request_data_with_model_routing_hint(
                 model_id=model_hint
             )
             should_route = credentials is not None
+            if should_route and should_authorize_model_hint:
+                await _authorize_model_routing_hint(
+                    model=model_hint,
+                    llm_router=llm_router,
+                    user_api_key_dict=user_api_key_dict,
+                )
     else:
+        if should_authorize_model_hint:
+            await _authorize_model_routing_hint(
+                model=model_hint,
+                llm_router=llm_router,
+                user_api_key_dict=user_api_key_dict,
+            )
         (
             should_route,
             _model_used,
@@ -261,7 +306,7 @@ def _update_request_data_with_model_routing_hint(
         model = credentials.get("model")
         if provider is None and isinstance(model, str) and "/" in model:
             provider = model.split("/", 1)[0]
-        if provider not in (None, LlmProviders.OPENAI.value):
+        if provider != LlmProviders.OPENAI.value:
             continue
 
         if openai_credentials is not None:
@@ -563,19 +608,19 @@ async def vector_store_file_list(
         user_api_key_dict=user_api_key_dict,
     )
 
-    data = _update_request_data_with_model_routing_hint(
-        data=data,
-        request=request,
-        llm_router=llm_router,
-        user_api_key_dict=user_api_key_dict,
-    )
-
     data = _update_request_data_with_litellm_managed_vector_store_registry(
         data=data,
         vector_store_id=vector_store_id,
         llm_router=llm_router,
         managed_vector_store=managed_vector_store,
         should_lookup_registry=False,
+    )
+
+    data = await _update_request_data_with_model_routing_hint(
+        data=data,
+        request=request,
+        llm_router=llm_router,
+        user_api_key_dict=user_api_key_dict,
     )
 
     provider_enum = await _resolve_provider(data=data, request=request)
