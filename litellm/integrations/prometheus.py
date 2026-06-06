@@ -2722,7 +2722,7 @@ class PrometheusLogger(CustomLogger):
         Args:
             guardrail_name: Name of the guardrail
             latency_seconds: Execution latency in seconds
-            status: "success" or "error"
+            status: "success", "error", or "intervened"
             error_type: Type of error if any, None otherwise
             hook_type: "pre_call", "during_call", or "post_call"
         """

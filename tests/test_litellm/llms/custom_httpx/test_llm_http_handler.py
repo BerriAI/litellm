@@ -564,6 +564,46 @@ def test_sync_delete_responses_omits_body_for_azure():
     )
 
 
+def _content_type(headers: dict) -> str:
+    for key, value in headers.items():
+        if key.lower() == "content-type":
+            return value
+    return ""
+
+
+def test_async_delete_responses_sets_json_content_type():
+    """OpenAI rejects a responses DELETE with no Content-Type by treating it as
+    application/octet-stream. The handler must declare application/json."""
+    captured: dict = {}
+    fake_async_delete, _ = _build_delete_response_mock(captured)
+
+    async def run():
+        with patch.object(AsyncHTTPHandler, "delete", new=fake_async_delete):
+            await litellm.adelete_responses(
+                response_id="resp_xyz",
+                custom_llm_provider="openai",
+                api_key="test-key",
+            )
+
+    asyncio.run(run())
+
+    assert _content_type(captured["headers"]) == "application/json"
+
+
+def test_sync_delete_responses_sets_json_content_type():
+    captured: dict = {}
+    _, fake_sync_delete = _build_delete_response_mock(captured)
+
+    with patch.object(HTTPHandler, "delete", new=fake_sync_delete):
+        litellm.delete_responses(
+            response_id="resp_xyz",
+            custom_llm_provider="openai",
+            api_key="test-key",
+        )
+
+    assert _content_type(captured["headers"]) == "application/json"
+
+
 # ---------------------------------------------------------------------------
 # Parity tests: request-body is serialized once and reused for the wire.
 # (_async_post_anthropic_messages_with_http_error_retry)

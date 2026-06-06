@@ -59,7 +59,7 @@ vi.mock("@/components/common_components/user_search_modal", () => ({
           Submit
         </button>
       </div>
-    ) : null
+    ) : null,
   ),
 }));
 
@@ -72,7 +72,7 @@ vi.mock("@/components/team/EditMembership", () => ({
           Submit
         </button>
       </div>
-    ) : null
+    ) : null,
   ),
 }));
 
@@ -83,7 +83,7 @@ vi.mock("@/components/common_components/DeleteResourceModal", () => ({
         <button onClick={onCancel}>Cancel</button>
         <button onClick={onOk}>Confirm Delete</button>
       </div>
-    ) : null
+    ) : null,
   ),
 }));
 
@@ -264,7 +264,7 @@ describe("TeamInfoView", () => {
           max_budget: 1000,
           spend: 250.5,
           budget_duration: "30d",
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -278,7 +278,7 @@ describe("TeamInfoView", () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           metadata: { guardrails: ["guardrail1", "guardrail2"] },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -294,7 +294,7 @@ describe("TeamInfoView", () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(
         createMockTeamData({
           policies: ["policy1"],
-        })
+        }),
       );
       vi.mocked(networking.getPolicyInfoWithGuardrails).mockResolvedValue({
         resolved_guardrails: ["guardrail1"],
@@ -316,7 +316,7 @@ describe("TeamInfoView", () => {
             tpm_limit: 5000,
             rpm_limit: 50,
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -329,10 +329,7 @@ describe("TeamInfoView", () => {
     it("should display virtual keys information", async () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue({
         ...createMockTeamData(),
-        keys: [
-          { user_id: "user1", token: "key1" },
-          { token: "key2" },
-        ],
+        keys: [{ user_id: "user1", token: "key1" }, { token: "key2" }],
       });
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -350,7 +347,7 @@ describe("TeamInfoView", () => {
             mcp_servers: ["server1"],
             vector_stores: ["store1"],
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -391,7 +388,7 @@ describe("TeamInfoView", () => {
       vi.mocked(networking.teamInfoCall).mockResolvedValue(createMockTeamData());
 
       renderWithProviders(
-        <TeamInfoView {...defaultProps} editTeam={true} is_team_admin={false} is_proxy_admin={false} />
+        <TeamInfoView {...defaultProps} editTeam={true} is_team_admin={false} is_proxy_admin={false} />,
       );
 
       await waitFor(() => {
@@ -660,7 +657,7 @@ describe("TeamInfoView", () => {
           metadata: {
             secret_manager_settings: { provider: "aws", secret_id: "abc" },
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} premiumUser={false} />);
@@ -681,7 +678,7 @@ describe("TeamInfoView", () => {
       await user.click(editButton);
 
       const secretField = await screen.findByPlaceholderText(
-        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
       );
       expect(secretField).toBeDisabled();
     });
@@ -693,7 +690,7 @@ describe("TeamInfoView", () => {
           metadata: {
             secret_manager_settings: { provider: "aws", secret_id: "abc" },
           },
-        })
+        }),
       );
       vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
@@ -715,7 +712,7 @@ describe("TeamInfoView", () => {
       await user.click(editButton);
 
       const secretField = await screen.findByPlaceholderText(
-        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+        '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
       );
       expect(secretField).not.toBeDisabled();
     });
@@ -762,7 +759,7 @@ describe("TeamInfoView", () => {
         createMockTeamData({
           soft_budget: 500.75,
           max_budget: 1000,
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -792,7 +789,7 @@ describe("TeamInfoView", () => {
           metadata: {
             soft_budget_alerting_emails: ["alert1@test.com", "alert2@test.com"],
           },
-        })
+        }),
       );
 
       renderWithProviders(<TeamInfoView {...defaultProps} />);
@@ -822,7 +819,7 @@ describe("TeamInfoView", () => {
         createMockTeamData({
           access_group_ids: accessGroupIds,
           models: ["gpt-4"],
-        })
+        }),
       );
       vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: {}, team_id: "123" } as any);
 
@@ -856,7 +853,7 @@ describe("TeamInfoView", () => {
           expect.objectContaining({
             access_group_ids: accessGroupIds,
             team_id: "123",
-          })
+          }),
         );
       });
     });

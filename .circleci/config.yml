@@ -182,7 +182,14 @@ jobs:
       - run:
           name: Run Windows-specific test
           command: |
-            uv run --no-sync python -m pytest tests/windows_tests/test_litellm_on_windows.py -v
+            uv run --no-sync python -m pytest tests/windows_tests/ -v
+      - run:
+          name: Guard against MAX_PATH-busting packaged wheel paths
+          environment:
+            UV_HTTP_TIMEOUT: "300"
+          command: |
+            uv build --wheel --out-dir dist
+            uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
 
   local_testing_part1:
     docker:
@@ -242,8 +249,15 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_part1_coverage.xml
-            mv .coverage local_testing_part1_coverage
+            # When CI reruns only the failed tests, a parallel node can receive
+            # zero tests and pytest never writes coverage. Emit empty placeholders
+            # so persist_to_workspace and the downstream coverage combine stay green.
+            if [ -f coverage.xml ]; then
+              mv coverage.xml local_testing_part1_coverage.xml
+              mv .coverage local_testing_part1_coverage
+            else
+              touch local_testing_part1_coverage.xml local_testing_part1_coverage
+            fi
 
       # Store test results
       - store_test_results:
@@ -307,8 +321,15 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml local_testing_part2_coverage.xml
-            mv .coverage local_testing_part2_coverage
+            # When CI reruns only the failed tests, a parallel node can receive
+            # zero tests and pytest never writes coverage. Emit empty placeholders
+            # so persist_to_workspace and the downstream coverage combine stay green.
+            if [ -f coverage.xml ]; then
+              mv coverage.xml local_testing_part2_coverage.xml
+              mv .coverage local_testing_part2_coverage
+            else
+              touch local_testing_part2_coverage.xml local_testing_part2_coverage
+            fi
 
       # Store test results
       - store_test_results:
@@ -431,6 +452,120 @@ jobs:
             - auth_ui_unit_tests_coverage.xml
             - auth_ui_unit_tests_coverage
 
+  proxy_behavior_tests:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Seed DB schema via prisma db push
+          command: |
+            uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Run proxy management behavior tests
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_behavior \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
+  proxy_security_tests:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Seed DB schema via prisma db push
+          command: |
+            uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Run proxy security tests
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_security_tests \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
+  schema_migration_check:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      # An empty database; the test applies every committed migration itself.
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Check schema.prisma is in sync with committed migrations
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/proxy_migration_tests \
+              -v --junitxml=test-results/junit.xml --durations=10
+          no_output_timeout: 15m
+      - store_test_results:
+          path: test-results
+
   litellm_router_testing: # Runs all tests with the "router" keyword
     docker:
       - *python312_image
@@ -457,6 +592,11 @@ jobs:
       - run:
           name: Run tests
           command: |
+            # On a "rerun failed tests" build a parallel node can receive no
+            # tests, so the test command never creates test-results. Pre-create it
+            # so store_test_results doesn't fail the node on a missing path.
+            mkdir -p test-results
+
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
 
             echo "$TEST_FILES" | circleci tests run \
@@ -1486,6 +1626,25 @@ jobs:
             zstd -d litellm-docker-database.tar.zst --stdout | docker load
             docker tag litellm-docker-database:ci my-app:latest
       - run:
+          name: Start OpenAI image record/replay proxy
+          background: true
+          command: |
+            CASSETTE_REDIS_URL="$CASSETTE_REDIS_URL" \
+            RECORDER_UPSTREAM_BASE_URL="https://api.openai.com" \
+              uv run --no-sync python tests/_openai_record_replay_proxy.py --host 0.0.0.0 --port 8090
+      - run:
+          name: Wait for record/replay proxy
+          command: |
+            for i in $(seq 1 30); do
+              if curl -sf http://localhost:8090/__recorder_health >/dev/null 2>&1; then
+                echo "record/replay proxy is up"
+                exit 0
+              fi
+              sleep 1
+            done
+            echo "record/replay proxy did not become ready" >&2
+            exit 1
+      - run:
           name: Run Docker container
           command: |
             docker run -d \
@@ -1515,6 +1674,7 @@ jobs:
               -e LANGFUSE_PROJECT2_PUBLIC=$LANGFUSE_PROJECT2_PUBLIC \
               -e LANGFUSE_PROJECT1_SECRET=$LANGFUSE_PROJECT1_SECRET \
               -e LANGFUSE_PROJECT2_SECRET=$LANGFUSE_PROJECT2_SECRET \
+              -e IMAGE_GEN_RECORDER_BASE_URL=http://host.docker.internal:8090/v1 \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/proxy_server_config.yaml:/app/config.yaml \
@@ -2616,6 +2776,12 @@ workflows:
             - ui_build
           filters: *main_branches
       - auth_ui_unit_tests:
+          filters: *main_branches
+      - proxy_behavior_tests:
+          filters: *main_branches
+      - proxy_security_tests:
+          filters: *main_branches
+      - schema_migration_check:
           filters: *main_branches
       - build_docker_database_image:
           filters: *main_branches

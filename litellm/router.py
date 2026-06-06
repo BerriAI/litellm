@@ -4636,11 +4636,11 @@ class Router:
             except Exception:
                 custom_llm_provider = None
 
-            # Build response kwargs
             response_kwargs = {
                 **data,
                 "caching": self.cache_responses,
                 **kwargs,
+                "model": model_name,
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -7126,6 +7126,9 @@ class Router:
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
+            # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
+            if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
+                return
             standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
             )
@@ -9100,7 +9103,10 @@ class Router:
         except Exception:
             pass
 
+        # Three mutually exclusive scenarios for the model's metadata:
         if custom_model_info is not None and litellm_model_name_model_info is not None:
+            # (1) It has both custom model_info set and exists in the built-in map
+            # merge with custom overriding built-in
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
@@ -9109,7 +9115,12 @@ class Router:
                 ),
             )
         elif litellm_model_name_model_info is not None:
+            # (2) Built-in only — no custom pricing to merge
             model_info = litellm_model_name_model_info
+        elif custom_model_info is not None:
+            # (3) Custom only — model not in built-in cost map yet
+            # custom_model_info already includes base_model defaults at this point, if applicable
+            model_info = cast(ModelInfo, custom_model_info)
 
         return model_info
 

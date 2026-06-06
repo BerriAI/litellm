@@ -373,6 +373,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.lambda.ai/v1":
                         custom_llm_provider = "lambda_ai"
                         dynamic_api_key = get_secret_str("LAMBDA_API_KEY")
+                    elif endpoint == "https://api.inceptionlabs.ai/v1":
+                        custom_llm_provider = "inception"
+                        dynamic_api_key = get_secret_str("INCEPTION_API_KEY")
                     elif endpoint == "https://api.hyperbolic.xyz/v1":
                         custom_llm_provider = "hyperbolic"
                         dynamic_api_key = get_secret_str("HYPERBOLIC_API_KEY")
@@ -656,6 +659,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or get_secret_str("NVIDIA_RIVA_API_KEY")
             or get_secret_str("NVIDIA_NIM_API_KEY")
         )
+    elif custom_llm_provider == "soniox":
+        api_base = (
+            api_base or get_secret_str("SONIOX_API_BASE") or "https://api.soniox.com"
+        )
+        dynamic_api_key = api_key or get_secret_str("SONIOX_API_KEY")
     elif custom_llm_provider == "cerebras":
         api_base = (
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
@@ -952,6 +960,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.LambdaAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    elif custom_llm_provider == "inception":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.InceptionChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "hyperbolic":

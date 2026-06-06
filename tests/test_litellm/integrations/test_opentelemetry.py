@@ -1263,7 +1263,6 @@ class TestOpenTelemetry(unittest.TestCase):
             ) as mock_get_headers,
             patch.object(otel, "_get_tracer_with_dynamic_headers") as mock_get_tracer,
         ):
-
             # Test case 1: With dynamic headers
             mock_get_headers.return_value = {
                 "arize-space-id": "test-space",
@@ -2668,7 +2667,7 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
                 # Verify parent span is still recording after each call
                 self.assertTrue(
                     parent_span.is_recording(),
-                    f"External span should still be recording after completion #{i+1}",
+                    f"External span should still be recording after completion #{i + 1}",
                 )
 
         # Verify all spans have the same trace_id
@@ -5170,6 +5169,138 @@ class TestOpenTelemetryPreprocessingDuration(unittest.TestCase):
         assert "litellm.preprocessing.duration_ms" not in self._attr(span, exp)
 
 
+class TestGetSpanContextLitellmMetadataFallback(unittest.TestCase):
+    """
+    Tests for _get_span_context() falling back to litellm_metadata.
+
+    On /v1/messages (Anthropic Messages API) and other LITELLM_METADATA_ROUTES,
+    litellm_parent_otel_span is stored in litellm_params["litellm_metadata"]
+    instead of litellm_params["metadata"].  _get_span_context() must check
+    both locations.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/27934
+    """
+
+    def test_span_context_from_metadata(self):
+        """Parent span is found when stored in litellm_params['metadata'] (OpenAI path)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.get_span_context.return_value = MagicMock(is_valid=True)
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        # Should NOT fall through to "no parent context" path
+        self.assertIsNone(detected_span)
+
+    def test_span_context_from_litellm_metadata_fallback(self):
+        """Parent span is found when stored in litellm_params['litellm_metadata'] (Anthropic path)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.get_span_context.return_value = MagicMock(is_valid=True)
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {
+                    "user_id": "test-user"
+                },  # Anthropic native metadata, no span
+                "litellm_metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        self.assertIsNone(detected_span)
+
+    def test_span_context_metadata_takes_priority(self):
+        """When both metadata and litellm_metadata have the span, metadata wins."""
+        otel = OpenTelemetry()
+        span_from_metadata = MagicMock(name="span_from_metadata")
+        span_from_metadata.get_span_context.return_value = MagicMock(is_valid=True)
+        span_from_litellm_metadata = MagicMock(name="span_from_litellm_metadata")
+        span_from_litellm_metadata.get_span_context.return_value = MagicMock(
+            is_valid=True
+        )
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": span_from_metadata},
+                "litellm_metadata": {
+                    "litellm_parent_otel_span": span_from_litellm_metadata
+                },
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        self.assertIsNotNone(ctx)
+        self.assertIsNone(detected_span)
+        # metadata span is found first, so get_span_context on the
+        # litellm_metadata span should never be called — proving
+        # metadata takes priority over litellm_metadata.
+        span_from_litellm_metadata.get_span_context.assert_not_called()
+
+    def test_span_context_no_parent_when_neither_has_span(self):
+        """When neither metadata nor litellm_metadata has a span, returns (None, None)."""
+        otel = OpenTelemetry()
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"user_id": "test-user"},
+                "litellm_metadata": {"some_key": "some_value"},
+            }
+        }
+
+        ctx, detected_span = otel._get_span_context(kwargs)
+        # No parent span in either metadata dict and no active span in test
+        # context, so both should be None.
+        self.assertIsNone(ctx)
+        self.assertIsNone(detected_span)
+
+
+class TestEndProxySpanLitellmMetadataFallback(unittest.TestCase):
+    """
+    Tests for _end_proxy_span_from_kwargs() falling back to litellm_metadata.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/27934
+    """
+
+    def test_end_proxy_span_from_metadata(self):
+        """Proxy span is found and ended from litellm_params['metadata']."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.name = "Received Proxy Server Request"
+        mock_span.is_recording.return_value = True
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.now())
+        mock_span.end.assert_called_once()
+
+    def test_end_proxy_span_from_litellm_metadata(self):
+        """Proxy span is found and ended from litellm_params['litellm_metadata'] (fallback)."""
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+        mock_span.name = "Received Proxy Server Request"
+        mock_span.is_recording.return_value = True
+
+        kwargs = {
+            "litellm_params": {
+                "metadata": {"user_id": "test-user"},  # No span here
+                "litellm_metadata": {"litellm_parent_otel_span": mock_span},
+            }
+        }
+
+        otel._end_proxy_span_from_kwargs(kwargs, end_time=datetime.now())
+        mock_span.end.assert_called_once()
 class TestOpenTelemetryInferenceIdentityAttributes(unittest.TestCase):
     """team_metadata, http.route, and both model names (the user-facing
     model_group alias and the dispatched provider model) must land on the

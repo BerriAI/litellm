@@ -3220,6 +3220,11 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     from litellm.integrations.custom_logger import CustomLogger
     import asyncio
 
+    if os.environ.get("LITELLM_RUN_LIVE_BEDROCK_PASSTHROUGH_TESTS") != "1":
+        pytest.skip("Live Bedrock passthrough E2E tests are opt-in")
+    if os.environ.get("CASSETTE_REDIS_URL"):
+        pytest.skip("Live Bedrock passthrough E2E tests cannot run under VCR replay")
+
     class MockCustomLogger(CustomLogger):
         pass
 

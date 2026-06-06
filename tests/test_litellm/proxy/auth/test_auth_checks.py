@@ -272,6 +272,86 @@ async def test_can_user_call_model_no_default_models_returns_forbidden():
 
 
 @pytest.mark.asyncio
+async def test_can_key_call_model_all_team_models_uses_team_allowlist():
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-team-key",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=["openai/openai/gpt-5.5-batch"],
+    )
+
+    assert (
+        await can_key_call_model(
+            model="openai/openai/gpt-5.5-batch",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="gpt-4o",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_all_team_models_empty_team_models_is_unrestricted():
+    """Team-bound key with empty team_models expands to [] -> unrestricted (same as get_key_models)."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-team-key",
+        team_id="team-123",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    assert (
+        await can_key_call_model(
+            model="any-model",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+        is True
+    )
+
+
+@pytest.mark.asyncio
+async def test_can_key_call_model_all_team_models_no_team_id_is_denied():
+    """Key with all-team-models but no team_id cannot resolve the sentinel; access must be denied."""
+    from litellm.proxy._types import SpecialModelNames
+    from litellm.proxy.auth.auth_checks import can_key_call_model
+
+    valid_token = UserAPIKeyAuth(
+        api_key="sk-orphan-key",
+        models=[SpecialModelNames.all_team_models.value],
+        team_models=[],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await can_key_call_model(
+            model="gpt-4o",
+            llm_model_list=None,
+            valid_token=valid_token,
+            llm_router=None,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+
+
+@pytest.mark.asyncio
 async def test_get_key_object_should_reconnect_once_on_db_connection_error():
     mock_prisma_client = MagicMock()
     mock_prisma_client.get_data = AsyncMock(
@@ -3391,30 +3471,42 @@ async def test_resolve_end_user_swallows_db_errors_and_returns_none(
 
 
 @pytest.mark.asyncio
-async def test_resolve_end_user_reraises_budget_exceeded(
-    _validate_flag_on, monkeypatch
-):
-    """BudgetExceededError from get_end_user_object must bubble up so the
-    auth path enforces spend limits instead of silently dropping the id."""
-    import litellm
+async def test_resolve_end_user(_validate_flag_on, monkeypatch):
+    """Verify that resolve_and_validate_end_user_id does NOT raise BudgetExceededError.
+
+    Note: As of the refactor that moved _check_end_user_budget out of
+    get_end_user_object, budget enforcement now happens in common_checks().
+
+    The end-user validation path should return the user ID regardless of budget status.
+    Budget enforcement for end users happens later in common_checks() via
+    _check_end_user_budget(), which respects skip_budget_checks for zero-cost models.
+
+    This test verifies that even when get_end_user_object returns a user with a budget,
+    resolve_and_validate_end_user_id does not block the request - budget enforcement
+    is deferred to common_checks() where skip_budget_checks logic can be applied.
+    """
     from litellm.proxy.auth import auth_checks
     from litellm.proxy.auth.auth_checks import resolve_and_validate_end_user_id
 
+    # Mock get_end_user_object to return a user with budget info
+    # (simulating a user who may have exceeded their budget)
+    mock_end_user = MagicMock()
+    mock_end_user.user_id = "customer-over-budget"
     monkeypatch.setattr(
         auth_checks,
         "get_end_user_object",
-        AsyncMock(
-            side_effect=litellm.BudgetExceededError(current_cost=10.0, max_budget=5.0)
-        ),
+        AsyncMock(return_value=mock_end_user),
     )
     cache = _validation_cache()
 
-    with pytest.raises(litellm.BudgetExceededError):
-        await resolve_and_validate_end_user_id(
-            raw_end_user_id="customer-over-budget",
-            prisma_client=MagicMock(),
-            user_api_key_cache=cache,
-        )
+    # resolve_and_validate_end_user_id should return the user ID without raising
+    # BudgetExceededError - budget enforcement happens in common_checks()
+    result = await resolve_and_validate_end_user_id(
+        raw_end_user_id="customer-over-budget",
+        prisma_client=MagicMock(),
+        user_api_key_cache=cache,
+    )
+    assert result == "customer-over-budget"
 
 
 @pytest.mark.asyncio

@@ -1127,7 +1127,7 @@ async def get_end_user_object(
     end_user_id: Optional[str],
     prisma_client: Optional[PrismaClient],
     user_api_key_cache: UserApiKeyCache,
-    route: str,
+    route: Optional[str] = "",
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
 ) -> Optional[LiteLLM_EndUserTable]:
@@ -1171,9 +1171,6 @@ async def get_end_user_object(
             parent_otel_span=parent_otel_span,
         )
 
-        # Check budget limits
-        await _check_end_user_budget(end_user_obj=return_obj, route=route)
-
         return return_obj
 
     # Fetch from database
@@ -1204,14 +1201,9 @@ async def get_end_user_object(
             model_type=LiteLLM_EndUserTable,
         )
 
-        # Check budget limits
-        await _check_end_user_budget(end_user_obj=_response, route=route)
-
         return _response
 
-    except Exception as e:
-        if isinstance(e, litellm.BudgetExceededError):
-            raise e
+    except Exception:
         return None
 
 
@@ -1308,8 +1300,6 @@ async def _end_user_id_exists_in_db(
         )
         if end_user_obj is not None:
             return True
-    except litellm.BudgetExceededError:
-        raise
     except Exception as e:
         verbose_proxy_logger.debug(
             f"end_user validation: get_end_user_object lookup failed: {e}"
@@ -3084,6 +3074,26 @@ def _model_in_team_aliases(
     return False
 
 
+def _resolve_key_models_for_auth_check(valid_token: UserAPIKeyAuth) -> List[str]:
+    """
+    Expand key model sentinels before auth checks.
+
+    ``all-team-models`` means inherit the parent team's allowlist — same
+    semantics as ``get_key_models`` in ``model_checks.py``.
+
+    If the key has no team_id the sentinel cannot be resolved, so the original
+    model list (still containing the sentinel string) is returned unchanged.
+    That string won't match any real model, so access is denied rather than
+    silently falling through to unrestricted access.
+    """
+    models = list(valid_token.models or [])
+    if SpecialModelNames.all_team_models.value in models:
+        if valid_token.team_id is None:
+            return models
+        return list(valid_token.team_models or [])
+    return models
+
+
 async def can_key_call_model(
     model: Union[str, List[str]],
     llm_model_list: Optional[list],
@@ -3102,11 +3112,12 @@ async def can_key_call_model(
     Raises:
         - Exception: If token not allowed to call model
     """
+    key_models = _resolve_key_models_for_auth_check(valid_token=valid_token)
     try:
         return _can_object_call_model(
             model=model,
             llm_router=llm_router,
-            models=valid_token.models,
+            models=key_models,
             team_model_aliases=valid_token.team_model_aliases,
             team_id=valid_token.team_id,
             object_type="key",
