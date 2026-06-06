@@ -2,9 +2,18 @@ import React, { useState } from "react";
 import { Modal, Tooltip, Form, Select, Input, Switch, Collapse } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
-import { createMCPServer, registerMCPServer } from "../networking";
+import { createMCPServer, registerMCPServer, storeMCPOAuthUserCredential } from "../networking";
 import { setToken } from "@/utils/mcpTokenStore";
-import { AUTH_TYPE, DiscoverableMCPServer, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
+import {
+  AUTH_TYPE,
+  DiscoverableMCPServer,
+  OAUTH_FLOW,
+  MCPServer,
+  MCPServerCostInfo,
+  TRANSPORT,
+  getMcpOAuthMode,
+  MCP_OAUTH2_FLOW_M2M,
+} from "./types";
 import OAuthFormFields from "./OAuthFormFields";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPConnectionStatus from "./mcp_connection_status";
@@ -412,19 +421,36 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           ? await createMCPServer(accessToken, payload)
           : await registerMCPServer(accessToken, payload);
 
-        // Cache the OAuth token in sessionStorage so the Tools tab can use it
-        // immediately without re-authenticating.  No backend DB write.
+        // Persist the token obtained via "Authorize & Fetch" once the server
+        // exists (so we have its server_id). OBO holds the per-user token in the
+        // backend, so write it to the DB (has_credentials=True). Passthrough
+        // forwards a browser-held token, so it stays in sessionStorage only.
         if (oauthTokenResponse?.access_token && response?.server_id) {
-          setToken(
-            response.server_id,
-            {
+          const oauthMode = getMcpOAuthMode({
+            auth_type: restValues.auth_type,
+            oauth2_flow: values.oauth_flow_type === OAUTH_FLOW.M2M ? MCP_OAUTH2_FLOW_M2M : null,
+            delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw),
+          });
+          if (oauthMode === "obo") {
+            const scope = oauthTokenResponse.scope;
+            await storeMCPOAuthUserCredential(accessToken, response.server_id, {
               access_token: oauthTokenResponse.access_token,
-              expires_in: oauthTokenResponse.expires_in,
               refresh_token: oauthTokenResponse.refresh_token,
-              token_type: oauthTokenResponse.token_type,
-            },
-            userID,
-          );
+              expires_in: oauthTokenResponse.expires_in,
+              scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
+            });
+          } else {
+            setToken(
+              response.server_id,
+              {
+                access_token: oauthTokenResponse.access_token,
+                expires_in: oauthTokenResponse.expires_in,
+                refresh_token: oauthTokenResponse.refresh_token,
+                token_type: oauthTokenResponse.token_type,
+              },
+              userID,
+            );
+          }
         }
 
         NotificationsManager.success(

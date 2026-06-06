@@ -115,9 +115,10 @@ if MCP_AVAILABLE:
         try:
             from litellm.proxy._experimental.mcp_server.db import (
                 get_user_oauth_credential,
-                is_oauth_credential_expired,
+                resolve_valid_user_oauth_token,
             )
 
+            prisma_client = None
             if prefetched_creds is not None:
                 cred = prefetched_creds.get(server_id)
             else:
@@ -129,13 +130,13 @@ if MCP_AVAILABLE:
                 cred = await get_user_oauth_credential(
                     prisma_client, user_id, server_id
                 )
+            cred = await resolve_valid_user_oauth_token(
+                user_id=user_id,
+                server=server,
+                cred=cred,
+                prisma_client=prisma_client,
+            )
             if cred and cred.get("access_token"):
-                if is_oauth_credential_expired(cred):
-                    verbose_logger.debug(
-                        f"_get_user_oauth_extra_headers: token expired for "
-                        f"user={user_id} server={server_id}"
-                    )
-                    return None
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception as e:
             verbose_logger.warning(

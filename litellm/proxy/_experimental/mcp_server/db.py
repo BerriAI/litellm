@@ -6,6 +6,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Union, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     LiteLLM_ObjectPermissionTable,
@@ -740,11 +741,14 @@ async def store_user_oauth_credential(
     )
 
 
-def is_oauth_credential_expired(cred: Dict[str, Any]) -> bool:
+def is_oauth_credential_expired(cred: Dict[str, Any], buffer_seconds: int = 0) -> bool:
     """Return True if the OAuth2 credential's access_token has expired.
 
     Checks the ``expires_at`` ISO-format string stored in the credential payload.
     Returns False when ``expires_at`` is absent or unparseable (treat as non-expired).
+    With ``buffer_seconds`` > 0, a token that is still valid but expires within the
+    buffer is also treated as expired, so callers can refresh proactively instead of
+    handing back a token that may lapse mid-request.
     """
     expires_at = cred.get("expires_at")
     if not expires_at:
@@ -753,7 +757,7 @@ def is_oauth_credential_expired(cred: Dict[str, Any]) -> bool:
         exp_dt = datetime.fromisoformat(expires_at)
         if exp_dt.tzinfo is None:
             exp_dt = exp_dt.replace(tzinfo=timezone.utc)
-        return datetime.now(timezone.utc) > exp_dt
+        return datetime.now(timezone.utc) + timedelta(seconds=buffer_seconds) > exp_dt
     except (ValueError, TypeError):
         return False
 
@@ -899,6 +903,50 @@ async def refresh_user_oauth_token(
         server_id,
     )
     return await get_user_oauth_credential(prisma_client, user_id, server_id)
+
+
+async def resolve_valid_user_oauth_token(
+    user_id: str,
+    server: Any,
+    cred: Optional[Dict[str, Any]],
+    prisma_client: Optional[PrismaClient] = None,
+) -> Optional[Dict[str, Any]]:
+    """Return an OAuth2 credential whose access_token is good for the next request.
+
+    Returns the credential unchanged while its token is valid for at least
+    ``MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS``. Only when the token is expired (or
+    expiring within that buffer) and a refresh_token is stored does it mint a new one
+    via ``refresh_user_oauth_token``. Returns None when there is no usable token
+    (missing token, expired with no refresh_token, or a failed refresh).
+
+    The refresh_token is only ever sent to the server's token_url inside
+    ``refresh_user_oauth_token``; it is never exposed to the caller beyond the cred
+    dict it already holds. ``prisma_client`` is fetched lazily and only when a refresh
+    actually happens, so the valid-token path never requires a DB handle.
+    """
+    if not cred or not cred.get("access_token"):
+        return None
+    if not is_oauth_credential_expired(
+        cred, buffer_seconds=MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS
+    ):
+        return cred
+    if not cred.get("refresh_token"):
+        return None
+    if prisma_client is None:
+        from litellm.proxy.utils import get_prisma_client_or_throw
+
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Cannot refresh OAuth token."
+        )
+    refreshed = await refresh_user_oauth_token(
+        prisma_client=prisma_client,
+        user_id=user_id,
+        server=server,
+        cred=cred,
+    )
+    if not refreshed or not refreshed.get("access_token"):
+        return None
+    return refreshed
 
 
 async def approve_mcp_server(

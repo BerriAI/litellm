@@ -2,19 +2,29 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as networking from "../networking";
+import { setToken } from "@/utils/mcpTokenStore";
 import CreateMCPServer from "./create_mcp_server";
 
 vi.mock("../networking", () => ({
   createMCPServer: vi.fn(),
+  registerMCPServer: vi.fn(),
+  storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
+vi.mock("@/utils/mcpTokenStore", () => ({
+  setToken: vi.fn(),
+}));
+
+// Mutable holder so individual tests can simulate "Authorize & Fetch" having
+// produced a token before submit.
+const oauthHook = vi.hoisted(() => ({ tokenResponse: null as Record<string, unknown> | null }));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: () => ({
     startOAuthFlow: vi.fn(),
     status: "idle",
     error: null,
-    tokenResponse: null,
+    tokenResponse: oauthHook.tokenResponse,
   }),
 }));
 
@@ -27,7 +37,25 @@ vi.mock("./MCPPermissionManagement", () => ({
 }));
 
 vi.mock("./mcp_tool_configuration", () => ({
-  default: () => <div data-testid="mcp-tool-config" />,
+  default: ({
+    onAllowedToolsChange,
+    onToolAllowlistInteraction,
+  }: {
+    onAllowedToolsChange?: (tools: string[]) => void;
+    onToolAllowlistInteraction?: () => void;
+  }) => (
+    <div data-testid="mcp-tool-config">
+      <button
+        type="button"
+        onClick={() => {
+          onToolAllowlistInteraction?.();
+          onAllowedToolsChange?.([]);
+        }}
+      >
+        Disable all tools
+      </button>
+    </div>
+  ),
 }));
 
 vi.mock("./mcp_connection_status", () => ({
@@ -92,6 +120,7 @@ async function selectAntOption(labelText: string, optionText: string) {
 describe("CreateMCPServer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    oauthHook.tokenResponse = null;
   });
 
   it("should render the modal with title when visible", () => {
@@ -448,6 +477,58 @@ describe("CreateMCPServer", () => {
 
       const [, payload] = vi.mocked(networking.createMCPServer).mock.calls[0];
       expect(payload.token_validation).toBeUndefined();
+    });
+
+    it("persists access + refresh token to the DB on submit for OBO mode", async () => {
+      // "Authorize & Fetch" produced a token before submit.
+      oauthHook.tokenResponse = {
+        access_token: "obo-access-token",
+        refresh_token: "obo-refresh-token",
+        expires_in: 3600,
+        token_type: "bearer",
+        scope: "channels:read chat:write",
+      };
+      vi.mocked(networking.createMCPServer).mockResolvedValue({
+        server_id: "obo-server-1",
+        server_name: "OBO_Server",
+        alias: "OBO_Server",
+        url: "https://example.com/mcp",
+        transport: "http",
+        auth_type: "oauth2",
+        created_at: "2024-01-01T00:00:00Z",
+        created_by: "user-1",
+        updated_at: "2024-01-01T00:00:00Z",
+        updated_by: "user-1",
+      });
+
+      // Interactive OAuth + delegate_auth_to_upstream off (the default) => OBO mode.
+      await setupOAuthInteractive();
+
+      const nameInput = document.getElementById("server_name") as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(nameInput, { target: { value: "OBO_Server" } });
+      });
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://example.com/mcp" } });
+      });
+
+      const submitButton = screen.getByRole("button", { name: "Add MCP Server" });
+      await act(async () => {
+        fireEvent.click(submitButton);
+      });
+
+      await waitFor(() => {
+        expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalledTimes(1);
+      });
+      expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalledWith("test-token", "obo-server-1", {
+        access_token: "obo-access-token",
+        refresh_token: "obo-refresh-token",
+        expires_in: 3600,
+        scopes: ["channels:read", "chat:write"],
+      });
+      // OBO persists server-side; it must not fall back to the browser-only cache.
+      expect(setToken).not.toHaveBeenCalled();
     });
 
     it("does not submit and shows validation error for invalid JSON in token_validation_json", async () => {
