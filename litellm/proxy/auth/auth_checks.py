@@ -746,18 +746,19 @@ async def common_checks(  # noqa: PLR0915
         user_object=user_object, route=route, request_body=request_body
     )
 
-    passthrough_access_group_ids = list(
-        {
-            *(valid_token.access_group_ids or []),
-            *((team_object.access_group_ids or []) if team_object is not None else []),
-        }
-    )
-    if passthrough_access_group_ids:
-        valid_token.access_group_passthrough_routes = (
-            await _get_passthrough_routes_from_access_groups(
-                access_group_ids=passthrough_access_group_ids,
-            )
+    if valid_token is not None:
+        passthrough_access_group_ids = list(
+            {
+                *(valid_token.access_group_ids or []),
+                *((team_object.access_group_ids or []) if team_object is not None else []),
+            }
         )
+        if passthrough_access_group_ids:
+            valid_token.access_group_passthrough_routes = (
+                await _get_passthrough_routes_from_access_groups(
+                    access_group_ids=passthrough_access_group_ids,
+                )
+            )
 
     _is_route_allowed = _is_api_route_allowed(
         route=route,
