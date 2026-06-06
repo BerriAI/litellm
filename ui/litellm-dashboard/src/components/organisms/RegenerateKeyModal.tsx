@@ -1,14 +1,19 @@
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { CheckOutlined, CopyOutlined, SyncOutlined } from "@ant-design/icons";
 import { Alert, Button, Col, Flex, Form, Input, InputNumber, Modal, Row, Space, Typography } from "antd";
-import { add } from "date-fns";
 import { useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import NotificationManager from "../molecules/notifications_manager";
 import { regenerateKeyCall } from "../networking";
+import { calculateExpiryPreviewFromDuration, formatExpiresUtc, isKeyExpired } from "@/utils/keyExpiryUtils";
 
 const { Text } = Typography;
+
+const DURATION_RULE = {
+  pattern: /^(\d+(s|m|h|d|w|mo))?$/,
+  message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+};
 
 interface RegenerateKeyModalProps {
   selectedToken: KeyResponse | null;
@@ -21,10 +26,17 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
   const { accessToken } = useAuthorized();
   const [form] = Form.useForm();
   const [regeneratedKey, setRegeneratedKey] = useState<string | null>(null);
-  const [regenerateFormData, setRegenerateFormData] = useState<any>(null);
-  const [newExpiryTime, setNewExpiryTime] = useState<string | null>(null);
   const [isRegenerating, setIsRegenerating] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const keyIsExpired = isKeyExpired(selectedToken?.expires);
+  const durationValue = Form.useWatch("duration", form);
+
+  // Expired keys must get a new duration, otherwise regeneration produces a key
+  // that inherits the old (past) expiry and is immediately unusable.
+  const durationRules = keyIsExpired
+    ? [{ required: true, message: "Expiration is required for expired keys" }, DURATION_RULE]
+    : [DURATION_RULE];
 
   useEffect(() => {
     if (visible && selectedToken && accessToken) {
@@ -39,46 +51,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
     }
   }, [visible, selectedToken, form, accessToken]);
 
-  const calculateNewExpiryTime = (duration: string | undefined): string | null => {
-    if (!duration) return null;
-
-    try {
-      const amount = parseInt(duration);
-      if (Number.isNaN(amount)) {
-        throw new Error("Invalid duration format");
-      }
-      const now = new Date();
-      // Check "mo" before "m" to avoid a false prefix match (e.g. "1mo" → minutes).
-      let newExpiry: Date;
-      if (duration.endsWith("mo")) {
-        newExpiry = add(now, { months: amount });
-      } else if (duration.endsWith("s")) {
-        newExpiry = add(now, { seconds: amount });
-      } else if (duration.endsWith("m")) {
-        newExpiry = add(now, { minutes: amount });
-      } else if (duration.endsWith("h")) {
-        newExpiry = add(now, { hours: amount });
-      } else if (duration.endsWith("d")) {
-        newExpiry = add(now, { days: amount });
-      } else if (duration.endsWith("w")) {
-        newExpiry = add(now, { weeks: amount });
-      } else {
-        throw new Error("Invalid duration format");
-      }
-
-      return newExpiry.toLocaleString();
-    } catch (error) {
-      return null;
-    }
-  };
-
-  useEffect(() => {
-    if (regenerateFormData?.duration) {
-      setNewExpiryTime(calculateNewExpiryTime(regenerateFormData.duration));
-    } else {
-      setNewExpiryTime(null);
-    }
-  }, [regenerateFormData?.duration]);
+  const newExpiryTime = durationValue ? calculateExpiryPreviewFromDuration(durationValue) : null;
 
   const handleRegenerateKey = async () => {
     if (!selectedToken || !accessToken) return;
@@ -95,6 +68,8 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
       // fields it returns (new token, timestamps, etc.) are captured, then
       // override with the explicit form values — the user's just-submitted
       // edits must win over whatever the API echoes back.
+      // expires must come from the API (an ISO string), never the locale-
+      // formatted preview, otherwise downstream expiry parsing breaks.
       const updatedKeyData: Partial<KeyResponse> = {
         ...response,
         token: response.token || response.key_id || selectedToken.token,
@@ -102,9 +77,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
         max_budget: formValues.max_budget,
         tpm_limit: formValues.tpm_limit,
         rpm_limit: formValues.rpm_limit,
-        expires: formValues.duration
-          ? calculateNewExpiryTime(formValues.duration) ?? selectedToken.expires
-          : selectedToken.expires,
+        expires: response.expires ?? selectedToken.expires,
       };
 
       // Update the parent component with new key data
@@ -114,9 +87,14 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
 
       setIsRegenerating(false);
     } catch (error) {
+      setIsRegenerating(false); // Reset regenerating state on error
+      // Ant Design form validation rejections surface inline under the field;
+      // don't also raise a backend-style toast for them.
+      if (error && typeof error === "object" && "errorFields" in error) {
+        return;
+      }
       console.error("Error regenerating key:", error);
       NotificationManager.fromBackend(error);
-      setIsRegenerating(false); // Reset regenerating state on error
     }
   };
 
@@ -193,16 +171,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
           </Flex>
         </Flex>
       ) : (
-        <Form
-          form={form}
-          layout="vertical"
-          style={{ marginTop: 4 }}
-          onValuesChange={(changedValues) => {
-            if ("duration" in changedValues) {
-              setRegenerateFormData((prev: { duration?: string }) => ({ ...prev, duration: changedValues.duration }));
-            }
-          }}
-        >
+        <Form form={form} layout="vertical" style={{ marginTop: 4 }}>
           <Form.Item name="key_alias" label="Key Alias">
             <Input disabled />
           </Form.Item>
@@ -230,11 +199,12 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
               <Form.Item
                 name="duration"
                 label="Expire Key"
+                rules={durationRules}
                 extra={
                   <Flex vertical gap={2}>
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      Current expiry:{" "}
-                      {selectedToken?.expires ? new Date(selectedToken.expires).toLocaleString() : "Never"}
+                    <Text type={keyIsExpired ? "danger" : "secondary"} style={{ fontSize: 12 }}>
+                      Current expiry: {selectedToken?.expires ? formatExpiresUtc(selectedToken.expires) : "Never"}
+                      {keyIsExpired && " (expired)"}
                     </Text>
                     {newExpiryTime && (
                       <Text type="success" style={{ fontSize: 12 }}>
@@ -257,12 +227,7 @@ export function RegenerateKeyModal({ selectedToken, visible, onClose, onKeyUpdat
                     Recommended: 24h to 72h for production keys
                   </Text>
                 }
-                rules={[
-                  {
-                    pattern: /^(\d+(s|m|h|d|w|mo))?$/,
-                    message: "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
-                  },
-                ]}
+                rules={[DURATION_RULE]}
               >
                 <Input placeholder="e.g. 24h, 2d" />
               </Form.Item>
