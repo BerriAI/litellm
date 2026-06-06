@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-import litellm
 from litellm.proxy.openai_files_endpoints.common_utils import (
     decode_model_from_file_id,
     get_batch_id_from_unified_batch_id,
@@ -100,6 +99,11 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
                     "input_file_id": "file-input456",
                     "endpoint": "/v1/chat/completions",
                     "completion_window": "24h",
+                    "metadata": {
+                        "customer_id": "cust-123",
+                        "applied_guardrails": ["pii"],
+                        "attempt": 1,
+                    },
                 }
             ),
         ),
@@ -115,8 +119,8 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
         ),
         patch(
             "litellm.acreate_batch",
-            new=AsyncMock(return_value=mock_response),
-        ),
+            new_callable=AsyncMock,
+        ) as mock_create_batch,
         patch(
             "litellm.proxy.batches_endpoints.endpoints.is_known_model",
             return_value=False,
@@ -133,6 +137,7 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
             ),
         ),
     ):
+        mock_create_batch.return_value = mock_response
         # Setup the mock processor to return data and logging obj
         mock_processor = MagicMock()
         mock_processor.common_processing_pre_call_logic = AsyncMock(
@@ -141,6 +146,11 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
                     "input_file_id": "file-input456",
                     "endpoint": "/v1/chat/completions",
                     "completion_window": "24h",
+                    "metadata": {
+                        "customer_id": "cust-123",
+                        "applied_guardrails": ["pii"],
+                        "attempt": 1,
+                    },
                 },
                 MagicMock(),
             )
@@ -172,6 +182,7 @@ async def test_create_batch_with_x_litellm_model_encodes_batch_id():
     assert (
         original_id == raw_batch_id
     ), f"Expected original ID '{raw_batch_id}', got: {original_id}"
+    assert mock_create_batch.call_args.kwargs["metadata"] == {"customer_id": "cust-123"}
 
 
 @pytest.mark.asyncio

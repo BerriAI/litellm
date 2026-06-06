@@ -5568,7 +5568,7 @@ class Router:
             )
             if resolved_credentials is not None:
                 data.update(resolved_credentials)
-                data.pop("litellm_credential_name", None)
+            data.pop("litellm_credential_name", None)
             model_name = data["model"]
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name="_acancel_batch"

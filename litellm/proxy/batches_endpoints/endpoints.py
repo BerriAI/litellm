@@ -13,6 +13,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.proxy._types import *
+from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
@@ -107,6 +108,7 @@ async def create_batch(  # noqa: PLR0915
             proxy_config=proxy_config,
             route_type="acreate_batch",
         )
+        data["metadata"] = sanitize_openai_provider_metadata(data.get("metadata"))
 
         ## check if model is a loadbalanced model
         router_model: Optional[str] = None
