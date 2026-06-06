@@ -105,8 +105,13 @@ class UserAPIKeyAuthExceptionHandler:
             # Log this exception to OTEL, Datadog etc. Reuse the identity resolved
             # before the failure (team alias/id, metadata, user) so the failed span
             # is labeled — a fresh UserAPIKeyAuth here would drop everything auth had
-            # already looked up (e.g. an expired key whose team/user is known).
-            user_api_key_dict = resolved_identity or UserAPIKeyAuth()
+            # already looked up (e.g. an expired key whose team/user is known). Copy
+            # so the handler is side-effect-free for the caller's identity object.
+            user_api_key_dict = (
+                resolved_identity.model_copy()
+                if resolved_identity is not None
+                else UserAPIKeyAuth()
+            )
             user_api_key_dict.parent_otel_span = parent_otel_span
             user_api_key_dict.request_route = route
             user_api_key_dict.api_key = user_api_key_dict.api_key or api_key
