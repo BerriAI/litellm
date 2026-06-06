@@ -5336,6 +5336,11 @@ class BaseLLMHTTPHandler:
                     model,
                     user_api_key_dict=user_api_key_dict,
                     request_data=_request_data,
+                    force_transcription_model=(
+                        model
+                        if (query_params or {}).get("intent") == "transcription"
+                        else None
+                    ),
                 )
                 if _session_config:
                     realtime_streaming.session_configuration_request = _session_config

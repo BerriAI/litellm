@@ -134,9 +134,15 @@ class AzureOpenAIRealtime(AzureChatCompletion):
                     websocket,
                     cast(ClientConnection, backend_ws),
                     logging_obj,
+                    model=model,
                     user_api_key_dict=user_api_key_dict,
                     request_data={"litellm_metadata": litellm_metadata or {}},
                     backend_uses_beta_protocol=backend_uses_beta_protocol,
+                    force_transcription_model=(
+                        model
+                        if (query_params or {}).get("intent") == "transcription"
+                        else None
+                    ),
                 )
                 await realtime_streaming.bidirectional_forward()
 

@@ -47,6 +47,7 @@ class RealTimeStreaming:
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
         backend_uses_beta_protocol: Optional[bool] = None,
+        force_transcription_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -103,7 +104,8 @@ class RealTimeStreaming:
         # Whether this is a transcription-only session (session.type == "transcription",
         # e.g. gpt-realtime-whisper). Such sessions must not be sent response.create and
         # their input_audio_transcription.completed usage drives duration-based cost.
-        self._is_transcription_session: bool = False
+        self._force_transcription_model = force_transcription_model
+        self._is_transcription_session: bool = force_transcription_model is not None
 
     # Per-connection caps for pre-setup audio frames (message count + total bytes).
     _MAX_BUFFERED_MESSAGES: int = 200
@@ -340,6 +342,7 @@ class RealTimeStreaming:
         backend, False if the provider transformation produced no output and
         the message was effectively dropped.
         """
+        message = self._enforce_transcription_session_model(message)
         if self.provider_config:
             transformed = self.provider_config.transform_realtime_request(
                 message, self.model, self.session_configuration_request
@@ -358,6 +361,80 @@ class RealTimeStreaming:
             return sent
         await self.backend_ws.send(message)  # type: ignore[union-attr, attr-defined]
         return True
+
+    def _enforce_transcription_session_model(self, message: str) -> str:
+        """Force client transcription session updates to the authorized model.
+
+        `/v1/realtime?intent=transcription` may intentionally omit `model` from
+        the upstream URL for Azure compatibility, but the proxy still authorizes
+        a resolved LiteLLM model before opening the backend websocket. If a
+        client later sends a transcription `session.update`, any model embedded
+        in that update must be rewritten to the same authorized model instead of
+        allowing a post-auth model/deployment switch.
+
+        Normal realtime sessions keep their independent nested transcription
+        model behavior because `_force_transcription_model` is only set for
+        transcription-intent websocket routes.
+        """
+        if self._force_transcription_model is None:
+            return message
+
+        try:
+            message_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return message
+
+        if message_obj.get("type") not in (
+            "session.update",
+            "transcription_session.update",
+        ):
+            return message
+
+        session = message_obj.get("session")
+        if not isinstance(session, dict):
+            return message
+
+        if session.get("type") == "transcription":
+            self._is_transcription_session = True
+
+        authorized_model = self._force_transcription_model
+        changed = False
+
+        transcription = session.get("input_audio_transcription")
+        if (
+            isinstance(transcription, dict)
+            and transcription.get("model") != authorized_model
+        ):
+            session["input_audio_transcription"] = {
+                **transcription,
+                "model": authorized_model,
+            }
+            changed = True
+
+        audio = session.get("audio")
+        if isinstance(audio, dict):
+            audio_input = audio.get("input")
+            if isinstance(audio_input, dict):
+                nested_transcription = audio_input.get("transcription")
+                if (
+                    isinstance(nested_transcription, dict)
+                    and nested_transcription.get("model") != authorized_model
+                ):
+                    session["audio"] = {
+                        **audio,
+                        "input": {
+                            **audio_input,
+                            "transcription": {
+                                **nested_transcription,
+                                "model": authorized_model,
+                            },
+                        },
+                    }
+                    changed = True
+
+        if not changed:
+            return message
+        return json.dumps(message_obj)
 
     def _uses_deferred_backend_setup(self) -> bool:
         """True when setup is deferred until the client's first session.update."""
