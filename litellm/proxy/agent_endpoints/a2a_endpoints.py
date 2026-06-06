@@ -15,6 +15,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.databricks_oauth import (
+    DATABRICKS_OAUTH_PARAM,
+    resolve_databricks_app_auth_header,
+)
 from litellm.proxy.agent_endpoints.utils import merge_agent_headers
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.utils import all_litellm_params
@@ -676,6 +680,17 @@ async def invoke_agent_a2a(  # noqa: PLR0915
             dynamic_headers=dynamic_headers or None,
             static_headers=static_headers or None,
         )
+
+        # Databricks App endpoints require a short-lived OAuth M2M token rather
+        # than a static bearer. Only agents explicitly configured with a
+        # ``databricks_oauth`` block get one; every other agent is left untouched.
+        if litellm_params.get(DATABRICKS_OAUTH_PARAM):
+            databricks_auth = await resolve_databricks_app_auth_header(litellm_params)
+            if databricks_auth:
+                agent_extra_headers = {
+                    **(agent_extra_headers or {}),
+                    **databricks_auth,
+                }
 
         # Merge agent-level guardrails into data so post_call_success_hook and
         # _handle_stream_message both pick them up.  A2A agents use model

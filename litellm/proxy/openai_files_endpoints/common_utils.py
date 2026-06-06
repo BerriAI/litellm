@@ -79,9 +79,10 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     if not isinstance(file_id, str):
         return ""
     if "llm_batch_id" in file_id:
-        return file_id.split("llm_batch_id:")[1].split(",")[0]
+        batch_id = file_id.split("llm_batch_id:", 1)[1]
     else:
-        return file_id.split("generic_response_id:")[1].split(",")[0]
+        batch_id = file_id.split("generic_response_id:", 1)[1]
+    return re.split(r"[;,]", batch_id, maxsplit=1)[0]
 
 
 def encode_file_id_with_model(

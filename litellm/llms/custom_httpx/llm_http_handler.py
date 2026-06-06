@@ -1751,6 +1751,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             optional_params=optional_params,
             data=data,
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -1833,6 +1834,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             optional_params=optional_params,
             data=data,
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -2586,6 +2588,8 @@ class BaseLLMHTTPHandler:
             headers=headers,
         )
 
+        headers.setdefault("Content-Type", "application/json")
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2675,6 +2679,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        headers.setdefault("Content-Type", "application/json")
 
         ## LOGGING
         logging_obj.pre_call(

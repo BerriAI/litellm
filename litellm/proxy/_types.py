@@ -1265,6 +1265,34 @@ class MCPApprovalStatus(str, enum.Enum):
     rejected = "rejected"
 
 
+class MCPEnvVarScope(str, enum.Enum):
+    """Scope for an MCP server environment variable.
+
+    - ``global``: value is provided by the admin and used for all users.
+    - ``user``: each user must provide their own value via the per-user
+      env-var endpoint. The admin-supplied ``value`` is treated as a
+      placeholder/hint and is not used at request time.
+    """
+
+    global_ = "global"
+    user = "user"
+
+
+class MCPEnvVar(LiteLLMPydanticObjectBase):
+    """One environment variable for an MCP server.
+
+    Variables can be interpolated into ``static_headers`` using ``${NAME}``
+    syntax. ``scope=global`` values are stored on the server. ``scope=user``
+    values are stored per-user in ``LiteLLM_MCPUserEnvVars`` and supplied by
+    each user.
+    """
+
+    name: str
+    value: str = ""
+    scope: MCPEnvVarScope = MCPEnvVarScope.global_
+    description: Optional[str] = None
+
+
 # MCP Proxy Request Types
 class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     server_id: Optional[str] = None
@@ -1283,6 +1311,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    env_vars: Optional[List[MCPEnvVar]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1300,6 +1329,7 @@ class NewMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    timeout: Optional[float] = None
     # BYOM submission fields — set by the endpoint, not by the caller.
     # Any caller-provided values are silently overridden before persistence.
     approval_status: Optional[str] = Field(
@@ -1368,6 +1398,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     tool_name_to_description: Optional[Dict[str, str]] = None
     extra_headers: Optional[List[str]] = None
     static_headers: Optional[Dict[str, str]] = None
+    env_vars: Optional[List[MCPEnvVar]] = None
     instructions: Optional[str] = None
     # Stdio-specific fields
     command: Optional[str] = None
@@ -1376,6 +1407,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
@@ -1384,6 +1416,7 @@ class UpdateMCPServerRequest(LiteLLMPydanticObjectBase):
     byok_description: List[str] = Field(default_factory=list)
     byok_api_key_help_url: Optional[str] = None
     source_url: Optional[str] = None
+    timeout: Optional[float] = None
 
     @model_validator(mode="before")
     @classmethod
@@ -1435,6 +1468,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     extra_headers: List[str] = Field(default_factory=list)
     mcp_info: Optional[MCPInfo] = None
     static_headers: Optional[Dict[str, str]] = None
+    env_vars: Optional[List[MCPEnvVar]] = None
     # Health check status
     status: Optional[Literal["healthy", "unhealthy", "unknown"]] = Field(
         default="unknown",
@@ -1449,6 +1483,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     authorization_url: Optional[str] = None
     token_url: Optional[str] = None
     registration_url: Optional[str] = None
+    oauth2_flow: Optional[Literal["client_credentials", "authorization_code"]] = None
     allow_all_keys: bool = False
     available_on_public_internet: bool = True
     delegate_auth_to_upstream: bool = False
@@ -1458,6 +1493,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     byok_api_key_help_url: Optional[str] = None
     has_user_credential: Optional[bool] = None
     source_url: Optional[str] = None
+    timeout: Optional[float] = None
     # BYOM submission fields
     approval_status: Optional[str] = Field(
         default="active",
@@ -1512,6 +1548,35 @@ class MCPUserCredentialListItem(LiteLLMPydanticObjectBase):
     has_credential: bool
     expires_at: Optional[str] = None  # ISO-8601; None means non-expiring
     connected_at: Optional[str] = None  # ISO-8601
+
+
+class MCPUserEnvVarsRequest(LiteLLMPydanticObjectBase):
+    """Payload for storing the calling user's per-user env var values."""
+
+    values: Dict[str, str]
+
+
+class MCPUserEnvVarSpec(LiteLLMPydanticObjectBase):
+    """Describes one per-user env var slot for the calling user.
+
+    Stored values are write-only: the status only reports whether a value
+    ``is_set`` and never echoes the decrypted secret back to the client.
+    """
+
+    name: str
+    description: Optional[str] = None
+    is_set: bool = False
+
+
+class MCPUserEnvVarsStatus(LiteLLMPydanticObjectBase):
+    """Per-user env var status for a single MCP server."""
+
+    server_id: str
+    server_name: Optional[str] = None
+    alias: Optional[str] = None
+    required: List[MCPUserEnvVarSpec] = Field(default_factory=list)
+    missing_count: int = 0
+    setup_url: Optional[str] = None  # frontend URL where the user can fill these in
 
 
 class RejectMCPServerRequest(LiteLLMPydanticObjectBase):
@@ -3514,6 +3579,19 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ui_callback_name="Traceloop",
     )
 
+    galileo: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="galileo",
+        litellm_callback_params=[
+            "GALILEO_API_KEY",
+            "GALILEO_PROJECT_ID",
+            "GALILEO_LOG_STREAM_ID",
+            "GALILEO_BASE_URL",
+            "GALILEO_USERNAME",
+            "GALILEO_PASSWORD",
+        ],
+        ui_callback_name="Galileo",
+    )
+
 
 class SpendLogsMetadata(TypedDict):
     """
@@ -4453,6 +4531,25 @@ class JWTRoutingOverride(BaseModel):
     }
 
 
+class UnregisteredJWTClientBehavior(str, enum.Enum):
+    """
+    Controls what happens when `virtual_key_claim_field` is configured but the
+    JWT claim value has no registered mapping in `litellm_jwtkeymapping`.
+
+    - fallback_team_mapping: Fall through to standard team-based JWT auth (default,
+      backward-compatible).
+    - reject: Immediately return HTTP 403. Use this when every valid JWT client
+      must have a pre-registered virtual key — unknown callers are denied.
+    - auto_register: Automatically create a new virtual key and mapping on first
+      encounter. The new key has no budget/model restrictions; admins can tighten
+      it later via /jwt_client/update.
+    """
+
+    FALLBACK_TEAM_MAPPING = "fallback_team_mapping"
+    REJECT = "reject"
+    AUTO_REGISTER = "auto_register"
+
+
 class JWTIssuerConfig(BaseModel):
     """
     Issuer-bound JWT validation configuration.
@@ -4619,6 +4716,15 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=300,
         description="TTL (seconds) for caching JWT-to-virtual-key mapping lookups.",
     )
+    unregistered_jwt_client_behavior: UnregisteredJWTClientBehavior = Field(
+        default=UnregisteredJWTClientBehavior.FALLBACK_TEAM_MAPPING,
+        description=(
+            "What to do when virtual_key_claim_field is set but the JWT claim value "
+            "has no registered mapping. 'fallback_team_mapping' (default): fall through "
+            "to team-based JWT auth. 'reject': return HTTP 403. "
+            "'auto_register': auto-create a virtual key and mapping on first encounter."
+        ),
+    )
     routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
@@ -4637,6 +4743,13 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         # check; the runtime gate in ``get_instance_fn`` refuses
         # ``s3://`` / ``gcs://`` when this is None.
         config_file_path = kwargs.pop("config_file_path", None)
+
+        # Backward-compat: jwt_client_id_field was renamed to virtual_key_claim_field
+        if "jwt_client_id_field" in kwargs:
+            if "virtual_key_claim_field" not in kwargs:
+                kwargs["virtual_key_claim_field"] = kwargs.pop("jwt_client_id_field")
+            else:
+                kwargs.pop("jwt_client_id_field")
 
         # get the attribute names for this Pydantic model
         allowed_keys = LiteLLM_JWTAuth.__annotations__.keys()
