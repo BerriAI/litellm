@@ -13,7 +13,7 @@ model/{model_id}/update - PATCH endpoint for model update.
 import asyncio
 import datetime
 import json
-from typing import Dict, List, Literal, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
@@ -39,6 +39,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
+    _refresh_cached_team,
     team_model_add,
     team_model_delete,
 )
@@ -592,6 +593,98 @@ async def _get_team_deployments(
     return result
 
 
+async def _get_team_public_model_names(
+    team_id: str,
+    prisma_client: PrismaClient,
+) -> Set[str]:
+    """
+    Public model names currently backed by a deployment in the team.
+
+    Called on delete (after the deployment row is removed) so a public name that is
+    load-balanced across several deployments stays in team.models while a replica
+    still serves it.
+    """
+    deployments = await _get_team_deployments(team_id, prisma_client)
+    public_names: Set[str] = set()
+    for row in deployments:
+        model_info = row.model_info
+        if isinstance(model_info, str):
+            try:
+                model_info = json.loads(model_info)
+            except (TypeError, ValueError):
+                continue
+        if isinstance(model_info, dict):
+            public_name = model_info.get("team_public_model_name")
+            if public_name:
+                public_names.add(public_name)
+    return public_names
+
+
+async def _remove_unbacked_team_models(
+    model_params: Deployment,
+    prisma_client: PrismaClient,
+    user_api_key_cache: Any,
+    proxy_logging_obj: Any,
+) -> None:
+    """
+    Strip a deleted team model's public name(s) from team.models and refresh the cache.
+
+    Must be called after the deployment row is deleted: a public name is removed only
+    when no remaining team deployment still backs it, so a load-balanced replica isn't
+    revoked while siblings serve it, and concurrent deletes can't leave a ghost.
+    """
+    team_id = model_params.model_info.team_id
+    if team_id is None:
+        return
+
+    # BYOK models carry an internal `model_name_{team_id}_{uuid}` name that can never
+    # be a team alias value, so skip the full litellm_modeltable scan for them.
+    removed_model_aliases: List[Tuple[str, str]] = []
+    if not model_params.model_name.startswith(f"model_name_{team_id}_"):
+        removed_model_aliases = await delete_team_model_alias(
+            public_model_name=model_params.model_name,
+            prisma_client=prisma_client,
+        )
+    names_to_remove = {
+        alias
+        for alias_team_id, alias in removed_model_aliases
+        if alias_team_id == team_id
+    }
+    if model_params.model_info.team_public_model_name is not None:
+        names_to_remove.add(model_params.model_info.team_public_model_name)
+
+    if names_to_remove:
+        names_to_remove -= await _get_team_public_model_names(
+            team_id=team_id, prisma_client=prisma_client
+        )
+
+    if not names_to_remove:
+        return
+
+    existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        where={"team_id": team_id}
+    )
+    if existing_team_row is None:
+        return
+
+    updated_team_row = await prisma_client.db.litellm_teamtable.update(
+        where={"team_id": team_id},
+        data={
+            "models": [
+                model
+                for model in existing_team_row.models
+                if model not in names_to_remove
+            ]
+        },
+        include={"object_permission": True},  # type: ignore
+    )
+    await _refresh_cached_team(
+        team_row=updated_team_row,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+
 async def _update_existing_team_model_assignment(
     team_id: str,
     public_model_name: str,
@@ -831,7 +924,9 @@ async def delete_model(
             llm_router,
             premium_user,
             prisma_client,
+            proxy_logging_obj,
             store_model_in_db,
+            user_api_key_cache,
         )
 
         if prisma_client is None:
@@ -859,35 +954,6 @@ async def delete_model(
             premium_user=premium_user,
         )
 
-        # delete team model alias
-        if model_params.model_info.team_id is not None:
-            removed_model_aliases = await delete_team_model_alias(
-                public_model_name=model_params.model_name,
-                prisma_client=prisma_client,
-            )
-
-            valid_team_model_aliases = [
-                model
-                for team_id, model in removed_model_aliases
-                if team_id == model_params.model_info.team_id
-            ]
-
-            ## UPDATE TEAM TO NOT LIST MODEL ##
-            existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": model_params.model_info.team_id}
-            )
-            if existing_team_row is not None:
-                existing_team_row.models = [
-                    model
-                    for model in existing_team_row.models
-                    if model not in valid_team_model_aliases
-                ]
-
-                await prisma_client.db.litellm_teamtable.update(
-                    where={"team_id": model_params.model_info.team_id},
-                    data={"models": existing_team_row.models},
-                )
-
         # update DB
         if store_model_in_db is True:
             """
@@ -908,6 +974,15 @@ async def delete_model(
             ## DELETE FROM ROUTER ##
             if llm_router is not None:
                 llm_router.delete_deployment(id=model_info.id)
+
+            # Runs after the row delete so the sibling check sees post-delete state.
+            if model_params.model_info.team_id is not None:
+                await _remove_unbacked_team_models(
+                    model_params=model_params,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
 
             ## CREATE AUDIT LOG ##
             asyncio.create_task(
