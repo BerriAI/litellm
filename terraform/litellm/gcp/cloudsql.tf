@@ -26,6 +26,8 @@ resource "google_sql_database_instance" "writer" {
     disk_size         = 20
     disk_autoresize   = true
 
+    user_labels = local.labels
+
     backup_configuration {
       enabled                        = true
       point_in_time_recovery_enabled = true
@@ -70,6 +72,8 @@ resource "google_sql_database_instance" "reader" {
     availability_type = "ZONAL"
     disk_autoresize   = true
 
+    user_labels = local.labels
+
     ip_configuration {
       ipv4_enabled    = false
       private_network = google_compute_network.this.id
@@ -106,6 +110,7 @@ resource "google_sql_user" "app" {
 
 resource "google_secret_manager_secret" "db_password" {
   secret_id = "${local.name}-db-password"
+  labels    = local.labels
   replication {
     auto {}
   }

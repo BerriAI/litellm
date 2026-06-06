@@ -44,48 +44,61 @@ resource "aws_cloudwatch_log_group" "migrations" {
 # HOST/PORT/USER/NAME plus an IAM-signed token, so no DB password is needed
 # in the task definition.
 locals {
-  # OTel v2 is wired on by default; the proxy stays inert until
-  # otel_endpoint is set (no exporter is configured). When an endpoint is
-  # supplied, OTEL_HEADERS is sourced from Secrets Manager (otel_headers env
-  # injection lives under shared_secrets).
-  otel_enabled = var.otel_endpoint != ""
-  otel_env = local.otel_enabled ? [
+  # OTel v2 is opt-in and gated on otel_endpoint, matching the GCP stack.
+  # When set, LITELLM_OTEL_V2 flips on alongside the OTEL_* block, with
+  # OTEL_SERVICE_NAME stamped per component so spans land tagged with the
+  # right hop. Any OTEL_* key set in *_extra_env wins over the default for
+  # that service (ECS allows duplicates but last-wins is undefined, so we
+  # filter here for the same predictable behavior GCP gets from Cloud Run's
+  # hard duplicate-rejection).
+  otel_enabled          = var.otel_endpoint != ""
+  otel_environment_name = var.otel_environment_name != "" ? var.otel_environment_name : var.env
+  otel_shared_env = local.otel_enabled ? [
     { name = "LITELLM_OTEL_V2", value = "true" },
     { name = "OTEL_EXPORTER", value = var.otel_exporter },
     { name = "OTEL_ENDPOINT", value = var.otel_endpoint },
-    { name = "OTEL_SERVICE_NAME", value = var.otel_service_name != "" ? var.otel_service_name : local.name },
-    { name = "OTEL_ENVIRONMENT_NAME", value = var.env },
+    { name = "OTEL_ENVIRONMENT_NAME", value = local.otel_environment_name },
+    { name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", value = var.otel_capture_message_content },
   ] : []
+  gateway_otel_env_raw = concat(local.otel_shared_env, local.otel_enabled ? [
+    { name = "OTEL_SERVICE_NAME", value = "${local.name}-gateway" },
+  ] : [])
+  backend_otel_env_raw = concat(local.otel_shared_env, local.otel_enabled ? [
+    { name = "OTEL_SERVICE_NAME", value = "${local.name}-backend" },
+  ] : [])
+  gateway_otel_env = [
+    for e in local.gateway_otel_env_raw : e if !contains(keys(var.gateway_extra_env), e.name)
+  ]
+  backend_otel_env = [
+    for e in local.backend_otel_env_raw : e if !contains(keys(var.backend_extra_env), e.name)
+  ]
   otel_secrets = local.otel_enabled && var.otel_headers_secret_arn != "" ? [
     { name = "OTEL_HEADERS", valueFrom = var.otel_headers_secret_arn },
   ] : []
 
-  shared_env = concat(
-    [
-      { name = "IAM_TOKEN_DB_AUTH", value = "true" },
-      { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
-      { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this.port) },
-      { name = "DATABASE_USER", value = var.db_username },
-      { name = "DATABASE_NAME", value = var.db_name },
-      { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this.reader_endpoint },
-      { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this.port) },
-      { name = "REDIS_HOST", value = aws_elasticache_replication_group.this.primary_endpoint_address },
-      { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this.port) },
-      # transit_encryption_enabled = true on the replication group means the
-      # proxy must connect via rediss://. _redis.get_redis_url_from_environment
-      # honors REDIS_SSL to flip the scheme.
-      { name = "REDIS_SSL", value = "true" },
-      # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
-      # (e.g. cache backend, request log archival, /files passthrough).
-      { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
-      { name = "S3_REGION_NAME", value = var.region },
-      # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
-      # AWS_REGION. Set both for compatibility.
-      { name = "AWS_REGION", value = var.region },
-      { name = "AWS_REGION_NAME", value = var.region },
-    ],
-    local.otel_env,
-  )
+  shared_env = [
+    { name = "IAM_TOKEN_DB_AUTH", value = "true" },
+    { name = "DATABASE_HOST", value = aws_rds_cluster.this.endpoint },
+    { name = "DATABASE_PORT", value = tostring(aws_rds_cluster.this.port) },
+    { name = "DATABASE_USER", value = var.db_username },
+    { name = "DATABASE_NAME", value = var.db_name },
+    { name = "DATABASE_HOST_READ_REPLICA", value = aws_rds_cluster.this.reader_endpoint },
+    { name = "DATABASE_PORT_READ_REPLICA", value = tostring(aws_rds_cluster.this.port) },
+    { name = "REDIS_HOST", value = aws_elasticache_replication_group.this.primary_endpoint_address },
+    { name = "REDIS_PORT", value = tostring(aws_elasticache_replication_group.this.port) },
+    # transit_encryption_enabled = true on the replication group means the
+    # proxy must connect via rediss://. _redis.get_redis_url_from_environment
+    # honors REDIS_SSL to flip the scheme.
+    { name = "REDIS_SSL", value = "true" },
+    # S3 bucket — referenced from proxy_config via os.environ/S3_BUCKET_NAME
+    # (e.g. cache backend, request log archival, /files passthrough).
+    { name = "S3_BUCKET_NAME", value = aws_s3_bucket.this.bucket },
+    { name = "S3_REGION_NAME", value = var.region },
+    # boto3 inside generate_iam_auth_token reads AWS_REGION_NAME first, then
+    # AWS_REGION. Set both for compatibility.
+    { name = "AWS_REGION", value = var.region },
+    { name = "AWS_REGION_NAME", value = var.region },
+  ]
 
   shared_secrets = concat(
     [
@@ -184,6 +197,7 @@ resource "aws_ecs_task_definition" "gateway" {
         portMappings = [{ containerPort = 4000, protocol = "tcp" }]
         environment = concat(
           local.shared_env,
+          local.gateway_otel_env,
           local.gateway_extra_env_list,
           local.proxy_config_env,
         )
@@ -269,6 +283,7 @@ resource "aws_ecs_task_definition" "backend" {
         environment = concat(
           local.shared_env,
           local.backend_default_env,
+          local.backend_otel_env,
           local.backend_extra_env_list,
           local.proxy_config_env,
         )

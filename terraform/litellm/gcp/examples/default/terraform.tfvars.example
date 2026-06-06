@@ -77,9 +77,11 @@ env    = "stage"
 # }
 
 # ---------- OpenTelemetry v2 ----------
-# LITELLM_OTEL_V2=true is always set on the gateway and backend; nothing
-# exports until you point them at a collector. To enable export, set
-# otel_endpoint (and optionally otel_exporter, otel_headers_secret,
-# otel_environment_name, otel_capture_message_content) directly on the
-# `module "litellm"` block in main.tf — these aren't wrapper vars in this
-# example. Full docs in ../../variables.tf.
+# OTel is gated on otel_endpoint: empty (default) and nothing is added to
+# the container env; set it and both gateway and backend gain
+# LITELLM_OTEL_V2=true plus the OTEL_* block (with OTEL_SERVICE_NAME
+# stamped per component). These knobs aren't surfaced as wrapper vars in
+# this example; set them directly on the `module "litellm"` block in
+# main.tf (otel_endpoint, otel_exporter, otel_environment_name,
+# otel_capture_message_content, otel_headers_secret). Full docs in
+# ../../variables.tf.

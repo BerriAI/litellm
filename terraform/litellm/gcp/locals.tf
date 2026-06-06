@@ -8,6 +8,19 @@ locals {
   # the stack can reference local.name.
   name = "${var.tenant}-litellm-${var.env}"
 
+  # Mirrors the AWS stack's local.tags: the module stamps its own
+  # `litellm-stack` / `managed-by` labels onto every label-supporting
+  # resource (Cloud Run, Cloud SQL, Memorystore, Secret Manager, GCS) and
+  # merges var.labels on top. GCP label keys/values are lower-kebab/snake
+  # only, so the key is `litellm-stack`, not AWS's `litellm:stack`.
+  labels = merge(
+    {
+      "litellm-stack" = local.name
+      "managed-by"    = "terraform"
+    },
+    var.labels,
+  )
+
   gateway_path_prefixes = [
     "/v1/chat/*", "/chat/*",
     "/v1/completions*", "/completions*",

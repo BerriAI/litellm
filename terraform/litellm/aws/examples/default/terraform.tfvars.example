@@ -81,10 +81,11 @@ env    = "stage"
 # }
 
 # ---------- OpenTelemetry v2 ----------
-# Set otel_endpoint to a non-empty value to enable OTel v2 on gateway and
-# backend (LITELLM_OTEL_V2=true + OTEL_EXPORTER/OTEL_ENDPOINT/OTEL_SERVICE_NAME/
-# OTEL_ENVIRONMENT_NAME). Empty disables it entirely.
-# otel_endpoint = "http://otel-collector.internal:4318"
-# otel_exporter = "otlp_http"   # otlp_grpc, console
-# otel_service_name = ""         # defaults to "<tenant>-litellm-<env>"
-# otel_headers_secret_arn = "arn:aws:secretsmanager:us-west-2:111122223333:secret:honeycomb-otel-headers-AbCdEf"
+# OTel is gated on otel_endpoint: empty (default) and nothing is added to
+# the container env; set it and both gateway and backend gain
+# LITELLM_OTEL_V2=true plus the OTEL_* block (with OTEL_SERVICE_NAME
+# stamped per component). The knobs aren't surfaced as wrapper vars in
+# this example; set them directly on the `module "litellm"` block in
+# main.tf (otel_endpoint, otel_exporter, otel_environment_name,
+# otel_capture_message_content, otel_headers_secret_arn). Full docs in
+# ../../variables.tf.

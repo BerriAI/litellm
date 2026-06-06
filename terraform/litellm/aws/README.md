@@ -124,17 +124,19 @@ aws secretsmanager create-secret \
 
 ### Observability (OpenTelemetry v2)
 
-Set `otel_endpoint` and OTel v2
-(https://docs.litellm.ai/docs/observability/opentelemetry_v2) turns on for
-both gateway and backend; the stack flips `LITELLM_OTEL_V2=true` and wires
-`OTEL_EXPORTER` / `OTEL_ENDPOINT` / `OTEL_SERVICE_NAME` /
-`OTEL_ENVIRONMENT_NAME` into the shared env block. Leave it empty and no OTel
-env vars are added.
+OTel v2 (https://docs.litellm.ai/docs/observability/opentelemetry_v2) is
+opt-in and gated entirely on `otel_endpoint`. Empty (default) and nothing
+OTel-related is added to the container env. Set it and both gateway and
+backend gain `LITELLM_OTEL_V2=true` plus the `OTEL_*` block, with
+`OTEL_SERVICE_NAME` stamped per component (`${tenant}-litellm-${env}-gateway`
+and `-backend`) so spans land tagged with the right hop. Any `OTEL_*` key
+set in `gateway_extra_env` / `backend_extra_env` overrides the default for
+that service.
 
 ```hcl
-otel_endpoint     = "http://otel-collector.internal:4318"
-otel_exporter     = "otlp_http"   # otlp_grpc, console
-otel_service_name = ""             # defaults to the stack name
+otel_endpoint         = "http://otel-collector.internal:4318"
+otel_exporter         = "otlp_http"   # otlp_grpc, console
+otel_environment_name = "prod"        # defaults to var.env
 ```
 
 For collectors that require an auth header, store the comma-separated
@@ -145,6 +147,11 @@ For collectors that require an auth header, store the comma-separated
 ```hcl
 otel_headers_secret_arn = "arn:aws:secretsmanager:us-west-2:111122223333:secret:honeycomb-otel-headers-AbCdEf"
 ```
+
+`OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` defaults to
+`no_content`; flip `otel_capture_message_content = "prompt_and_completion"`
+only after auditing what lands in the backend, since prompts and
+completions are typically sensitive.
 
 Vendor presets (Arize, Phoenix, Langfuse OTel, Weave, Langtrace, Levo,
 AgentOps) live under `proxy_config.litellm_settings.callbacks` and are

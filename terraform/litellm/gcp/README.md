@@ -174,10 +174,15 @@ you need a pinned version, edit `local.gateway_extra_secret_kv` in
 
 ### OpenTelemetry v2
 
-`LITELLM_OTEL_V2=true` is wired into both the gateway and backend by default
-(see [OpenTelemetry v2 docs](https://docs.litellm.ai/docs/observability/opentelemetry_v2)).
-The flag is dormant until `otel_endpoint` is non-empty; with an empty
-endpoint nothing exports and the integration is effectively off.
+OTel v2 (https://docs.litellm.ai/docs/observability/opentelemetry_v2) is
+opt-in and gated entirely on `otel_endpoint`. Empty (default) and nothing
+OTel-related lands in the container env. Set it and both gateway and
+backend gain `LITELLM_OTEL_V2=true` plus the `OTEL_*` block, with
+`OTEL_SERVICE_NAME` stamped per component (`${tenant}-litellm-${env}-gateway`
+and `-backend`) so spans land tagged with the right hop. Any `OTEL_*` key
+set in `gateway_extra_env` / `backend_extra_env` overrides the default for
+that service (Cloud Run rejects duplicate env names, so the override is
+predictable).
 
 ```hcl
 otel_endpoint         = "https://otel.example.com:4318"
@@ -186,18 +191,18 @@ otel_environment_name = "prod"       # default: var.env
 otel_headers_secret   = "projects/my-gcp-project/secrets/otel-headers"
 ```
 
-`OTEL_SERVICE_NAME` is set per component (`${tenant}-litellm-${env}-gateway`
-and `-backend`) so spans land tagged with the right hop. `OTEL_HEADERS`
-is wired as a Secret Manager `secret_key_ref` since it typically carries
-the collector's auth token; create the secret with the literal header
-string, e.g. `Authorization=Bearer <token>`. Any `OTEL_*` key set in
-`gateway_extra_env` / `backend_extra_env` overrides the default for that
-service.
+`OTEL_HEADERS` is wired as a Secret Manager `secret_key_ref` since it
+typically carries the collector's auth token; create the secret with the
+literal header string, e.g. `Authorization=Bearer <token>`.
 
 `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT` defaults to
-`no_content` — flip `otel_capture_message_content =
-"prompt_and_completion"` only after auditing what lands in the backend,
-since prompts and completions are typically sensitive.
+`no_content`; flip `otel_capture_message_content = "prompt_and_completion"`
+only after auditing what lands in the backend, since prompts and
+completions are typically sensitive.
+
+Behavior matches the AWS stack 1:1; the only naming differences are
+`otel_headers_secret` (a Secret Manager resource ID) vs AWS's
+`otel_headers_secret_arn` (a Secrets Manager ARN).
 
 ## Tenant deployment
 
@@ -332,8 +337,14 @@ module "litellm" {
 ```
 
 Both the default `google` and `google-beta` configs are inherited by the
-module automatically through the call — declare both in the caller.
-Resource labels are controlled by the module's `labels` input.
+module automatically through the call; declare both in the caller.
+
+Labels: the module stamps its own `litellm-stack` and `managed-by` labels
+onto every label-supporting resource (Cloud Run services and the
+migrations job, Cloud SQL writer and reader, Memorystore, Secret Manager
+entries, GCS buckets, the LB global address and forwarding rules) and
+merges `var.labels` on top. Use the `labels` input for per-deployment
+labels; mirrors the AWS stack's `tags` input.
 
 **`for_each` shares one provider config.** The module's `versions.tf` declares
 `google` / `google-beta` *without* `configuration_aliases`, so it only ever

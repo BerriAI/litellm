@@ -463,17 +463,20 @@ variable "log_retention_days" {
 #
 # https://docs.litellm.ai/docs/observability/opentelemetry_v2
 #
-# Setting otel_endpoint to a non-empty value turns OTel v2 on for both gateway
-# and backend (LITELLM_OTEL_V2=true plus OTEL_EXPORTER/OTEL_ENDPOINT/
-# OTEL_SERVICE_NAME/OTEL_ENVIRONMENT_NAME are added to shared_env). Empty
-# endpoint = nothing added to the container env.
+# OTel v2 is opt-in and gated entirely on otel_endpoint, matching the GCP
+# stack. Leave otel_endpoint = "" and nothing OTel-related lands in the
+# container env. Set it and the gateway and backend gain LITELLM_OTEL_V2=true
+# plus the OTEL_* block (per-component OTEL_SERVICE_NAME, exporter, endpoint,
+# environment name, capture-content), with OTEL_HEADERS sourced from
+# otel_headers_secret_arn when provided.
 
 variable "otel_endpoint" {
   description = <<-EOT
-    OTLP collector endpoint (sets OTEL_ENDPOINT / OTEL_EXPORTER_OTLP_ENDPOINT).
-    Empty disables OTel export. Point at any OTLP-compatible backend
-    (self-hosted collector, Grafana Tempo, Honeycomb, Datadog, etc.). Example:
-    "http://otel-collector.internal:4318" for OTLP/HTTP.
+    OTLP collector endpoint (sets OTEL_ENDPOINT). Empty disables OTel
+    entirely (no LITELLM_OTEL_V2, no OTEL_* env). Point at any
+    OTLP-compatible backend (self-hosted collector, Grafana Tempo,
+    Honeycomb, Datadog). Example: "http://otel-collector.internal:4318"
+    for OTLP/HTTP.
   EOT
   type        = string
   default     = ""
@@ -494,13 +497,30 @@ variable "otel_exporter" {
   }
 }
 
-variable "otel_service_name" {
+variable "otel_environment_name" {
   description = <<-EOT
-    OTEL_SERVICE_NAME resource attribute. Defaults to the stack name
-    (`<tenant>-litellm-<env>`).
+    Value for OTEL_ENVIRONMENT_NAME (becomes `deployment.environment` on
+    every span). Defaults to var.env when empty so spans land tagged with
+    the deployment env without extra wiring.
   EOT
   type        = string
   default     = ""
+}
+
+variable "otel_capture_message_content" {
+  description = <<-EOT
+    Value for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT. Default
+    `no_content` matches the litellm default; flip to `prompt_and_completion`
+    only when you've audited what's about to land in your observability
+    backend, because raw prompts/completions are typically sensitive.
+  EOT
+  type        = string
+  default     = "no_content"
+
+  validation {
+    condition     = contains(["no_content", "prompt_and_completion"], var.otel_capture_message_content)
+    error_message = "otel_capture_message_content must be one of: no_content, prompt_and_completion."
+  }
 }
 
 variable "otel_headers_secret_arn" {

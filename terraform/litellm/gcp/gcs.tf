@@ -18,7 +18,7 @@ resource "google_storage_bucket" "this" {
 
   public_access_prevention = "enforced"
 
-  labels = var.labels
+  labels = local.labels
 }
 
 # Cloud Run runtime SA gains object admin on this bucket only.
@@ -48,7 +48,7 @@ resource "google_storage_bucket" "proxy_config" {
 
   public_access_prevention = "enforced"
 
-  labels = var.labels
+  labels = local.labels
 }
 
 resource "google_storage_bucket_object" "proxy_config" {

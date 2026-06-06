@@ -14,7 +14,8 @@ locals {
 }
 
 resource "google_compute_global_address" "lb" {
-  name = "${local.name}-lb-ip"
+  name   = "${local.name}-lb-ip"
+  labels = local.labels
 }
 
 # Serverless NEGs — one per Cloud Run service.
@@ -148,6 +149,7 @@ resource "google_compute_global_forwarding_rule" "http" {
   load_balancing_scheme = "EXTERNAL_MANAGED"
   ip_address            = google_compute_global_address.lb.address
   target                = google_compute_target_http_proxy.this.id
+  labels                = local.labels
 }
 
 # ---------- HTTPS (gated on var.lb_domains) ----------
@@ -193,4 +195,5 @@ resource "google_compute_global_forwarding_rule" "https" {
   load_balancing_scheme = "EXTERNAL_MANAGED"
   ip_address            = google_compute_global_address.lb.address
   target                = google_compute_target_https_proxy.this[0].id
+  labels                = local.labels
 }

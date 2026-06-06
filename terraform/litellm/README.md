@@ -163,6 +163,39 @@ against the backend image:
 Run the migration job once after the first `terraform apply` and before the
 gateway/backend services start serving traffic.
 
+## Feature parity between stacks
+
+The two modules expose the same conceptual surface; concrete inputs differ
+only where the underlying cloud forces it.
+
+| Capability                       | AWS input(s)                                            | GCP input(s)                                              |
+| -------------------------------- | ------------------------------------------------------- | --------------------------------------------------------- |
+| Tenant + env naming              | `tenant`, `env`                                         | `tenant`, `env`                                           |
+| Pre-shared master key / license  | `litellm_master_key`, `litellm_license`                 | `litellm_master_key`, `litellm_license`                   |
+| UI admin password                | `ui_password`                                           | `ui_password`                                             |
+| Per-deployment tags / labels     | `tags` (`map(string)`)                                  | `labels` (`map(string)`)                                  |
+| TLS posture                      | `acm_certificate_arn`, `allow_plaintext_alb`            | `lb_domains`, `allow_plaintext_lb`                        |
+| Force destroy of object store    | `s3_force_destroy`                                      | `gcs_force_destroy`                                       |
+| Database deletion protection     | `skip_final_snapshot`                                   | `cloudsql_deletion_protection`                            |
+| `proxy_config` (typed YAML map)  | `proxy_config`                                          | `proxy_config`                                            |
+| Extra plain env per component    | `gateway_extra_env`, `backend_extra_env`                | `gateway_extra_env`, `backend_extra_env`                  |
+| Extra secret-backed env          | `gateway_extra_secrets`, `backend_extra_secrets` (ARNs) | `gateway_extra_secrets`, `backend_extra_secrets` (resource IDs) |
+| Uvicorn `--workers` on gateway   | `gateway_num_workers`                                   | `gateway_num_workers`                                     |
+| OpenTelemetry v2 (opt-in)        | `otel_endpoint`, `otel_exporter`, `otel_environment_name`, `otel_capture_message_content`, `otel_headers_secret_arn` | `otel_endpoint`, `otel_exporter`, `otel_environment_name`, `otel_capture_message_content`, `otel_headers_secret` |
+
+Each module stamps its own stack-identity tag (`litellm:stack` on AWS,
+`litellm-stack` on GCP — GCP label keys forbid colons) plus
+`managed-by = "terraform"` onto every taggable / labelable resource and
+merges `var.tags` / `var.labels` on top. Provider `default_tags` on AWS
+merge on top of all of these.
+
+OTel is opt-in on both clouds: leave `otel_endpoint` empty and nothing
+OTel-related is added to the container env; set it and both gateway and
+backend get `LITELLM_OTEL_V2=true` plus the full `OTEL_*` block, with
+`OTEL_SERVICE_NAME` stamped per component
+(`<tenant>-litellm-<env>-gateway` and `-backend`). Any `OTEL_*` key set
+in `gateway_extra_env` / `backend_extra_env` wins for that service.
+
 ## What's not included
 
 - TLS certificates / custom domains. Both stacks expose plain-HTTP load
@@ -172,7 +205,8 @@ gateway/backend services start serving traffic.
   backend block to `versions.tf` when graduating to a team environment.
 - Observability beyond the cloud provider's defaults (CloudWatch logs on
   AWS, Cloud Logging on GCP). Wire your own Prometheus / Datadog / Langfuse
-  via the `*_extra_env` variables.
+  via the `*_extra_env` variables, or turn on OTel v2 (see the parity
+  table above).
 
 ## HCP Terraform no-code (1-click) deploy
 

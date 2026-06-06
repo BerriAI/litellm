@@ -30,11 +30,9 @@ variable "env" {
 }
 
 variable "labels" {
-  description = "Resource labels merged into every label-supporting resource."
+  description = "Per-deployment labels applied to every label-supporting resource the module creates, on top of the module's own `litellm-stack` / `managed-by` labels. Mirrors the AWS stack's `tags` input."
   type        = map(string)
-  default = {
-    "managed-by" = "terraform"
-  }
+  default     = {}
 }
 
 # ---------- Tenant-supplied secrets ----------
@@ -169,6 +167,17 @@ variable "gateway_memory" {
   description = "Cloud Run memory per gateway instance."
   type        = string
   default     = "4Gi"
+}
+
+variable "gateway_num_workers" {
+  description = "uvicorn worker processes per gateway instance (passed as --workers). Size relative to gateway_cpu — uvicorn recommends ~(2 × vCPU) + 1 for CPU-bound work. Mirrors the AWS stack's gateway_num_workers."
+  type        = number
+  default     = 1
+
+  validation {
+    condition     = var.gateway_num_workers >= 1
+    error_message = "gateway_num_workers must be >= 1."
+  }
 }
 
 # Cloud Run autoscales out of the box (request-rate driven). The min/max
@@ -411,19 +420,20 @@ variable "proxy_config" {
 #
 # https://docs.litellm.ai/docs/observability/opentelemetry_v2
 #
-# OTel v2 is wired into the gateway and backend by default (LITELLM_OTEL_V2=true
-# is added to shared_env) but is dormant until otel_endpoint is non-empty. Leave
-# otel_endpoint = "" to ship without any OTel exporter; the proxy will boot with
-# the flag flipped on but no destination configured, which is functionally
-# equivalent to "off" because nothing is exported.
+# OTel v2 is opt-in and gated entirely on otel_endpoint, matching the AWS
+# stack. Leave otel_endpoint = "" and nothing OTel-related is added to the
+# container env. Set it and the gateway/backend gain LITELLM_OTEL_V2=true
+# plus the OTEL_* block (per-component OTEL_SERVICE_NAME, exporter, endpoint,
+# environment name, capture-content), with OTEL_HEADERS sourced from
+# otel_headers_secret when provided.
 
 variable "otel_endpoint" {
   description = <<-EOT
     OTLP collector URL (e.g. https://otel.example.com:4318 for HTTP, or
-    your collector's :4317 for gRPC). When empty the gateway/backend boot
-    with LITELLM_OTEL_V2=true but no exporter wired in, which is
-    functionally off. When set, OTEL_EXPORTER and OTEL_ENDPOINT are
-    injected and spans ship to the collector.
+    your collector's :4317 for gRPC). Empty disables OTel entirely (no
+    LITELLM_OTEL_V2, no OTEL_* env). When set, LITELLM_OTEL_V2=true plus
+    OTEL_EXPORTER / OTEL_ENDPOINT are injected and spans ship to the
+    collector.
   EOT
   type        = string
   default     = ""

@@ -24,27 +24,29 @@ locals {
     { name = "REDIS_SSL_CA_CERTS", value = "/tmp/redis-ca.pem" },
     { name = "REDIS_CA_PEM_B64", value = local.redis_ca_pem_b64 },
     { name = "GCS_BUCKET_NAME", value = google_storage_bucket.this.name },
-    # OTel v2 master switch. Dormant until otel_endpoint is set; see
-    # otel_env below and the otel_endpoint variable for the gate.
-    { name = "LITELLM_OTEL_V2", value = "true" },
   ]
 
+  # OTel v2 is opt-in and gated on otel_endpoint, matching the AWS stack —
+  # nothing OTel-related is added to the container env until an endpoint is
+  # set. LITELLM_OTEL_V2 flips on alongside the OTEL_* block so the proxy
+  # never boots the instrumentation with no exporter wired in.
   otel_enabled          = var.otel_endpoint != ""
   otel_environment_name = var.otel_environment_name != "" ? var.otel_environment_name : var.env
-  otel_capture_kv       = local.otel_enabled ? [{ name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", value = var.otel_capture_message_content }] : []
   otel_shared_endpoint_kv = local.otel_enabled ? [
+    { name = "LITELLM_OTEL_V2", value = "true" },
     { name = "OTEL_EXPORTER", value = var.otel_exporter },
     { name = "OTEL_ENDPOINT", value = var.otel_endpoint },
     { name = "OTEL_ENVIRONMENT_NAME", value = local.otel_environment_name },
+    { name = "OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", value = var.otel_capture_message_content },
   ] : []
   # OTel defaults are filtered out when the same key appears in
   # *_extra_env, so a caller-supplied OTEL_SERVICE_NAME (or any other
   # OTEL_*) takes precedence without colliding at Cloud Run apply time
   # (Cloud Run rejects duplicate env var names).
-  gateway_otel_env_kv_raw = concat(local.otel_shared_endpoint_kv, local.otel_capture_kv, local.otel_enabled ? [
+  gateway_otel_env_kv_raw = concat(local.otel_shared_endpoint_kv, local.otel_enabled ? [
     { name = "OTEL_SERVICE_NAME", value = "${local.name}-gateway" },
   ] : [])
-  backend_otel_env_kv_raw = concat(local.otel_shared_endpoint_kv, local.otel_capture_kv, local.otel_enabled ? [
+  backend_otel_env_kv_raw = concat(local.otel_shared_endpoint_kv, local.otel_enabled ? [
     { name = "OTEL_SERVICE_NAME", value = "${local.name}-backend" },
   ] : [])
   gateway_otel_env_kv = [
@@ -53,7 +55,7 @@ locals {
   backend_otel_env_kv = [
     for e in local.backend_otel_env_kv_raw : e if !contains(keys(var.backend_extra_env), e.name)
   ]
-  otel_env_secrets = var.otel_headers_secret != "" ? [
+  otel_env_secrets = local.otel_enabled && var.otel_headers_secret != "" ? [
     { name = "OTEL_HEADERS", secret = var.otel_headers_secret, version = "latest" },
   ] : []
 
@@ -109,7 +111,7 @@ locals {
   gateway_args = join(" && ", concat(
     local.redis_ca_fragment,
     local.database_url_fragment,
-    ["exec uvicorn gateway.main:app --host 0.0.0.0 --port 4000"],
+    ["exec uvicorn gateway.main:app --host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"],
   ))
 
   backend_args = join(" && ", concat(
@@ -139,6 +141,7 @@ resource "google_cloud_run_v2_service" "gateway" {
   name     = "${local.name}-gateway"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels   = local.labels
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -251,6 +254,7 @@ resource "google_cloud_run_v2_service" "backend" {
   name     = "${local.name}-backend"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels   = local.labels
 
   template {
     service_account                  = google_service_account.runtime.email
@@ -365,6 +369,7 @@ resource "google_cloud_run_v2_service" "ui" {
   name     = "${local.name}-ui"
   location = var.region
   ingress  = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  labels   = local.labels
 
   template {
     service_account                  = google_service_account.ui_runtime.email
@@ -438,6 +443,7 @@ resource "google_cloud_run_v2_service_iam_member" "ui_allusers" {
 resource "google_cloud_run_v2_job" "migrations" {
   name     = "${local.name}-migrations"
   location = var.region
+  labels   = local.labels
 
   template {
     template {
