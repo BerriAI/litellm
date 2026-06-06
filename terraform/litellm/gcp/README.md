@@ -25,10 +25,14 @@ and `litellm-migrations` (slim image used only by the one-off Cloud Run
 Job — runs `prisma migrate deploy` against the writer DB and exits).
 Bump them together when bumping LiteLLM.
 
-Cloud Run only accepts images from Artifact Registry, `[region.]gcr.io`,
-or `docker.io` — `ghcr.io` URIs are rejected at apply time. The four
-images are published to GHCR upstream, so any real deploy needs an
-Artifact Registry remote repository pointed at GHCR.
+**Required override.** The `image_registry` default (`ghcr.io/berriai`)
+does **not** work as-is — Cloud Run only accepts images from Artifact
+Registry, `[region.]gcr.io`, or `docker.io`, and rejects `ghcr.io` URIs
+at apply time. Every deploy (including HCP Terraform 1-click) must
+supply either `image_registry` pointed at an Artifact Registry remote
+repo backed by GHCR, or full per-component `*_image` URIs against
+images you've already mirrored. The default is present only so
+`terraform plan` succeeds during local iteration.
 
 **One-time setup (per project):** create a remote repo and let Cloud Run
 pull through it.

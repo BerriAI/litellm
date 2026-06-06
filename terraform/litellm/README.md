@@ -173,3 +173,44 @@ gateway/backend services start serving traffic.
 - Observability beyond the cloud provider's defaults (CloudWatch logs on
   AWS, Cloud Logging on GCP). Wire your own Prometheus / Datadog / Langfuse
   via the `*_extra_env` variables.
+
+## HCP Terraform no-code (1-click) deploy
+
+Both stacks are publishable as no-code modules in HCP Terraform's private
+registry. The end-user flow is: open the no-code launch URL, fill in a
+few inputs, hit *Create workspace*, and HCP runs plan/apply against your
+cloud account using a variable-set of credentials (static keys or
+dynamic-credentials OIDC).
+
+Required overrides the launcher must supply per stack:
+
+- **AWS** (`terraform/litellm/aws`): `region`, `azs`, `tenant`, `env`.
+  The image vars (`gateway_image`, `backend_image`, `ui_image`,
+  `migrations_image`) can be left at their defaults — the GHCR images
+  are anonymous-readable and ECS Fargate pulls them without extra
+  credentials.
+
+- **GCP** (`terraform/litellm/gcp`): `project`, `tenant`, `env`, **and
+  one of**:
+  - `image_registry` pointed at an Artifact Registry **remote** repository
+    backed by `https://ghcr.io` (e.g.
+    `us-central1-docker.pkg.dev/<project>/litellm/berriai`), so Cloud Run
+    pulls the four upstream `litellm-*` images through it; or
+  - all four per-component `*_image` URIs pointing at images mirrored
+    into a regular Artifact Registry repo.
+
+  The defaults (`ghcr.io/berriai`) cause Cloud Run admission to reject
+  the service spec — Cloud Run only authenticates against Artifact
+  Registry, `[region.]gcr.io`, or `docker.io`. See
+  `terraform/litellm/gcp/README.md#image-pulls` for the
+  `gcloud artifacts repositories create … --mode=remote-repository`
+  command that sets up the passthrough repo (one-time, per project).
+
+What still requires a manual step regardless of HCP no-code:
+
+- The one-off migration task. The stacks auto-run it via `local-exec`
+  during `terraform apply`, but that requires the `aws` / `gcloud` CLI
+  on the runner. HCP-hosted runners don't have them; use an HCP agent
+  pool with a custom image that includes the relevant CLI, or run the
+  command printed in the `migration_run_command` output by hand after
+  the first apply.
