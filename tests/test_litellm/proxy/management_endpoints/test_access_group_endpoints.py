@@ -31,6 +31,8 @@ def _make_access_group_record(
     access_model_names: list | None = None,
     access_mcp_server_ids: list | None = None,
     access_agent_ids: list | None = None,
+    access_passthrough_routes: list | None = None,
+    access_vector_store_ids: list | None = None,
     assigned_team_ids: list | None = None,
     assigned_key_ids: list | None = None,
     created_by: str | None = "admin-user",
@@ -46,6 +48,8 @@ def _make_access_group_record(
         "access_model_names": access_model_names or [],
         "access_mcp_server_ids": access_mcp_server_ids or [],
         "access_agent_ids": access_agent_ids or [],
+        "access_passthrough_routes": access_passthrough_routes or [],
+        "access_vector_store_ids": access_vector_store_ids or [],
         "assigned_team_ids": assigned_team_ids or [],
         "assigned_key_ids": assigned_key_ids or [],
         "created_at": created_at_val,
@@ -75,6 +79,8 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_passthrough_routes=data.get("access_passthrough_routes", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             created_by=data.get("created_by"),
@@ -92,6 +98,8 @@ def client_and_mocks(monkeypatch):
             access_model_names=data.get("access_model_names", []),
             access_mcp_server_ids=data.get("access_mcp_server_ids", []),
             access_agent_ids=data.get("access_agent_ids", []),
+            access_passthrough_routes=data.get("access_passthrough_routes", []),
+            access_vector_store_ids=data.get("access_vector_store_ids", []),
             assigned_team_ids=data.get("assigned_team_ids", []),
             assigned_key_ids=data.get("assigned_key_ids", []),
             updated_by=data.get("updated_by"),
@@ -196,6 +204,48 @@ def test_create_access_group_success(client_and_mocks, base_path, payload):
     assert body["access_group_name"] == payload["access_group_name"]
     assert body.get("access_group_id") is not None
     mock_table.create.assert_awaited_once()
+
+
+def test_create_access_group_persists_passthrough_and_vector_store_fields(
+    client_and_mocks,
+):
+    """Passthrough routes and vector store ids round-trip through create."""
+    client, _, mock_table, *_ = client_and_mocks
+
+    payload = {
+        "access_group_name": "group-resources",
+        "access_passthrough_routes": ["/bedrock", "/vllm"],
+        "access_vector_store_ids": ["vs-1", "vs-2"],
+    }
+    resp = client.post("/v1/access_group", json=payload)
+    assert resp.status_code == 201
+
+    body = resp.json()
+    assert body["access_passthrough_routes"] == ["/bedrock", "/vllm"]
+    assert body["access_vector_store_ids"] == ["vs-1", "vs-2"]
+
+    # the new fields are written to the DB row, not silently dropped
+    _, create_kwargs = mock_table.create.call_args
+    create_data = create_kwargs["data"]
+    assert create_data["access_passthrough_routes"] == ["/bedrock", "/vllm"]
+    assert create_data["access_vector_store_ids"] == ["vs-1", "vs-2"]
+
+
+def test_update_access_group_clears_resource_fields_to_empty_list(client_and_mocks):
+    """Explicit null for the new list fields is coerced to [] on update."""
+    client, _, mock_table, *_ = client_and_mocks
+    mock_table.find_unique = AsyncMock(return_value=_make_access_group_record())
+
+    resp = client.put(
+        "/v1/access_group/ag-123",
+        json={"access_passthrough_routes": None, "access_vector_store_ids": None},
+    )
+    assert resp.status_code == 200
+
+    _, update_kwargs = mock_table.update.call_args
+    update_data = update_kwargs["data"]
+    assert update_data["access_passthrough_routes"] == []
+    assert update_data["access_vector_store_ids"] == []
 
 
 def test_create_access_group_duplicate_name_conflict(client_and_mocks):

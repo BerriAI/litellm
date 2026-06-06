@@ -51,6 +51,8 @@ const createMockAccessGroup = (overrides: Partial<AccessGroupResponse> = {}): Ac
   access_model_names: ["model-1", "model-2"],
   access_mcp_server_ids: ["mcp-1"],
   access_agent_ids: ["agent-1"],
+  access_passthrough_routes: ["/bedrock"],
+  access_vector_store_ids: ["vs-1"],
   assigned_team_ids: ["team-1"],
   assigned_key_ids: ["key-1", "key-2"],
   created_at: "2025-01-01T00:00:00Z",
