@@ -32,15 +32,17 @@ _PRISMA_TO_PG_TABLE: Dict[str, str] = {
 
 def update_metrics(existing_metrics: SpendMetrics, record: Any) -> SpendMetrics:
     """Update metrics with new record data."""
-    existing_metrics.spend += record.spend
-    existing_metrics.prompt_tokens += record.prompt_tokens
-    existing_metrics.completion_tokens += record.completion_tokens
-    existing_metrics.total_tokens += record.prompt_tokens + record.completion_tokens
-    existing_metrics.cache_read_input_tokens += record.cache_read_input_tokens
-    existing_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens
-    existing_metrics.api_requests += record.api_requests
-    existing_metrics.successful_requests += record.successful_requests
-    existing_metrics.failed_requests += record.failed_requests
+    # Coerce nullable DB fields to 0 to prevent TypeError on None + None/int
+    # when keys have no spend data. See: #29773
+    existing_metrics.spend += record.spend or 0
+    existing_metrics.prompt_tokens += record.prompt_tokens or 0
+    existing_metrics.completion_tokens += record.completion_tokens or 0
+    existing_metrics.total_tokens += (record.prompt_tokens or 0) + (record.completion_tokens or 0)
+    existing_metrics.cache_read_input_tokens += record.cache_read_input_tokens or 0
+    existing_metrics.cache_creation_input_tokens += record.cache_creation_input_tokens or 0
+    existing_metrics.api_requests += record.api_requests or 0
+    existing_metrics.successful_requests += record.successful_requests or 0
+    existing_metrics.failed_requests += record.failed_requests or 0
     return existing_metrics
 
 
@@ -696,16 +698,20 @@ _GROUP_DATE_ENDPOINT_API_KEY = 30  # 0b0011110
 
 def _record_to_spend_metrics(record: Any) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row."""
+    # Coerce nullable DB fields to 0 to prevent TypeError on None + None/int
+    # when keys have no spend data. See: #29773
+    prompt_tokens = record.prompt_tokens or 0
+    completion_tokens = record.completion_tokens or 0
     return SpendMetrics(
-        spend=record.spend,
-        prompt_tokens=record.prompt_tokens,
-        completion_tokens=record.completion_tokens,
-        total_tokens=record.prompt_tokens + record.completion_tokens,
-        cache_read_input_tokens=record.cache_read_input_tokens,
-        cache_creation_input_tokens=record.cache_creation_input_tokens,
-        api_requests=record.api_requests,
-        successful_requests=record.successful_requests,
-        failed_requests=record.failed_requests,
+        spend=record.spend or 0,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cache_read_input_tokens=record.cache_read_input_tokens or 0,
+        cache_creation_input_tokens=record.cache_creation_input_tokens or 0,
+        api_requests=record.api_requests or 0,
+        successful_requests=record.successful_requests or 0,
+        failed_requests=record.failed_requests or 0,
     )
 
 
