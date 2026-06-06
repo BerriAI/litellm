@@ -438,6 +438,27 @@ litellm-proxy http request POST /chat/completions -j '{"model": "gpt-4", "messag
 litellm-proxy http request GET /health/test_connection -H "X-Custom-Header:value"
 ```
 
+### Claude Code
+
+Launch [Claude Code](https://docs.claude.com/en/docs/claude-code) routed through your LiteLLM proxy. The wrapper resolves your LiteLLM key (logging in via SSO if you are not authenticated), exports the Anthropic environment variables Claude Code reads, then hands off to the `claude` binary. As long as you start Claude Code this way, it always talks to your proxy:
+
+```bash
+litellm-proxy claude-code
+```
+
+Options:
+
+- `--model`, `-m`: Model Claude Code should request (sets `ANTHROPIC_MODEL`). The name must resolve on your proxy.
+- `--small-fast-model`: Model for background tasks (sets `ANTHROPIC_SMALL_FAST_MODEL`).
+
+Any extra arguments are forwarded to `claude`. Use `--` to pass flags that `claude` owns:
+
+```bash
+litellm-proxy claude-code --model claude-sonnet-proxy -- --resume
+```
+
+Under the hood this sets `ANTHROPIC_BASE_URL` to your proxy URL and `ANTHROPIC_AUTH_TOKEN` to your LiteLLM key, and clears any stray `ANTHROPIC_API_KEY` so the proxy token always wins. Requests land on the proxy's Anthropic-compatible `/v1/messages` endpoint, so the models you reference (default Claude model names or your `--model` override) must exist on the proxy.
+
 ## Environment Variables
 
 The CLI respects the following environment variables:

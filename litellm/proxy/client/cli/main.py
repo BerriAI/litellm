@@ -9,6 +9,7 @@ from litellm.proxy.client.health import HealthManagementClient
 
 from .commands.auth import get_stored_api_key, login, logout, whoami
 from .commands.chat import chat
+from .commands.claude_code import claude_code
 from .commands.credentials import credentials
 from .commands.http import http
 from .commands.keys import keys
@@ -98,6 +99,8 @@ def version(ctx: click.Context):
 cli.add_command(login)
 cli.add_command(logout)
 cli.add_command(whoami)
+# Add the claude-code launcher command
+cli.add_command(claude_code)
 # Add the models command group
 cli.add_command(models)
 # Add the credentials command group
