@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 
@@ -214,3 +215,53 @@ def test_app_lifespan_leaves_injected_http_client_open():
         pass
 
     assert client.closed is False
+
+
+def test_handle_logs_miss_then_hit(caplog):
+    """Each request self-reports so a CI run shows cassette vs live."""
+    recorder = _recorder()
+    upstream = _Upstream()
+    body_in = b'{"model":"gpt-image-1"}'
+
+    with caplog.at_level(logging.INFO, logger="openai_record_replay"):
+        _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
+        _run(recorder.handle("POST", "/v1/images/generations", body_in, upstream))
+
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("MISS forwarded live and recorded" in m for m in messages)
+    assert any("HIT replayed from cassette" in m for m in messages)
+
+
+def test_handle_warns_when_recording_not_persisted(caplog):
+    """A redis failure must surface loudly, not look like a successful record."""
+    recorder = _recorder(_BoomRedis())
+    upstream = _Upstream()
+
+    with caplog.at_level(logging.WARNING, logger="openai_record_replay"):
+        _run(recorder.handle("POST", "/v1/images/generations", b'{"model":"gpt-image-1"}', upstream))
+
+    assert any(r.levelno == logging.WARNING and "NOT recorded" in r.getMessage() for r in caplog.records)
+
+
+def test_log_startup_mode_distinguishes_replay_from_passthrough(caplog):
+    """Startup must announce whether the recorder will actually cache."""
+    with caplog.at_level(logging.INFO, logger="openai_record_replay"):
+        OpenAIRecordReplay(None).log_startup_mode()
+        _recorder().log_startup_mode()
+
+    emitted = [(r.levelno, r.getMessage()) for r in caplog.records]
+    assert any(lvl == logging.WARNING and "PASSTHROUGH" in m for lvl, m in emitted)
+    assert any(lvl == logging.INFO and "REPLAY mode" in m for lvl, m in emitted)
+
+
+class _UnreachableRedis:
+    def ping(self):
+        raise ConnectionError("redis offline")
+
+
+def test_log_startup_mode_warns_when_redis_configured_but_unreachable(caplog):
+    """A configured-but-dead redis must warn, not look like it will cache."""
+    with caplog.at_level(logging.WARNING, logger="openai_record_replay"):
+        _recorder(_UnreachableRedis()).log_startup_mode()
+
+    assert any(r.levelno == logging.WARNING and "DEGRADED" in r.getMessage() for r in caplog.records)
