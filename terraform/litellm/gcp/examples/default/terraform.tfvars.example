@@ -1,5 +1,5 @@
-project = "my-gcp-project"
-region  = "us-central1"
+project_id = "my-gcp-project"
+region     = "us-central1"
 
 # Resource naming: every GCP resource the stack creates is named
 # `${tenant}-litellm-${env}` (or that plus a per-resource suffix). E.g.
@@ -28,14 +28,14 @@ env    = "stage"
 # cloudsql_deletion_protection = true   # default: refuse destroy on the DB
 # gcs_force_destroy            = false  # default: refuse destroy on a non-empty bucket
 
-# Component images. Defaults pin all four to the same GHCR release tag —
-# bump them together when bumping LiteLLM. To use private images, mirror
-# them into Artifact Registry first — Cloud Run only authenticates against
-# AR / gcr.io.
-# gateway_image    = "us-central1-docker.pkg.dev/my-gcp-project/litellm/gateway:1.86.0-dev"
-# backend_image    = "us-central1-docker.pkg.dev/my-gcp-project/litellm/backend:1.86.0-dev"
-# ui_image         = "us-central1-docker.pkg.dev/my-gcp-project/litellm/ui:1.86.0-dev"
-# migrations_image = "us-central1-docker.pkg.dev/my-gcp-project/litellm/migrations:1.86.0-dev"
+# Images. Cloud Run rejects ghcr.io, so a real deploy must point
+# image_registry at an Artifact Registry remote repo (see README "Image
+# pulls"); image_tag is applied to all four litellm-* images. Per-component
+# *_image overrides are NOT exposed here — set them directly on the
+# `module "litellm"` block in main.tf (see ../../variables.tf) if you need
+# to mix-and-match versions.
+# image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
+# image_tag      = "v1.86.0-dev"
 
 # ---------- proxy_config (mirrors helm gateway.config.proxy_config) ----------
 # proxy_config = {
@@ -75,3 +75,13 @@ env    = "stage"
 #   OPENAI_API_KEY    = "projects/my-gcp-project/secrets/openai-api-key"
 #   ANTHROPIC_API_KEY = "projects/my-gcp-project/secrets/anthropic-api-key"
 # }
+
+# ---------- OpenTelemetry v2 ----------
+# OTel is gated on otel_endpoint: empty (default) and nothing is added to
+# the container env; set it and both gateway and backend gain
+# LITELLM_OTEL_V2=true plus the OTEL_* block (with OTEL_SERVICE_NAME
+# stamped per component). These knobs aren't surfaced as wrapper vars in
+# this example; set them directly on the `module "litellm"` block in
+# main.tf (otel_endpoint, otel_exporter, otel_environment_name,
+# otel_capture_message_content, otel_headers_secret). Full docs in
+# ../../variables.tf.

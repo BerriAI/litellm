@@ -59,6 +59,6 @@ output "migration_run_command" {
     "gcloud run jobs execute %s --region %s --project %s --wait",
     google_cloud_run_v2_job.migrations.name,
     var.region,
-    var.project,
+    var.project_id,
   )
 }

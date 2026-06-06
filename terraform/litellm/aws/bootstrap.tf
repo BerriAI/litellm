@@ -32,6 +32,8 @@ resource "aws_iam_policy" "bootstrap_secrets" {
       Resource = [aws_secretsmanager_secret.db_master_password.arn]
     }]
   })
+
+  tags = local.tags
 }
 
 resource "aws_iam_role_policy_attachment" "task_execution_bootstrap_secrets" {
@@ -43,6 +45,8 @@ resource "aws_iam_role_policy_attachment" "task_execution_bootstrap_secrets" {
 resource "aws_cloudwatch_log_group" "bootstrap_db" {
   name              = "/ecs/${local.name}/bootstrap-db"
   retention_in_days = var.log_retention_days
+
+  tags = local.tags
 }
 
 locals {
@@ -101,6 +105,8 @@ resource "aws_ecs_task_definition" "bootstrap_db" {
       }
     }
   }])
+
+  tags = local.tags
 }
 
 # ---------- Bootstrap trigger ----------

@@ -24,7 +24,7 @@ variable "env" {
 }
 
 variable "tags" {
-  description = "Additional tags merged into the provider default_tags."
+  description = "Per-deployment tags applied to every taggable resource the module creates, on top of the module's own `litellm:stack` / `managed-by` tags. Caller-level provider `default_tags` (if any) merge with these."
   type        = map(string)
   default     = {}
 }
@@ -420,10 +420,12 @@ variable "backend_extra_secrets" {
 variable "proxy_config" {
   description = <<-EOT
     LiteLLM proxy config (the contents of config.yaml). Mirrors the helm
-    chart's `gateway.config.proxy_config` value. Passed to gateway, backend,
-    and the migration task as a base64-encoded env var and decoded to
-    /tmp/litellm-config.yaml at container start; CONFIG_FILE_PATH is set
-    automatically.
+    chart's `gateway.config.proxy_config` value. Uploaded to S3 under
+    `config/litellm-config.yaml` in the stack's bucket; gateway and backend
+    container entrypoints download it to /tmp/litellm-config.yaml at task
+    start (CONFIG_FILE_PATH is set automatically). The S3 object's etag is
+    wired into the task definition, so editing this value produces a new
+    task-def revision and a rolling redeploy.
 
     Example:
       proxy_config = {
@@ -455,4 +457,79 @@ variable "log_retention_days" {
   description = "CloudWatch log retention for the three services."
   type        = number
   default     = 30
+}
+
+# ---------- OpenTelemetry v2 ----------
+#
+# https://docs.litellm.ai/docs/observability/opentelemetry_v2
+#
+# OTel v2 is opt-in and gated entirely on otel_endpoint, matching the GCP
+# stack. Leave otel_endpoint = "" and nothing OTel-related lands in the
+# container env. Set it and the gateway and backend gain LITELLM_OTEL_V2=true
+# plus the OTEL_* block (per-component OTEL_SERVICE_NAME, exporter, endpoint,
+# environment name, capture-content), with OTEL_HEADERS sourced from
+# otel_headers_secret_arn when provided.
+
+variable "otel_endpoint" {
+  description = <<-EOT
+    OTLP collector endpoint (sets OTEL_ENDPOINT). Empty disables OTel
+    entirely (no LITELLM_OTEL_V2, no OTEL_* env). Point at any
+    OTLP-compatible backend (self-hosted collector, Grafana Tempo,
+    Honeycomb, Datadog). Example: "http://otel-collector.internal:4318"
+    for OTLP/HTTP.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_exporter" {
+  description = <<-EOT
+    OTLP exporter protocol. One of "otlp_http", "otlp_grpc", or "console"
+    (stdout, useful for verifying instrumentation against CloudWatch logs).
+    Ignored when otel_endpoint is empty.
+  EOT
+  type        = string
+  default     = "otlp_http"
+
+  validation {
+    condition     = contains(["otlp_http", "otlp_grpc", "console"], var.otel_exporter)
+    error_message = "otel_exporter must be one of: otlp_http, otlp_grpc, console."
+  }
+}
+
+variable "otel_environment_name" {
+  description = <<-EOT
+    Value for OTEL_ENVIRONMENT_NAME (becomes `deployment.environment` on
+    every span). Defaults to var.env when empty so spans land tagged with
+    the deployment env without extra wiring.
+  EOT
+  type        = string
+  default     = ""
+}
+
+variable "otel_capture_message_content" {
+  description = <<-EOT
+    Value for OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT. Default
+    `no_content` matches the litellm default; flip to `prompt_and_completion`
+    only when you've audited what's about to land in your observability
+    backend, because raw prompts/completions are typically sensitive.
+  EOT
+  type        = string
+  default     = "no_content"
+
+  validation {
+    condition     = contains(["no_content", "prompt_and_completion"], var.otel_capture_message_content)
+    error_message = "otel_capture_message_content must be one of: no_content, prompt_and_completion."
+  }
+}
+
+variable "otel_headers_secret_arn" {
+  description = <<-EOT
+    Secrets Manager ARN whose plaintext value becomes OTEL_HEADERS
+    (comma-separated `key=value` pairs, typically used to pass an API key
+    header to a managed collector). The execution role auto-gains
+    secretsmanager:GetSecretValue on this ARN. Empty omits OTEL_HEADERS.
+  EOT
+  type        = string
+  default     = ""
 }
