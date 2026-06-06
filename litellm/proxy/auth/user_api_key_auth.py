@@ -2070,6 +2070,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             route=route,
             parent_otel_span=parent_otel_span,
             api_key=api_key,
+            resolved_identity=valid_token,
         )
 
 
@@ -2558,6 +2559,7 @@ async def user_api_key_auth(
                 route=route,
                 parent_otel_span=user_api_key_auth_obj.parent_otel_span,
                 api_key=api_key,
+                resolved_identity=user_api_key_auth_obj,
             )
 
         # Defense-in-depth: ``_user_api_key_auth_builder`` has multiple early-return
