@@ -17,7 +17,17 @@ Quick summary:
 - async_log_success_event() fires on GET /v1/batches/{id} (batch completion)
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    Literal,
+    NoReturn,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from fastapi import HTTPException
 from pydantic import BaseModel
@@ -30,6 +40,7 @@ from litellm.batches.batch_utils import (
     _get_file_content_as_dictionary,
     _get_models_from_batch_input_file_content,
 )
+from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import (
     ProxyErrorTypes,
@@ -37,10 +48,11 @@ from litellm.proxy._types import (
     SpecialModelNames,
     UserAPIKeyAuth,
 )
-from litellm.proxy.hooks.rate_limiter_utils import (
-    ProxyHTTPRateLimitError,
-    resolve_llm_provider_for_rate_limit,
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
 )
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -385,8 +397,8 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         batch_usage: BatchFileUsage,
         limit_type: str,
         requested_model: Optional[str] = None,
-    ) -> None:
-        """Raise HTTPException for rate limit exceeded."""
+    ) -> NoReturn:
+        """Raise :class:`ProxyRateLimitError` (a 429) for batch rate limit exceeded."""
         from datetime import datetime
 
         # Find the descriptor for this status
@@ -432,14 +444,15 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
             requested_model
         )
-        raise ProxyHTTPRateLimitError(
-            status_code=429,
+        raise ProxyRateLimitError(
             detail=detail,
             headers={
                 "retry-after": str(window_size),
                 "rate_limit_type": limit_type,
                 "reset_at": reset_time_formatted,
             },
+            category=RateLimitErrorCategory.LITELLM_BATCH_RATE_LIMIT,
+            rate_limit_type=map_v3_rate_limit_type(limit_type),
             model=resolved_model,
             llm_provider=llm_provider,
         )
