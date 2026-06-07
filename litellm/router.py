@@ -8086,7 +8086,16 @@ class Router:
             )
             prefs_raw = mi_dict.get("adaptive_router_preferences")
             if prefs_raw is not None:
-                model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+                try:
+                    model_to_prefs[name] = AdaptiveRouterPreferences(**prefs_raw)
+                except Exception:
+                    verbose_router_logger.warning(
+                        "AdaptiveRouter[%s]: invalid adaptive_router_preferences "
+                        "for model %s, using defaults: %s",
+                        deployment.model_name,
+                        name,
+                        prefs_raw,
+                    )
 
             # `input_cost_per_token` is a LiteLLM_Params field per types/router.py.
             lp = d.get("litellm_params") if isinstance(d, dict) else d.litellm_params
@@ -8536,6 +8545,17 @@ class Router:
         )
         self.model_names.add(deployment.model_name)
         self._sync_deployment_budget_config(deployment=deployment)
+
+        # Adaptive-router init is deferred because it needs visibility into
+        # all deployments in available_models. This call handles the case where
+        # downstream models are already loaded (e.g. Management API add).
+        # During startup, the proxy's _add_deployment() calls finalize after
+        # all DB models are loaded, so this is a safe no-op in that path.
+        if self._is_adaptive_router_deployment(
+            litellm_params=deployment.litellm_params
+        ):
+            self._finalize_adaptive_router_if_configured()
+
         return deployment
 
     def _update_deployment_indices_after_removal(
