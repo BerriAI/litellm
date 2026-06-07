@@ -1,9 +1,9 @@
 """
-ECS logging early-startup hook for litellm.
+ECS logging early-startup hook template for litellm.
 
-Python executes sitecustomize.py from the active site-packages directory
-before any user code, making it the right place to configure logging format
-before the first log record is emitted.
+This file is a deploy-time template. It will NOT auto-execute from its current
+location inside the litellm package. Python only auto-runs sitecustomize.py if
+it exists as a top-level module in a site-packages directory.
 
 To enable ECS-compliant log output without touching application code:
 
