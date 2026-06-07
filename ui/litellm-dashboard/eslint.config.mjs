@@ -4,6 +4,17 @@ import nextCoreWebVitals from "eslint-config-next/core-web-vitals";
 import prettier from "eslint-config-prettier/flat";
 import unusedImports from "eslint-plugin-unused-imports";
 
+const tremorImportBan = {
+  group: ["@tremor/react", "@tremor/react/*"],
+  message: "@tremor/react is being phased out; build new UI with antd instead of adding tremor imports.",
+};
+
+const networkingImportBan = {
+  group: ["@/components/networking", "@/components/networking/*"],
+  message:
+    "This folder is migrated to the typed fetchClient (@/lib/http/api); add the endpoint there instead of importing from networking.",
+};
+
 const eslintConfig = [
   {
     ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts", "src/lib/http/schema.d.ts"],
@@ -40,23 +51,19 @@ const eslintConfig = [
             "Raw fetch() is only allowed in src/lib/http/. Use the shared client (createApiClient / apiClient) from @/lib/http/client instead.",
         },
       ],
-      "no-restricted-imports": [
-        "error",
-        {
-          patterns: [
-            {
-              group: ["@tremor/react", "@tremor/react/*"],
-              message: "@tremor/react is being phased out; build new UI with antd instead of adding tremor imports.",
-            },
-          ],
-        },
-      ],
+      "no-restricted-imports": ["error", { patterns: [tremorImportBan] }],
     },
   },
   {
     files: ["src/lib/http/**"],
     rules: {
       "no-restricted-syntax": "off",
+    },
+  },
+  {
+    files: ["src/app/(dashboard)/hooks/tags/**"],
+    rules: {
+      "no-restricted-imports": ["error", { patterns: [tremorImportBan, networkingImportBan] }],
     },
   },
 ];

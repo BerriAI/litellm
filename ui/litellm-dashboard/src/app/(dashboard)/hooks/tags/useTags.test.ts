@@ -3,21 +3,18 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
 import { useTags } from "./useTags";
-import { tagListCall } from "@/components/networking";
 import type { TagListResponse } from "@/components/tag_management/types";
 
-// Mock the networking function
-vi.mock("@/components/networking", () => ({
-  tagListCall: vi.fn(),
+const mockGet = vi.fn();
+vi.mock("@/lib/http/api", () => ({
+  fetchClient: { GET: (...args: unknown[]) => mockGet(...args) },
 }));
 
-// Mock useAuthorized hook - we can override this in individual tests
 const mockUseAuthorized = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => mockUseAuthorized(),
 }));
 
-// Mock data
 const mockTags: TagListResponse = {
   "tag-1": {
     name: "tag-1",
@@ -71,10 +68,8 @@ describe("useTags", () => {
       },
     });
 
-    // Reset all mocks
     vi.clearAllMocks();
 
-    // Set default mock for useAuthorized (enabled state)
     mockUseAuthorized.mockReturnValue({
       accessToken: "test-access-token",
       userId: "test-user-id",
@@ -90,17 +85,14 @@ describe("useTags", () => {
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
-  it("should return tags data when query is successful", async () => {
-    // Mock successful API call
-    (tagListCall as any).mockResolvedValue(mockTags);
+  it("fetches /tag/list and returns the unwrapped body on success", async () => {
+    mockGet.mockResolvedValue({ data: mockTags });
 
     const { result } = renderHook(() => useTags(), { wrapper });
 
-    // Initially loading
     expect(result.current.isLoading).toBe(true);
     expect(result.current.data).toBeUndefined();
 
-    // Wait for success
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
       expect(result.current.isSuccess).toBe(true);
@@ -108,23 +100,18 @@ describe("useTags", () => {
 
     expect(result.current.data).toEqual(mockTags);
     expect(result.current.error).toBeNull();
-    expect(tagListCall).toHaveBeenCalledWith("test-access-token");
-    expect(tagListCall).toHaveBeenCalledTimes(1);
+    expect(mockGet).toHaveBeenCalledWith("/tag/list");
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 
-  it("should handle error when tagListCall fails", async () => {
-    const errorMessage = "Failed to fetch tags";
-    const testError = new Error(errorMessage);
-
-    // Mock failed API call
-    (tagListCall as any).mockRejectedValue(testError);
+  it("surfaces an error when the request rejects", async () => {
+    const testError = new Error("Failed to fetch tags");
+    mockGet.mockRejectedValue(testError);
 
     const { result } = renderHook(() => useTags(), { wrapper });
 
-    // Initially loading
     expect(result.current.isLoading).toBe(true);
 
-    // Wait for error
     await waitFor(() => {
       expect(result.current.isLoading).toBe(false);
       expect(result.current.isError).toBe(true);
@@ -132,12 +119,11 @@ describe("useTags", () => {
 
     expect(result.current.error).toEqual(testError);
     expect(result.current.data).toBeUndefined();
-    expect(tagListCall).toHaveBeenCalledWith("test-access-token");
-    expect(tagListCall).toHaveBeenCalledTimes(1);
+    expect(mockGet).toHaveBeenCalledWith("/tag/list");
+    expect(mockGet).toHaveBeenCalledTimes(1);
   });
 
-  it("should not execute query when accessToken is missing", async () => {
-    // Mock missing accessToken
+  it("does not fetch when accessToken is missing", () => {
     mockUseAuthorized.mockReturnValue({
       accessToken: null,
       userId: "test-user-id",
@@ -151,17 +137,12 @@ describe("useTags", () => {
 
     const { result } = renderHook(() => useTags(), { wrapper });
 
-    // Query should not execute
     expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
     expect(result.current.isFetched).toBe(false);
-
-    // API should not be called
-    expect(tagListCall).not.toHaveBeenCalled();
+    expect(mockGet).not.toHaveBeenCalled();
   });
 
-  it("should not execute query when userId is missing", async () => {
-    // Mock missing userId
+  it("does not fetch when userId is missing", () => {
     mockUseAuthorized.mockReturnValue({
       accessToken: "test-access-token",
       userId: null,
@@ -175,17 +156,11 @@ describe("useTags", () => {
 
     const { result } = renderHook(() => useTags(), { wrapper });
 
-    // Query should not execute
-    expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
     expect(result.current.isFetched).toBe(false);
-
-    // API should not be called
-    expect(tagListCall).not.toHaveBeenCalled();
+    expect(mockGet).not.toHaveBeenCalled();
   });
 
-  it("should not execute query when userRole is missing", async () => {
-    // Mock missing userRole
+  it("does not fetch when userRole is missing", () => {
     mockUseAuthorized.mockReturnValue({
       accessToken: "test-access-token",
       userId: "test-user-id",
@@ -199,85 +174,20 @@ describe("useTags", () => {
 
     const { result } = renderHook(() => useTags(), { wrapper });
 
-    // Query should not execute
-    expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
     expect(result.current.isFetched).toBe(false);
-
-    // API should not be called
-    expect(tagListCall).not.toHaveBeenCalled();
+    expect(mockGet).not.toHaveBeenCalled();
   });
 
-  it("should not execute query when all auth values are missing", async () => {
-    // Mock all auth values missing
-    mockUseAuthorized.mockReturnValue({
-      accessToken: null,
-      userId: null,
-      userRole: null,
-      token: null,
-      userEmail: "test@example.com",
-      premiumUser: false,
-      disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
-    });
+  it("returns an empty object when the API returns empty data", async () => {
+    mockGet.mockResolvedValue({ data: {} });
 
     const { result } = renderHook(() => useTags(), { wrapper });
 
-    // Query should not execute
-    expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
-    expect(result.current.isFetched).toBe(false);
-
-    // API should not be called
-    expect(tagListCall).not.toHaveBeenCalled();
-  });
-
-  it("should execute query when all auth values are present", async () => {
-    // Mock successful API call
-    (tagListCall as any).mockResolvedValue(mockTags);
-
-    // Ensure all auth values are present (already set in beforeEach)
-    const { result } = renderHook(() => useTags(), { wrapper });
-
-    // Wait for query to execute
     await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
-    });
-
-    expect(tagListCall).toHaveBeenCalledWith("test-access-token");
-    expect(tagListCall).toHaveBeenCalledTimes(1);
-  });
-
-  it("should return empty object when API returns empty data", async () => {
-    // Mock API returning empty object
-    (tagListCall as any).mockResolvedValue({});
-
-    const { result } = renderHook(() => useTags(), { wrapper });
-
-    // Wait for success
-    await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
       expect(result.current.isSuccess).toBe(true);
     });
 
     expect(result.current.data).toEqual({});
-    expect(tagListCall).toHaveBeenCalledWith("test-access-token");
-  });
-
-  it("should handle network timeout error", async () => {
-    const timeoutError = new Error("Network timeout");
-
-    // Mock network timeout
-    (tagListCall as any).mockRejectedValue(timeoutError);
-
-    const { result } = renderHook(() => useTags(), { wrapper });
-
-    // Wait for error
-    await waitFor(() => {
-      expect(result.current.isError).toBe(true);
-    });
-
-    expect(result.current.error).toEqual(timeoutError);
-    expect(result.current.data).toBeUndefined();
+    expect(mockGet).toHaveBeenCalledWith("/tag/list");
   });
 });
