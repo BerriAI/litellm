@@ -5550,14 +5550,17 @@ def _bedrock_tools_pt(
         normalize_json_schema_custom_types_to_object(parameters)
         if parameters.get("type") not in _valid_json_schema_root_types:
             parameters["type"] = "object"
-        tool_block = BedrockToolSpec(
-            name=name,
-            description=description,
-            parameters=parameters,
-            strict=tool.get("function", {}).get("strict", None),
-            supports_strict_tools=supports_strict_tools,
+        tool_block = cast(
+            BedrockToolBlock,
+            BedrockToolSpec(
+                name=name,
+                description=description,
+                parameters=parameters,
+                strict=tool.get("function", {}).get("strict", None),
+                supports_strict_tools=supports_strict_tools,
+            ),
         )
-        tool_block_list.append(tool_block)  # type: ignore[arg-type]
+        tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
         cache_point_tool_block = add_cache_point_tool_block(tool, model=model)
