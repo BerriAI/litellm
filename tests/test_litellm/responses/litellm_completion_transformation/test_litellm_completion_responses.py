@@ -1189,6 +1189,44 @@ class TestToolTransformation:
         assert "allowed_callers" not in result_tool
         assert "input_examples" not in result_tool
 
+    def test_transform_namespace_tools_to_function_tools(self):
+        """Test that Responses API namespace tools keep their schema."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+            "description": "Run JavaScript in the node REPL",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {
+                        "type": "string",
+                        "description": "JavaScript source to evaluate",
+                    }
+                },
+                "required": ["code"],
+            },
+        }
+
+        tools = [namespace_tool]
+
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "mcp__node_repl"
+        assert (
+            result_tool["function"]["description"]
+            == "Run JavaScript in the node REPL"
+        )
+        assert result_tool["function"]["parameters"] == namespace_tool["parameters"]
+
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""
         code_execution_tool = {

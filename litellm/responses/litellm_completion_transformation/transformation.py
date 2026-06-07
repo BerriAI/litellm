@@ -1386,7 +1386,7 @@ class LiteLLMCompletionResponsesConfig:
                     search_context_size=_search_context_size,
                     user_location=_user_location,
                 )
-            elif tool.get("type") == "function":
+            elif tool.get("type") in ("function", "namespace"):
                 typed_tool = cast(FunctionToolParam, tool)
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
                 parameters = dict(typed_tool.get("parameters", {}) or {})
