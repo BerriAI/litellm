@@ -2,9 +2,9 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [main]
+    branches: [main, litellm_internal_staging]
   pull_request:
-    branches: [main]
+    branches: [main, litellm_internal_staging]
   schedule:
     # Run daily at 04:00 UTC
     - cron: "0 4 * * *"
@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   analyze:
-    if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
+    if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm' || github.repository == 'rayward-external/litellm'
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
