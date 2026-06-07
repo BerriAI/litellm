@@ -87,11 +87,9 @@ class CachePrefixOptimizer(CustomLogger):
 
         # 找到第一条 system 消息
         system_msg = None
-        system_idx = -1
-        for i, msg in enumerate(messages):
+        for msg in messages:
             if isinstance(msg, dict) and msg.get("role") == "system":
                 system_msg = msg
-                system_idx = i
                 break
 
         if system_msg is None:
