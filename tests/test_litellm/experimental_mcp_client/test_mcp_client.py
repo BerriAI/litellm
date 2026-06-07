@@ -542,6 +542,44 @@ class TestExecuteSessionOperationSurfacesTransportError:
         result = await client._execute_session_operation(transport_ctx, _op)
         assert result == "done"
 
+    @pytest.mark.asyncio
+    async def test_list_resources_tolerates_missing_resources_field(self):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        session = AsyncMock()
+
+        async def send_request(_request, result_type):
+            assert result_type is mcp_client_module._LenientListResourcesResult
+            return result_type.model_validate({})
+
+        session.send_request = AsyncMock(side_effect=send_request)
+
+        async def run_with_session(operation):
+            return await operation(session)
+
+        client.run_with_session = AsyncMock(side_effect=run_with_session)
+
+        assert await client.list_resources() == []
+        session.send_request.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_list_prompts_tolerates_missing_prompts_field(self):
+        client = MCPClient(server_url="http://example.com/mcp", transport_type="http")
+        session = AsyncMock()
+
+        async def send_request(_request, result_type):
+            assert result_type is mcp_client_module._LenientListPromptsResult
+            return result_type.model_validate({})
+
+        session.send_request = AsyncMock(side_effect=send_request)
+
+        async def run_with_session(operation):
+            return await operation(session)
+
+        client.run_with_session = AsyncMock(side_effect=run_with_session)
+
+        assert await client.list_prompts() == []
+        session.send_request.assert_awaited_once()
+
 
 if __name__ == "__main__":
     pytest.main([__file__])
