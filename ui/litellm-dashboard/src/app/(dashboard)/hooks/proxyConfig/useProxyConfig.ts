@@ -89,7 +89,6 @@ export const getProxyConfigCall = async (accessToken: string, configType: Config
     if (!response.ok) {
       const errorData = await response.json();
       const errorMessage = deriveErrorMessage(errorData);
-      handleError(errorMessage);
       throw new Error(errorMessage);
     }
 
