@@ -31,7 +31,8 @@
         "@tootallnate/once": "3.0.1",
         "@isaacs/brace-expansion": "5.0.0",
         "@babel/traverse": "7.28.5",
-        "ws": "8.18.3",
+        "ws": "8.20.1",
+        "brace-expansion": "5.0.6",
         "braces": "3.0.3"
     }
 }
