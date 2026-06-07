@@ -426,6 +426,7 @@ class XAIOAuthChatConfig(XAIChatConfig):
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
+        using_stored_oauth_token = api_key is None
         try:
             dynamic_api_key = api_key or self.authenticator.get_access_token()
         except XAIOAuthError as exc:
@@ -435,7 +436,11 @@ class XAIOAuthChatConfig(XAIChatConfig):
                 message=str(exc),
             ) from exc
         return (
-            api_base or self.authenticator.get_api_base(),
+            (
+                self.authenticator.get_api_base()
+                if using_stored_oauth_token
+                else api_base or self.authenticator.get_api_base()
+            ),
             dynamic_api_key,
         )
 
@@ -469,5 +474,8 @@ class XAIOAuthResponsesAPIConfig(XAIResponsesAPIConfig):
         api_base: Optional[str],
         litellm_params: dict,
     ) -> str:
-        api_base = api_base or self.authenticator.get_api_base()
+        if litellm_params.get("api_key") is None:
+            api_base = self.authenticator.get_api_base()
+        else:
+            api_base = api_base or self.authenticator.get_api_base()
         return f"{api_base.rstrip('/')}/responses"
