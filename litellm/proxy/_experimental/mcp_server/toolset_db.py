@@ -4,6 +4,7 @@ from typing import List, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import MCPToolsetRepository
 from litellm.types.mcp_server.mcp_toolset import (
     MCPToolset,
     NewMCPToolsetRequest,
@@ -30,7 +31,7 @@ async def create_mcp_toolset(
     data_dict["tools"] = json.dumps(data_dict.get("tools", []))
     data_dict["created_by"] = touched_by
     data_dict["updated_by"] = touched_by
-    row = await prisma_client.db.litellm_mcptoolsettable.create(data=data_dict)
+    row = await MCPToolsetRepository(prisma_client).table.create(data=data_dict)
     return _toolset_from_row(row)
 
 
@@ -38,7 +39,7 @@ async def get_mcp_toolset(
     prisma_client: PrismaClient,
     toolset_id: str,
 ) -> Optional[MCPToolset]:
-    row = await prisma_client.db.litellm_mcptoolsettable.find_unique(
+    row = await MCPToolsetRepository(prisma_client).table.find_unique(
         where={"toolset_id": toolset_id}
     )
     if row is None:
@@ -54,7 +55,7 @@ async def list_mcp_toolsets(
         where = {}
         if toolset_ids is not None:
             where = {"toolset_id": {"in": toolset_ids}}
-        rows = await prisma_client.db.litellm_mcptoolsettable.find_many(where=where)
+        rows = await MCPToolsetRepository(prisma_client).table.find_many(where=where)
         return [_toolset_from_row(r) for r in rows]
     except Exception as e:
         verbose_proxy_logger.warning(
@@ -69,7 +70,7 @@ async def get_mcp_toolset_by_name(
     prisma_client: PrismaClient,
     toolset_name: str,
 ) -> Optional[MCPToolset]:
-    row = await prisma_client.db.litellm_mcptoolsettable.find_first(
+    row = await MCPToolsetRepository(prisma_client).table.find_first(
         where={"toolset_name": toolset_name}
     )
     if row is None:
@@ -87,7 +88,7 @@ async def update_mcp_toolset(
         data_dict["tools"] = json.dumps(data_dict["tools"])
     data_dict["updated_by"] = touched_by
     try:
-        row = await prisma_client.db.litellm_mcptoolsettable.update(
+        row = await MCPToolsetRepository(prisma_client).table.update(
             where={"toolset_id": data.toolset_id},
             data=data_dict,
         )
@@ -105,7 +106,7 @@ async def delete_mcp_toolset(
     toolset_id: str,
 ) -> Optional[MCPToolset]:
     try:
-        row = await prisma_client.db.litellm_mcptoolsettable.delete(
+        row = await MCPToolsetRepository(prisma_client).table.delete(
             where={"toolset_id": toolset_id}
         )
     except Exception as e:
