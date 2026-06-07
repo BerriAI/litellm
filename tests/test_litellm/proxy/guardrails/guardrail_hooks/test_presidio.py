@@ -2495,3 +2495,50 @@ async def test_anonymize_text_uses_correct_positions_with_parse_pii():
     assert pii_tokens.get("<PERSON_1>") == "John Smith"
     assert pii_tokens.get("<EMAIL_ADDRESS_2>") == "john@example.com"
     assert pii_tokens.get("<PHONE_NUMBER_3>") == "555-867-5309"
+
+
+# ---------------------------------------------------------------------------
+# URL scheme validation
+# ---------------------------------------------------------------------------
+# The Presidio guardrail used to silently prepend `http://` when the operator-
+# supplied PRESIDIO_*_API_BASE lacked a URL scheme. This sent the unredacted
+# prompt to the analyzer in plaintext over any non-loopback transit. The
+# integration now refuses to guess: missing-scheme raises ValueError at startup
+# so the operator makes a conscious choice between `https://` (direct TLS) and
+# `http://` (encryption handled below by loopback, service mesh, Tailscale).
+
+
+def test_missing_scheme_on_analyzer_api_base_raises():
+    """validate_environment must reject PRESIDIO_ANALYZER_API_BASE without a scheme."""
+    with pytest.raises(ValueError, match="PRESIDIO_ANALYZER_API_BASE must include a URL scheme"):
+        _OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base="presidio-analyzer.namespace.svc.cluster.local",
+            presidio_anonymizer_api_base="https://presidio-anonymizer.namespace.svc.cluster.local",
+        )
+
+
+def test_missing_scheme_on_anonymizer_api_base_raises():
+    """validate_environment must reject PRESIDIO_ANONYMIZER_API_BASE without a scheme."""
+    with pytest.raises(ValueError, match="PRESIDIO_ANONYMIZER_API_BASE must include a URL scheme"):
+        _OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base="https://presidio-analyzer.namespace.svc.cluster.local",
+            presidio_anonymizer_api_base="presidio-anonymizer.namespace.svc.cluster.local",
+        )
+
+
+@pytest.mark.parametrize(
+    "analyzer_base, anonymizer_base",
+    [
+        ("http://localhost:5002", "http://localhost:5001"),
+        ("https://presidio.example.com:5002", "https://presidio.example.com:5001"),
+        ("http://presidio-analyzer.svc.cluster.local", "https://presidio-anonymizer.example.com"),
+    ],
+)
+def test_explicit_scheme_accepted(analyzer_base, anonymizer_base):
+    """validate_environment accepts both http:// and https:// schemes explicitly."""
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        presidio_analyzer_api_base=analyzer_base,
+        presidio_anonymizer_api_base=anonymizer_base,
+    )
+    assert guardrail.presidio_analyzer_api_base.startswith(("http://", "https://"))
+    assert guardrail.presidio_anonymizer_api_base.startswith(("http://", "https://"))
