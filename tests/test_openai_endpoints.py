@@ -5,7 +5,6 @@ import asyncio
 import aiohttp, openai
 from openai import OpenAI, AsyncOpenAI, AzureOpenAI, AsyncAzureOpenAI
 from typing import Optional, List, Union
-from litellm._uuid import uuid
 
 LITELLM_MASTER_KEY = "sk-1234"
 
@@ -82,7 +81,7 @@ async def moderation(session, key):
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
     }
-    data = {"input": "I want to kill the cat."}
+    data = {"model": "text-moderation-stable", "input": "I want to kill the cat."}
 
     async with session.post(url, headers=headers, json=data) as response:
         status = response.status
@@ -107,7 +106,7 @@ async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
         "model": model,
         "messages": [
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": f"Hello! {uuid.uuid4()}"},
+            {"role": "user", "content": "Hello!"},
         ],
     }
 

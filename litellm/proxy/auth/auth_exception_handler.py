@@ -14,6 +14,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.integrations.otel.runtime import seed_request_identity
 from litellm.proxy.auth.auth_utils import _get_request_ip_address
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.types.services import ServiceTypes
@@ -41,6 +42,7 @@ class UserAPIKeyAuthExceptionHandler:
         route: str,
         parent_otel_span: Optional[Span],
         api_key: str,
+        resolved_identity: Optional[UserAPIKeyAuth] = None,
     ) -> UserAPIKeyAuth:
         """
         Handles Connection Errors when reading a Virtual Key from LiteLLM DB
@@ -100,12 +102,30 @@ class UserAPIKeyAuthExceptionHandler:
                 extra={"requester_ip": requester_ip},
             )
 
-            # Log this exception to OTEL, Datadog etc
-            user_api_key_dict = UserAPIKeyAuth(
-                parent_otel_span=parent_otel_span,
-                api_key=api_key,
-                request_route=route,
+            # Log this exception to OTEL, Datadog etc. Reuse the identity resolved
+            # before the failure (team alias/id, metadata, user) so the failed span
+            # is labeled — a fresh UserAPIKeyAuth here would drop everything auth had
+            # already looked up (e.g. an expired key whose team/user is known). Copy
+            # so the handler is side-effect-free for the caller's identity object.
+            user_api_key_dict = (
+                resolved_identity.model_copy()
+                if resolved_identity is not None
+                else UserAPIKeyAuth()
             )
+            user_api_key_dict.parent_otel_span = parent_otel_span
+            user_api_key_dict.request_route = route
+            user_api_key_dict.api_key = (
+                user_api_key_dict.api_key or UserAPIKeyAuth(api_key=api_key).api_key
+            )
+
+            # Stamp identity onto the request's server span now, before the request
+            # is rejected; the OTEL failure hooks don't touch the server span, so
+            # without this the failed trace would carry no team/key attributes.
+            seed_request_identity(
+                user_api_key_dict,
+                model=request_data.get("model"),
+            )
+
             # Allow callbacks to transform the error response
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
