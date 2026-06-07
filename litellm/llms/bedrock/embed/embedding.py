@@ -224,6 +224,10 @@ class BedrockEmbedding(BaseAWSLLM):
                 returned_response = AmazonTitanV2Config()._transform_response(
                     response_list=response_list, model=model
                 )
+            elif model == "amazon.titan-embed-g1-text-02":
+                returned_response = AmazonTitanG1Config()._transform_response(
+                    response_list=response_list, model=model
+                )    
             elif provider == "twelvelabs":
                 returned_response = (
                     TwelveLabsMarengoEmbeddingConfig()._transform_response(
@@ -447,6 +451,7 @@ class BedrockEmbedding(BaseAWSLLM):
             "amazon.titan-embed-image-v1",
             "amazon.titan-embed-text-v1",
             "amazon.titan-embed-text-v2:0",
+            "amazon.titan-embed-g1-text-02",
         ]:
             batch_data = []
             for i in input:
@@ -464,6 +469,10 @@ class BedrockEmbedding(BaseAWSLLM):
                     transformed_request = AmazonTitanV2Config()._transform_request(
                         input=i, inference_params=inference_params
                     )
+                elif model == "amazon.titan-embed-g1-text-02":
+                    transformed_request = AmazonTitanG1Config()._transform_request(
+                        input=i, inference_params=inference_params
+                    )    
                 else:
                     raise Exception(
                         "Unmapped model. Received={}. Expected={}".format(
