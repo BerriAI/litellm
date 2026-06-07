@@ -301,6 +301,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       return;
     }
 
+    form.resetFields();
+    setCostConfig({});
+    clearTools();
+    setAllowedTools([]);
+    setHasToolAllowlistInteraction(false);
+    setLogoUrl(undefined);
+    setToolNameToDisplayName({});
+    setToolNameToDescription({});
+
     const transport = duplicateServer.spec_path ? TRANSPORT.OPENAPI : duplicateServer.transport || "";
     setTransportType(transport);
 
@@ -310,12 +319,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     const newName = baseName + copySuffix;
     const newAlias = baseAlias + copySuffix;
 
+    const isM2MDuplicate = duplicateServer.oauth2_flow === MCP_OAUTH2_FLOW_M2M;
+
     const prefillValues: Record<string, any> = {
       server_name: newName,
       alias: newAlias,
       description: duplicateServer.description || "",
       transport: transport,
       auth_type: duplicateServer.auth_type || "none",
+      oauth_flow_type: isM2MDuplicate ? OAUTH_FLOW.M2M : OAUTH_FLOW.INTERACTIVE,
       mcp_access_groups: duplicateServer.mcp_access_groups || [],
       allow_all_keys: duplicateServer.allow_all_keys ?? false,
       available_on_public_internet: duplicateServer.available_on_public_internet ?? false,
@@ -376,8 +388,11 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       setLogoUrl(duplicateServer.mcp_info.logo_url);
     }
 
-    if (duplicateServer.allowed_tools && duplicateServer.allowed_tools.length > 0) {
-      setAllowedTools(duplicateServer.allowed_tools);
+    const duplicateAllowedTools = duplicateServer.allowed_tools ?? [];
+    if (duplicateAllowedTools.length > 0) {
+      setAllowedTools(duplicateAllowedTools);
+    }
+    if (duplicateAllowedTools.length > 0 || Boolean(duplicateServer.mcp_info?.tool_allowlist_enforced)) {
       setHasToolAllowlistInteraction(true);
     }
 
