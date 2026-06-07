@@ -17,11 +17,7 @@ function wrapper({ children }: { children: React.ReactNode }) {
       queries: { retry: false },
     },
   });
-  return (
-    <QueryClientProvider client={queryClient}>
-      {children}
-    </QueryClientProvider>
-  );
+  return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
 }
 
 describe("GuardrailsMonitorView", () => {
@@ -34,10 +30,7 @@ describe("GuardrailsMonitorView", () => {
       passRate: 100,
     });
 
-    render(
-      <GuardrailsMonitorView accessToken="test-token" />,
-      { wrapper }
-    );
+    render(<GuardrailsMonitorView accessToken="test-token" />, { wrapper });
 
     expect(await screen.findByRole("heading", { name: /Guardrails Monitor/i })).toBeDefined();
     await waitFor(() => {

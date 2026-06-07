@@ -26,7 +26,13 @@ test("unauth redirect preserves SERVER_ROOT_PATH prefix", async ({ page }) => {
 
   await page.goto(`http://localhost:4000${ROOT_PATH}/ui/?page=virtual-keys`);
 
-  await page.waitForURL((url) => url.pathname.endsWith("/ui/login"), { timeout: 15_000 });
+  await page.waitForURL((url) => url.pathname.includes("/ui/login"), { timeout: 15_000 });
 
-  expect(page.url()).toContain(`${ROOT_PATH}/ui/login`);
+  // The redirect target is built by joining proxyBaseUrl (assembled by
+  // resolveApiBase from the origin + SERVER_ROOT_PATH) with "/ui/login". A
+  // regression in that join surfaces as a doubled separator, which the loose
+  // toContain above would still accept, so assert the prefix joins exactly once.
+  const { pathname } = new URL(page.url());
+  expect(pathname.startsWith(`${ROOT_PATH}/ui/login`)).toBe(true);
+  expect(pathname).not.toContain("//");
 });

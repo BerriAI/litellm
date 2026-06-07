@@ -53,7 +53,7 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   // Generate code based on selected language and tab
   const generateCode = () => {
     const hasVariables = Object.keys(promptVariables).length > 0;
-    
+
     if (selectedLanguage === "curl") {
       if (selectedTab === "basic") {
         return `curl -X POST '${apiBase}/chat/completions' \\
@@ -61,8 +61,12 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   -H 'Authorization: Bearer ${effectiveApiKey}' \\
   -d '{
     "model": "${model}",
-    "prompt_id": "${promptId}"${hasVariables ? `,
-    "prompt_variables": ${JSON.stringify(promptVariables, null, 6).replace(/\n/g, '\n    ')}` : ''}
+    "prompt_id": "${promptId}"${
+      hasVariables
+        ? `,
+    "prompt_variables": ${JSON.stringify(promptVariables, null, 6).replace(/\n/g, "\n    ")}`
+        : ""
+    }
   }' | jq`;
       } else if (selectedTab === "messages") {
         return `curl -X POST '${apiBase}/chat/completions' \\
@@ -70,8 +74,12 @@ const PromptCodeSnippets: React.FC<PromptCodeSnippetsProps> = ({
   -H 'Authorization: Bearer ${effectiveApiKey}' \\
   -d '{
     "model": "${model}",
-    "prompt_id": "${promptId}"${hasVariables ? `,
-    "prompt_variables": ${JSON.stringify(promptVariables, null, 6).replace(/\n/g, '\n    ')}` : ''},
+    "prompt_id": "${promptId}"${
+      hasVariables
+        ? `,
+    "prompt_variables": ${JSON.stringify(promptVariables, null, 6).replace(/\n/g, "\n    ")}`
+        : ""
+    },
     "messages": [
       {
         "role": "user",
@@ -108,8 +116,12 @@ client = openai.OpenAI(
 response = client.chat.completions.create(
     model="${model}",
     extra_body={
-        "prompt_id": "${promptId}"${hasVariables ? `,
-        "prompt_variables": ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, '\n        ')}` : ''}
+        "prompt_id": "${promptId}"${
+          hasVariables
+            ? `,
+        "prompt_variables": ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
+            : ""
+        }
     }
 )
 
@@ -122,8 +134,12 @@ response = client.chat.completions.create(
         {"role": "user", "content": "hi"}
     ],
     extra_body={
-        "prompt_id": "${promptId}"${hasVariables ? `,
-        "prompt_variables": ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, '\n        ')}` : ''}
+        "prompt_id": "${promptId}"${
+          hasVariables
+            ? `,
+        "prompt_variables": ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
+            : ""
+        }
     }
 )
 
@@ -157,8 +173,12 @@ const client = new OpenAI({
 async function main() {
     const response = await client.chat.completions.create({
         model: "${model}",
-        ${hasVariables ? `prompt_id: "${promptId}",
-        prompt_variables: ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, '\n        ')}` : `prompt_id: "${promptId}"`}
+        ${
+          hasVariables
+            ? `prompt_id: "${promptId}",
+        prompt_variables: ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
+            : `prompt_id: "${promptId}"`
+        }
     });
     
     console.log(response);
@@ -173,8 +193,12 @@ async function main() {
         messages: [
             { role: "user", content: "hi" }
         ],
-        ${hasVariables ? `prompt_id: "${promptId}",
-        prompt_variables: ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, '\n        ')}` : `prompt_id: "${promptId}"`}
+        ${
+          hasVariables
+            ? `prompt_id: "${promptId}",
+        prompt_variables: ${JSON.stringify(promptVariables, null, 8).replace(/\n/g, "\n        ")}`
+            : `prompt_id: "${promptId}"`
+        }
     });
     
     console.log(response);
@@ -210,21 +234,11 @@ main();`;
 
   return (
     <>
-      <TremorButton
-        variant="secondary"
-        icon={CodeOutlined}
-        onClick={showModal}
-      >
+      <TremorButton variant="secondary" icon={CodeOutlined} onClick={showModal}>
         Get Code
       </TremorButton>
 
-      <Modal
-        title="Generated Code"
-        open={isModalVisible}
-        onCancel={handleCancel}
-        footer={null}
-        width={800}
-      >
+      <Modal title="Generated Code" open={isModalVisible} onCancel={handleCancel} footer={null} width={800}>
         <div className="flex justify-between items-center mb-4">
           <div>
             <Text className="font-medium block mb-1 text-gray-700">Language</Text>
@@ -249,7 +263,7 @@ main();`;
           </AntdButton>
         </div>
 
-        <Tabs 
+        <Tabs
           activeKey={selectedTab}
           onChange={setSelectedTab}
           items={[
@@ -281,4 +295,3 @@ main();`;
 };
 
 export default PromptCodeSnippets;
-

@@ -38,7 +38,6 @@ from pydantic import (
     Field,
     PrivateAttr,
     field_validator,
-    model_validator,
 )
 from typing_extensions import Required, TypedDict
 
@@ -148,6 +147,7 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_xhigh_reasoning_effort: Optional[bool]
     supports_max_reasoning_effort: Optional[bool]
     supports_output_config: Optional[bool]
+    supports_image_size: Optional[bool]
     bedrock_output_config_effort_ceiling: Optional[
         Literal["low", "medium", "high", "max", "xhigh"]
     ]
@@ -2580,6 +2580,12 @@ class StandardLoggingMCPToolCall(TypedDict, total=False):
     Cost per query for the MCP server tool call
     """
 
+    mcp_session_id: Optional[str]
+    """
+    The MCP `mcp-session-id` of the stateful session this tool call ran in, when
+    the client is driving a stateful session. Absent for stateless calls.
+    """
+
 
 class StandardLoggingVectorStoreRequest(TypedDict, total=False):
     """
@@ -2713,6 +2719,23 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     llm_provider: Optional[str]
     traceback: Optional[str]
     error_message: Optional[str]
+    # error_rate_limit_category:
+    #   For 429 / rate-limit errors, the source of the rate limit. One of the
+    #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
+    #   (vendor_rate_limit, vendor_batch_rate_limit, litellm_rate_limit,
+    #   litellm_batch_rate_limit). None for non-rate-limit exceptions.
+    #   Surfaced here so custom callbacks / metrics consumers can switch on
+    #   the rate-limit source without reaching for the raw exception.
+    error_rate_limit_category: Optional[str]
+    # error_rate_limit_type:
+    #   For 429 / rate-limit errors, the dimension that was exceeded. One of
+    #   the string values defined by `litellm.exceptions.RateLimitType`
+    #   (requests, tokens, concurrent_requests, budget, max_iterations).
+    #   None for non-rate-limit exceptions and for rate-limit exceptions that
+    #   did not classify the failure (e.g. legacy vendor 429 with no header
+    #   hints). Lets dashboards split rate-limit failures by cause without
+    #   parsing free-text error messages.
+    error_rate_limit_type: Optional[str]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -3180,6 +3203,7 @@ all_litellm_params = (
         "allowed_openai_params",
         "litellm_session_id",
         "use_litellm_proxy",
+        "use_chat_completions_api",
         "prompt_label",
         "shared_session",
         "search_tool_name",
@@ -3282,6 +3306,7 @@ class LlmProviders(str, Enum):
     GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     NVIDIA_RIVA = "nvidia_riva"
+    SONIOX = "soniox"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
@@ -3293,6 +3318,8 @@ class LlmProviders(str, Enum):
     V0 = "v0"
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
+    INCEPTION = "inception"
+    TEXT_COMPLETION_INCEPTION = "text-completion-inception"
     DEEPSEEK = "deepseek"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
@@ -3357,13 +3384,16 @@ class LlmProviders(str, Enum):
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
+    LANGFLOW = "langflow"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
     NANOGPT = "nano-gpt"
     POE = "poe"
     CHUTES = "chutes"
+    NEOSANTARA = "neosantara"
     XIAOMI_MIMO = "xiaomi_mimo"
+    TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -3404,6 +3434,8 @@ class SearchProviders(str, Enum):
     DUCKDUCKGO = "duckduckgo"
     SEARCHAPI = "searchapi"
     SERPER = "serper"
+    YOU_COM = "you_com"
+    APISERPENT = "apiserpent"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3544,25 +3576,11 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
-class CredentialBase(BaseModel):
-    credential_name: str
-    credential_info: dict
-
-
-class CredentialItem(CredentialBase):
-    credential_values: dict
-
-
-class CreateCredentialItem(CredentialBase):
-    credential_values: Optional[dict] = None
-    model_id: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_credential_params(cls, values):
-        if not values.get("credential_values") and not values.get("model_id"):
-            raise ValueError("Either credential_values or model_id must be set")
-        return values
+from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
+from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
+from litellm.models.credentials import (  # noqa: E402
+    CreateCredentialItem as CreateCredentialItem,
+)
 
 
 class ExtractedFileData(TypedDict):
@@ -3600,6 +3618,10 @@ class SpecialEnums(Enum):
 
     LITELLM_MANAGED_VIDEO_COMPLETE_STR = (
         "litellm:custom_llm_provider:{};model_id:{};video_id:{}"
+    )
+
+    LITELLM_PASSTHROUGH_MANAGED_ID_COMPLETE_STR = (
+        "litellm_proxy:passthrough;provider:{};unified_id,{};raw_id,{}"
     )
 
 

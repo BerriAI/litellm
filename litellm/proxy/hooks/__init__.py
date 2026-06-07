@@ -10,6 +10,7 @@ from .max_iterations_limiter import _PROXY_MaxIterationsHandler
 from .parallel_request_limiter import _PROXY_MaxParallelRequestsHandler
 from .parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
 from .responses_id_security import ResponsesIDSecurity
+from .sensitive_data_routing import _PROXY_SensitiveDataRoutingHandler
 
 # List of all available hooks that can be enabled.
 # Defined before the enterprise import below so that any module re-imported
@@ -23,6 +24,7 @@ PROXY_HOOKS = {
     "litellm_skills": SkillsInjectionHook,
     "max_iterations_limiter": _PROXY_MaxIterationsHandler,
     "max_budget_per_session_limiter": _PROXY_MaxBudgetPerSessionHandler,
+    "sensitive_data_routing": _PROXY_SensitiveDataRoutingHandler,
 }
 
 ## FEATURE FLAG HOOKS ##

@@ -1,7 +1,4 @@
-import {
-  AccessGroupResponse,
-  useAccessGroups,
-} from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
+import { AccessGroupResponse, useAccessGroups } from "@/app/(dashboard)/hooks/accessGroups/useAccessGroups";
 import { useDeleteAccessGroup } from "@/app/(dashboard)/hooks/accessGroups/useDeleteAccessGroup";
 import { PlusOutlined } from "@ant-design/icons";
 import {
@@ -13,26 +10,8 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Button,
-  Card,
-  Flex,
-  Input,
-  Layout,
-  Pagination,
-  Space,
-  Table,
-  Tag,
-  theme,
-  Tooltip,
-  Typography,
-} from "antd";
-import {
-  BotIcon,
-  LayersIcon,
-  SearchIcon,
-  ServerIcon
-} from "lucide-react";
+import { Button, Card, Flex, Input, Layout, Pagination, Space, Table, Tag, theme, Tooltip, Typography } from "antd";
+import { BotIcon, LayersIcon, SearchIcon, ServerIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
@@ -82,16 +61,12 @@ function buildAntdColumns(
   return headers.map((header) => {
     const canSort = header.column.getCanSort();
     const isSorted = header.column.getIsSorted();
-    const meta = header.column.columnDef.meta as
-      | { responsive?: string[] }
-      | undefined;
+    const meta = header.column.columnDef.meta as { responsive?: string[] } | undefined;
 
     const col: Record<string, unknown> = {
       title: (
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-          {header.isPlaceholder
-            ? null
-            : flexRender(header.column.columnDef.header, header.getContext())}
+          {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
           {canSort && (
             <TableHeaderSortDropdown
               sortState={isSorted === false ? false : (isSorted as SortState)}
@@ -99,9 +74,7 @@ function buildAntdColumns(
                 if (newState === false) {
                   onSortingChange([]);
                 } else {
-                  onSortingChange([
-                    { id: header.column.id, desc: newState === "desc" },
-                  ]);
+                  onSortingChange([{ id: header.column.id, desc: newState === "desc" }]);
                 }
               }}
               columnId={header.column.id}
@@ -114,9 +87,7 @@ function buildAntdColumns(
       render: (_: unknown, record: AccessGroup) => {
         const row = rowLookup.get(record.id);
         if (!row) return null;
-        const cell = row
-          .getVisibleCells()
-          .find((c) => c.column.id === header.id);
+        const cell = row.getVisibleCells().find((c) => c.column.id === header.id);
         if (!cell) return null;
         return flexRender(cell.column.columnDef.cell, cell.getContext());
       },
@@ -136,10 +107,7 @@ export function AccessGroupsPage() {
   // Admin Viewer follows the read-parity rule: see access groups, no writes.
   const canModify = isProxyAdminRole(userRole ?? "");
   const { data: groupsData, isLoading } = useAccessGroups();
-  const groups = useMemo(
-    () => (groupsData ?? []).map(mapResponseToAccessGroup),
-    [groupsData],
-  );
+  const groups = useMemo(() => (groupsData ?? []).map(mapResponseToAccessGroup), [groupsData]);
 
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
   const [isCreateModalVisible, setIsCreateModalVisible] = useState(false);
@@ -243,8 +211,7 @@ export function AccessGroupsPage() {
         header: () => <span>Created</span>,
         enableSorting: true,
         sortingFn: "datetime",
-        cell: ({ getValue }) =>
-          new Date(getValue() as string).toLocaleDateString(),
+        cell: ({ getValue }) => new Date(getValue() as string).toLocaleDateString(),
         meta: { responsive: ["lg"] },
       },
       {
@@ -252,8 +219,7 @@ export function AccessGroupsPage() {
         accessorKey: "updatedAt",
         header: () => <span>Updated</span>,
         enableSorting: false,
-        cell: ({ getValue }) =>
-          new Date(getValue() as string).toLocaleDateString(),
+        cell: ({ getValue }) => new Date(getValue() as string).toLocaleDateString(),
         meta: { responsive: ["xl"] },
       },
       ...(canModify
@@ -295,16 +261,10 @@ export function AccessGroupsPage() {
   const sortedRows = table.getRowModel().rows;
 
   // Paginated slice
-  const paginatedRows = sortedRows.slice(
-    (currentPage - 1) * pageSize,
-    currentPage * pageSize,
-  );
+  const paginatedRows = sortedRows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   // Map for O(1) lookup by record id in antd render()
-  const rowLookup = useMemo(
-    () => new Map(paginatedRows.map((row) => [row.original.id, row])),
-    [paginatedRows],
-  );
+  const rowLookup = useMemo(() => new Map(paginatedRows.map((row) => [row.original.id, row])), [paginatedRows]);
 
   // Convert TanStack headers → antd columns
   const antdColumns = buildAntdColumns(table, rowLookup, setSorting);
@@ -313,37 +273,20 @@ export function AccessGroupsPage() {
   const dataSource = paginatedRows.map((row) => row.original);
 
   if (selectedGroupId) {
-    return (
-      <AccessGroupDetail
-        accessGroupId={selectedGroupId}
-        onBack={() => setSelectedGroupId(null)}
-      />
-    );
+    return <AccessGroupDetail accessGroupId={selectedGroupId} onBack={() => setSelectedGroupId(null)} />;
   }
 
   return (
-    <Content
-      style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}
-    >
-      <Flex
-        justify="space-between"
-        align="center"
-        style={{ marginBottom: 16 }}
-      >
+    <Content style={{ padding: token.paddingLG, paddingInline: token.paddingLG * 2 }}>
+      <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
         <Space direction="vertical" size={0}>
           <Title level={2} style={{ margin: 0 }}>
             Access Groups
           </Title>
-          <Text type="secondary">
-            Manage resource permissions for your organization
-          </Text>
+          <Text type="secondary">Manage resource permissions for your organization</Text>
         </Space>
         {canModify && (
-          <Button
-            type="primary"
-            icon={<PlusOutlined />}
-            onClick={() => setIsCreateModalVisible(true)}
-          >
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalVisible(true)}>
             Create Access Group
           </Button>
         )}
@@ -375,19 +318,10 @@ export function AccessGroupsPage() {
             showSizeChanger={false}
           />
         </Flex>
-        <Table
-          columns={antdColumns}
-          dataSource={dataSource}
-          rowKey="id"
-          loading={isLoading}
-          pagination={false}
-        />
+        <Table columns={antdColumns} dataSource={dataSource} rowKey="id" loading={isLoading} pagination={false} />
       </Card>
 
-      <AccessGroupCreateModal
-        visible={isCreateModalVisible}
-        onCancel={() => setIsCreateModalVisible(false)}
-      />
+      <AccessGroupCreateModal visible={isCreateModalVisible} onCancel={() => setIsCreateModalVisible(false)} />
 
       <DeleteResourceModal
         isOpen={!!groupToDelete}

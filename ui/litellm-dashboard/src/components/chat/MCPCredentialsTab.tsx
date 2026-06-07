@@ -12,11 +12,7 @@ import { Spin } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import { DeleteOutlined, LinkOutlined } from "@ant-design/icons";
 import { Badge, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
-import {
-  deleteMCPOAuthUserCredential,
-  listMCPUserCredentials,
-  MCPUserCredentialListItem,
-} from "../networking";
+import { deleteMCPOAuthUserCredential, listMCPUserCredentials, MCPUserCredentialListItem } from "../networking";
 
 interface Props {
   accessToken: string;
@@ -70,7 +66,9 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
       .finally(() => setLoading(false));
   }, [accessToken]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const handleRevoke = async (serverId: string) => {
     setRevoking((prev) => new Set(prev).add(serverId));
@@ -80,21 +78,22 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
     } catch {
       MessageManager.error("Failed to revoke connection. Please try again.");
     } finally {
-      setRevoking((prev) => { const n = new Set(prev); n.delete(serverId); return n; });
+      setRevoking((prev) => {
+        const n = new Set(prev);
+        n.delete(serverId);
+        return n;
+      });
     }
   };
 
-  const displayName = (c: MCPUserCredentialListItem) =>
-    c.alias || c.server_name || c.server_id;
+  const displayName = (c: MCPUserCredentialListItem) => c.alias || c.server_name || c.server_id;
 
   return (
     <div className="w-full">
       {/* Header */}
       <div className="mb-4">
         <h2 className="text-base font-semibold text-gray-900 mb-0.5">App Credentials</h2>
-        <p className="text-sm text-gray-500 m-0">
-          Your stored OAuth connections — used automatically in chat.
-        </p>
+        <p className="text-sm text-gray-500 m-0">Your stored OAuth connections — used automatically in chat.</p>
       </div>
 
       {loading ? (
@@ -113,15 +112,9 @@ const MCPCredentialsTab: React.FC<Props> = ({ accessToken }) => {
           <Table>
             <TableHead>
               <TableRow>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">
-                  App
-                </TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">
-                  Connected
-                </TableHeaderCell>
-                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">
-                  Status
-                </TableHeaderCell>
+                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">App</TableHeaderCell>
+                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">Connected</TableHeaderCell>
+                <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4">Status</TableHeaderCell>
                 <TableHeaderCell className="text-xs font-medium text-gray-500 py-2 px-4 text-right">
                   Actions
                 </TableHeaderCell>

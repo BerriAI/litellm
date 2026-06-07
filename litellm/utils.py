@@ -3147,6 +3147,7 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    imageConfig: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[list] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -3183,6 +3184,7 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
+        "imageConfig": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -3374,12 +3376,17 @@ def get_optional_params_embeddings(  # noqa: PLR0915
             and "dimensions" in non_default_params.keys()
             and "dimensions" not in (allowed_openai_params or [])
         ):
-            raise UnsupportedParamsError(
-                status_code=500,
-                message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
-            )
-        else:
-            optional_params = non_default_params
+            # Honor drop_params (per-call) and litellm.drop_params (global) the same
+            # way `_check_valid_arg` does above. The raised error message itself
+            # tells users to set `drop_params=True`, so respect it here.
+            if litellm.drop_params is True or drop_params is True:
+                non_default_params.pop("dimensions", None)
+            else:
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message="Setting dimensions is not supported for OpenAI `text-embedding-3` and later models. To drop it from the call, set `litellm.drop_params = True`.",
+                )
+        optional_params = non_default_params
     elif custom_llm_provider == "triton":
         supported_params = get_supported_openai_params(
             model=model,
@@ -4542,6 +4549,18 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
 
+    elif custom_llm_provider == "text-completion-inception":
+        optional_params = litellm.InceptionTextCompletionConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+
     elif custom_llm_provider == "databricks":
         optional_params = litellm.DatabricksConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4852,7 +4871,7 @@ def add_provider_specific_params_to_optional_params(
             )
             is False
         ):
-            extra_body = passed_params.pop("extra_body", None) or {}
+            extra_body = dict(passed_params.pop("extra_body", None) or {})
             for k in passed_params.keys():
                 if k not in openai_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
@@ -5443,7 +5462,7 @@ def _invalidate_model_cost_lowercase_map() -> None:
     _model_cost_mutation_generation += 1
 
     # Clear LRU caches that depend on model_cost data
-    get_model_info.cache_clear()
+    _cached_get_model_info.cache_clear()
     _cached_get_model_info_helper.cache_clear()
 
 
@@ -5680,7 +5699,9 @@ def _cached_get_model_info_helper(
     Speed Optimization to hit high RPS
     """
     return _get_model_info_helper(
-        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
     )
 
 
@@ -5720,6 +5741,7 @@ def _get_model_info_helper(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> ModelInfoBase:
     """
     Helper for 'get_model_info'. Separated out to avoid infinite loop caused by returning 'supported_openai_param's
@@ -5754,6 +5776,31 @@ def _get_model_info_helper(  # noqa: PLR0915
         split_model = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
         #########################
+        provider_config: Optional[BaseLLMModelInfo] = None
+        if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
+            provider_config = ProviderConfigManager.get_provider_model_info(
+                model=model, provider=LlmProviders(custom_llm_provider)
+            )
+        if provider_config is not None:
+            provider_get_model_info = getattr(provider_config, "get_model_info", None)
+            if callable(provider_get_model_info):
+                try:
+                    provider_model_info = provider_get_model_info(
+                        model=model,
+                        api_base=api_base,
+                        api_key=api_key,
+                    )
+                    if provider_model_info is not None:
+                        return provider_model_info
+                except Exception as e:
+                    verbose_logger.warning(
+                        "Could not get dynamic model info for model=%s, provider=%s; "
+                        "falling back to the static cost map: %s",
+                        model,
+                        custom_llm_provider,
+                        e,
+                    )
+
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
             return ModelInfoBase(
@@ -5774,10 +5821,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 supports_computer_use=None,
                 supports_pdf_input=None,
             )
-        elif (
-            custom_llm_provider == "ollama" or custom_llm_provider == "ollama_chat"
-        ) and not _is_potential_model_name_in_model_cost(potential_model_names):
-            return litellm.OllamaConfig().get_model_info(model, api_base=api_base)
         else:
             """
             Check if: (in order of specificity)
@@ -6054,6 +6097,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "provider_specific_entry", None
                 ),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
+                supports_image_size=_model_info.get("supports_image_size", None),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
@@ -6064,11 +6108,53 @@ def _get_model_info_helper(  # noqa: PLR0915
         )
 
 
+def _build_model_info(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> ModelInfo:
+    supported_openai_params = litellm.get_supported_openai_params(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+
+    _model_info = _get_model_info_helper(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+    )
+
+    provider_info = get_provider_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    if provider_info:
+        for key, value in provider_info.items():
+            if value is not None:
+                _model_info[key] = value  # type: ignore
+
+    # if verbose_logger.isEnabledFor(logging.DEBUG):
+    # verbose_logger.debug(f"model_info: {_model_info}")
+
+    return ModelInfo(**_model_info, supported_openai_params=supported_openai_params)
+
+
 @lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
+def _cached_get_model_info(
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+) -> ModelInfo:
+    return _build_model_info(
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
+    )
+
+
 def get_model_info(
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
 ) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
@@ -6140,32 +6226,15 @@ def get_model_info(
             "supported_openai_params": ["temperature", "max_tokens", "top_p", "frequency_penalty", "presence_penalty"]
         }
     """
-    supported_openai_params = litellm.get_supported_openai_params(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
+    # api_key is a per-caller credential, not part of the model identity, so it is
+    # kept out of the cache key; explicit keys are resolved without the cache.
+    if api_key is not None:
+        return _build_model_info(model, custom_llm_provider, api_base, api_key)
+    return _cached_get_model_info(model, custom_llm_provider, api_base)
 
-    _model_info = _get_model_info_helper(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
-    )
 
-    provider_info = get_provider_info(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
-    if provider_info:
-        for key, value in provider_info.items():
-            if value is not None:
-                _model_info[key] = value  # type: ignore
-
-    # if verbose_logger.isEnabledFor(logging.DEBUG):
-    # verbose_logger.debug(f"model_info: {_model_info}")
-
-    returned_model_info = ModelInfo(
-        **_model_info, supported_openai_params=supported_openai_params
-    )
-
-    return returned_model_info
+get_model_info.cache_clear = _cached_get_model_info.cache_clear  # type: ignore[attr-defined]
+get_model_info.cache_info = _cached_get_model_info.cache_info  # type: ignore[attr-defined]
 
 
 def json_schema_type(python_type_name: str):
@@ -6583,6 +6652,14 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("CODESTRAL_API_KEY")
+        elif (
+            custom_llm_provider == "inception"
+            or custom_llm_provider == "text-completion-inception"
+        ):
+            if "INCEPTION_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("INCEPTION_API_KEY")
         elif custom_llm_provider == "deepseek":
             if "DEEPSEEK_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8237,6 +8314,7 @@ class ProviderConfigManager:
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
+            LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
             LlmProviders.TEXT_COMPLETION_OPENAI: (
                 lambda: litellm.OpenAITextCompletionConfig(),
@@ -8302,6 +8380,10 @@ class ProviderConfigManager:
                 lambda: litellm.CodestralTextCompletionConfig(),
                 False,
             ),
+            LlmProviders.TEXT_COMPLETION_INCEPTION: (
+                lambda: litellm.InceptionTextCompletionConfig(),
+                False,
+            ),
             LlmProviders.SAMBANOVA: (lambda: litellm.SambanovaConfig(), False),
             LlmProviders.MARITALK: (lambda: litellm.MaritalkConfig(), False),
             LlmProviders.VLLM: (lambda: litellm.VLLMConfig(), False),
@@ -8338,6 +8420,10 @@ class ProviderConfigManager:
             LlmProviders.AMAZON_NOVA: (lambda: litellm.AmazonNovaChatConfig(), False),
             LlmProviders.LANGGRAPH: (
                 lambda: ProviderConfigManager._get_langgraph_config(),
+                False,
+            ),
+            LlmProviders.LANGFLOW: (
+                lambda: ProviderConfigManager._get_langflow_config(),
                 False,
             ),
         }
@@ -8410,6 +8496,13 @@ class ProviderConfigManager:
         from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
         return LangGraphConfig()
+
+    @staticmethod
+    def _get_langflow_config() -> BaseConfig:
+        """Get LangFlow config."""
+        from litellm.llms.langflow.chat.transformation import LangFlowConfig
+
+        return LangFlowConfig()
 
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
@@ -8723,6 +8816,12 @@ class ProviderConfigManager:
             )
 
             return NvidiaRivaAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SONIOX == provider:
+            from litellm.llms.soniox.audio_transcription.transformation import (
+                SonioxAudioTranscriptionConfig,
+            )
+
+            return SonioxAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8816,6 +8915,16 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
+            # Only OpenAI gpt frontier models (gpt-5.x, and future gpt-6 etc.) are
+            # served on the /openai/v1/responses path. gpt-oss and every non-OpenAI
+            # model on Mantle (nvidia, mistral, google, zai, ...) are chat-completions
+            # only and 400 on that path, so they fall through to None to keep the
+            # chat-completions emulation (see litellm/responses/main.py "config is None").
+            model_lower = model.lower() if model else ""
+            if "openai.gpt-" in model_lower and "gpt-oss" not in model_lower:
+                return litellm.BedrockMantleResponsesAPIConfig()
+            return None
         return None
 
     @staticmethod
@@ -8863,6 +8972,8 @@ class ProviderConfigManager:
             return litellm.FireworksAITextCompletionConfig()
         elif LlmProviders.TOGETHER_AI == provider:
             return litellm.TogetherAITextCompletionConfig()
+        elif LlmProviders.TEXT_COMPLETION_INCEPTION == provider:
+            return litellm.InceptionTextCompletionConfig()
         return litellm.OpenAITextCompletionConfig()
 
     @staticmethod
@@ -8936,6 +9047,12 @@ class ProviderConfigManager:
             )
 
             return AzurePassthroughConfig()
+        elif LlmProviders.WATSONX == provider:
+            from litellm.llms.watsonx.passthrough.transformation import (
+                WatsonxPassthroughConfig,
+            )
+
+            return WatsonxPassthroughConfig()
         return None
 
     @staticmethod
@@ -9389,6 +9506,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.apiserpent.search.transformation import (
+            APISerpentSearchConfig,
+        )
         from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.duckduckgo.search.transformation import DuckDuckGoSearchConfig
@@ -9404,6 +9524,7 @@ class ProviderConfigManager:
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
+        from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
             SearchProviders.PERPLEXITY: PerplexitySearchConfig,
@@ -9419,6 +9540,8 @@ class ProviderConfigManager:
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
             SearchProviders.SEARCHAPI: SearchAPIConfig,
             SearchProviders.SERPER: SerperSearchConfig,
+            SearchProviders.YOU_COM: YouComSearchConfig,
+            SearchProviders.APISERPENT: APISerpentSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)
         if config_class is None:

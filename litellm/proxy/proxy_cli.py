@@ -7,7 +7,7 @@ import subprocess
 import sys
 import urllib.parse as urlparse
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
 import click
 import httpx
@@ -201,32 +201,35 @@ class ProxyInitializationHelpers:
 
     @staticmethod
     def _get_reload_options(config_path: Optional[str]) -> dict:
-        """Build uvicorn reload kwargs so --reload also reacts to YAML edits."""
-        options: dict = {"reload": True}
-        if not config_path:
-            return options
-        config_abs = os.path.abspath(config_path)
-        config_dir = os.path.dirname(config_abs)
+        """Build uvicorn reload kwargs so --reload also reacts to .env and YAML edits."""
         cwd = os.path.abspath(os.getcwd())
         reload_dirs = [cwd]
-        if config_dir and config_dir != cwd:
-            reload_dirs.append(config_dir)
-        options["reload_dirs"] = reload_dirs
-        # Must be a basename, not an absolute path: uvicorn's
+        # Must be basenames, not absolute paths: uvicorn's
         # resolve_reload_patterns() calls pathlib.Path.glob(), which raises
         # NotImplementedError on absolute patterns (uvicorn discussion #2156).
-        options["reload_includes"] = ["*.py", os.path.basename(config_abs)]
-        return options
+        reload_includes = ["*.py", ".env"]
+        if config_path:
+            config_abs = os.path.abspath(config_path)
+            config_dir = os.path.dirname(config_abs)
+            if config_dir and config_dir != cwd:
+                reload_dirs.append(config_dir)
+            reload_includes.append(os.path.basename(config_abs))
+        return {
+            "reload": True,
+            "reload_dirs": reload_dirs,
+            "reload_includes": reload_includes,
+        }
 
     @staticmethod
-    def _patch_statreload_for_config(config_path: str) -> bool:
-        """Make uvicorn's StatReload reloader notice YAML config changes.
+    def _patch_statreload_extra_paths(paths: Iterable[Optional[str]]) -> bool:
+        """Make uvicorn's StatReload reloader notice non-Python dev files
+        (the --config YAML and .env).
 
         Uvicorn uses WatchFilesReload when the optional `watchfiles` package
         is installed, otherwise StatReload. StatReload hard-codes `*.py` in
         `iter_py_files()` and silently ignores `reload_includes`, so the
-        kwargs from `_get_reload_options` alone don't trigger reloads on YAML
-        edits. We monkey-patch `iter_py_files` to also yield the config path.
+        kwargs from `_get_reload_options` alone don't trigger reloads on those
+        files. We monkey-patch `iter_py_files` to also yield the given paths.
 
         Idempotent across calls and a no-op for the WatchFilesReload path.
         """
@@ -235,29 +238,48 @@ class ProxyInitializationHelpers:
         except ImportError:  # pragma: no cover - uvicorn is a hard dep
             return False
 
-        if not config_path:
-            return False
-
         from pathlib import Path
 
-        config_abs = Path(config_path).resolve()
+        resolved = {Path(p).resolve() for p in paths if p}
+        if not resolved:
+            return False
 
         patched_paths = getattr(StatReload, "_litellm_patched_config_paths", None)
         if patched_paths is None:
             original_iter = StatReload.iter_py_files
             patched_paths = set()
 
-            def _iter_with_config(self):  # type: ignore[no-untyped-def]
+            def _iter_with_extra(self):  # type: ignore[no-untyped-def]
                 yield from original_iter(self)
                 for path in StatReload._litellm_patched_config_paths:
                     if path.exists():
                         yield path
 
-            StatReload.iter_py_files = _iter_with_config  # type: ignore[assignment]
+            StatReload.iter_py_files = _iter_with_extra  # type: ignore[assignment]
             StatReload._litellm_patched_config_paths = patched_paths  # type: ignore[attr-defined]
 
-        patched_paths.add(config_abs)
+        patched_paths.update(resolved)
         return True
+
+    @staticmethod
+    def _configure_dev_reload(uvicorn_args: dict, config_path: Optional[str]) -> None:
+        """Wire up --reload (dev only): watch *.py, the --config YAML, and .env,
+        and signal reloaded workers to re-read .env with override so edits to
+        existing keys actually take effect rather than staying masked by the
+        value inherited from the reloader process."""
+        from litellm._logging import verbose_proxy_logger
+
+        uvicorn_args.update(ProxyInitializationHelpers._get_reload_options(config_path))
+        os.environ["LITELLM_DEV_ENV_HOT_RELOAD"] = "True"
+        env_path = os.path.join(os.getcwd(), ".env")
+        ProxyInitializationHelpers._patch_statreload_extra_paths(
+            [config_path, env_path]
+        )
+        verbose_proxy_logger.warning(
+            "LiteLLM --reload: worker processes re-read .env with override, so .env "
+            "values win over shell-exported environment variables. Unset a key in .env "
+            "to let a shell-exported value take precedence."
+        )
 
     @staticmethod
     def _init_hypercorn_server(
@@ -1217,11 +1239,7 @@ def run_server(  # noqa: PLR0915
                 uvicorn_args["loop"] = loop_type
 
             if reload:
-                uvicorn_args.update(
-                    ProxyInitializationHelpers._get_reload_options(config)
-                )
-                if config:
-                    ProxyInitializationHelpers._patch_statreload_for_config(config)
+                ProxyInitializationHelpers._configure_dev_reload(uvicorn_args, config)
 
             uvicorn.run(
                 **uvicorn_args,

@@ -49,9 +49,24 @@ class DocumentBlock(TypedDict):
     name: str
 
 
+class SearchResultBlock(TypedDict, total=False):
+    """
+    Search result block used in Bedrock toolResult content.
+
+    Reference:
+    https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_SearchResultBlock.html
+    """
+
+    source: str
+    title: str
+    content: List[dict]
+    citations: dict
+
+
 class ToolResultContentBlock(TypedDict, total=False):
     image: ImageBlock
     document: DocumentBlock
+    searchResult: SearchResultBlock
     json: dict
     text: str
 
@@ -106,24 +121,41 @@ class CitationWebLocationBlock(TypedDict, total=False):
     domain: str
 
 
+class CitationSearchResultLocationBlock(TypedDict, total=False):
+    """
+    Character span of a Nova grounding citation within the cited content,
+    plus the index of the search result it refers to.
+    """
+
+    start: int
+    end: int
+    searchResultIndex: int
+
+
 class CitationLocationBlock(TypedDict, total=False):
     """
-    Location block containing the web location for a citation.
+    Location block describing where a citation points to.
     """
 
     web: CitationWebLocationBlock
+    searchResultLocation: CitationSearchResultLocationBlock
 
 
 class CitationReferenceBlock(TypedDict, total=False):
     """
-    Citation reference block containing a single citation with its location.
-
-    Each citation contains:
-    - location.web.url: The URL of the source
-    - location.web.domain: The domain of the source
+    Citation reference block containing a single citation with its location,
+    source URL and title.
     """
 
     location: CitationLocationBlock
+    source: str
+    title: str
+
+
+class CitationGeneratedContentBlock(TypedDict, total=False):
+    """A piece of generated text associated with a citationsContent block."""
+
+    text: str
 
 
 class CitationsContentBlock(TypedDict, total=False):
@@ -131,27 +163,33 @@ class CitationsContentBlock(TypedDict, total=False):
     Citations content block returned by Nova grounding (web search) tool.
 
     When Nova grounding is enabled via systemTool, the model may return
-    citationsContent blocks containing web search citation references.
+    citationsContent blocks containing the grounded text and its citation
+    references.
 
     Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
 
     Example response structure:
         {
             "citationsContent": {
+                "content": [{"text": "The grounded answer text ..."}],
                 "citations": [
                     {
                         "location": {
-                            "web": {
-                                "url": "https://example.com/article",
-                                "domain": "example.com"
+                            "searchResultLocation": {
+                                "start": 0,
+                                "end": 42,
+                                "searchResultIndex": 0
                             }
-                        }
+                        },
+                        "source": "https://example.com/article",
+                        "title": "Example Article"
                     }
                 ]
             }
         }
     """
 
+    content: List[CitationGeneratedContentBlock]
     citations: List[CitationReferenceBlock]
 
 
@@ -212,6 +250,7 @@ class ToolJsonSchemaBlock(TypedDict, total=False):
     type: Literal["object"]
     properties: dict
     required: List[str]
+    additionalProperties: bool
 
 
 class ToolInputSchemaBlock(TypedDict):
@@ -222,6 +261,7 @@ class ToolSpecBlock(TypedDict, total=False):
     inputSchema: Required[ToolInputSchemaBlock]
     name: Required[str]
     description: str
+    strict: bool
 
 
 class SystemToolBlock(TypedDict, total=False):
@@ -243,6 +283,36 @@ class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
     systemTool: Optional[SystemToolBlock]
     cachePoint: Optional[CachePointBlock]
+
+
+class BedrockToolSpec(dict):
+    def __init__(
+        self,
+        *,
+        name: str,
+        description: str,
+        parameters: dict,
+        strict: Optional[bool],
+        supports_strict_tools: bool,
+    ) -> None:
+        json_schema: ToolJsonSchemaBlock = {
+            "type": parameters["type"],
+            "properties": parameters.get("properties", {}),
+            "required": parameters.get("required", []),
+        }
+        additional_properties = parameters.get("additionalProperties")
+        if supports_strict_tools and additional_properties is not None:
+            json_schema["additionalProperties"] = additional_properties
+
+        tool_spec: ToolSpecBlock = {
+            "inputSchema": {"json": json_schema},
+            "name": name,
+            "description": description,
+        }
+        if supports_strict_tools and strict is not None:
+            tool_spec["strict"] = strict
+
+        super().__init__(toolSpec=tool_spec)
 
 
 class SpecificToolChoiceBlock(TypedDict):
