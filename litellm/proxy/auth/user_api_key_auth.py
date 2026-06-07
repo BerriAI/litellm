@@ -21,9 +21,9 @@ from fastapi.security.api_key import APIKeyHeader
 import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
+from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
-from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.proxy._types import *
@@ -65,7 +65,6 @@ from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -73,12 +72,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     populate_request_with_path_params,
 )
 from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
     normalize_route_for_root_path,
 )
+from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 
@@ -1797,7 +1798,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         _team_id = valid_token.team_id
 
                         if _user_id is not None and _team_id is not None:
-                            _db_member = await prisma_client.db.litellm_teammembership.find_first(
+                            _db_member = await TeamMembershipRepository(
+                                prisma_client
+                            ).table.find_first(
                                 where={
                                     "user_id": _user_id,
                                     "team_id": _team_id,

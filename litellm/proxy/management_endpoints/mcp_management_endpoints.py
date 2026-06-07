@@ -60,6 +60,10 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
+from litellm.repositories.table_repositories import (
+    MCPServerRepository,
+    MCPUserCredentialsRepository,
+)
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 
@@ -761,7 +765,7 @@ if MCP_AVAILABLE:
         # Get from DB
         if prisma_client is not None:
             try:
-                mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
+                mcp_servers = await MCPServerRepository(prisma_client).table.find_many()
                 for server in mcp_servers:
                     if (
                         hasattr(server, "mcp_access_groups")
@@ -998,10 +1002,10 @@ if MCP_AVAILABLE:
                 if getattr(s, "is_byok", False)
             ]
             if byok_server_ids:
-                cred_rows = (
-                    await _byok_prisma_client.db.litellm_mcpusercredentials.find_many(
-                        where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
-                    )
+                cred_rows = await MCPUserCredentialsRepository(
+                    _byok_prisma_client
+                ).table.find_many(
+                    where={"user_id": user_id, "server_id": {"in": byok_server_ids}}
                 )
                 cred_set = {r.server_id for r in cred_rows}
                 for server in redacted_mcp_servers:

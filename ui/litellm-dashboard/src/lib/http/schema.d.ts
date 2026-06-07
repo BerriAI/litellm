@@ -21364,8 +21364,7 @@ export interface components {
         };
         /**
          * LiteLLM_DeletedTeamTable
-         * @description Recording of deleted teams for audit purposes. Mirrors LiteLLM_TeamTable
-         *     plus metadata captured at deletion time.
+         * @description Audit record for deleted teams; mirrors the team plus deletion metadata.
          */
         LiteLLM_DeletedTeamTable: {
             /** Access Group Ids */
@@ -21375,6 +21374,11 @@ export interface components {
              * @default []
              */
             admins: unknown[];
+            /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
             /**
              * Blocked
              * @default false
@@ -21422,6 +21426,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -21431,6 +21449,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -21454,8 +21474,7 @@ export interface components {
         };
         /**
          * LiteLLM_DeletedVerificationToken
-         * @description Recording of deleted keys for audit purposes. Mirrors LiteLLM_VerificationToken
-         *     plus metadata captured at deletion time.
+         * @description Audit record for deleted keys; mirrors the token plus deletion metadata.
          */
         LiteLLM_DeletedVerificationToken: {
             /** Access Group Ids */
@@ -21488,6 +21507,8 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: {
                 [key: string]: unknown;
@@ -21866,9 +21887,9 @@ export interface components {
             /** Id */
             id?: number | null;
             /** Model Aliases */
-            model_aliases?: {
+            model_aliases?: string | {
                 [key: string]: unknown;
-            } | string | null;
+            } | null;
             team?: components["schemas"]["LiteLLM_TeamTable"] | null;
             /** Updated By */
             updated_by: string;
@@ -21934,6 +21955,11 @@ export interface components {
             } | null;
             /** Mcp Toolsets */
             mcp_toolsets?: string[] | null;
+            /**
+             * Models
+             * @default []
+             */
+            models: string[] | null;
             /** Object Permission Id */
             object_permission_id: string;
             /**
@@ -21949,7 +21975,7 @@ export interface components {
         };
         /**
          * LiteLLM_OrganizationMembershipTable
-         * @description This is the table that track what organizations a user belongs to and users spend within the organization
+         * @description Tracks which organizations a user belongs to and their spend within it.
          */
         LiteLLM_OrganizationMembershipTable: {
             /** Budget Id */
@@ -22005,7 +22031,17 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
-            /** Models */
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
@@ -22231,7 +22267,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */
@@ -22286,7 +22322,7 @@ export interface components {
             /** Created At */
             created_at?: string | null;
             /** Created By */
-            created_by: string;
+            created_by?: string | null;
             /** Description */
             description?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
@@ -22328,7 +22364,7 @@ export interface components {
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
-            updated_by: string;
+            updated_by?: string | null;
         };
         /** LiteLLM_SpendLogs */
         LiteLLM_SpendLogs: {
@@ -22433,6 +22469,11 @@ export interface components {
              */
             admins: unknown[];
             /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
+            /**
              * Blocked
              * @default false
              */
@@ -22469,6 +22510,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -22478,6 +22533,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -22549,6 +22606,11 @@ export interface components {
         };
         /** LiteLLM_UserTable */
         LiteLLM_UserTable: {
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Reset At */
@@ -22557,6 +22619,8 @@ export interface components {
             created_at?: string | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -22581,8 +22645,17 @@ export interface components {
              */
             models: unknown[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /**
+             * Policies
+             * @default []
+             */
+            policies: string[];
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -22592,6 +22665,8 @@ export interface components {
             spend: number;
             /** Sso User Id */
             sso_user_id?: string | null;
+            /** Team Id */
+            team_id?: string | null;
             /**
              * Teams
              * @default []
@@ -22612,6 +22687,11 @@ export interface components {
         };
         /** LiteLLM_UserTableWithKeyCount */
         LiteLLM_UserTableWithKeyCount: {
+            /**
+             * Allowed Cache Controls
+             * @default []
+             */
+            allowed_cache_controls: string[];
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Reset At */
@@ -22625,6 +22705,8 @@ export interface components {
             key_count: number;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Metadata */
             metadata?: {
                 [key: string]: unknown;
@@ -22649,8 +22731,17 @@ export interface components {
              */
             models: unknown[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
+            /** Object Permission Id */
+            object_permission_id?: string | null;
+            /** Organization Id */
+            organization_id?: string | null;
             /** Organization Memberships */
             organization_memberships?: components["schemas"]["LiteLLM_OrganizationMembershipTable"][] | null;
+            /**
+             * Policies
+             * @default []
+             */
+            policies: string[];
             /** Rpm Limit */
             rpm_limit?: number | null;
             /**
@@ -22660,6 +22751,8 @@ export interface components {
             spend: number;
             /** Sso User Id */
             sso_user_id?: string | null;
+            /** Team Id */
+            team_id?: string | null;
             /**
              * Teams
              * @default []
@@ -22710,6 +22803,8 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: {
                 [key: string]: unknown;
@@ -24234,7 +24329,17 @@ export interface components {
             metadata?: {
                 [key: string]: unknown;
             } | null;
-            /** Models */
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Models
+             * @default []
+             */
             models: string[];
             object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
             /** Object Permission Id */
@@ -24339,7 +24444,7 @@ export interface components {
              */
             created_at: string;
             /** Created By */
-            created_by: string;
+            created_by?: string | null;
             /** Description */
             description?: string | null;
             litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
@@ -24384,7 +24489,7 @@ export interface components {
              */
             updated_at: string;
             /** Updated By */
-            updated_by: string;
+            updated_by?: string | null;
         };
         /** NewTeamRequest */
         NewTeamRequest: {
@@ -27273,6 +27378,11 @@ export interface components {
              */
             admins: unknown[];
             /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
+            /**
              * Blocked
              * @default false
              */
@@ -27309,6 +27419,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -27318,6 +27442,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -27361,6 +27487,11 @@ export interface components {
              * @default []
              */
             admins: unknown[];
+            /**
+             * Allow Team Guardrail Config
+             * @default false
+             */
+            allow_team_guardrail_config: boolean | null;
             /**
              * Blocked
              * @default false
@@ -27408,6 +27539,20 @@ export interface components {
             /** Model Id */
             model_id?: number | null;
             /**
+             * Model Max Budget
+             * @default {}
+             */
+            model_max_budget: {
+                [key: string]: unknown;
+            } | null;
+            /**
+             * Model Spend
+             * @default {}
+             */
+            model_spend: {
+                [key: string]: unknown;
+            } | null;
+            /**
              * Models
              * @default []
              */
@@ -27417,6 +27562,8 @@ export interface components {
             object_permission_id?: string | null;
             /** Organization Id */
             organization_id?: string | null;
+            /** Policies */
+            policies?: string[] | null;
             /** Router Settings */
             router_settings?: {
                 [key: string]: unknown;
@@ -28907,6 +29054,8 @@ export interface components {
             blocked?: boolean | null;
             /** Budget Duration */
             budget_duration?: string | null;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Budget Limits */
             budget_limits?: {
                 [key: string]: unknown;
@@ -29653,7 +29802,7 @@ export interface components {
                 [key: string]: unknown;
             } | null;
             /** Stream Timeout */
-            stream_timeout?: string | number | null;
+            stream_timeout?: number | string | null;
             /** Tag Regex */
             tag_regex?: string[] | null;
             /** Tags */

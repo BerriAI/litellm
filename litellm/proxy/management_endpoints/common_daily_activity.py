@@ -8,6 +8,10 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
     DailySpendData,
@@ -346,7 +350,7 @@ async def get_api_key_metadata(
     This ensures that key_alias and team_id are preserved in historical activity logs
     even after a key is deleted or regenerated.
     """
-    key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+    key_records = await VerificationTokenRepository(prisma_client).table.find_many(
         where={"token": {"in": list(api_keys)}}
     )
     result = {
@@ -357,11 +361,11 @@ async def get_api_key_metadata(
     missing_keys = api_keys - set(result.keys())
     if missing_keys:
         try:
-            deleted_key_records = (
-                await prisma_client.db.litellm_deletedverificationtoken.find_many(
-                    where={"token": {"in": list(missing_keys)}},
-                    order={"deleted_at": "desc"},
-                )
+            deleted_key_records = await DeletedVerificationTokenRepository(
+                prisma_client
+            ).table.find_many(
+                where={"token": {"in": list(missing_keys)}},
+                order={"deleted_at": "desc"},
             )
             # Use the most recent deleted record for each token (ordered by deleted_at desc)
             for k in deleted_key_records:

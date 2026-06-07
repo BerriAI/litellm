@@ -60,12 +60,13 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    EndpointType,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -1002,9 +1003,7 @@ async def pass_through_request(  # noqa: PLR0915
                 is_passthrough_list_route,
                 list_passthrough_ids_from_db,
             )
-            from litellm.proxy.proxy_server import (
-                prisma_client as _list_prisma,
-            )
+            from litellm.proxy.proxy_server import prisma_client as _list_prisma
 
             if (
                 is_passthrough_list_route(
@@ -2875,7 +2874,7 @@ async def _filter_endpoints_by_team_allowed_routes(
         HTTPException: If team is not found
     """
     # retrieve team from db
-    team = await prisma_client.db.litellm_teamtable.find_unique(
+    team = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id},
     )
     if team is None:
