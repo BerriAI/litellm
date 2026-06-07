@@ -308,15 +308,15 @@ class XAIOAuthAuthenticator:
     def _exchange_token(
         self, token_endpoint: str, data: Dict[str, str]
     ) -> Dict[str, Any]:
-        response = self._client().post(
-            token_endpoint,
-            headers={
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-            data=data,
-        )
         try:
+            response = self._client().post(
+                token_endpoint,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                data=data,
+            )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             raise XAIOAuthError(
