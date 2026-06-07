@@ -122,13 +122,13 @@ def chat(
     Examples:
 
         # Chat with a specific model
-        litellm-proxy chat gpt-4
+        lite chat gpt-4
 
         # Chat without specifying model (will show model selection)
-        litellm-proxy chat
+        lite chat
 
         # Chat with custom settings
-        litellm-proxy chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
+        lite chat gpt-4 --temperature 0.9 --system "You are a helpful coding assistant"
     """
     console = Console()
 

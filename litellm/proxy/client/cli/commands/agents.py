@@ -137,7 +137,7 @@ def verify_proxy_key(
     if resp.status_code in (401, 403):
         raise AgentRunError(
             f"LiteLLM rejected your key (HTTP {resp.status_code}). "
-            "Run `litellm-proxy login` to refresh it, or pass a valid --api-key."
+            "Run `lite login` to refresh it, or pass a valid --api-key."
         )
 
 
@@ -197,7 +197,7 @@ def _resolve_api_key(ctx: click.Context) -> str:
     if not _is_interactive():
         raise click.ClickException(
             "No LiteLLM key found. Set LITELLM_PROXY_API_KEY (or pass --api-key) for "
-            "non-interactive use, or run `litellm-proxy login` from a terminal."
+            "non-interactive use, or run `lite login` from a terminal."
         )
 
     click.echo("No LiteLLM credentials found; starting login...")
@@ -252,7 +252,7 @@ def _make_agent_command(binary: str, display_name: str) -> click.Command:
 
 
 def agent_commands() -> List[click.Command]:
-    """Build one top-level command per known agent, e.g. `litellm-proxy claude`."""
+    """Build one top-level command per known agent, e.g. `lite claude`."""
     return [
         _make_agent_command(binary, name)
         for binary, (name, _profiles) in _KNOWN_AGENTS.items()
