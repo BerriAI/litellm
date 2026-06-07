@@ -410,7 +410,18 @@ Run the LiteLLM proxy as a production-ready componentized stack (gateway, backen
 
 #### AWS — ECS Fargate + Aurora + ElastiCache + ALB
 
+[![Launch in AWS CloudShell](https://img.shields.io/badge/Launch-AWS_CloudShell-FF9900?logo=amazon-aws&logoColor=white)](https://console.aws.amazon.com/cloudshell/home) — opens an in-browser shell, already authenticated to your AWS account. Once inside, run:
+
+```bash
+git clone https://github.com/BerriAI/litellm.git
+cd litellm/terraform/litellm/aws/examples/default
+cp terraform.tfvars.example terraform.tfvars   # edit region/tenant/env
+terraform init && terraform apply
+```
+
 [Module page →](https://registry.terraform.io/modules/BerriAI/litellm/aws/latest)
+
+Or call the module from your own root config:
 
 ```hcl
 # main.tf
@@ -454,9 +465,13 @@ Provider API keys live in AWS Secrets Manager; reference ARNs via `gateway_extra
 
 #### GCP — Cloud Run + Cloud SQL + Memorystore + HTTPS LB
 
+[![Open in Cloud Shell](https://gstatic.com/cloudssh/images/open-btn.svg)](https://ssh.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https%3A%2F%2Fgithub.com%2FBerriAI%2Flitellm&cloudshell_workspace=terraform%2Flitellm%2Fgcp%2Fexamples%2Fdefault&cloudshell_tutorial=TUTORIAL.md&cloudshell_image=gcr.io/ds-artifacts-cloudshell/deploystack_custom_image&shellonly=true)
+
+Real 1-click. Opens Cloud Shell, clones this repo, and walks you through `terraform apply` via a built-in [DeployStack tutorial](./terraform/litellm/gcp/examples/default/TUTORIAL.md) — pick the project, the tutorial sets up the Artifact Registry remote repo, writes `terraform.tfvars` from your answers, and runs apply.
+
 [Module page →](https://registry.terraform.io/modules/BerriAI/litellm/google/latest)
 
-Cloud Run can't pull from `ghcr.io` directly, so first set up a one-time Artifact Registry remote repo backed by GHCR:
+To call the module from your own config instead, Cloud Run can't pull from `ghcr.io` directly, so first set up a one-time Artifact Registry remote repo backed by GHCR:
 
 ```bash
 gcloud artifacts repositories create litellm \
