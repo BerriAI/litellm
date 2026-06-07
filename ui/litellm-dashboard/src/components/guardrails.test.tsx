@@ -44,6 +44,11 @@ vi.mock("./guardrails/TeamGuardrailsTab", () => ({
   TeamGuardrailsTab: () => <div>Mock Team Guardrails Tab</div>,
 }));
 
+vi.mock("./guardrails/guardrail_garden", () => ({
+  __esModule: true,
+  default: () => <div>Mock Guardrail Garden</div>,
+}));
+
 vi.mock("@/utils/roles", () => ({
   isAdminRole: vi.fn((role: string) => role === "admin"),
 }));
@@ -106,5 +111,16 @@ describe("GuardrailsPanel", () => {
     // Activate the Guardrails tab so its content (including the Add button) is rendered
     fireEvent.click(screen.getByText("Guardrails"));
     expect(screen.getByText("+ Add New Guardrail")).toBeInTheDocument();
+  });
+
+  it("defaults admins to the first tab, not Submitted Guardrails", async () => {
+    render(<GuardrailsPanel accessToken="test-token" userRole="admin" />);
+    expect(screen.getByRole("tab", { name: "Guardrail Garden" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Submitted Guardrails" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("defaults non-admins to the Submitted Guardrails tab", async () => {
+    render(<GuardrailsPanel accessToken="test-token" userRole="internal_user" />);
+    expect(screen.getByRole("tab", { name: "Submitted Guardrails" })).toHaveAttribute("aria-selected", "true");
   });
 });
