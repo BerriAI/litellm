@@ -179,14 +179,19 @@ class TestMCPClientUnitTests:
         ]
         mock_result = MagicMock()
         mock_result.tools = mock_tools
-        mock_session_instance.list_tools.return_value = mock_result
+
+        async def send_request(_request, result_type):
+            assert result_type is mcp_client_module._LenientListToolsResult
+            return mock_result
+
+        mock_session_instance.send_request = AsyncMock(side_effect=send_request)
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()
 
         assert result == mock_tools
         mock_session_instance.initialize.assert_called_once()
-        mock_session_instance.list_tools.assert_called_once()
+        mock_session_instance.send_request.assert_awaited_once()
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
