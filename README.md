@@ -404,6 +404,124 @@ You can use LiteLLM through either the Proxy Server or Python SDK. Both give you
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
+### Deploy on AWS or GCP with Terraform
+
+Run the LiteLLM proxy as a production-ready componentized stack (gateway, backend, UI on separate services; managed Postgres + Redis + object store) using the published Terraform modules. Both modules are on the [public Terraform Registry](https://registry.terraform.io/namespaces/BerriAI) — no auth needed.
+
+#### AWS — ECS Fargate + Aurora + ElastiCache + ALB
+
+[Module page →](https://registry.terraform.io/modules/BerriAI/litellm/aws/latest)
+
+```hcl
+# main.tf
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    aws = { source = "hashicorp/aws", version = "~> 5.60" }
+  }
+}
+
+provider "aws" {
+  region = "us-west-2"
+}
+
+module "litellm" {
+  source  = "BerriAI/litellm/aws"
+  version = "~> 1.89"
+
+  region = "us-west-2"
+  azs    = ["us-west-2a", "us-west-2b"]
+  tenant = "acme"
+  env    = "prod"
+
+  # Production: provide an ACM cert. Without one, set allow_plaintext_alb = true
+  # (dev/trial only).
+  # acm_certificate_arn = "arn:aws:acm:us-west-2:111122223333:certificate/..."
+  allow_plaintext_alb = true
+}
+
+output "litellm_url" {
+  value = module.litellm.alb_dns_name
+}
+```
+
+```bash
+terraform init
+terraform apply
+```
+
+Provider API keys live in AWS Secrets Manager; reference ARNs via `gateway_extra_secrets`. Full input list and architecture diagram on the [registry page](https://registry.terraform.io/modules/BerriAI/litellm/aws/latest?tab=inputs).
+
+#### GCP — Cloud Run + Cloud SQL + Memorystore + HTTPS LB
+
+[Module page →](https://registry.terraform.io/modules/BerriAI/litellm/google/latest)
+
+Cloud Run can't pull from `ghcr.io` directly, so first set up a one-time Artifact Registry remote repo backed by GHCR:
+
+```bash
+gcloud artifacts repositories create litellm \
+  --location=us-central1 \
+  --repository-format=docker \
+  --mode=remote-repository \
+  --remote-docker-repo=https://ghcr.io \
+  --project=my-gcp-project
+```
+
+Then:
+
+```hcl
+# main.tf
+terraform {
+  required_version = ">= 1.6.0"
+  required_providers {
+    google      = { source = "hashicorp/google",      version = "~> 6.10" }
+    google-beta = { source = "hashicorp/google-beta", version = "~> 6.10" }
+  }
+}
+
+provider "google"      { project = "my-gcp-project"; region = "us-central1" }
+provider "google-beta" { project = "my-gcp-project"; region = "us-central1" }
+
+module "litellm" {
+  source  = "BerriAI/litellm/google"
+  version = "~> 1.89"
+
+  project_id = "my-gcp-project"
+  region     = "us-central1"
+  tenant     = "acme"
+  env        = "prod"
+
+  image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
+
+  # Production: provide DNS already pointing at the LB IP for Google-managed certs.
+  # Without one, set allow_plaintext_lb = true (dev/trial only).
+  # lb_domains         = ["proxy.example.com"]
+  allow_plaintext_lb = true
+}
+
+output "litellm_url" {
+  value = module.litellm.load_balancer_url
+}
+```
+
+```bash
+terraform init
+terraform apply
+```
+
+Provider API keys live in Secret Manager; reference resource IDs (e.g. `projects/my-gcp-project/secrets/openai-api-key`) via `gateway_extra_secrets`. Full input list and architecture diagram on the [registry page](https://registry.terraform.io/modules/BerriAI/litellm/google/latest?tab=inputs).
+
+#### Both stacks include
+
+- The full componentized split (gateway / backend / UI as independent services)
+- Managed Postgres (writer + reader) and Redis
+- Versioned object store for proxy state + file uploads
+- An auto-generated `LITELLM_MASTER_KEY` in your cloud's secret manager
+- A one-off migration job that runs `prisma migrate deploy` before the proxy starts
+- The same `proxy_config` surface as the [Helm chart](./helm/litellm/) — pass YAML as a typed map
+
+The Terraform modules live at [`terraform/litellm/aws/`](./terraform/litellm/aws/) and [`terraform/litellm/gcp/`](./terraform/litellm/gcp/) in this repo; the registry entries are read-only mirrors updated on each release.
+
 ### Run in Developer Mode
 #### Services
 1. Setup .env file in root
