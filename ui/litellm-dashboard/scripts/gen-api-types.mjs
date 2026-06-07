@@ -23,9 +23,17 @@ const specDir = mkdtempSync(join(tmpdir(), "litellm-openapi-"));
 const specPath = join(specDir, "openapi.json");
 
 const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
+// The dashboard calls internal UI routes that the public /openapi.json hides via
+// include_in_schema=False. Force them in so they get typed here; this mutates a
+// throwaway interpreter, so the spec the proxy actually serves is unchanged.
 const dumpSpec = [
   "import json, sys",
   "from litellm.proxy.proxy_server import app",
+  "from fastapi.routing import APIRoute",
+  "for route in app.routes:",
+  "    if isinstance(route, APIRoute):",
+  "        route.include_in_schema = True",
+  "app.openapi_schema = None",
   "with open(sys.argv[1], 'w') as f: json.dump(app.openapi(), f, sort_keys=True)",
 ].join("\n");
 
