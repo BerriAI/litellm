@@ -27,11 +27,17 @@ def test_parses_valid_json_array():
         ("3.14", 3.14),
         ("true", True),
         ("false", False),
-        ("null", None),
     ],
 )
 def test_parses_valid_json_scalars(raw, expected):
     assert safe_json_loads(raw) == expected
+
+
+def test_parses_json_null_to_none():
+    # Use a non-None default so a correct parse (real None) is distinguishable
+    # from the function silently falling back to its default.
+    sentinel = object()
+    assert safe_json_loads("null", default=sentinel) is None
 
 
 def test_returns_default_none_on_invalid_json():
