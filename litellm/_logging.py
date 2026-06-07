@@ -249,7 +249,7 @@ if json_logs:
     handler.setFormatter(JsonFormatter())
     _setup_json_exception_handlers(JsonFormatter())
 else:
-    if os.environ.get("NO_COLOR") is None:
+    if sys.stdout.isatty() and os.environ.get("NO_COLOR") is None:
         _format_str = "\033[92m%(asctime)s - %(name)s:%(levelname)s\033[0m: %(filename)s:%(lineno)s - %(message)s"
     else:
         _format_str = "%(asctime)s - %(name)s:%(levelname)s: %(filename)s:%(lineno)s - %(message)s"
