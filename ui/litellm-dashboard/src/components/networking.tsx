@@ -849,7 +849,9 @@ export const userCreateCall = async (
       formValues.metadata = JSON.stringify(formValues.metadata);
     }
 
-    formValues.auto_create_key = false;
+    if (formValues.auto_create_key === undefined) {
+      formValues.auto_create_key = false;
+    }
     // if formValues.metadata is not undefined, make it a valid dict
     if (formValues.metadata) {
       // if there's an exception JSON.parse, show it in the message

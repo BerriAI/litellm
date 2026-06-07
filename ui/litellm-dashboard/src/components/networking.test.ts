@@ -113,6 +113,62 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("userCreateCall", () => {
+  const originalFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("preserves explicit auto_create_key values", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ user_id: "user-1", key: "sk-test" }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.userCreateCall("token", null, {
+      user_email: "user@example.com",
+      user_role: "internal_user",
+      auto_create_key: true,
+    });
+
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [, options] = mockFetch.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual(
+      expect.objectContaining({
+        user_email: "user@example.com",
+        user_role: "internal_user",
+        auto_create_key: true,
+      }),
+    );
+  });
+
+  it("defaults auto_create_key to false when callers omit it", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ user_id: "user-2" }),
+    } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.userCreateCall("token", null, {
+      user_email: "user@example.com",
+      user_role: "internal_user",
+    });
+
+    const [, options] = mockFetch.mock.calls[0];
+    expect(JSON.parse(options.body)).toEqual(
+      expect.objectContaining({
+        auto_create_key: false,
+      }),
+    );
+  });
+});
+
 describe("daily activity helpers", () => {
   const startTime = new Date("2025-02-12T00:00:00.000Z");
   const endTime = new Date("2025-02-19T00:00:00.000Z");
