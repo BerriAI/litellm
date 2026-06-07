@@ -1,4 +1,5 @@
 import json
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import TYPE_CHECKING, Required, TypedDict, override
@@ -283,6 +284,60 @@ class ToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]
     systemTool: Optional[SystemToolBlock]
     cachePoint: Optional[CachePointBlock]
+
+
+@dataclass
+class BedrockToolSpec:
+    name: str
+    description: str
+    json_type: str
+    properties: dict
+    required: List[str]
+    additional_properties: Optional[bool] = None
+    strict: Optional[bool] = None
+
+    @classmethod
+    def from_openai_tool(
+        cls,
+        *,
+        name: str,
+        description: str,
+        parameters: dict,
+        strict: Optional[bool],
+        supports_strict_tools: bool,
+    ) -> "BedrockToolSpec":
+        return cls(
+            name=name,
+            description=description,
+            json_type=parameters["type"],
+            properties=parameters.get("properties", {}),
+            required=parameters.get("required", []),
+            additional_properties=(
+                parameters.get("additionalProperties")
+                if supports_strict_tools
+                else None
+            ),
+            strict=strict if supports_strict_tools else None,
+        )
+
+    def to_tool_block(self) -> ToolBlock:
+        json_schema: ToolJsonSchemaBlock = {
+            "type": self.json_type,  # type: ignore[typeddict-item]
+            "properties": self.properties,
+            "required": self.required,
+        }
+        if self.additional_properties is not None:
+            json_schema["additionalProperties"] = self.additional_properties
+
+        tool_spec: ToolSpecBlock = {
+            "inputSchema": {"json": json_schema},
+            "name": self.name,
+            "description": self.description,
+        }
+        if self.strict is not None:
+            tool_spec["strict"] = self.strict
+
+        return ToolBlock(toolSpec=tool_spec)
 
 
 class SpecificToolChoiceBlock(TypedDict):
