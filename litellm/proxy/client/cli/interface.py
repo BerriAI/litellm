@@ -161,7 +161,7 @@ def execute_command(user_input: str, ctx: click.Context):
     # Execute the command
     try:
         # Create a new argument list for click to parse
-        sys.argv = ["litellm-proxy"] + [command] + args
+        sys.argv = ["lite"] + [command] + args
 
         # Get the command object and invoke it
         cmd = cli.commands[command]
