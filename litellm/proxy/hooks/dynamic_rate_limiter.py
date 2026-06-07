@@ -11,9 +11,10 @@ from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.exceptions import RateLimitType
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.hooks.rate_limiter_utils import (
-    ProxyHTTPRateLimitError,
     convert_priority_to_percent,
     resolve_llm_provider_for_rate_limit,
 )
@@ -222,8 +223,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
                     data.get("model")
                 )
-                raise ProxyHTTPRateLimitError(
-                    status_code=429,
+                raise ProxyRateLimitError(
                     detail={
                         "error": "Key={} over available TPM={}. Model TPM={}, Active keys={}".format(
                             user_api_key_dict.api_key,
@@ -232,6 +232,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                             active_projects,
                         )
                     },
+                    rate_limit_type=RateLimitType.TOKENS,
                     model=resolved_model,
                     llm_provider=llm_provider,
                 )
@@ -240,8 +241,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
                     data.get("model")
                 )
-                raise ProxyHTTPRateLimitError(
-                    status_code=429,
+                raise ProxyRateLimitError(
                     detail={
                         "error": "Key={} over available RPM={}. Model RPM={}, Active keys={}".format(
                             user_api_key_dict.api_key,
@@ -250,6 +250,7 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
                             active_projects,
                         )
                     },
+                    rate_limit_type=RateLimitType.REQUESTS,
                     model=resolved_model,
                     llm_provider=llm_provider,
                 )
