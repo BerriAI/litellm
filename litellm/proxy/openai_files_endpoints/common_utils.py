@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
+from litellm.repositories.table_repositories import (
+    ManagedFileRepository,
+    ManagedObjectRepository,
+)
 from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
@@ -79,9 +83,10 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     if not isinstance(file_id, str):
         return ""
     if "llm_batch_id" in file_id:
-        return file_id.split("llm_batch_id:")[1].split(",")[0]
+        batch_id = file_id.split("llm_batch_id:", 1)[1]
     else:
-        return file_id.split("generic_response_id:")[1].split(",")[0]
+        batch_id = file_id.split("generic_response_id:", 1)[1]
+    return re.split(r"[;,]", batch_id, maxsplit=1)[0]
 
 
 def encode_file_id_with_model(
@@ -696,7 +701,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
         and prisma_client
     ):
         try:
-            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+            managed_file = await ManagedFileRepository(prisma_client).table.find_first(
                 where={"flat_model_file_ids": {"has": response.input_file_id}}
             )
             if managed_file:
@@ -718,13 +723,83 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
         if not raw_id or _is_base64_encoded_unified_file_id(raw_id):
             continue
         try:
-            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+            managed_file = await ManagedFileRepository(prisma_client).table.find_first(
                 where={"flat_model_file_ids": {"has": raw_id}}
             )
             if managed_file:
                 setattr(response, attr, managed_file.unified_file_id)
         except Exception:
             pass
+
+
+async def ensure_batch_response_managed_file_ids(
+    response,
+    managed_files_obj,
+    prisma_client,
+    verbose_proxy_logger,
+    user_api_key_dict=None,
+    db_batch_object=None,
+) -> None:
+    """Normalize batch file IDs to managed unified IDs before DB persistence."""
+    await resolve_input_file_id_to_unified(response, prisma_client)
+    await resolve_output_file_ids_to_unified(response, prisma_client)
+
+    if managed_files_obj is None:
+        return
+
+    hidden_params = getattr(response, "_hidden_params", None) or {}
+    model_id = hidden_params.get("model_id")
+    if not model_id:
+        return
+
+    model_name = hidden_params.get("model_name")
+    unified_file_id = hidden_params.get("unified_file_id")
+    if not model_name and isinstance(unified_file_id, str):
+        decoded_unified_file_id = (
+            _is_base64_encoded_unified_file_id(unified_file_id) or unified_file_id
+        )
+        target_model_names = get_models_from_unified_file_id(decoded_unified_file_id)
+        if target_model_names:
+            model_name = ",".join(target_model_names)
+
+    if user_api_key_dict is None and db_batch_object is not None:
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_id=getattr(db_batch_object, "created_by", None) or "default-user-id",
+            team_id=getattr(db_batch_object, "team_id", None),
+        )
+    if user_api_key_dict is None:
+        return
+
+    for file_attr in ("output_file_id", "error_file_id"):
+        raw_file_id = getattr(response, file_attr, None)
+        if not raw_file_id or _is_base64_encoded_unified_file_id(raw_file_id):
+            continue
+        try:
+            new_unified_file_id = managed_files_obj.get_unified_output_file_id(
+                output_file_id=raw_file_id,
+                model_id=model_id,
+                model_name=model_name,
+            )
+            await managed_files_obj.store_unified_file_id(
+                file_id=new_unified_file_id,
+                file_object=None,
+                litellm_parent_otel_span=getattr(
+                    user_api_key_dict, "parent_otel_span", None
+                ),
+                model_mappings={model_id: raw_file_id},
+                user_api_key_dict=user_api_key_dict,
+            )
+            setattr(response, file_attr, new_unified_file_id)
+            verbose_proxy_logger.debug(
+                f"Converted batch {file_attr} {raw_file_id!r} to managed ID before DB write"
+            )
+        except Exception as e:
+            verbose_proxy_logger.warning(
+                f"Failed to convert batch {file_attr}={raw_file_id!r} to managed ID "
+                f"before DB write: {e}"
+            )
 
 
 async def get_batch_from_database(
@@ -750,6 +825,7 @@ async def get_batch_from_database(
         - response_batch: Parsed LiteLLMBatch object (or None)
     """
     import json
+
     from litellm.types.utils import LiteLLMBatch
 
     if managed_files_obj is None or not unified_batch_id:
@@ -759,7 +835,7 @@ async def get_batch_from_database(
         if not prisma_client:
             return None, None
 
-        db_batch_object = await prisma_client.db.litellm_managedobjecttable.find_first(
+        db_batch_object = await ManagedObjectRepository(prisma_client).table.find_first(
             where={"unified_object_id": batch_id}
         )
 
@@ -800,6 +876,7 @@ async def update_batch_in_database(
     verbose_proxy_logger,
     db_batch_object=None,
     operation: str = "update",
+    user_api_key_dict=None,
 ):
     """
     Update batch status and object in ManagedObjectTable.
@@ -813,6 +890,7 @@ async def update_batch_in_database(
         verbose_proxy_logger: Logger instance
         db_batch_object: Optional existing database object (for comparison)
         operation: Description of operation ("update", "cancel", etc.)
+        user_api_key_dict: Optional auth context for creating managed file IDs
     """
     import litellm.utils
 
@@ -822,6 +900,18 @@ async def update_batch_in_database(
     try:
         if not prisma_client:
             return
+
+        # Always normalize the response's file IDs to unified managed IDs
+        # (mutates in place) so the caller returns unified IDs to the user
+        # even when we skip the DB update below for an unchanged status.
+        await ensure_batch_response_managed_file_ids(
+            response=response,
+            managed_files_obj=managed_files_obj,
+            prisma_client=prisma_client,
+            verbose_proxy_logger=verbose_proxy_logger,
+            user_api_key_dict=user_api_key_dict,
+            db_batch_object=db_batch_object,
+        )
 
         # Only update if status has changed (when db_batch_object is provided)
         if db_batch_object and response.status == db_batch_object.status:
@@ -857,7 +947,7 @@ async def update_batch_in_database(
             update_data["batch_processed"] = True
 
         try:
-            await prisma_client.db.litellm_managedobjecttable.update(
+            await ManagedObjectRepository(prisma_client).table.update(
                 where={"unified_object_id": batch_id},
                 data=update_data,
             )
@@ -873,7 +963,7 @@ async def update_batch_in_database(
                     f"batch_processed column not found, retrying update without it: {col_err}"
                 )
                 update_data.pop("batch_processed", None)
-                await prisma_client.db.litellm_managedobjecttable.update(
+                await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": batch_id},
                     data=update_data,
                 )

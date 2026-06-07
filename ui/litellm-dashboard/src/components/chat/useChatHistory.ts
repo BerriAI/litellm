@@ -39,9 +39,7 @@ function trimConversations(conversations: Conversation[]): Conversation[] {
   if (conversations.length <= MAX_CONVERSATIONS) {
     return conversations;
   }
-  return [...conversations]
-    .sort((a, b) => b.updatedAt - a.updatedAt)
-    .slice(0, MAX_CONVERSATIONS);
+  return [...conversations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, MAX_CONVERSATIONS);
 }
 
 export function useChatHistory(activeConversationId: string | null): {
@@ -51,7 +49,10 @@ export function useChatHistory(activeConversationId: string | null): {
   staleId: boolean;
   createConversation: (model: string) => string;
   appendMessage: (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => void;
-  updateLastAssistantMessage: (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>) => void;
+  updateLastAssistantMessage: (
+    conversationId: string,
+    updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>,
+  ) => void;
   /** Remove the message with `messageId` and all subsequent messages from the conversation. */
   truncateFromMessage: (conversationId: string, messageId: string) => void;
   deleteConversation: (id: string) => void;
@@ -98,59 +99,50 @@ export function useChatHistory(activeConversationId: string | null): {
     }
   }, [conversations]);
 
-  const createConversation = useCallback(
-    (model: string): string => {
-      const id = crypto.randomUUID();
-      const now = Date.now();
-      const newConversation: Conversation = {
-        id,
-        title: "New conversation",
-        model,
-        messages: [],
-        mcpServerNames: [],
-        createdAt: now,
-        updatedAt: now,
-      };
-      setConversations((prev) => trimConversations([newConversation, ...prev]));
-      setCurrentActiveId(id);
-      return id;
-    },
-    [],
-  );
+  const createConversation = useCallback((model: string): string => {
+    const id = crypto.randomUUID();
+    const now = Date.now();
+    const newConversation: Conversation = {
+      id,
+      title: "New conversation",
+      model,
+      messages: [],
+      mcpServerNames: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    setConversations((prev) => trimConversations([newConversation, ...prev]));
+    setCurrentActiveId(id);
+    return id;
+  }, []);
 
-  const appendMessage = useCallback(
-    (conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => {
-      const newMessage: ChatMessage = {
-        ...message,
-        id: crypto.randomUUID(),
-        timestamp: Date.now(),
-      };
+  const appendMessage = useCallback((conversationId: string, message: Omit<ChatMessage, "id" | "timestamp">) => {
+    const newMessage: ChatMessage = {
+      ...message,
+      id: crypto.randomUUID(),
+      timestamp: Date.now(),
+    };
 
-      setConversations((prev) => {
-        const updated = prev.map((conv) => {
-          if (conv.id !== conversationId) return conv;
-          const updatedMessages = [...conv.messages, newMessage];
-          let title = conv.title;
-          if (
-            title === "New conversation" &&
-            newMessage.role === "user" &&
-            conv.messages.filter((m) => m.role === "user").length === 0
-          ) {
-            title = generateTitle(newMessage.content);
-          }
-          return { ...conv, title, messages: updatedMessages, updatedAt: Date.now() };
-        });
-        return trimConversations(updated);
+    setConversations((prev) => {
+      const updated = prev.map((conv) => {
+        if (conv.id !== conversationId) return conv;
+        const updatedMessages = [...conv.messages, newMessage];
+        let title = conv.title;
+        if (
+          title === "New conversation" &&
+          newMessage.role === "user" &&
+          conv.messages.filter((m) => m.role === "user").length === 0
+        ) {
+          title = generateTitle(newMessage.content);
+        }
+        return { ...conv, title, messages: updatedMessages, updatedAt: Date.now() };
       });
-    },
-    [],
-  );
+      return trimConversations(updated);
+    });
+  }, []);
 
   const updateLastAssistantMessage = useCallback(
-    (
-      conversationId: string,
-      updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>,
-    ) => {
+    (conversationId: string, updates: Partial<Pick<ChatMessage, "content" | "reasoningContent" | "mcpEvents">>) => {
       setConversations((prev) => {
         const updated = prev.map((conv) => {
           if (conv.id !== conversationId) return conv;
@@ -169,20 +161,17 @@ export function useChatHistory(activeConversationId: string | null): {
     [],
   );
 
-  const truncateFromMessage = useCallback(
-    (conversationId: string, messageId: string) => {
-      setConversations((prev) => {
-        const updated = prev.map((conv) => {
-          if (conv.id !== conversationId) return conv;
-          const idx = conv.messages.findIndex((m) => m.id === messageId);
-          if (idx === -1) return conv;
-          return { ...conv, messages: conv.messages.slice(0, idx), updatedAt: Date.now() };
-        });
-        return trimConversations(updated);
+  const truncateFromMessage = useCallback((conversationId: string, messageId: string) => {
+    setConversations((prev) => {
+      const updated = prev.map((conv) => {
+        if (conv.id !== conversationId) return conv;
+        const idx = conv.messages.findIndex((m) => m.id === messageId);
+        if (idx === -1) return conv;
+        return { ...conv, messages: conv.messages.slice(0, idx), updatedAt: Date.now() };
       });
-    },
-    [],
-  );
+      return trimConversations(updated);
+    });
+  }, []);
 
   const deleteConversation = useCallback(
     (id: string) => {
@@ -192,18 +181,13 @@ export function useChatHistory(activeConversationId: string | null): {
     [currentActiveId],
   );
 
-  const renameConversation = useCallback(
-    (id: string, newTitle: string) => {
-      setConversations((prev) =>
-        trimConversations(
-          prev.map((conv) =>
-            conv.id === id ? { ...conv, title: newTitle, updatedAt: Date.now() } : conv,
-          ),
-        ),
-      );
-    },
-    [],
-  );
+  const renameConversation = useCallback((id: string, newTitle: string) => {
+    setConversations((prev) =>
+      trimConversations(
+        prev.map((conv) => (conv.id === id ? { ...conv, title: newTitle, updatedAt: Date.now() } : conv)),
+      ),
+    );
+  }, []);
 
   const setActiveConversationId = useCallback((id: string | null) => {
     setCurrentActiveId(id);
@@ -211,9 +195,7 @@ export function useChatHistory(activeConversationId: string | null): {
   }, []);
 
   const activeConversation =
-    currentActiveId !== null
-      ? (conversations.find((c) => c.id === currentActiveId) ?? null)
-      : null;
+    currentActiveId !== null ? conversations.find((c) => c.id === currentActiveId) ?? null : null;
 
   return {
     conversations,

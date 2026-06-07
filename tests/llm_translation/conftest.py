@@ -18,14 +18,17 @@ sys.path.insert(
 
 import litellm  # noqa: E402
 
-from tests._vcr_conftest_common import (  # noqa: E402
+from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
+    _pin_multipart_boundary,
     apply_vcr_auto_marker_to_items,
     emit_cassette_cache_session_banner,
     emit_vcr_classification_summary,
+    emit_vcr_diagnostic_log,
     install_live_call_probe,
     record_vcr_outcome,
     register_persister_if_enabled,
+    reset_vcr_diag_dir,
     vcr_config_dict,
 )
 
@@ -36,13 +39,7 @@ from tests._vcr_conftest_common import (  # noqa: E402
 # itself run under a live cassette context.
 _VCR_AUTO_MARKER_SKIP_FILES = frozenset({"test_vcr_redis_persister.py"})
 
-# Tests that observe live cross-call provider state (e.g. prompt-cache
-# warm-up between two consecutive calls); replay can't reproduce that state.
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES = (
-    "::test_prompt_caching",
-    "TestBedrockInvokeNovaJson::test_json_response_pydantic_obj",
-    "::test_bedrock_converse__streaming_passthrough",
-)
+_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 
 _verbose_state = VerboseReporterState()
@@ -73,6 +70,7 @@ def _vcr_outcome_gate(request, vcr):
 
 def pytest_configure(config):
     _verbose_state.remember_pluginmanager(config)
+    reset_vcr_diag_dir()
 
 
 def pytest_runtest_logreport(report):
@@ -82,6 +80,7 @@ def pytest_runtest_logreport(report):
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     emit_cassette_cache_session_banner(terminalreporter)
     emit_vcr_classification_summary(terminalreporter)
+    emit_vcr_diagnostic_log(terminalreporter)
 
 
 # ---------------------------------------------------------------------------

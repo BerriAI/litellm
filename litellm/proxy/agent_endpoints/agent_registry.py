@@ -9,6 +9,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
 
@@ -92,10 +93,19 @@ class AgentRegistry:
     ########### DB management helpers for agents ###########
     ############################################################
     async def add_agent_to_db(
-        self, agent: AgentConfig, prisma_client: PrismaClient, created_by: str
+        self,
+        agent: AgentConfig,
+        prisma_client: PrismaClient,
+        created_by: str,
+        agent_id: Optional[str] = None,
     ) -> AgentResponse:
         """
-        Add an agent to the database
+        Add an agent to the database.
+
+        If ``agent_id`` is provided, it is used as the primary key for the new
+        row (otherwise the DB generates a UUID). Callers pass an explicit ID
+        when the agent_card_params must reference the agent's own URL before
+        the row exists, e.g. the A2A merge in ``create_agent``.
         """
         try:
             agent_name = agent.get("agent_name")
@@ -145,6 +155,8 @@ class AgentRegistry:
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
             }
+            if agent_id is not None:
+                create_data["agent_id"] = agent_id
             if static_headers_val is not None:
                 create_data["static_headers"] = static_headers_val
             if extra_headers_val is not None:
@@ -163,7 +175,7 @@ class AgentRegistry:
                     create_data[rate_field] = _val
 
             # Create agent in DB
-            created_agent = await prisma_client.db.litellm_agentstable.create(
+            created_agent = await AgentsRepository(prisma_client).table.create(
                 data=create_data,
                 include={"object_permission": True},
             )
@@ -189,7 +201,7 @@ class AgentRegistry:
         Delete an agent from the database
         """
         try:
-            deleted_agent = await prisma_client.db.litellm_agentstable.delete(
+            deleted_agent = await AgentsRepository(prisma_client).table.delete(
                 where={"agent_id": agent_id}
             )
             return dict(deleted_agent)
@@ -218,7 +230,7 @@ class AgentRegistry:
             The patched agent
         """
         try:
-            existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
+            existing_agent = await AgentsRepository(prisma_client).table.find_unique(
                 where={"agent_id": agent_id}
             )
             if existing_agent is not None:
@@ -271,7 +283,7 @@ class AgentRegistry:
                 if object_permission_id is not None:
                     update_data["object_permission_id"] = object_permission_id
             # Patch agent in DB
-            patched_agent = await prisma_client.db.litellm_agentstable.update(
+            patched_agent = await AgentsRepository(prisma_client).table.update(
                 where={"agent_id": agent_id},
                 data={
                     **update_data,
@@ -357,9 +369,9 @@ class AgentRegistry:
                     update_data[rate_field] = _val
 
             if agent.get("object_permission") is not None:
-                existing_agent = await prisma_client.db.litellm_agentstable.find_unique(
-                    where={"agent_id": agent_id}
-                )
+                existing_agent = await AgentsRepository(
+                    prisma_client
+                ).table.find_unique(where={"agent_id": agent_id})
                 existing_object_permission_id = (
                     existing_agent.object_permission_id
                     if existing_agent is not None
@@ -375,7 +387,7 @@ class AgentRegistry:
                     update_data["object_permission_id"] = object_permission_id
 
             # Update agent in DB
-            updated_agent = await prisma_client.db.litellm_agentstable.update(
+            updated_agent = await AgentsRepository(prisma_client).table.update(
                 where={"agent_id": agent_id},
                 data=update_data,
                 include={"object_permission": True},
@@ -403,7 +415,7 @@ class AgentRegistry:
         Get all agents from the database
         """
         try:
-            agents_from_db = await prisma_client.db.litellm_agentstable.find_many(
+            agents_from_db = await AgentsRepository(prisma_client).table.find_many(
                 order={"created_at": "desc"},
                 include={"object_permission": True},
             )

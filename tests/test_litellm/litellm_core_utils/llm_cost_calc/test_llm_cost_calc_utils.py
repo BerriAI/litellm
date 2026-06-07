@@ -1418,3 +1418,123 @@ def test_image_count_prevents_text_tokens_fallback():
         f"got {prompt_cost}. text_tokens fallback may be double-charging."
     )
     assert completion_cost == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Data-residency (OpenAI regional processing) tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def _local_model_cost_map():
+    prev_env = os.environ.get("LITELLM_LOCAL_MODEL_COST_MAP")
+    prev_model_cost = litellm.model_cost
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    try:
+        yield
+    finally:
+        litellm.model_cost = prev_model_cost
+        if prev_env is None:
+            os.environ.pop("LITELLM_LOCAL_MODEL_COST_MAP", None)
+        else:
+            os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = prev_env
+
+
+@pytest.mark.parametrize("data_residency", ["eu", "us"])
+def test_data_residency_applies_uplift(data_residency, _local_model_cost_map):
+    """gpt-5 should apply the regional processing uplift multiplier when
+    data_residency is set."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    regional = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=data_residency,
+    )
+
+    base_total = base[0] + base[1]
+    regional_total = regional[0] + regional[1]
+
+    assert base_total > 0
+    assert regional_total == pytest.approx(base_total * 1.10, rel=1e-9)
+    assert regional[0] == pytest.approx(base[0] * 1.10, rel=1e-9)
+    assert regional[1] == pytest.approx(base[1] * 1.10, rel=1e-9)
+
+
+def test_data_residency_no_uplift_for_unmarked_model(_local_model_cost_map):
+    """A model without a regional_processing_uplift_multiplier_* entry should
+    fall back to base pricing, not error."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(
+        model="gpt-3.5-turbo",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    with_residency = generic_cost_per_token(
+        model="gpt-3.5-turbo",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency="eu",
+    )
+
+    assert base == with_residency
+
+
+def test_data_residency_none_no_uplift(_local_model_cost_map):
+    """data_residency=None should be a no-op even for models with a multiplier."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    base = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+    )
+    explicit_none = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        data_residency=None,
+    )
+
+    assert base == explicit_none
+
+
+def test_data_residency_composes_with_service_tier(_local_model_cost_map):
+    """The uplift multiplies the priority-tier cost, not the standard one."""
+    from litellm.types.utils import Usage
+
+    usage = Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500)
+
+    priority_base = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="priority",
+    )
+    priority_eu = generic_cost_per_token(
+        model="gpt-5",
+        usage=usage,
+        custom_llm_provider="openai",
+        service_tier="priority",
+        data_residency="eu",
+    )
+
+    priority_base_total = priority_base[0] + priority_base[1]
+    priority_eu_total = priority_eu[0] + priority_eu[1]
+
+    assert priority_base_total > 0
+    assert priority_eu_total == pytest.approx(priority_base_total * 1.10, rel=1e-9)

@@ -30,6 +30,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Set,
     Tuple,
     Union,
     cast,
@@ -206,6 +207,15 @@ if TYPE_CHECKING:
     )
     from litellm.router_strategy.quality_router.quality_router import (
         QualityRouter,
+    )
+    from litellm.responses.streaming_iterator import (
+        BaseResponsesAPIStreamingIterator,
+    )
+    from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseInputParam,
+        ResponsesAPIResponse,
     )
 
     Span = Union[_Span, Any]
@@ -1578,6 +1588,44 @@ class Router:
             cancel_interaction, call_type="cancel_interaction"
         )
 
+    def _initialize_managed_agents_endpoints(self):
+        """Initialize Google Managed Agents API endpoints (v1beta/agents)."""
+        from litellm.interactions.agents import acreate as acreate_agent
+        from litellm.interactions.agents import adelete as adelete_agent
+        from litellm.interactions.agents import aget as aget_agent
+        from litellm.interactions.agents import alist as alist_agents
+        from litellm.interactions.agents import alist_versions as alist_agent_versions
+        from litellm.interactions.agents import create as create_agent
+        from litellm.interactions.agents import delete as delete_agent
+        from litellm.interactions.agents import get as get_agent
+        from litellm.interactions.agents import list as list_agents
+        from litellm.interactions.agents import list_versions as list_agent_versions
+
+        self.acreate_agent = self.factory_function(
+            acreate_agent, call_type="acreate_agent"
+        )
+        self.create_agent = self.factory_function(
+            create_agent, call_type="create_agent"
+        )
+        self.alist_agents = self.factory_function(
+            alist_agents, call_type="alist_agents"
+        )
+        self.list_agents = self.factory_function(list_agents, call_type="list_agents")
+        self.aget_agent = self.factory_function(aget_agent, call_type="aget_agent")
+        self.get_agent = self.factory_function(get_agent, call_type="get_agent")
+        self.adelete_agent = self.factory_function(
+            adelete_agent, call_type="adelete_agent"
+        )
+        self.delete_agent = self.factory_function(
+            delete_agent, call_type="delete_agent"
+        )
+        self.alist_agent_versions = self.factory_function(
+            alist_agent_versions, call_type="alist_agent_versions"
+        )
+        self.list_agent_versions = self.factory_function(
+            list_agent_versions, call_type="list_agent_versions"
+        )
+
     def _initialize_specialized_endpoints(self):
         """Helper to initialize specialized router endpoints (vector store, OCR, search, video, container, skills, interactions)."""
         self._initialize_vector_store_endpoints()
@@ -1590,6 +1638,7 @@ class Router:
         self._initialize_container_endpoints()
         self._initialize_skills_endpoints()
         self._initialize_interactions_endpoints()
+        self._initialize_managed_agents_endpoints()
 
     def initialize_router_endpoints(self):
         self._initialize_core_endpoints()
@@ -1704,11 +1753,14 @@ class Router:
             if pre_call_check == "prompt_caching":
                 _callback = PromptCachingDeploymentCheck(cache=self.cache)
             elif pre_call_check == "router_budget_limiting":
+                if self._get_router_deployment_budget_limiter() is not None:
+                    continue
                 _callback = RouterBudgetLimiting(
                     dual_cache=self.cache,
                     provider_budget_config=self.provider_budget_config,
                     model_list=self.model_list,
                 )
+                self.router_budget_logger = _callback
             elif pre_call_check == "enforce_model_rate_limits":
                 _callback = ModelRateLimitingCheck(dual_cache=self.cache)
 
@@ -2205,6 +2257,388 @@ class Router:
                             )
 
         return FallbackStreamWrapper(stream_with_fallbacks())
+
+    @staticmethod
+    def _extract_partial_responses_usage(
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+    ) -> Optional["ResponseAPIUsage"]:
+        """
+        Best-effort: pull partial token usage from a Responses-API streaming
+        iterator that errored mid-stream, normalized to ResponseAPIUsage so
+        the caller can combine without crossing token-naming conventions.
+
+        Two sources, in priority order:
+          1. The bridge path (LiteLLMCompletionStreamingIterator) accumulates
+             chat-completion chunks while streaming — feed them through
+             stream_chunk_builder to recover chat Usage, then translate
+             (prompt_tokens → input_tokens, completion_tokens → output_tokens).
+          2. The native path (ResponsesAPIStreamingIterator) only has a
+             completed_response object if the stream reached
+             RESPONSE_COMPLETED before erroring — uncommon mid-stream but
+             worth checking. Already ResponseAPIUsage-shaped.
+
+        Returns None when no partial usage is recoverable.
+        """
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+        from litellm.types.llms.openai import (
+            ResponseAPIUsage,
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        )
+
+        # Bridge subclass is the only iterator that accumulates chat-completion
+        # chunks. isinstance narrows the type so we can read the attribute
+        # directly instead of getattr-ing on the base class.
+        if isinstance(source_iterator, LiteLLMCompletionStreamingIterator):
+            chunks = source_iterator.collected_chat_completion_chunks
+            if chunks:
+                try:
+                    from litellm.main import stream_chunk_builder
+
+                    built = stream_chunk_builder(chunks=chunks)
+                    # stream_chunk_builder returns ModelResponse |
+                    # TextCompletionResponse | None. ModelResponse sets .usage
+                    # in __init__ rather than declaring it as a class field, so
+                    # static narrowing doesn't expose it. Mirror the sync path
+                    # (_completion_streaming_iterator) and pull via getattr.
+                    chat = getattr(built, "usage", None) if built is not None else None
+                    if chat is not None:
+                        # getattr-with-default because the test path may
+                        # substitute a SimpleNamespace lacking some fields;
+                        # real Usage instances always have them.
+                        prompt = int(getattr(chat, "prompt_tokens", 0) or 0)
+                        completion = int(getattr(chat, "completion_tokens", 0) or 0)
+                        total = int(
+                            getattr(chat, "total_tokens", prompt + completion)
+                            or (prompt + completion)
+                        )
+                        return ResponseAPIUsage(
+                            input_tokens=prompt,
+                            output_tokens=completion,
+                            total_tokens=total,
+                        )
+                except Exception:
+                    # Builder is best-effort — fall through to native path.
+                    pass
+
+        # Native path: completed_response is set only if RESPONSE_COMPLETED
+        # arrived before the error (uncommon mid-stream but worth checking).
+        # Already ResponseAPIUsage-shaped — return as-is.
+        completed = source_iterator.completed_response
+        if isinstance(
+            completed,
+            (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
+        ):
+            return completed.response.usage
+        return None
+
+    @staticmethod
+    def _combine_responses_fallback_usage(
+        fallback_item: "BaseLiteLLMOpenAIResponseObject",
+        partial_usage: "ResponseAPIUsage",
+    ) -> None:
+        """
+        Merge partial-stream usage with fallback-stream usage on a
+        Responses-API streaming event.
+
+        Only mutates events that carry a `response` with a `usage` field
+        (response.completed / response.failed / response.incomplete). Other
+        events pass through unchanged.
+
+        Both inputs are ResponseAPIUsage-shaped (see
+        _extract_partial_responses_usage which normalizes the bridge path),
+        so we can sum input_tokens / output_tokens / total_tokens directly
+        and produce a clean ResponseAPIUsage — no token-naming split, no
+        setattr bypass.
+        """
+        from litellm.types.llms.openai import (
+            ResponseAPIUsage,
+            ResponseCompletedEvent,
+            ResponseFailedEvent,
+            ResponseIncompleteEvent,
+        )
+
+        if not isinstance(
+            fallback_item,
+            (ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent),
+        ):
+            return
+        response = fallback_item.response
+        if response.usage is None:
+            return
+
+        fb = response.usage
+        response.usage = ResponseAPIUsage(
+            input_tokens=(partial_usage.input_tokens or 0) + (fb.input_tokens or 0),
+            output_tokens=(partial_usage.output_tokens or 0) + (fb.output_tokens or 0),
+            total_tokens=(partial_usage.total_tokens or 0) + (fb.total_tokens or 0),
+        )
+
+    @staticmethod
+    def _build_responses_continuation_input(
+        input_val: Optional[Union[str, "ResponseInputParam"]],
+        generated_content: str,
+    ) -> "ResponseInputParam":
+        """
+        Convert Responses-API input + partial assistant output into a
+        continuation input that asks the fallback model to pick up where the
+        prior assistant message stopped.
+
+        Best effort across providers. The chat-completions path uses
+        Anthropic's `prefix: True` prefill trick on the assistant message;
+        the Responses-API input schema has no direct equivalent, so we
+        append an instruction (developer role) plus a prior assistant
+        message containing the partial output. Providers without prefill
+        semantics (OpenAI, Vertex) treat this as conversational context
+        and may regenerate — same trade-off as the chat-completions path
+        for non-Anthropic fallbacks.
+        """
+        # base/continuation are List[Any] because ResponseInputParam items
+        # are a wide Union of TypedDicts (EasyInputMessageParam, Message,
+        # ResponseOutputMessageParam, ...) — annotating as List[Dict[str, Any]]
+        # rejects the list() spread of input_val. We cast the combined list to
+        # ResponseInputParam at the return.
+        base: List[Any]
+        if isinstance(input_val, str):
+            base = [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": input_val}],
+                }
+            ]
+        elif isinstance(input_val, list):
+            base = list(input_val)
+        else:
+            base = []
+        continuation: List[Any] = [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "The previous assistant response was interrupted "
+                            "mid-stream. Continue exactly where it stopped — "
+                            "do not repeat any of its content. Your response "
+                            "must read as a seamless continuation."
+                        ),
+                    }
+                ],
+            },
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": generated_content}],
+            },
+        ]
+        return cast("ResponseInputParam", base + continuation)
+
+    async def _aresponses_streaming_iterator(
+        self,
+        response: "BaseResponsesAPIStreamingIterator",
+        initial_kwargs: Dict[str, Any],
+    ) -> "BaseResponsesAPIStreamingIterator":
+        """
+        Wrap a Responses-API streaming iterator so MidStreamFallbackError
+        triggers the Router's fallback chain (parity with
+        _acompletion_streaming_iterator for the chat-completions path).
+
+        The Responses-API streaming path goes through
+        _ageneric_api_call_with_fallbacks rather than _acompletion, so the
+        returned iterator is never wrapped by the chat completions
+        fallback handler. Without this wrapper, MidStreamFallbackError
+        raised mid-stream from the underlying CustomStreamWrapper (used by
+        LiteLLMCompletionStreamingIterator when the Responses API is
+        served via the completion bridge) propagates unhandled and the
+        configured cross-provider fallback never fires.
+
+        Full parity with the chat-completions path:
+          - Pre-first-chunk: retry with the original input unchanged.
+          - Partial content: inject a developer instruction + prior
+            assistant message carrying the generated text so the fallback
+            model continues rather than restarts.
+          - Usage combining: merge partial-stream usage onto the fallback's
+            response.completed event so accounting reflects both attempts.
+          - Stream cleanup: shielded aclose() on both source and fallback
+            iterators on terminate.
+        """
+        from litellm.exceptions import MidStreamFallbackError
+        from litellm.responses.streaming_iterator import (
+            BaseResponsesAPIStreamingIterator,
+        )
+
+        source_iterator = response
+
+        class FallbackResponsesStreamWrapper(BaseResponsesAPIStreamingIterator):
+            """
+            Subclasses BaseResponsesAPIStreamingIterator only for isinstance
+            compatibility (proxy + interactions code paths check the type).
+            Bypasses the parent constructor and delegates iteration to an
+            async generator.
+            """
+
+            def __init__(self, async_generator: AsyncGenerator):
+                import time
+                from datetime import datetime
+
+                self._async_generator = async_generator
+                # Mirror every attribute BaseResponsesAPIStreamingIterator.__init__
+                # would have set. The wrapper bypasses super().__init__ (it has no
+                # httpx.Response of its own and no provider config to drive), so
+                # we copy from source_iterator where applicable and use safe
+                # defaults elsewhere. This keeps inherited methods (e.g.
+                # _check_max_streaming_duration, _handle_failure) safe to call.
+                #
+                # The bridge path (LiteLLMCompletionStreamingIterator used by
+                # Anthropic/Bedrock/Vertex) does not call super().__init__ and
+                # is missing many of these attributes — use getattr fallbacks
+                # so wrapper construction never raises AttributeError. The
+                # bridge stores the logging object as `litellm_logging_obj`.
+                self.response = getattr(source_iterator, "response", None)
+                self.model = getattr(source_iterator, "model", None)
+                self.logging_obj = getattr(
+                    source_iterator,
+                    "logging_obj",
+                    getattr(source_iterator, "litellm_logging_obj", None),
+                )
+                self.finished = False
+                self.responses_api_provider_config = getattr(
+                    source_iterator, "responses_api_provider_config", None
+                )
+                self.completed_response = None
+                self.start_time = getattr(source_iterator, "start_time", datetime.now())
+                self._failure_handled = False
+                self._completed_response_cached = False
+                self._completed_response_logged = False
+                self._completed_response_cache_hit = None
+                self._persist_completed_response_before_logging = True
+                self._stream_created_time = time.time()
+                self.litellm_metadata = getattr(
+                    source_iterator, "litellm_metadata", None
+                )
+                self.custom_llm_provider = getattr(
+                    source_iterator, "custom_llm_provider", None
+                )
+                self.request_data = getattr(source_iterator, "request_data", {}) or {}
+                self.call_type = getattr(source_iterator, "call_type", None)
+                # Preserve hidden params so response headers (model_id,
+                # api_base, additional_headers) keep flowing.
+                self._hidden_params = dict(
+                    getattr(source_iterator, "_hidden_params", None) or {}
+                )
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                return await self._async_generator.__anext__()
+
+            async def aclose(self):
+                # async generators always expose aclose — no defensive check needed.
+                await self._async_generator.aclose()
+
+        async def stream_with_fallbacks():
+            fallback_response = None
+            try:
+                async for item in source_iterator:
+                    yield item
+            except MidStreamFallbackError as e:
+                partial_usage = Router._extract_partial_responses_usage(source_iterator)
+                try:
+                    model_group = cast(str, initial_kwargs.get("model"))
+                    fallbacks: Optional[List] = initial_kwargs.get(
+                        "fallbacks", self.fallbacks
+                    )
+                    context_window_fallbacks: Optional[List] = initial_kwargs.get(
+                        "context_window_fallbacks", self.context_window_fallbacks
+                    )
+                    content_policy_fallbacks: Optional[List] = initial_kwargs.get(
+                        "content_policy_fallbacks", self.content_policy_fallbacks
+                    )
+                    # Re-enter via the per-attempt helper so the fallback chain
+                    # picks deployments through
+                    # _ageneric_api_call_with_fallbacks_helper.
+                    # original_generic_function is preserved by the caller so
+                    # the helper knows what underlying API to invoke per attempt.
+                    initial_kwargs["original_function"] = (
+                        self._ageneric_api_call_with_fallbacks_helper
+                    )
+                    if e.is_pre_first_chunk or not e.generated_content:
+                        # No content generated before the error — retry with the
+                        # original input. Adding a continuation prompt would
+                        # waste tokens and confuse the model.
+                        pass
+                    else:
+                        initial_kwargs["input"] = (
+                            Router._build_responses_continuation_input(
+                                initial_kwargs.get("input"),
+                                e.generated_content,
+                            )
+                        )
+                    # The Responses-API path stores observability metadata
+                    # under "litellm_metadata" (not the default "metadata") —
+                    # see _ageneric_api_call_with_fallbacks. Mirroring that
+                    # here ensures model_group, model_group_alias, and trace
+                    # ids land in the same key litellm.aresponses reads from.
+                    self._update_kwargs_before_fallbacks(
+                        model=model_group,
+                        kwargs=initial_kwargs,
+                        metadata_variable_name="litellm_metadata",
+                    )
+                    fallback_response = (
+                        await self.async_function_with_fallbacks_common_utils(
+                            e=e,
+                            disable_fallbacks=False,
+                            fallbacks=fallbacks,
+                            context_window_fallbacks=context_window_fallbacks,
+                            content_policy_fallbacks=content_policy_fallbacks,
+                            model_group=model_group,
+                            args=(),
+                            kwargs=initial_kwargs,
+                        )
+                    )
+
+                    if hasattr(fallback_response, "__aiter__"):
+                        async for fallback_item in fallback_response:  # type: ignore
+                            if partial_usage is not None:
+                                Router._combine_responses_fallback_usage(
+                                    fallback_item, partial_usage
+                                )
+                            yield fallback_item
+                    else:
+                        yield fallback_response
+                except Exception as fallback_error:
+                    verbose_router_logger.error(
+                        f"Responses streaming fallback also failed: {fallback_error}"
+                    )
+                    raise fallback_error
+            finally:
+                with anyio.CancelScope(shield=True):
+                    if hasattr(source_iterator, "aclose"):
+                        try:
+                            await source_iterator.aclose()  # type: ignore[func-returns-value]
+                        except BaseException as exc:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks(aresponses): error closing source: %s",
+                                exc,
+                            )
+                    if fallback_response is not None and hasattr(
+                        fallback_response, "aclose"
+                    ):
+                        try:
+                            await fallback_response.aclose()
+                        except BaseException as exc:
+                            verbose_router_logger.debug(
+                                "stream_with_fallbacks(aresponses): error closing fallback: %s",
+                                exc,
+                            )
+
+        return FallbackResponsesStreamWrapper(stream_with_fallbacks())
 
     def _completion_streaming_iterator(  # noqa: PLR0915
         self,
@@ -4202,11 +4636,11 @@ class Router:
             except Exception:
                 custom_llm_provider = None
 
-            # Build response kwargs
             response_kwargs = {
                 **data,
                 "caching": self.cache_responses,
                 **kwargs,
+                "model": model_name,
             }
             # Only set custom_llm_provider if it's not None
             if custom_llm_provider is not None:
@@ -4251,6 +4685,61 @@ class Router:
             if model is not None:
                 self.fail_calls[model] += 1
             raise e
+
+    async def _aresponses_with_streaming_fallbacks(
+        self, original_function: Callable, **kwargs: Any
+    ) -> Union["ResponsesAPIResponse", "BaseResponsesAPIStreamingIterator"]:
+        """
+        _ageneric_api_call_with_fallbacks for the Responses API, with the
+        addition of mid-stream fallback handling.
+
+        When stream=True and the underlying call returns a
+        BaseResponsesAPIStreamingIterator, wrap it with
+        _aresponses_streaming_iterator so MidStreamFallbackError raised
+        during iteration triggers the Router's cross-provider fallback chain.
+        """
+        from litellm.responses.streaming_iterator import (
+            BaseResponsesAPIStreamingIterator,
+        )
+
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+        # Snapshot the request kwargs before _ageneric_api_call_with_fallbacks
+        # mutates them. A shallow copy alone is not enough: the primary
+        # attempt mutates nested dicts in place — notably `litellm_metadata`,
+        # which `_update_kwargs_with_deployment` populates with
+        # deployment-specific fields (`deployment`, `model_info`, `api_base`,
+        # tags, etc.). Without an explicit copy of that dict, the shallow
+        # copy would still share its reference, leaking primary-deployment
+        # metadata into the mid-stream fallback request.
+        #
+        # We avoid deep-copying the full kwargs because it can contain
+        # non-deepcopyable objects (logging handles, async clients, etc.);
+        # `safe_deep_copy` deep-copies the metadata dicts key-by-key with a
+        # fallback to the original reference for any non-picklable value.
+        # The original_generic_function is preserved so the per-attempt
+        # helper knows which underlying API to call on fallback.
+        fallback_kwargs: Dict[str, Any] = kwargs.copy()
+        if isinstance(fallback_kwargs.get("litellm_metadata"), dict):
+            fallback_kwargs["litellm_metadata"] = safe_deep_copy(
+                fallback_kwargs["litellm_metadata"]
+            )
+        if isinstance(fallback_kwargs.get("metadata"), dict):
+            fallback_kwargs["metadata"] = safe_deep_copy(fallback_kwargs["metadata"])
+        fallback_kwargs["original_generic_function"] = original_function
+
+        response = await self._ageneric_api_call_with_fallbacks(
+            original_function=original_function, **kwargs
+        )
+
+        if kwargs.get("stream") and isinstance(
+            response, BaseResponsesAPIStreamingIterator
+        ):
+            return await self._aresponses_streaming_iterator(
+                response=response,
+                initial_kwargs=fallback_kwargs,
+            )
+        return response
 
     def _generic_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
@@ -5072,7 +5561,14 @@ class Router:
                 request_kwargs=kwargs,
             )
 
+            selected_deployment_id = (deployment.get("model_info") or {}).get("id")
             data = deployment["litellm_params"].copy()
+            resolved_credentials = self.get_deployment_credentials_with_provider(
+                model_id=selected_deployment_id or model
+            )
+            if resolved_credentials is not None:
+                data.update(resolved_credentials)
+            data.pop("litellm_credential_name", None)
             model_name = data["model"]
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name="_acancel_batch"
@@ -5321,6 +5817,16 @@ class Router:
             "delete_interaction",
             "acancel_interaction",
             "cancel_interaction",
+            "acreate_agent",
+            "create_agent",
+            "alist_agents",
+            "list_agents",
+            "aget_agent",
+            "get_agent",
+            "adelete_agent",
+            "delete_agent",
+            "alist_agent_versions",
+            "list_agent_versions",
         ] = "assistants",
     ):
         """
@@ -5405,6 +5911,27 @@ class Router:
 
             return vector_store_file_sync_wrapper
 
+        if call_type in (
+            "create_agent",
+            "list_agents",
+            "get_agent",
+            "delete_agent",
+            "list_agent_versions",
+        ):
+
+            def managed_agents_sync_wrapper(
+                custom_llm_provider: Optional[str] = None,
+                client: Optional[Any] = None,
+                **kwargs,
+            ):
+                if custom_llm_provider and "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = custom_llm_provider
+                if "custom_llm_provider" not in kwargs:
+                    kwargs["custom_llm_provider"] = "gemini"
+                return original_function(**kwargs)
+
+            return managed_agents_sync_wrapper
+
         # Handle asynchronous call types
         async def async_wrapper(
             custom_llm_provider: Optional[str] = None,
@@ -5440,9 +5967,13 @@ class Router:
                     custom_llm_provider=custom_llm_provider,
                     **kwargs,
                 )
+            elif call_type == "aresponses":
+                return await self._aresponses_with_streaming_fallbacks(
+                    original_function=original_function,
+                    **kwargs,
+                )
             elif call_type in (
                 "anthropic_messages",
-                "aresponses",
                 "_arealtime",
                 "_aresponses_websocket",
                 "acreate_fine_tuning_job",
@@ -5468,8 +5999,6 @@ class Router:
                 "alist_skills",
                 "aget_skill",
                 "adelete_skill",
-                "acreate_interaction",
-                "create_interaction",
             ):
                 return await self._ageneric_api_call_with_fallbacks(
                     original_function=original_function,
@@ -5529,11 +6058,25 @@ class Router:
                     **kwargs,
                 )
             elif call_type in (
+                "acreate_interaction",
+                "create_interaction",
                 "aget_interaction",
                 "adelete_interaction",
                 "acancel_interaction",
             ):
                 return await self._init_interactions_api_endpoints(
+                    original_function=original_function,
+                    custom_llm_provider=custom_llm_provider,
+                    **kwargs,
+                )
+            elif call_type in (
+                "acreate_agent",
+                "alist_agents",
+                "aget_agent",
+                "adelete_agent",
+                "alist_agent_versions",
+            ):
+                return await self._init_managed_agents_api_endpoints(
                     original_function=original_function,
                     custom_llm_provider=custom_llm_provider,
                     **kwargs,
@@ -5587,6 +6130,7 @@ class Router:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
         container_id = kwargs.get("container_id")
+        _forwarded_model_id = kwargs.get("model_id")
         if isinstance(container_id, str):
             decoded = ResponsesAPIRequestUtils._decode_container_id(container_id)
             original_id = decoded.get("response_id", container_id)
@@ -5595,7 +6139,14 @@ class Router:
             decoded_provider = decoded.get("custom_llm_provider")
             if decoded_provider and kwargs.get("custom_llm_provider") == "openai":
                 kwargs["custom_llm_provider"] = decoded_provider
-            model_id = decoded.get("model_id")
+            # Fall back to the model_id forwarded by the proxy when the container_id
+            # is a native upstream ID (e.g. Azure hex cntr_) that carries no LiteLLM
+            # routing payload, so deployment credentials (api_base, api_key) are applied.
+            model_id = decoded.get("model_id") or (
+                _forwarded_model_id.strip()
+                if isinstance(_forwarded_model_id, str) and _forwarded_model_id.strip()
+                else None
+            )
             if model_id:
                 kwargs["model"] = model_id
                 return await self._ageneric_api_call_with_fallbacks(
@@ -5642,6 +6193,34 @@ class Router:
         if custom_llm_provider and "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = custom_llm_provider
         # Default to gemini for interactions API
+        if "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = "gemini"
+        # If the proxy accidentally passed agent name as model, clear it
+        if kwargs.get("agent") and kwargs.get("model") == kwargs.get("agent"):
+            kwargs["model"] = None
+        # Model-based interactions use deployment routing + fallbacks; agent-only calls
+        # must not enter model-group lookup (agent name is not a LiteLLM deployment).
+        if kwargs.get("model"):
+            return await self._ageneric_api_call_with_fallbacks(
+                original_function=original_function,
+                **kwargs,
+            )
+        return await original_function(**kwargs)
+
+    async def _init_managed_agents_api_endpoints(
+        self,
+        original_function: Callable,
+        custom_llm_provider: Optional[str] = None,
+        **kwargs,
+    ):
+        """
+        Initialize the Managed Agents API endpoints on the router (v1beta/agents).
+
+        CRUD operations for Gemini managed agents don't need model-based routing,
+        so we call the original function directly with the custom_llm_provider.
+        """
+        if custom_llm_provider and "custom_llm_provider" not in kwargs:
+            kwargs["custom_llm_provider"] = custom_llm_provider
         if "custom_llm_provider" not in kwargs:
             kwargs["custom_llm_provider"] = "gemini"
         return await original_function(**kwargs)
@@ -6554,6 +7133,9 @@ class Router:
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
+            # WS session wrappers fire with result=None; per-turn costs tracked by inner calls.
+            if kwargs.get("call_type") in ("_aresponses_websocket", "_arealtime"):
+                return
             standard_logging_object: Optional[StandardLoggingPayload] = kwargs.get(
                 "standard_logging_object", None
             )
@@ -6957,12 +7539,11 @@ class Router:
         unhealthy_deployments = _get_cooldown_deployments(
             litellm_router_instance=self, parent_otel_span=parent_otel_span
         )
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] in unhealthy_deployments:
-                continue
-            else:
-                healthy_deployments.append(deployment)
+        unhealthy_set = set(unhealthy_deployments)
+        healthy_deployments: list = [
+            d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         return healthy_deployments, _all_deployments
 
@@ -6990,10 +7571,12 @@ class Router:
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set = set(unhealthy_deployments)
-        healthy_deployments: list = []
-        for deployment in _all_deployments:
-            if deployment["model_info"]["id"] not in unhealthy_deployments_set:
-                healthy_deployments.append(deployment)
+        healthy_deployments: list = [
+            d
+            for d in _all_deployments
+            if d["model_info"]["id"] not in unhealthy_deployments_set
+        ]
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
         return healthy_deployments, _all_deployments
 
     def routing_strategy_pre_call_checks(self, deployment: dict):
@@ -7208,6 +7791,38 @@ class Router:
             _shared_model_info = {
                 k: v for k, v in _model_info.items() if k not in _custom_pricing_fields
             }
+            _existing_shared_mode = (
+                cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}
+            ).get("mode")
+            _deployment_mode = _shared_model_info.get("mode")
+            # Keep the built-in bridge mode stable for shared backend keys.
+            # Multiple aliases can point at the same provider/model backend,
+            # but their deployment-level overrides should not downgrade the
+            # backend from responses -> chat via last-write-wins registration.
+            # Only preserve in that specific direction so legitimate upgrades
+            # (e.g. chat -> responses) and unrelated mode changes still apply,
+            # and so a missing deployment mode does not silently clear the
+            # existing shared backend mode.
+            _is_responses_to_chat_downgrade = (
+                _existing_shared_mode == "responses" and _deployment_mode == "chat"
+            )
+            _would_clear_existing_mode = (
+                _existing_shared_mode is not None and _deployment_mode is None
+            )
+            if _is_responses_to_chat_downgrade or _would_clear_existing_mode:
+                if _deployment_mode is not None:
+                    verbose_router_logger.warning(
+                        "Router: preserving existing mode=%s for shared backend "
+                        "key %s instead of the deployment-specified mode=%s "
+                        "(prevents alias registration from downgrading the "
+                        "shared backend mode).",
+                        _existing_shared_mode,
+                        _model_name,
+                        _deployment_mode,
+                    )
+                _shared_model_info["mode"] = _existing_shared_mode
+
+            # Always register the (possibly mode-preserved) shared backend info.
             _backend_alias_cost = {_model_name: _shared_model_info}
             if "responses/" in _model_name:
                 _stripped_model_name = _model_name.replace("responses/", "")
@@ -7927,6 +8542,7 @@ class Router:
             model=_deployment, model_id=deployment.model_info.id
         )
         self.model_names.add(deployment.model_name)
+        self._sync_deployment_budget_config(deployment=deployment)
         return deployment
 
     def _update_deployment_indices_after_removal(
@@ -8115,11 +8731,63 @@ class Router:
                 self._update_deployment_indices_after_removal(
                     model_id=id, removal_idx=deployment_idx
                 )
+                _budget_limiter = self._get_router_deployment_budget_limiter()
+                if _budget_limiter is not None:
+                    _budget_limiter.unregister_deployment_budget(model_id=id)
                 return item
             else:
                 return None
         except Exception:
             return None
+
+    def _get_router_deployment_budget_limiter(
+        self,
+    ) -> Optional[RouterBudgetLimiting]:
+        """
+        Return the router's deployment-budget callback.
+
+        Uses exact-type matching so proxy subclasses (e.g. virtual-key model budgets)
+        registered on litellm.callbacks are not mistaken for router deployment budgets.
+        """
+        if self.router_budget_logger is not None:
+            return self.router_budget_logger
+
+        if self.optional_callbacks:
+            for _cb in self.optional_callbacks:
+                if type(_cb) is RouterBudgetLimiting:
+                    self.router_budget_logger = _cb
+                    return _cb
+        return None
+
+    def _deployment_has_budget_limits(self, deployment: Deployment) -> bool:
+        return (
+            deployment.litellm_params.get("max_budget") is not None
+            and deployment.litellm_params.get("budget_duration") is not None
+            and deployment.model_info.id is not None
+        )
+
+    def _sync_deployment_budget_config(self, deployment: Deployment) -> None:
+        model_id = deployment.model_info.id
+        if model_id is None:
+            return
+
+        _budget_limiter = self._get_router_deployment_budget_limiter()
+
+        if not self._deployment_has_budget_limits(deployment=deployment):
+            if _budget_limiter is not None:
+                _budget_limiter.unregister_deployment_budget(model_id=model_id)
+            return
+
+        if _budget_limiter is None:
+            self.add_optional_pre_call_checks(
+                optional_pre_call_checks=["router_budget_limiting"]
+            )
+            _budget_limiter = self._get_router_deployment_budget_limiter()
+
+        if _budget_limiter is not None:
+            _budget_limiter.register_deployment_budget(
+                deployment=deployment.to_json(exclude_none=True)
+            )
 
     def get_deployment(self, model_id: str) -> Optional[Deployment]:
         """
@@ -8142,10 +8810,14 @@ class Router:
 
     def get_deployment_credentials(self, model_id: str) -> Optional[dict]:
         """
-        Returns -> dict of credentials for a given model id
+        Returns -> dict of credentials for a given model id.
+
+        Returns None if the deployment is paused via `LiteLLM_ProxyModelTable.blocked`,
+        so file/batch/passthrough callers that resolve credentials directly cannot keep
+        using a paused deployment.
         """
         deployment = self.get_deployment(model_id=model_id)
-        if deployment is None:
+        if deployment is None or self._is_deployment_blocked(deployment):
             return None
         return CredentialLiteLLMParams(
             **deployment.litellm_params.model_dump(exclude_none=True)
@@ -8190,7 +8862,9 @@ class Router:
 
         Returns:
             Dictionary containing api_key, api_base, custom_llm_provider, etc.
-            Returns None if model not found.
+            Returns None if model not found, or if the resolved deployment is
+            paused via `LiteLLM_ProxyModelTable.blocked` (so passthrough callers
+            cannot bypass an admin pause by resolving credentials directly).
 
         Example:
             credentials = router.get_deployment_credentials_with_provider("gpt-4o-litellm")
@@ -8216,7 +8890,7 @@ class Router:
                 elif isinstance(deployment_dict, Deployment):
                     deployment = deployment_dict
 
-        if deployment is None:
+        if deployment is None or self._is_deployment_blocked(deployment):
             return None
 
         # Get basic credentials
@@ -8436,7 +9110,10 @@ class Router:
         except Exception:
             pass
 
+        # Three mutually exclusive scenarios for the model's metadata:
         if custom_model_info is not None and litellm_model_name_model_info is not None:
+            # (1) It has both custom model_info set and exists in the built-in map
+            # merge with custom overriding built-in
             model_info = cast(
                 ModelInfo,
                 _update_dictionary(
@@ -8445,7 +9122,12 @@ class Router:
                 ),
             )
         elif litellm_model_name_model_info is not None:
+            # (2) Built-in only — no custom pricing to merge
             model_info = litellm_model_name_model_info
+        elif custom_model_info is not None:
+            # (3) Custom only — model not in built-in cost map yet
+            # custom_model_info already includes base_model defaults at this point, if applicable
+            model_info = cast(ModelInfo, custom_model_info)
 
         return model_info
 
@@ -9242,6 +9924,29 @@ class Router:
                 model_names.append(deployment.get("model_name", ""))
 
         return model_names
+
+    def get_fully_blocked_model_names(self) -> Set[str]:
+        """
+        Returns the set of model_names where every backing deployment has `blocked=True`.
+
+        Used by `/v1/models` to hide paused models from client listings while still
+        surfacing them on admin endpoints (e.g. `/model/info`). A model with at least
+        one non-blocked deployment is still serviceable and remains visible.
+        """
+        deployments = self.get_model_list() or []
+        blocked_by_name: Dict[str, bool] = {}
+        for deployment in deployments:
+            name = deployment.get("model_name") or ""
+            if not name:
+                continue
+            is_blocked = (deployment.get("model_info") or {}).get("blocked") is True
+            if name in blocked_by_name:
+                blocked_by_name[name] = blocked_by_name[name] and is_blocked
+            else:
+                blocked_by_name[name] = is_blocked
+        return {
+            name for name, fully_blocked in blocked_by_name.items() if fully_blocked
+        }
 
     def _get_team_specific_model(
         self, deployment: DeploymentTypedDict, team_id: Optional[str] = None
@@ -10131,6 +10836,12 @@ class Router:
             )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is currently paused and cannot accept requests.",
+                    model=model,
+                    llm_provider="",
+                )
             return healthy_deployments
 
         # Health-check-based filtering (before cooldown)
@@ -10163,6 +10874,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
@@ -10387,6 +11100,12 @@ class Router:
 
             # 3. If specific deployment returned, verify if it supports pass-through
             if isinstance(healthy_deployments, dict):
+                if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                    raise litellm.ServiceUnavailableError(
+                        message=f"Model '{model}' is currently paused and cannot accept requests.",
+                        model=model,
+                        llm_provider="",
+                    )
                 litellm_params = healthy_deployments.get("litellm_params", {})
                 if litellm_params.get("use_in_pass_through"):
                     return healthy_deployments
@@ -10555,6 +11274,12 @@ class Router:
         )
 
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is currently paused and cannot accept requests.",
+                    model=model,
+                    llm_provider="",
+                )
             return healthy_deployments
 
         parent_otel_span: Optional[Span] = _get_parent_otel_span_from_kwargs(
@@ -10584,6 +11309,8 @@ class Router:
                 "All deployments in cooldown via health-check routing, bypassing cooldown filter"
             )
             healthy_deployments = _pre_cooldown_deployments
+
+        healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -10704,6 +11431,12 @@ class Router:
 
         # 2. If the returned is a specific deployment (Dict), verify and return directly
         if isinstance(healthy_deployments, dict):
+            if (healthy_deployments.get("model_info") or {}).get("blocked") is True:
+                raise litellm.ServiceUnavailableError(
+                    message=f"Model '{model}' is currently paused and cannot accept requests.",
+                    model=model,
+                    llm_provider="",
+                )
             litellm_params = healthy_deployments.get("litellm_params", {})
             if litellm_params.get("use_in_pass_through"):
                 return healthy_deployments
@@ -10742,6 +11475,9 @@ class Router:
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
             cooldown_deployments=cooldown_deployments,
+        )
+        pass_through_deployments = self._filter_blocked_deployments(
+            pass_through_deployments
         )
 
         # 5. Apply pre-call checks (if enabled)
@@ -10831,6 +11567,36 @@ class Router:
             for deployment in healthy_deployments
             if deployment["model_info"]["id"] not in cooldown_set
         ]
+
+    def _filter_blocked_deployments(
+        self, healthy_deployments: List[Dict]
+    ) -> List[Dict]:
+        """
+        Filters out deployments that an admin has paused via `LiteLLM_ProxyModelTable.blocked`.
+
+        Applied alongside the cooldown filter on every routing entry point that calls
+        `_common_checks_available_deployment` directly — the primary sync/async path,
+        the sync pass-through path, and the retry / health-check helpers — so paused
+        deployments never serve a request. The async pass-through path inherits this
+        filter through its delegation to `async_get_healthy_deployments`.
+        """
+        return [
+            deployment
+            for deployment in healthy_deployments
+            if (deployment.get("model_info") or {}).get("blocked") is not True
+        ]
+
+    @staticmethod
+    def _is_deployment_blocked(deployment: "Deployment") -> bool:
+        """
+        Returns True when a `Deployment` Pydantic instance carries the admin-paused
+        flag. Used by credential-lookup helpers so passthrough file / batch endpoints
+        cannot bypass the pause by resolving credentials directly.
+        """
+        model_info = getattr(deployment, "model_info", None)
+        if model_info is None:
+            return False
+        return getattr(model_info, "blocked", None) is True
 
     async def _async_filter_health_check_unhealthy_deployments(
         self,

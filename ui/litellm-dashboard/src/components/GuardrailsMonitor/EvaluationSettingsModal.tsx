@@ -98,11 +98,7 @@ export function EvaluationSettingsModal({
         <div>
           <div className="flex items-center justify-between mb-1.5">
             <label className="text-sm font-medium text-gray-700">Evaluation Prompt</label>
-            <button
-              type="button"
-              onClick={handleResetPrompt}
-              className="text-xs text-indigo-600 hover:text-indigo-700"
-            >
+            <button type="button" onClick={handleResetPrompt} className="text-xs text-indigo-600 hover:text-indigo-700">
               Reset to default
             </button>
           </div>
@@ -118,9 +114,7 @@ export function EvaluationSettingsModal({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Response Schema
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Response Schema</label>
           <p className="text-xs text-gray-400 mb-1">response_format: json_schema</p>
           <Input.TextArea
             value={schema}

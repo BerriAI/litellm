@@ -30,6 +30,15 @@ Usage:
     # Cancel an interaction
     result = litellm.interactions.cancel(interaction_id="...")
 
+    # Create a managed agent on the provider side
+    result = litellm.interactions.agents.create(
+        name="waverunner",
+        custom_llm_provider="gemini",
+        api_key="...",
+        base_agent="gemini-2.5-flash",
+        instructions="You are a helpful assistant.",
+    )
+
 Methods:
 - create(): Sync create interaction
 - acreate(): Async create interaction
@@ -39,8 +48,12 @@ Methods:
 - adelete(): Async delete interaction
 - cancel(): Sync cancel interaction
 - acancel(): Async cancel interaction
+
+Sub-modules:
+- agents: Provider-side agent creation (litellm.interactions.agents.create)
 """
 
+from litellm.interactions import agents
 from litellm.interactions.main import (
     acancel,
     acreate,
@@ -65,4 +78,6 @@ __all__ = [
     # Cancel
     "cancel",
     "acancel",
+    # Sub-modules
+    "agents",
 ]

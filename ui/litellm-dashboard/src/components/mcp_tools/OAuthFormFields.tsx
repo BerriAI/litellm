@@ -75,14 +75,24 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             name={["credentials", "client_id"]}
             rules={[{ required: true, message: "Client ID is required for M2M OAuth" }]}
           >
-            <TextInput type="password" placeholder={`Enter OAuth client ID${placeholderSuffix}`} className={fieldClassName} />
+            <TextInput
+              type="password"
+              placeholder={`Enter OAuth client ID${placeholderSuffix}`}
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Client Secret" tooltip="OAuth2 client secret for the client_credentials grant." />}
+            label={
+              <FieldLabel label="Client Secret" tooltip="OAuth2 client secret for the client_credentials grant." />
+            }
             name={["credentials", "client_secret"]}
             rules={[{ required: true, message: "Client Secret is required for M2M OAuth" }]}
           >
-            <TextInput type="password" placeholder={`Enter OAuth client secret${placeholderSuffix}`} className={fieldClassName} />
+            <TextInput
+              type="password"
+              placeholder={`Enter OAuth client secret${placeholderSuffix}`}
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
             label={<FieldLabel label="Token URL" tooltip="Token endpoint URL for the client_credentials grant." />}
@@ -92,7 +102,12 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             <TextInput placeholder="https://auth.example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Scopes (optional)" tooltip="Optional scopes to request with the client_credentials grant." />}
+            label={
+              <FieldLabel
+                label="Scopes (optional)"
+                tooltip="Optional scopes to request with the client_credentials grant."
+              />
+            }
             name={["credentials", "scopes"]}
           >
             <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
@@ -103,7 +118,10 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
           <Form.Item
             label={
               <span className="flex items-center justify-between w-full">
-                <FieldLabel label="Client ID (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />
+                <FieldLabel
+                  label="Client ID (optional)"
+                  tooltip="Provide only if your MCP server cannot handle dynamic client registration."
+                />
                 {docsUrl && (
                   <a
                     href={docsUrl}
@@ -122,19 +140,38 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             <TextInput type="password" placeholder={`Enter client ID${placeholderSuffix}`} className={fieldClassName} />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Client Secret (optional)" tooltip="Provide only if your MCP server cannot handle dynamic client registration." />}
+            label={
+              <FieldLabel
+                label="Client Secret (optional)"
+                tooltip="Provide only if your MCP server cannot handle dynamic client registration."
+              />
+            }
             name={["credentials", "client_secret"]}
           >
-            <TextInput type="password" placeholder={`Enter client secret${placeholderSuffix}`} className={fieldClassName} />
+            <TextInput
+              type="password"
+              placeholder={`Enter client secret${placeholderSuffix}`}
+              className={fieldClassName}
+            />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Scopes (optional)" tooltip="Optional scopes requested during token exchange. Separate multiple scopes with enter or commas." />}
+            label={
+              <FieldLabel
+                label="Scopes (optional)"
+                tooltip="Optional scopes requested during token exchange. Separate multiple scopes with enter or commas."
+              />
+            }
             name={["credentials", "scopes"]}
           >
             <Select mode="tags" tokenSeparators={[","]} placeholder="Add scopes" className="rounded-lg" size="large" />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Authorization URL (optional)" tooltip="Optional override for the authorization endpoint." />}
+            label={
+              <FieldLabel
+                label="Authorization URL (optional)"
+                tooltip="Optional override for the authorization endpoint."
+              />
+            }
             name="authorization_url"
           >
             <TextInput placeholder="https://example.com/oauth/authorize" className={fieldClassName} />
@@ -146,7 +183,12 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             <TextInput placeholder="https://example.com/oauth/token" className={fieldClassName} />
           </Form.Item>
           <Form.Item
-            label={<FieldLabel label="Registration URL (optional)" tooltip="Optional override for the dynamic client registration endpoint." />}
+            label={
+              <FieldLabel
+                label="Registration URL (optional)"
+                tooltip="Optional override for the dynamic client registration endpoint."
+              />
+            }
             name="registration_url"
           >
             <TextInput placeholder="https://example.com/oauth/register" className={fieldClassName} />
@@ -188,17 +230,13 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
             }
             name="token_storage_ttl_seconds"
           >
-            <InputNumber
-              min={1}
-              placeholder="e.g. 3600"
-              className="w-full rounded-lg"
-              style={{ width: "100%" }}
-            />
+            <InputNumber min={1} placeholder="e.g. 3600" className="w-full rounded-lg" style={{ width: "100%" }} />
           </Form.Item>
           {oauthFlow && (
             <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
               <p className="text-sm text-gray-600">
-                Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.
+                Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication
+                value.
               </p>
               <Button
                 variant="secondary"

@@ -48,6 +48,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.types.interactions import (
     CancelInteractionResult,
     DeleteInteractionResult,
+    InteractionEnvironment,
     InteractionInput,
     InteractionsAPIResponse,
     InteractionsAPIStreamingResponse,
@@ -80,6 +81,8 @@ async def acreate(
     store: Optional[bool] = None,
     # Background execution
     background: Optional[bool] = None,
+    # Agent execution environment ("remote", env id, or remote config object)
+    environment: Optional[InteractionEnvironment] = None,
     # Response format
     response_modalities: Optional[List[str]] = None,
     response_format: Optional[Dict[str, Any]] = None,
@@ -109,6 +112,10 @@ async def acreate(
         stream: Whether to stream the response
         store: Whether to store the response for later retrieval
         background: Whether to run in background
+        environment: Agent execution environment — ``"remote"``, an existing env id
+            string, or a config object such as
+            ``{"type": "remote", "sources": [...]}`` /
+            ``{"type": "remote", "network": {...}}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -144,6 +151,7 @@ async def acreate(
             stream=stream,
             store=store,
             background=background,
+            environment=environment,
             response_modalities=response_modalities,
             response_format=response_format,
             response_mime_type=response_mime_type,
@@ -194,6 +202,8 @@ def create(
     store: Optional[bool] = None,
     # Background execution
     background: Optional[bool] = None,
+    # Agent execution environment ("remote", env id, or remote config object)
+    environment: Optional[InteractionEnvironment] = None,
     # Response format
     response_modalities: Optional[List[str]] = None,
     response_format: Optional[Dict[str, Any]] = None,
@@ -231,6 +241,10 @@ def create(
         stream: Whether to stream the response
         store: Whether to store the response for later retrieval
         background: Whether to run in background
+        environment: Agent execution environment — ``"remote"``, an existing env id
+            string, or a config object such as
+            ``{"type": "remote", "sources": [...]}`` /
+            ``{"type": "remote", "network": {...}}``
         response_modalities: Requested response modalities (TEXT, IMAGE, AUDIO)
         response_format: JSON schema for response format
         response_mime_type: MIME type of the response
@@ -252,7 +266,14 @@ def create(
 
         litellm_params = GenericLiteLLMParams(**kwargs)
 
-        if model:
+        # Routing logic:
+        # - agent provided (no model, or model accidentally set to agent name) → gemini
+        # - model provided → resolve provider via get_llm_provider (normal routing)
+        if agent and model == agent:
+            model = None
+        if agent and not model:
+            custom_llm_provider = custom_llm_provider or "gemini"
+        elif model:
             model, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model,
                 custom_llm_provider=custom_llm_provider,

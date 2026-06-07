@@ -79,7 +79,14 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing_extensions import Annotated, Dict, Required, TypedDict, override
+from typing_extensions import (
+    Annotated,
+    Dict,
+    NotRequired,
+    Required,
+    TypedDict,
+    override,
+)
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.responses.main import (
@@ -958,6 +965,7 @@ ChatCompletionAssistantContentValue = (
 
 class ChatCompletionResponseMessage(TypedDict, total=False):
     content: Optional[ChatCompletionAssistantContentValue]
+    annotations: Optional[List[ChatCompletionAnnotation]]
     tool_calls: Optional[List[ChatCompletionToolCallChunk]]
     role: Literal["assistant"]
     function_call: Optional[ChatCompletionToolCallFunctionChunk]
@@ -1076,6 +1084,7 @@ OpenAIImageGenerationOptionalParams = Literal[
     "image_url",
     "image_prompt_strength",
     "aspect_ratio",
+    "imageConfig",
 ]
 
 OpenAIImageEditOptionalParams = Literal[
@@ -1883,7 +1892,7 @@ class OpenAIRealtimeStreamResponseOutputItemContent(TypedDict, total=False):
     """The ID of the previous conversation item for reference"""
     text: str
     """The text content, used for 'input_text' / 'text' / 'output_text' content types"""
-    transcript: str
+    transcript: Optional[str]
     """The transcript content, used for 'input_audio' / 'audio' content types"""
     type: Literal[
         "input_audio",
@@ -1935,6 +1944,7 @@ class OpenAIRealtimeStreamResponseOutputItemAdded(TypedDict):
     response_id: str
     output_index: int
     item: OpenAIRealtimeStreamResponseOutputItem
+    event_id: NotRequired[str]
 
 
 class OpenAIRealtimeStreamResponseBaseObject(TypedDict):
@@ -1988,7 +1998,7 @@ class OpenAIRealtimeResponseContentPart(TypedDict, total=False):
     text: str
     """The text content, if type is 'text' or 'output_text'"""
 
-    transcript: str
+    transcript: Optional[str]
     """The transcript content, if type is 'audio' or 'output_audio'"""
 
     type: Union[
@@ -2061,6 +2071,17 @@ class OpenAIRealtimeContentPartDone(TypedDict):
     type: Literal["response.content_part.done"]
 
 
+class OpenAIRealtimeFunctionCallArgumentsDone(TypedDict):
+    type: Literal["response.function_call_arguments.done"]
+    event_id: str
+    response_id: str
+    item_id: str
+    output_index: int
+    call_id: str
+    name: str
+    arguments: str
+
+
 class OpenAIRealtimeOutputItemDone(TypedDict):
     event_id: str
     item: OpenAIRealtimeStreamResponseOutputItem
@@ -2126,6 +2147,7 @@ OpenAIRealtimeEvents = Union[
     OpenAIRealtimeResponseAudioDone,
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeOutputItemDone,
+    OpenAIRealtimeFunctionCallArgumentsDone,
     OpenAIRealtimeDoneEvent,
 ]
 
