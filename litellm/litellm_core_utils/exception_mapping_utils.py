@@ -655,7 +655,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 custom_llm_provider == "anthropic"
                 or custom_llm_provider == "anthropic_text"
             ):  # one of the anthropics
-                if "prompt is too long" in error_str or "prompt: length" in error_str:
+                if (
+                    "prompt is too long" in error_str
+                    or "prompt: length" in error_str
+                    or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
+                ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message="AnthropicError - {}".format(error_str),

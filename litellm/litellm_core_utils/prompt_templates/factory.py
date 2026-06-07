@@ -5496,12 +5496,18 @@ def _bedrock_tools_pt(
     ]
     """
     from litellm.llms.bedrock.common_utils import (
+        get_bedrock_base_model,
         normalize_json_schema_custom_types_to_object,
     )
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
     _valid_json_schema_root_types = frozenset(
         ("array", "boolean", "integer", "null", "number", "object", "string")
+    )
+    # Only Claude on Bedrock honours strict tool schemas; other families
+    # (Nova, Llama, GPT-OSS) reject the strict field outright.
+    supports_strict_tools = bool(
+        model and get_bedrock_base_model(model).startswith("anthropic")
     )
     tool_block_list: List[BedrockToolBlock] = []
     for tool_idx, tool in enumerate(tools):
@@ -5548,16 +5554,21 @@ def _bedrock_tools_pt(
         normalize_json_schema_custom_types_to_object(parameters)
         if parameters.get("type") not in _valid_json_schema_root_types:
             parameters["type"] = "object"
-        tool_input_schema = BedrockToolInputSchemaBlock(
-            json=BedrockToolJsonSchemaBlock(
-                type=parameters["type"],
-                properties=parameters.get("properties", {}),
-                required=parameters.get("required", []),
-            )
+        json_schema = BedrockToolJsonSchemaBlock(
+            type=parameters["type"],
+            properties=parameters.get("properties", {}),
+            required=parameters.get("required", []),
         )
+        additional_properties = parameters.get("additionalProperties", None)
+        if supports_strict_tools and additional_properties is not None:
+            json_schema["additionalProperties"] = additional_properties
+        tool_input_schema = BedrockToolInputSchemaBlock(json=json_schema)
         tool_spec = BedrockToolSpecBlock(
             inputSchema=tool_input_schema, name=name, description=description
         )
+        strict = tool.get("function", {}).get("strict", None)
+        if supports_strict_tools and strict is not None:
+            tool_spec["strict"] = strict
         tool_block = BedrockToolBlock(toolSpec=tool_spec)
         tool_block_list.append(tool_block)
 

@@ -15,6 +15,7 @@ from litellm.integrations.otel.model.baggage import promoted_baggage
 from litellm.integrations.otel.model.config import OpenTelemetryV2Config
 from litellm.integrations.otel.plumbing.context import (
     is_recordable_span,
+    request_root_span,
     resolve_parent_context,
     resolve_request_span_context,
     set_request_baggage,
@@ -435,8 +436,12 @@ class OpenTelemetryV2(CustomLogger):
                 attach(set_request_baggage(bag, context=get_current()))
                 # The server span was started by the instrumentor before this ran,
                 # so the Baggage processor (which only fires at span start) won't
-                # backfill it — stamp identity on it directly.
-                server_span = get_current_span()
+                # backfill it — stamp identity on it directly. Prefer the anchored
+                # root span over the ambient one so identity still lands on the
+                # server span when seeding from inside the live ``auth`` phase span
+                # (the auth-failure path), where ``get_current_span`` is the phase
+                # span, not the request's root.
+                server_span = request_root_span() or get_current_span()
                 if is_recordable_span(server_span):
                     # Re-capture the anchor here too: this runs post-auth with the
                     # server span active and covers entrypoints that bypass
