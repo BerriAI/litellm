@@ -73,6 +73,7 @@ const MCPToolsViewer = ({
   const {
     data: oboCredStatus,
     isLoading: isLoadingOboCred,
+    isError: isOboCredError,
     refetch: refetchOboCred,
   } = useQuery({
     queryKey: ["mcpOauthUserCredStatus", serverId, userID],
@@ -83,9 +84,12 @@ const MCPToolsViewer = ({
 
   // A stored credential is sufficient: the backend proactively refreshes an
   // expired or near-expiry token from the stored refresh_token on the next list
-  // call, so the user only needs to authorize when no credential row exists.
+  // call, so the user only needs to authorize when no credential row exists. If
+  // the status check itself fails we can't confirm a credential, so surface the
+  // Authorize gate rather than a silent empty tool list; re-authorizing only
+  // overwrites the user's own row, so it is safe when a credential did exist.
   const hasOboCred = !!oboCredStatus?.has_credential;
-  const oboNeedsAuth = isObo && !isLoadingOboCred && !!oboCredStatus && !hasOboCred;
+  const oboNeedsAuth = isObo && !isLoadingOboCred && (isOboCredError || (!!oboCredStatus && !hasOboCred));
   const oboStatusLoading = isObo && isLoadingOboCred;
 
   // Check if this server has extra headers configured

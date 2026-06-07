@@ -108,6 +108,16 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(vi.mocked(listMCPTools)).not.toHaveBeenCalled();
   });
 
+  it("shows the Authorize gate for an OBO server when the credential-status check fails", async () => {
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockRejectedValue(new Error("network down"));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
+    expect(vi.mocked(listMCPTools)).not.toHaveBeenCalled();
+  });
+
   it("does not gate an OBO server whose stored token is expired; the list call refreshes it server-side", async () => {
     // has_credential=true with is_expired=true must NOT gate: resolve_valid_user_oauth_token
     // refreshes from the stored refresh_token on the list call, so the user never reauthorizes.

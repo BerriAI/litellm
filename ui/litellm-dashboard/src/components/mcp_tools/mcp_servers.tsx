@@ -123,8 +123,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   // Server whose Tools tab should be reopened after an OBO OAuth redirect; read
   // once from sessionStorage so the restored server selection is correct on the
-  // first render (no setState-in-effect).
-  const [toolsTabServerId] = useState<string | null>(readToolsOAuthServerId);
+  // first render. Cleared when the user navigates back to the list (handleBack)
+  // so a later visit to the same server defaults to Overview, not the Tools tab.
+  const [toolsTabServerId, setToolsTabServerId] = useState<string | null>(readToolsOAuthServerId);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(toolsTabServerId);
   const [editServer, setEditServer] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>("all");
@@ -200,17 +201,18 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     }
   }, []);
 
-  // The restored server id was consumed by the initializers above; clear the
-  // sessionStorage key so a later normal visit doesn't reopen the Tools tab.
+  // The restored server id was consumed by the initializer above; remove the
+  // one-shot sessionStorage key so a full page reload doesn't reopen the Tools
+  // tab (removeItem only, no setState).
   useEffect(() => {
-    if (toolsTabServerId && typeof window !== "undefined") {
+    if (typeof window !== "undefined") {
       try {
         window.sessionStorage.removeItem(TOOLS_OAUTH_UI_STATE_KEY);
       } catch {
         // ignore storage errors
       }
     }
-  }, [toolsTabServerId]);
+  }, []);
 
   // Get unique teams from all servers
   const uniqueTeams = React.useMemo(() => {
@@ -372,6 +374,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleBack = React.useCallback(() => {
     setEditServer(false);
     setSelectedServerId(null);
+    // Drop the post-redirect one-shot so re-selecting that server opens Overview.
+    setToolsTabServerId(null);
     refetch();
   }, [refetch]);
 
