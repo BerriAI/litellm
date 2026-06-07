@@ -27574,6 +27574,11 @@ export interface components {
              * @description List of models this team member can access. Pass an empty list to remove per-member model restrictions.
              */
             allowed_models?: string[] | null;
+            /**
+             * Budget Duration
+             * @description Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.
+             */
+            budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /** Role */
@@ -27599,6 +27604,8 @@ export interface components {
         TeamMemberUpdateResponse: {
             /** Allowed Models */
             allowed_models?: string[] | null;
+            /** Budget Duration */
+            budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
             /** Rpm Limit */
@@ -38537,7 +38544,17 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description RateLimitError */
+            /**
+             * @description Unified rate-limit error.
+             *
+             *         Every rate-limit condition surfaced by litellm — whether it originated from
+             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *         max-iterations, etc.) — is raised as an instance of this class.
+             *
+             *         The :attr:`category` attribute lets callers distinguish the source. See
+             *         :class:`RateLimitErrorCategory` for the available values.
+             */
             429: {
                 headers: {
                     [name: string]: unknown;
