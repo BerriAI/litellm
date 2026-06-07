@@ -40,7 +40,7 @@ def test_llm_passthrough_route():
                 "model": "my-custom-model",
                 "messages": [{"role": "user", "content": "Hello, world!"}],
             },
-            http_client=client,
+            client=client,
         )
 
         mock_post.call_args.kwargs[
@@ -94,7 +94,7 @@ def test_bedrock_application_inference_profile_url_encoding():
             endpoint="model/arn:aws:bedrock:us-east-1:123456789123:application-inference-profile/r742sbn2zckd/converse",
             method="POST",
             custom_llm_provider="bedrock",
-            http_client=client,
+            client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -152,7 +152,7 @@ def test_bedrock_non_application_inference_profile_no_encoding():
             endpoint="model/anthropic.claude-3-sonnet-20240229-v1:0/converse",
             method="POST",
             custom_llm_provider="bedrock",
-            http_client=client,
+            client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -511,7 +511,7 @@ def test_azure_with_custom_api_base_and_key():
                 "model": "gpt-4.1",
                 "messages": [{"role": "user", "content": "Hello!"}],
             },
-            http_client=client,
+            client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -592,7 +592,7 @@ def test_content_param_forwarded_to_build_request():
             content=raw_content,
             data=None,
             json=None,
-            http_client=client,
+            client=client,
             litellm_logging_obj=mock_logging_obj,
         )
 
@@ -717,7 +717,7 @@ async def test_allm_passthrough_route_429_streaming_raises():
                 api_base="https://my-azure.openai.azure.com",
                 api_key="fake-azure-key",
                 json={"model": "gpt-4", "input": "hello", "stream": True},
-                http_client=async_client,
+                client=async_client,
                 litellm_logging_obj=mock_logging_obj,
             )
 

@@ -108,7 +108,7 @@ async def allm_passthrough_route(
     json: Optional[Any] = None,
     params: Optional[QueryParamTypes] = None,
     cookies: Optional[CookieTypes] = None,
-    http_client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
 ) -> Union[httpx.Response, AsyncIterator[bytes]]:
     """
@@ -154,7 +154,7 @@ async def allm_passthrough_route(
             json=json,
             params=params,
             cookies=cookies,
-            http_client=http_client,
+            client=client,
             **kwargs,
         )
 
@@ -234,7 +234,7 @@ def llm_passthrough_route(
     json: Optional[Any] = None,
     params: Optional[QueryParamTypes] = None,
     cookies: Optional[CookieTypes] = None,
-    http_client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+    client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     **kwargs,
 ) -> Union[
     httpx.Response,
@@ -256,11 +256,11 @@ def llm_passthrough_route(
 
     _is_async = allm_passthrough_route
 
-    if http_client is None:
+    if client is None:
         if _is_async:
-            http_client = litellm.module_level_aclient
+            client = litellm.module_level_aclient
         else:
-            http_client = litellm.module_level_client
+            client = litellm.module_level_client
 
     litellm_logging_obj = cast("LiteLLMLoggingObj", kwargs.get("litellm_logging_obj"))
 
@@ -342,7 +342,7 @@ def llm_passthrough_route(
     if json and isinstance(json, dict) and "model" in json:
         json["model"] = model
 
-    request = http_client.client.build_request(
+    request = client.client.build_request(
         method=method,
         url=updated_url,
         content=signed_json_body if signed_json_body is not None else content,
@@ -379,7 +379,7 @@ def llm_passthrough_route(
         if _is_async:
             # Return the coroutine to be awaited by the caller
             return _async_passthrough_request(
-                client=http_client,
+                client=client,
                 request=request,
                 is_streaming_request=is_streaming_request,
                 litellm_logging_obj=litellm_logging_obj,
@@ -387,7 +387,7 @@ def llm_passthrough_route(
             )
         else:
             # Sync path - client.client.send returns Response directly
-            response: httpx.Response = http_client.client.send(request=request, stream=is_streaming_request)  # type: ignore
+            response: httpx.Response = client.client.send(request=request, stream=is_streaming_request)  # type: ignore
             response.raise_for_status()
 
             if (
