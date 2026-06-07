@@ -300,6 +300,18 @@ describe("useModelHub", () => {
     expect(result.current.data).toBeUndefined();
   });
 
+  it("falls back to an empty object when the response has no body", async () => {
+    mockModelGroupInfoGet.mockResolvedValue({ data: undefined });
+
+    const { result } = renderHook(() => useModelHub(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data).toEqual({});
+  });
+
   it("does not fetch when the access token is missing", () => {
     mockUseAuthorized.mockReturnValue({
       accessToken: null,

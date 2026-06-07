@@ -63,7 +63,10 @@ export const useModelHub = () => {
   const { accessToken } = useAuthorized();
   return useQuery({
     queryKey: modelHubKeys.list({}),
-    queryFn: async () => (await fetchClient.GET("/model_group/info")).data as UntypedApiResponse,
+    queryFn: async () => {
+      const { data } = await fetchClient.GET("/model_group/info");
+      return (data ?? {}) as UntypedApiResponse;
+    },
     enabled: Boolean(accessToken),
   });
 };

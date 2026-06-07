@@ -190,4 +190,16 @@ describe("useTags", () => {
     expect(result.current.data).toEqual({});
     expect(mockGet).toHaveBeenCalledWith("/tag/list");
   });
+
+  it("falls back to an empty object when the response has no body", async () => {
+    mockGet.mockResolvedValue({ data: undefined });
+
+    const { result } = renderHook(() => useTags(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data).toEqual({});
+  });
 });
