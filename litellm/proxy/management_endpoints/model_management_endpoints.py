@@ -947,12 +947,31 @@ async def delete_model(
             )
 
         model_params = Deployment(**model_in_db.model_dump())
-        await ModelManagementAuthChecks.can_user_make_model_call(
-            model_params=model_params,
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            premium_user=premium_user,
+
+        team_id = model_params.model_info.team_id if model_params.model_info else None
+        team_exists = team_id is None or (
+            await prisma_client.db.litellm_teamtable.find_unique(
+                where={"team_id": team_id}
+            )
+            is not None
         )
+
+        if team_exists:
+            await ModelManagementAuthChecks.can_user_make_model_call(
+                model_params=model_params,
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+                premium_user=premium_user,
+            )
+        elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            # The model's team was deleted; without it team-admin membership can't be
+            # verified, so only a proxy admin may delete the orphaned model.
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "Only a proxy admin can delete a model whose team has been deleted."
+                },
+            )
 
         # update DB
         if store_model_in_db is True:
