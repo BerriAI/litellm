@@ -388,6 +388,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         max_budget_in_team: values.max_budget_in_team,
         tpm_limit: values.tpm_limit,
         rpm_limit: values.rpm_limit,
+        budget_duration: values.budget_duration,
         allowed_models: values.allowed_models,
       };
       MessageManager.destroy(); // Remove all existing toasts
@@ -1688,6 +1689,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               step: 0.01,
               min: 0,
               placeholder: "Budget limit for this member within this team",
+            },
+            {
+              name: "budget_duration",
+              label: (
+                <span>
+                  Budget Reset Period{" "}
+                  <Tooltip title="How often this member's budget resets within the team. Leave unset and the budget never resets.">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              ),
+              type: "budget-duration" as const,
             },
             {
               name: "tpm_limit",
