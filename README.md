@@ -508,6 +508,7 @@ module "litellm" {
   tenant     = "acme"
   env        = "prod"
 
+  # Replace my-gcp-project with your GCP project ID (same value as project_id above).
   image_registry = "us-central1-docker.pkg.dev/my-gcp-project/litellm/berriai"
 
   # Production: provide DNS already pointing at the LB IP for Google-managed certs.
