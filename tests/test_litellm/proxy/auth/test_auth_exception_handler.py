@@ -25,7 +25,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_exception_handler import UserAPIKeyAuthExceptionHandler
 
 
@@ -183,3 +183,118 @@ async def test_route_passed_to_post_call_failure_hook():
             mock_post_call_failure_hook.assert_called_once()
             call_args = mock_post_call_failure_hook.call_args[1]
             assert call_args["user_api_key_dict"].request_route == test_route
+
+
+@pytest.mark.asyncio
+async def test_resolved_identity_exported_on_auth_failure():
+    """Regression: when auth fails AFTER the key/team/user identity is resolved
+    (e.g. an expired key), that identity must still reach the failure logging /
+    span instead of being dropped for a blank UserAPIKeyAuth. Before the fix the
+    handler built a fresh empty object, so the failed trace showed no team alias,
+    team id, or metadata."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    resolved_identity = UserAPIKeyAuth(
+        token="hashed-token",
+        team_id="team-123",
+        team_alias="acme-team",
+        user_id="user-456",
+        metadata={"foo": "bar"},
+        team_metadata={"baz": "qux"},
+    )
+
+    expired_key_error = ProxyException(
+        message="Authentication Error - Expired Key.",
+        type=ProxyErrorTypes.expired_key,
+        param="sk-...",
+        code=status.HTTP_401_UNAUTHORIZED,
+    )
+
+    seeded = {}
+
+    def _capture_seed(user_api_key_dict, model=None):
+        seeded["dict"] = user_api_key_dict
+        seeded["model"] = model
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+            side_effect=_capture_seed,
+        ) as mock_seed,
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+        ) as mock_hook,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await handler._handle_authentication_error(
+                expired_key_error,
+                MagicMock(),
+                {"model": "gpt-4o"},
+                "/v1/chat/completions",
+                None,
+                "sk-raw-key",
+                resolved_identity=resolved_identity,
+            )
+
+    # The identity that auth already resolved is what gets logged on failure.
+    logged = mock_hook.call_args[1]["user_api_key_dict"]
+    assert logged.team_id == "team-123"
+    assert logged.team_alias == "acme-team"
+    assert logged.user_id == "user-456"
+    assert logged.metadata == {"foo": "bar"}
+    assert logged.team_metadata == {"baz": "qux"}
+    assert logged.request_route == "/v1/chat/completions"
+
+    # And it is stamped onto the span eagerly, before the request is rejected.
+    mock_seed.assert_called_once()
+    assert seeded["dict"] is logged
+    assert seeded["dict"].team_alias == "acme-team"
+    assert seeded["model"] == "gpt-4o"
+
+
+@pytest.mark.asyncio
+async def test_auth_failure_without_resolved_identity_still_logs():
+    """When auth fails before any identity is resolved (e.g. an unknown key),
+    the handler must still log a usable object carrying the raw api key and
+    route, not crash on the missing identity."""
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+        ) as mock_hook,
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException):
+            await handler._handle_authentication_error(
+                ProxyException(
+                    message="Invalid API key",
+                    type=ProxyErrorTypes.auth_error,
+                    param=None,
+                    code=status.HTTP_401_UNAUTHORIZED,
+                ),
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                "sk-unknown",
+            )
+
+    logged = mock_hook.call_args[1]["user_api_key_dict"]
+    # Raw key must NOT land on the object — it would be promoted into telemetry
+    # as litellm.api_key.hash and leak a real sk-... to anyone reading the trace.
+    assert logged.api_key != "sk-unknown"
+    assert logged.api_key == UserAPIKeyAuth(api_key="sk-unknown").api_key
+    assert logged.request_route == "/v1/chat/completions"
