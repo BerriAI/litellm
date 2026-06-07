@@ -127,11 +127,11 @@ class TestFileLikeInputNotPartiallyConsumed:
     """
     In ``llm_http_handler.create_file`` the object-name step
     (get_complete_file_url -> get_object_name) runs before
-    transform_create_file_request, and each independently calls
-    ``extract_file_data`` on the same create_file_data. When the file is a
-    tuple-wrapped open handle, the streaming reader must still emit every row
-    including entry 0: ``extract_file_data`` materializes the handle to bytes and
-    rewinds it (seek(0)), so neither step consumes the other's cursor. A partial
+    transform_create_file_request, and both read the same create_file_data
+    source. When the file is a tuple-wrapped open handle, the streaming reader
+    must still emit every row including entry 0: ``_iter_openai_jsonl_lines``
+    rewinds a seekable source (seek(0)) before each pass, so the object-name
+    step's partial read of the cursor does not consume the upload. A partial
     upload missing the first request would be silent and hard to catch, so this
     locks the full-payload invariant in.
     """
@@ -244,12 +244,9 @@ class TestGetObjectNameLazyParse:
             b'{"custom_id": "r-0", "body": {"model": "gemini-2.5-flash"}}\n'
             b"garbage line that is not json\n"
         )
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            extract_file_data,
+        object_name = cfg.get_object_name(
+            ("batch.jsonl", raw, "application/jsonl"), purpose="batch"
         )
-
-        extracted = extract_file_data(("batch.jsonl", raw, "application/jsonl"))
-        object_name = cfg.get_object_name(extracted, purpose="batch")
         assert "gemini-2.5-flash" in object_name
 
 
@@ -300,20 +297,109 @@ class TestStreamingPeakMemory:
 
     def test_get_object_name_does_not_scale_with_payload(self):
         cfg = VertexAIFilesConfig()
-        from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            extract_file_data,
-        )
-
         raw = _make_openai_jsonl_bytes(8000)
-        extracted = extract_file_data(("batch.jsonl", raw, "application/jsonl"))
+        file_data = ("batch.jsonl", raw, "application/jsonl")
 
         # The payload bytes already exist before measurement starts, so a lazy
         # first-row parse should allocate only a small fraction of the payload;
         # parsing every row would blow past this bound.
-        peak = self._measure(lambda: cfg.get_object_name(extracted, purpose="batch"))
+        peak = self._measure(lambda: cfg.get_object_name(file_data, purpose="batch"))
         assert (
             peak / len(raw) < 2.0
         ), "get_object_name should not copy the whole payload"
+
+
+class TestPathSourcedStreaming:
+    """
+    The proxy spools large batch uploads to a temp file and passes a pathlib.Path
+    as the file content instead of pre-reading bytes, so the transform streams
+    from disk. These lock in that a Path source yields identical output, keeps
+    every row, stays memory-bounded, and is re-iterable (multi-model uploads).
+    """
+
+    def _write_jsonl(self, tmp_path, n_rows, padding=400):
+        raw = _make_openai_jsonl_bytes(n_rows, padding=padding)
+        path = tmp_path / "batch.jsonl"
+        path.write_bytes(raw)
+        return path, raw
+
+    def _batch_request(self, path) -> CreateFileRequest:
+        return {"file": ("batch.jsonl", path, "application/jsonl"), "purpose": "batch"}
+
+    def test_transform_from_path_matches_legacy_and_keeps_all_rows(self, tmp_path):
+        cfg = VertexAIFilesConfig()
+        n_rows = 200
+        path, raw = self._write_jsonl(tmp_path, n_rows)
+        data = self._batch_request(path)
+
+        url = cfg.get_complete_file_url(
+            api_base=None,
+            api_key=None,
+            model="",
+            optional_params={},
+            litellm_params={"bucket_name": "test-bucket"},
+            data=data,
+        )
+        assert "uploadType=resumable" in url
+
+        out = cfg.transform_create_file_request(
+            model="", create_file_data=data, optional_params={}, litellm_params={}
+        )
+        assert isinstance(out, dict) and "resumable_chunked_upload" in out
+        body = _join_upload_body(out).decode("utf-8")
+        assert body == _legacy_vertex_jsonl_string(cfg, raw.decode("utf-8"))
+        lines = body.splitlines()
+        assert len(lines) == n_rows, "no batch row may be dropped from a Path source"
+        first_labels = json.loads(lines[0])["request"]["labels"]
+        assert _get_litellm_batch_custom_id_from_labels(first_labels) == "request-0"
+
+    def test_path_source_peak_stays_below_payload(self, tmp_path):
+        cfg = VertexAIFilesConfig()
+        path, raw = self._write_jsonl(tmp_path, 8000)
+        data = self._batch_request(path)
+
+        def run():
+            cfg.get_complete_file_url(
+                api_base=None,
+                api_key=None,
+                model="",
+                optional_params={},
+                litellm_params={"bucket_name": "test-bucket"},
+                data=data,
+            )
+            out = cfg.transform_create_file_request(
+                model="", create_file_data=data, optional_params={}, litellm_params={}
+            )
+            for _ in _resumable_stream(out).iter_bytes():
+                pass  # drain without accumulating
+
+        gc.collect()
+        tracemalloc.start()
+        try:
+            run()
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+
+        # Streaming from disk must not materialize the payload. Reading the whole
+        # file into bytes (the pre-fix path) would push peak past the file size.
+        assert peak < len(raw) * 0.3, (
+            f"peak {peak} not bounded vs payload {len(raw)} "
+            f"(ratio {peak / len(raw):.2f})"
+        )
+
+    def test_path_source_stream_is_reiterable(self, tmp_path):
+        cfg = VertexAIFilesConfig()
+        path, _ = self._write_jsonl(tmp_path, 50)
+        data = self._batch_request(path)
+
+        out = cfg.transform_create_file_request(
+            model="", create_file_data=data, optional_params={}, litellm_params={}
+        )
+        stream = _resumable_stream(out)
+        first = b"".join(stream.iter_bytes())
+        second = b"".join(stream.iter_bytes())
+        assert first == second and len(first) > 0
 
 
 _GCS_OBJECT_JSON = {

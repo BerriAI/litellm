@@ -22,7 +22,10 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     validate_managed_cloud_file_id,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    extract_file_data,
+    extract_file_metadata,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
     BaseFileUploadStream,
@@ -47,7 +50,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.files import ResumableChunkedUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse
-from litellm.types.utils import ExtractedFileData, LlmProviders, ModelResponse
+from litellm.types.utils import LlmProviders, ModelResponse
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
@@ -371,27 +374,21 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         object_name = f"{VERTEX_AI_MANAGED_GCS_PREFIX}{safe_model_path}/{uuid.uuid4()}"
         return object_name
 
-    def get_object_name(
-        self, extracted_file_data: ExtractedFileData, purpose: str
-    ) -> str:
+    def get_object_name(self, file_data: FileTypes, purpose: str) -> str:
         """
-        Get the object name for the request
+        Get the object name for the request.
+
+        Reads only the first JSONL entry (streamed) for batch files, so a large
+        upload is never materialized just to derive the GCS object name.
         """
-        extracted_file_data_content = extracted_file_data.get("content")
-
-        if extracted_file_data_content is None:
-            raise ValueError("file content is required")
-
         if purpose == "batch":
             ## 1. If jsonl, derive the object name from the first entry's model
-            first_entry = next(
-                _iter_openai_jsonl_entries(extracted_file_data_content), None
-            )
+            first_entry = next(_iter_openai_jsonl_entries(file_data), None)
             if first_entry is not None:
                 return self._get_gcs_object_name_from_batch_jsonl([first_entry])
 
         ## 2. If not jsonl, store under a server-generated managed object name
-        filename = extracted_file_data.get("filename")
+        filename, _ = extract_file_metadata(file_data)
         return build_managed_cloud_object_name(
             prefix=f"{VERTEX_AI_MANAGED_GCS_PREFIX}uploads/",
             filename=filename,
@@ -424,8 +421,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        extracted_file_data = extract_file_data(file_data)
-        object_name = self.get_object_name(extracted_file_data, purpose)
+        _, content_type = extract_file_metadata(file_data)
+        object_name = self.get_object_name(file_data, purpose)
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name = encode_gcs_object_name_for_url(object_name)
@@ -433,8 +430,8 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         # large uploads); everything else is a single simple-media upload.
         upload_type = (
             "resumable"
-            if FilesAPIUtils.is_batch_jsonl_file(
-                create_file_data=data, extracted_file_data=extracted_file_data
+            if FilesAPIUtils.is_batch_jsonl_request(
+                create_file_data=data, content_type=content_type
             )
             else "media"
         )
@@ -504,20 +501,16 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         file_data = create_file_data.get("file")
         if file_data is None:
             raise ValueError("file is required")
-        extracted_file_data = extract_file_data(file_data)
-        extracted_file_data_content = extracted_file_data.get("content")
 
-        if extracted_file_data_content is None:
-            raise ValueError("file content is required")
-
-        if FilesAPIUtils.is_batch_jsonl_file(
+        _, content_type = extract_file_metadata(file_data)
+        if FilesAPIUtils.is_batch_jsonl_request(
             create_file_data=create_file_data,
-            extracted_file_data=extracted_file_data,
+            content_type=content_type,
         ):
             return {
                 "resumable_chunked_upload": ResumableChunkedUploadConfig(
                     body_stream=_OpenAIToVertexBatchUploadStream(
-                        extracted_file_data_content,
+                        file_data,
                         self._map_openai_to_vertex_params,
                     ),
                     initiate_headers={
@@ -525,10 +518,11 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     },
                 )
             }
-        elif isinstance(extracted_file_data_content, bytes):
+
+        extracted_file_data_content = extract_file_data(file_data).get("content")
+        if isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
-        else:
-            raise ValueError("Unsupported file content type")
+        raise ValueError("Unsupported file content type")
 
     def transform_create_file_response(
         self,

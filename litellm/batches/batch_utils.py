@@ -1,5 +1,5 @@
 import json
-from typing import Any, List, Literal, Optional, Tuple
+from typing import Any, Iterator, List, Literal, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
@@ -314,6 +314,46 @@ def _get_file_content_as_dictionary(file_content: bytes) -> List[dict]:
         raise e
 
 
+def _iter_batch_input_entries(file_content: bytes) -> Iterator[dict]:
+    """
+    Yield batch input JSONL entries one at a time without materializing the whole
+    file as a list, so peak memory stays bounded when counting a large batch file.
+    """
+    start, length, newline = 0, len(file_content), ord("\n")
+    while start < length:
+        idx = file_content.find(newline, start)
+        if idx == -1:
+            chunk, start = file_content[start:], length
+        else:
+            chunk, start = file_content[start:idx], idx + 1
+        line = chunk.strip()
+        if line:
+            yield json.loads(line)
+
+
+def _count_entry_tokens(
+    entry: dict,
+    model_name: Optional[str] = None,
+) -> int:
+    """Token-count a single batch input entry's body (chat / text / embedding)."""
+    body = entry.get("body", {}) or {}
+    model = body.get("model", model_name or "")
+
+    messages = body.get("messages")
+    if messages:
+        return token_counter(model=model, messages=messages)
+
+    prompt = body.get("prompt")
+    if prompt:
+        return _count_prompt_or_input_tokens(model=model, value=prompt)
+
+    input_data = body.get("input")
+    if input_data:
+        return _count_prompt_or_input_tokens(model=model, value=input_data)
+
+    return 0
+
+
 def _get_batch_job_cost_from_file_content(
     file_content_dictionary: List[dict],
     custom_llm_provider: Literal[
@@ -431,27 +471,7 @@ def _get_batch_job_input_file_usage(
     completion_tokens: int = 0
 
     for _item in file_content_dictionary:
-        body = _item.get("body", {})
-        model = body.get("model", model_name or "")
-
-        # Chat completion payloads.
-        messages = body.get("messages")
-        if messages:
-            prompt_tokens += token_counter(model=model, messages=messages)
-            continue
-
-        # Text completion payloads (`prompt`).
-        prompt = body.get("prompt")
-        if prompt:
-            prompt_tokens += _count_prompt_or_input_tokens(model=model, value=prompt)
-            continue
-
-        # Embedding payloads (`input`).
-        input_data = body.get("input")
-        if input_data:
-            prompt_tokens += _count_prompt_or_input_tokens(
-                model=model, value=input_data
-            )
+        prompt_tokens += _count_entry_tokens(_item, model_name=model_name)
 
     return Usage(
         total_tokens=prompt_tokens + completion_tokens,

@@ -21,6 +21,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Iterable,
     List,
     Literal,
     NoReturn,
@@ -35,10 +36,9 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.batch_utils import (
+    _count_entry_tokens,
     _extract_file_access_credentials,
-    _get_batch_job_input_file_usage,
-    _get_file_content_as_dictionary,
-    _get_models_from_batch_input_file_content,
+    _iter_batch_input_entries,
 )
 from litellm.exceptions import RateLimitErrorCategory
 from litellm.integrations.custom_logger import CustomLogger
@@ -562,7 +562,19 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     f"Expected bytes content from file retrieval for {file_id}, "
                     f"got {type(file_content_bytes)}"
                 )
-            file_content_as_dict = _get_file_content_as_dictionary(file_content_bytes)
+
+            # Single streaming pass over the JSONL entries: accumulate request
+            # count, distinct models, and token total without ever holding all
+            # entries in a list, so peak memory does not scale with file size.
+            models: set = set()
+            total_tokens = 0
+            request_count = 0
+            for entry in _iter_batch_input_entries(file_content_bytes):
+                request_count += 1
+                model = (entry.get("body") or {}).get("model")
+                if model:
+                    models.add(model)
+                total_tokens += _count_entry_tokens(entry)
 
             # Validate every model named in the batch JSONL against the
             # caller's per-key model allowlist. Without this, a caller
@@ -572,16 +584,11 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             if user_api_key_dict is not None:
                 await self._enforce_batch_file_model_access(
                     user_api_key_dict=user_api_key_dict,
-                    file_content_as_dict=file_content_as_dict,
+                    models=models,
                 )
 
-            input_file_usage = _get_batch_job_input_file_usage(
-                file_content_dictionary=file_content_as_dict,
-                custom_llm_provider=custom_llm_provider,
-            )
-            request_count = len(file_content_as_dict)
             return BatchFileUsage(
-                total_tokens=input_file_usage.total_tokens,
+                total_tokens=total_tokens,
                 request_count=request_count,
             )
 
@@ -607,7 +614,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     async def _enforce_batch_file_model_access(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        file_content_as_dict: List[dict],
+        models: Iterable[str],
     ) -> None:
         """Reject the batch if the caller is not authorized for every
         ``body.model`` named inside the JSONL.
@@ -627,7 +634,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         from litellm.proxy.proxy_server import proxy_logging_obj
         from litellm.proxy.proxy_server import user_api_key_cache
 
-        models = _get_models_from_batch_input_file_content(file_content_as_dict)
         if not models:
             return
 
