@@ -43,6 +43,7 @@ import NotificationsManager from "./molecules/notifications_manager";
 import type { MCPUserEnvVarsStatus } from "./mcp_tools/types";
 import { createApiClient, deriveErrorMessage } from "@/lib/http/client";
 import { resolveApiBase } from "@/lib/http/resolveApiBase";
+import { registerAuthHeaderNameGetter, registerBaseUrlGetter } from "@/lib/http/runtime";
 
 export { deriveErrorMessage };
 export { ApiError } from "@/lib/http/client";
@@ -376,6 +377,9 @@ const apiClient = createApiClient({
   getAuthHeaderName: getGlobalLitellmHeaderName,
   onError: handleError,
 });
+
+registerBaseUrlGetter(getProxyBaseUrl);
+registerAuthHeaderNameGetter(getGlobalLitellmHeaderName);
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
   const url = proxyBaseUrl ? `${proxyBaseUrl}/model_group/make_public` : `/model_group/make_public`;

@@ -1,6 +1,7 @@
 import { useQuery, useInfiniteQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import { modelInfoCall, modelHubCall, modelAvailableCall } from "@/components/networking";
+import { modelInfoCall, modelAvailableCall } from "@/components/networking";
+import { fetchClient, type UntypedApiResponse } from "@/lib/http/api";
 import useAuthorized from "../useAuthorized";
 
 export interface ProxyModel {
@@ -62,7 +63,7 @@ export const useModelHub = () => {
   const { accessToken } = useAuthorized();
   return useQuery({
     queryKey: modelHubKeys.list({}),
-    queryFn: async () => await modelHubCall(accessToken!),
+    queryFn: async () => (await fetchClient.GET("/model_group/info")).data as UntypedApiResponse,
     enabled: Boolean(accessToken),
   });
 };

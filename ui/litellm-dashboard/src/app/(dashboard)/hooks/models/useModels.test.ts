@@ -15,7 +15,6 @@ import {
 
 vi.mock("@/components/networking", () => ({
   modelInfoCall: vi.fn(),
-  modelHubCall: vi.fn(),
   modelAvailableCall: vi.fn(),
 }));
 
@@ -24,7 +23,12 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => mockUseAuthorized(),
 }));
 
-import { modelAvailableCall, modelHubCall, modelInfoCall } from "@/components/networking";
+const mockModelGroupInfoGet = vi.fn();
+vi.mock("@/lib/http/api", () => ({
+  fetchClient: { GET: (...args: unknown[]) => mockModelGroupInfoGet(...args) },
+}));
+
+import { modelAvailableCall, modelInfoCall } from "@/components/networking";
 
 const mockProxyModel: ProxyModel = {
   id: "model-1",
@@ -265,55 +269,38 @@ describe("useModelHub", () => {
   const wrapper = ({ children }: { children: ReactNode }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
 
-  it("should render without crashing", () => {
-    (modelHubCall as any).mockResolvedValue({ data: [] });
-
-    const { result } = renderHook(() => useModelHub(), { wrapper });
-
-    expect(result.current).toBeDefined();
-  });
-
-  it("should return model hub data when query is successful", async () => {
-    const mockHubData = { data: [{ id: "hub-1", name: "Test Hub" }] };
-    (modelHubCall as any).mockResolvedValue(mockHubData);
+  it("fetches /model_group/info and returns the unwrapped body on success", async () => {
+    const body = { data: [{ model_group: "gpt-4o" }] };
+    mockModelGroupInfoGet.mockResolvedValue({ data: body });
 
     const { result } = renderHook(() => useModelHub(), { wrapper });
 
     expect(result.current.isLoading).toBe(true);
-    expect(result.current.data).toBeUndefined();
 
     await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data).toEqual(mockHubData);
-    expect(result.current.error).toBeNull();
-    expect(modelHubCall).toHaveBeenCalledWith("test-access-token");
-    expect(modelHubCall).toHaveBeenCalledTimes(1);
+    expect(result.current.data).toEqual(body);
+    expect(mockModelGroupInfoGet).toHaveBeenCalledWith("/model_group/info");
+    expect(mockModelGroupInfoGet).toHaveBeenCalledTimes(1);
   });
 
-  it("should handle error when modelHubCall fails", async () => {
-    const errorMessage = "Failed to fetch model hub";
-    const testError = new Error(errorMessage);
-
-    (modelHubCall as any).mockRejectedValue(testError);
+  it("surfaces an error when the request rejects", async () => {
+    const testError = new Error("boom");
+    mockModelGroupInfoGet.mockRejectedValue(testError);
 
     const { result } = renderHook(() => useModelHub(), { wrapper });
 
-    expect(result.current.isLoading).toBe(true);
-
     await waitFor(() => {
-      expect(result.current.isLoading).toBe(false);
       expect(result.current.isError).toBe(true);
     });
 
-    expect(result.current.error).toEqual(testError);
+    expect(result.current.error).toBe(testError);
     expect(result.current.data).toBeUndefined();
-    expect(modelHubCall).toHaveBeenCalledTimes(1);
   });
 
-  it("should not execute query when accessToken is missing", () => {
+  it("does not fetch when the access token is missing", () => {
     mockUseAuthorized.mockReturnValue({
       accessToken: null,
       userId: "test-user-id",
@@ -328,9 +315,8 @@ describe("useModelHub", () => {
     const { result } = renderHook(() => useModelHub(), { wrapper });
 
     expect(result.current.isLoading).toBe(false);
-    expect(result.current.data).toBeUndefined();
     expect(result.current.isFetched).toBe(false);
-    expect(modelHubCall).not.toHaveBeenCalled();
+    expect(mockModelGroupInfoGet).not.toHaveBeenCalled();
   });
 });
 

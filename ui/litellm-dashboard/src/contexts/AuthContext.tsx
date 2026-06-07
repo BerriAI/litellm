@@ -6,6 +6,7 @@ import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { formatUserRole } from "@/utils/roles";
 import { getUiConfig, setGlobalLitellmHeaderName } from "@/components/networking";
+import { setAuthToken } from "@/lib/http/runtime";
 
 function deleteCookie(name: string, path = "/") {
   document.cookie = `${name}=; Max-Age=0; Path=${path}`;
@@ -83,6 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Decode JWT and populate derived auth state whenever the token changes.
   useEffect(() => {
     if (!token) {
+      setAuthToken(null);
       return;
     }
 
@@ -104,6 +106,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!decoded) return;
 
     setAccessToken(decoded.key);
+    setAuthToken(decoded.key);
     setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
 
     if (decoded.user_role) {
