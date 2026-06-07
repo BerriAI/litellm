@@ -6,11 +6,12 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
+from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.config_repository import ConfigRepository
 from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroExportRequest,
     CloudZeroExportResponse,
@@ -53,7 +54,7 @@ async def _set_cloudzero_settings(api_key: str, connection_id: str, timezone: st
         "timezone": timezone,
     }
 
-    await prisma_client.db.litellm_config.upsert(
+    await ConfigRepository(prisma_client).table.upsert(
         where={"param_name": "cloudzero_settings"},
         data={
             "create": {
@@ -80,7 +81,7 @@ async def _get_cloudzero_settings():
             detail={"error": CommonProxyErrors.db_not_connected_error.value},
         )
 
-    cloudzero_config = await prisma_client.db.litellm_config.find_first(
+    cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
         where={"param_name": "cloudzero_settings"}
     )
     if cloudzero_config is None or cloudzero_config.param_value is None:
@@ -282,7 +283,7 @@ async def is_cloudzero_setup_in_db() -> bool:
             return False
 
         # Check for CloudZero settings in database
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -548,7 +549,7 @@ async def delete_cloudzero_settings(
             )
 
         # Check if CloudZero settings exist
-        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+        cloudzero_config = await ConfigRepository(prisma_client).table.find_first(
             where={"param_name": "cloudzero_settings"}
         )
 
@@ -560,7 +561,7 @@ async def delete_cloudzero_settings(
 
         # Delete only the CloudZero settings entry
         # This uses a specific where clause to target only the cloudzero_settings row
-        await prisma_client.db.litellm_config.delete(
+        await ConfigRepository(prisma_client).table.delete(
             where={"param_name": "cloudzero_settings"}
         )
 

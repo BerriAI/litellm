@@ -14,11 +14,11 @@ import os
 import re
 from typing import Any, List, Literal, Optional, Set, Tuple, Union, cast
 
+import jwt
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
-import jwt
 from jwt.api_jwk import PyJWK
 
 from litellm._logging import verbose_proxy_logger
@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import can_team_access_model
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.user_repository import UserRepository
 
 from .auth_checks import (
     _allowed_routes_check,
@@ -1790,7 +1791,7 @@ class JWTAuthManager:
         # Update user role
         new_role = jwt_handler.map_jwt_role_to_litellm_role(jwt_valid_token)
         if new_role and user_object.user_role != new_role.value:
-            await prisma_client.db.litellm_usertable.update(
+            await UserRepository(prisma_client).table.update(
                 where={"user_id": user_object.user_id},
                 data={"user_role": new_role.value},
             )

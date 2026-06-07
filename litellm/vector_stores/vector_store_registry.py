@@ -5,6 +5,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_args
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
+from litellm.repositories.table_repositories import (
+    ManagedVectorStoreIndexRepository,
+    ManagedVectorStoresRepository,
+)
 from litellm.types.vector_stores import (
     VECTOR_STORE_OPENAI_PARAMS,
     LiteLLM_ManagedVectorStore,
@@ -91,10 +95,10 @@ class VectorStoreIndexRegistry:
         """
         vector_stores_from_db: List[LiteLLM_ManagedVectorStoreIndex] = []
         if prisma_client is not None:
-            _vector_stores_from_db = (
-                await prisma_client.db.litellm_managedvectorstoreindextable.find_many(
-                    order={"created_at": "desc"},
-                )
+            _vector_stores_from_db = await ManagedVectorStoreIndexRepository(
+                prisma_client
+            ).table.find_many(
+                order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:
                 _dict_vector_store = dict(vector_store)
@@ -374,9 +378,9 @@ class VectorStoreRegistry:
             if vector_store is not None and prisma_client is not None:
                 try:
                     # Check if it still exists in database
-                    db_vector_store = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-                        where={"vector_store_id": vector_store_id}
-                    )
+                    db_vector_store = await ManagedVectorStoresRepository(
+                        prisma_client
+                    ).table.find_unique(where={"vector_store_id": vector_store_id})
                     if db_vector_store is None:
                         # Vector store was deleted from database, remove from cache
                         verbose_logger.debug(
@@ -541,10 +545,10 @@ class VectorStoreRegistry:
         """
         vector_stores_from_db: List[LiteLLM_ManagedVectorStore] = []
         if prisma_client is not None:
-            _vector_stores_from_db = (
-                await prisma_client.db.litellm_managedvectorstorestable.find_many(
-                    order={"created_at": "desc"},
-                )
+            _vector_stores_from_db = await ManagedVectorStoresRepository(
+                prisma_client
+            ).table.find_many(
+                order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:
                 _dict_vector_store = dict(vector_store)

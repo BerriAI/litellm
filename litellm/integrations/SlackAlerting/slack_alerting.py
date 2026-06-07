@@ -37,6 +37,8 @@ from litellm.proxy._types import (
     VirtualKeyEvent,
     WebhookEvent,
 )
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *
@@ -1231,7 +1233,7 @@ Model Info:
                 and recipient_user_id is not None
                 and prisma_client is not None
             ):
-                user_row = await prisma_client.db.litellm_usertable.find_unique(
+                user_row = await UserRepository(prisma_client).table.find_unique(
                     where={"user_id": recipient_user_id}
                 )
 
@@ -1263,7 +1265,7 @@ Model Info:
                 team_id = webhook_event.team_id
                 team_name = "Default Team"
                 if team_id is not None and prisma_client is not None:
-                    team_row = await prisma_client.db.litellm_teamtable.find_unique(
+                    team_row = await TeamRepository(prisma_client).table.find_unique(
                         where={"team_id": team_id}
                     )
                     if team_row is not None:

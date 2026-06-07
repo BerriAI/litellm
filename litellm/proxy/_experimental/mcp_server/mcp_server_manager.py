@@ -42,8 +42,8 @@ from litellm.constants import (
     MCP_TOOL_LISTING_TIMEOUT,
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
@@ -85,6 +85,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import ProxyLogging
+from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
@@ -3817,7 +3818,7 @@ class MCPServerManager:
         # Pending/rejected servers are excluded at the DB level so we never load them.
         from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
 
-        raw_rows = await prisma_client.db.litellm_mcpservertable.find_many(
+        raw_rows = await MCPServerRepository(prisma_client).table.find_many(
             where={
                 "OR": [
                     {"approval_status": None},

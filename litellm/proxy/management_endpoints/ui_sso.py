@@ -15,8 +15,8 @@ import inspect
 import os
 import re
 import secrets
-from html import escape
 from copy import deepcopy
+from html import escape
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -39,9 +39,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 
 import litellm
-from litellm.caching.dual_cache import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.caching.dual_cache import DualCache
 from litellm.constants import (
     CLI_SSO_CLAIM_MAP,
     CLI_SSO_CLAIM_MAX_SCALAR_LENGTH,
@@ -77,7 +77,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken, get_user_object
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.auth.auth_utils import (
     _get_request_ip_address,
     _has_user_setup_sso,
@@ -92,6 +91,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
     jwt_display_template,
 )
 from litellm.proxy.common_utils.html_forms.ui_login import html_form
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso_helper_utils import (
@@ -110,6 +110,9 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
+from litellm.repositories.table_repositories import SSOConfigRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
 from litellm.types.proxy.management_endpoints.ui_sso import (
@@ -438,7 +441,7 @@ async def _persist_cli_sso_user_metadata(
         return
 
     try:
-        user_row = await prisma_client.db.litellm_usertable.find_unique(
+        user_row = await UserRepository(prisma_client).table.find_unique(
             where={"user_id": user_id}
         )
         existing_metadata: Dict[str, Any] = {}
@@ -451,7 +454,7 @@ async def _persist_cli_sso_user_metadata(
             existing_metadata=existing_metadata,
             attribution_metadata=attribution_metadata,
         )
-        await prisma_client.db.litellm_usertable.update_many(
+        await UserRepository(prisma_client).table.update_many(
             where={"user_id": user_id},
             data={"metadata": merged_metadata},
         )
@@ -859,7 +862,7 @@ async def google_login(
         if premium_user is not True:
             # Check if under 'free SSO user' limit
             if prisma_client is not None:
-                total_users = await prisma_client.db.litellm_usertable.count()
+                total_users = await UserRepository(prisma_client).table.count()
                 if total_users and total_users > 5:
                     raise ProxyException(
                         message="You must be a LiteLLM Enterprise user to use SSO for more than 5 users. If you have a license please set `LITELLM_LICENSE` in your env. If you want to obtain a license meet with us here: https://enterprise.litellm.ai/demo You are seeing this error message because You set one of `MICROSOFT_CLIENT_ID`, `GOOGLE_CLIENT_ID`, or `GENERIC_CLIENT_ID` in your env. Please unset this",
@@ -1150,7 +1153,7 @@ async def _setup_team_mappings() -> Optional["TeamMappings"]:
             "Prisma client is None, connect a database to your proxy"
         )
 
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(
             where={"id": "sso_config"}
         )
 
@@ -1188,7 +1191,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
             "Prisma client is None, connect a database to your proxy"
         )
 
-        sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
+        sso_db_record = await SSOConfigRepository(prisma_client).table.find_unique(
             where={"id": "sso_config"}
         )
 
@@ -1755,7 +1758,7 @@ async def _sync_user_role_from_jwt_role_map(
 
     # Update existing DB record if role differs
     if user_info is not None and user_info.user_role != mapped_role.value:
-        await prisma_client.db.litellm_usertable.update(
+        await UserRepository(prisma_client).table.update(
             where={"user_id": user_info.user_id},
             data={"user_role": mapped_role.value},
         )
@@ -1819,7 +1822,7 @@ async def check_and_update_if_proxy_admin_id(
             return user_role
 
         if prisma_client:
-            await prisma_client.db.litellm_usertable.update(
+            await UserRepository(prisma_client).table.update(
                 where={"user_id": user_id},
                 data={"user_role": LitellmUserRoles.PROXY_ADMIN.value},
             )
@@ -1976,7 +1979,7 @@ async def _fetch_cli_sso_team_details(
     team_details: List[Dict[str, Any]] = []
     try:
         if teams:
-            prisma_teams = await prisma_client.db.litellm_teamtable.find_many(
+            prisma_teams = await TeamRepository(prisma_client).table.find_many(
                 where={"team_id": {"in": teams}}
             )
             for team_row in prisma_teams:
@@ -2884,7 +2887,7 @@ class SSOAuthenticationHandler:
                     user_id=user_id,
                 )
 
-                await prisma_client.db.litellm_usertable.update_many(
+                await UserRepository(prisma_client).table.update_many(
                     where={"user_id": user_id}, data=update_data
                 )
             else:
@@ -2986,7 +2989,7 @@ class SSOAuthenticationHandler:
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         try:
-            team_obj = await prisma_client.db.litellm_teamtable.find_first(
+            team_obj = await TeamRepository(prisma_client).table.find_first(
                 where={"team_id": litellm_team_id}
             )
             verbose_proxy_logger.debug(f"Team object: {team_obj}")

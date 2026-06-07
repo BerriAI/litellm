@@ -19,6 +19,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import get_prisma_client_or_throw
+from litellm.repositories.table_repositories import AccessGroupRepository
 from litellm.types.access_group import (
     AccessGroupCreateRequest,
     AccessGroupResponse,
@@ -386,7 +387,7 @@ async def list_access_groups(
         CommonProxyErrors.db_not_connected_error.value
     )
 
-    records = await prisma_client.db.litellm_accessgrouptable.find_many(
+    records = await AccessGroupRepository(prisma_client).table.find_many(
         order={"created_at": "desc"}
     )
     return [_record_to_response(r) for r in records]
@@ -405,7 +406,7 @@ async def get_access_group(
         CommonProxyErrors.db_not_connected_error.value
     )
 
-    record = await prisma_client.db.litellm_accessgrouptable.find_unique(
+    record = await AccessGroupRepository(prisma_client).table.find_unique(
         where={"access_group_id": access_group_id}
     )
     if record is None:

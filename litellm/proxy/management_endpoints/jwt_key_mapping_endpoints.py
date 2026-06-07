@@ -11,6 +11,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.repositories.table_repositories import JWTKeyMappingRepository
 
 router = APIRouter()
 
@@ -61,7 +62,7 @@ async def create_jwt_key_mapping(
         if data.description is not None:
             create_data["description"] = data.description
 
-        new_mapping = await prisma_client.db.litellm_jwtkeymapping.create(
+        new_mapping = await JWTKeyMappingRepository(prisma_client).table.create(
             data=create_data
         )
 
@@ -113,7 +114,7 @@ async def update_jwt_key_mapping(
 
     try:
         # Get old mapping for cache invalidation
-        old_mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
+        old_mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(
             where={"id": data.id}
         )
 
@@ -123,7 +124,7 @@ async def update_jwt_key_mapping(
         cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
-        updated_mapping = await prisma_client.db.litellm_jwtkeymapping.update(
+        updated_mapping = await JWTKeyMappingRepository(prisma_client).table.update(
             where={"id": data.id}, data=update_data
         )
 
@@ -166,7 +167,7 @@ async def delete_jwt_key_mapping(
 
     try:
         # Get old mapping for cache invalidation
-        old_mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
+        old_mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(
             where={"id": data.id}
         )
 
@@ -176,7 +177,7 @@ async def delete_jwt_key_mapping(
         cache_key = f"jwt_key_mapping:{old_mapping.jwt_claim_name}:{old_mapping.jwt_claim_value}"
         await user_api_key_cache.async_delete_cache(cache_key)
 
-        await prisma_client.db.litellm_jwtkeymapping.delete(where={"id": data.id})
+        await JWTKeyMappingRepository(prisma_client).table.delete(where={"id": data.id})
         return {"status": "success"}
     except HTTPException:
         raise
@@ -206,12 +207,12 @@ async def list_jwt_key_mappings(
 
     try:
         skip = (page - 1) * size
-        mappings = await prisma_client.db.litellm_jwtkeymapping.find_many(
+        mappings = await JWTKeyMappingRepository(prisma_client).table.find_many(
             skip=skip,
             take=size,
             order={"created_at": "desc"},
         )
-        total_count = await prisma_client.db.litellm_jwtkeymapping.count()
+        total_count = await JWTKeyMappingRepository(prisma_client).table.count()
         return {
             "mappings": [_to_response(m) for m in mappings],
             "total_count": total_count,
@@ -245,7 +246,7 @@ async def info_jwt_key_mapping(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        mapping = await prisma_client.db.litellm_jwtkeymapping.find_unique(
+        mapping = await JWTKeyMappingRepository(prisma_client).table.find_unique(
             where={"id": id}
         )
         if mapping is None:

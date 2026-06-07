@@ -22,6 +22,10 @@ import asyncio
 from typing import Any, Dict, Tuple
 
 from litellm._logging import verbose_router_logger
+from litellm.repositories.table_repositories import (
+    AdaptiveRouterSessionRepository,
+    AdaptiveRouterStateRepository,
+)
 
 StateKey = Tuple[str, str, str]  # (router_name, request_type, model_name)
 SessionKey = Tuple[str, str, str]  # (session_id, router_name, model_name)
@@ -112,7 +116,7 @@ class AdaptiveRouterUpdateQueue:
                 # other. The upsert creates the row with the delta as the
                 # initial value on first write, then increments on subsequent
                 # writes — no read-modify-write race.
-                await prisma_client.db.litellm_adaptiverouterstate.upsert(
+                await AdaptiveRouterStateRepository(prisma_client).table.upsert(
                     where={
                         "router_name_request_type_model_name": {
                             "router_name": router,
@@ -174,7 +178,7 @@ class AdaptiveRouterUpdateQueue:
                     for k, v in payload.items()
                     if k not in ("session_id", "router_name", "model_name")
                 }
-                await prisma_client.db.litellm_adaptiveroutersession.upsert(
+                await AdaptiveRouterSessionRepository(prisma_client).table.upsert(
                     where={
                         "session_id_router_name_model_name": {
                             "session_id": session_id,

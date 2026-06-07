@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
+from litellm.repositories.table_repositories import (
+    ManagedFileRepository,
+    ManagedObjectRepository,
+)
 from litellm.types.utils import SpecialEnums
 
 if TYPE_CHECKING:
@@ -697,7 +701,7 @@ async def resolve_input_file_id_to_unified(response, prisma_client) -> None:
         and prisma_client
     ):
         try:
-            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+            managed_file = await ManagedFileRepository(prisma_client).table.find_first(
                 where={"flat_model_file_ids": {"has": response.input_file_id}}
             )
             if managed_file:
@@ -719,7 +723,7 @@ async def resolve_output_file_ids_to_unified(response, prisma_client) -> None:
         if not raw_id or _is_base64_encoded_unified_file_id(raw_id):
             continue
         try:
-            managed_file = await prisma_client.db.litellm_managedfiletable.find_first(
+            managed_file = await ManagedFileRepository(prisma_client).table.find_first(
                 where={"flat_model_file_ids": {"has": raw_id}}
             )
             if managed_file:
@@ -821,6 +825,7 @@ async def get_batch_from_database(
         - response_batch: Parsed LiteLLMBatch object (or None)
     """
     import json
+
     from litellm.types.utils import LiteLLMBatch
 
     if managed_files_obj is None or not unified_batch_id:
@@ -830,7 +835,7 @@ async def get_batch_from_database(
         if not prisma_client:
             return None, None
 
-        db_batch_object = await prisma_client.db.litellm_managedobjecttable.find_first(
+        db_batch_object = await ManagedObjectRepository(prisma_client).table.find_first(
             where={"unified_object_id": batch_id}
         )
 
@@ -942,7 +947,7 @@ async def update_batch_in_database(
             update_data["batch_processed"] = True
 
         try:
-            await prisma_client.db.litellm_managedobjecttable.update(
+            await ManagedObjectRepository(prisma_client).table.update(
                 where={"unified_object_id": batch_id},
                 data=update_data,
             )
@@ -958,7 +963,7 @@ async def update_batch_in_database(
                     f"batch_processed column not found, retrying update without it: {col_err}"
                 )
                 update_data.pop("batch_processed", None)
-                await prisma_client.db.litellm_managedobjecttable.update(
+                await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": batch_id},
                     data=update_data,
                 )
