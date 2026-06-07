@@ -442,6 +442,13 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+# Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
+# `litellm_proxy_failed_requests_metric`. Off by default to preserve the
+# pre-unification label set so existing dashboards / recording rules keyed on
+# that metric keep matching after upgrade. Enable when downstream consumers
+# are ready to split 429s by source (vendor vs. litellm) and dimension
+# (RPM/TPM/concurrent/budget).
+prometheus_emit_rate_limit_labels: bool = False
 prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
@@ -1303,6 +1310,8 @@ from .exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    RateLimitErrorCategory,
+    RateLimitType,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
