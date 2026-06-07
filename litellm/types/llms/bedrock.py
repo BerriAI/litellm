@@ -296,7 +296,7 @@ class BedrockToolSpec(dict):
         supports_strict_tools: bool,
     ) -> None:
         json_schema: ToolJsonSchemaBlock = {
-            "type": parameters["type"],  # type: ignore[typeddict-item]
+            "type": parameters["type"],
             "properties": parameters.get("properties", {}),
             "required": parameters.get("required", []),
         }
