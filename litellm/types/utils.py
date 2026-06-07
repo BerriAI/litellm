@@ -38,7 +38,6 @@ from pydantic import (
     Field,
     PrivateAttr,
     field_validator,
-    model_validator,
 )
 from typing_extensions import Required, TypedDict
 
@@ -3577,25 +3576,11 @@ class RawRequestTypedDict(TypedDict, total=False):
     error: Optional[str]
 
 
-class CredentialBase(BaseModel):
-    credential_name: str
-    credential_info: dict
-
-
-class CredentialItem(CredentialBase):
-    credential_values: dict
-
-
-class CreateCredentialItem(CredentialBase):
-    credential_values: Optional[dict] = None
-    model_id: Optional[str] = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def check_credential_params(cls, values):
-        if not values.get("credential_values") and not values.get("model_id"):
-            raise ValueError("Either credential_values or model_id must be set")
-        return values
+from litellm.models.credentials import CredentialBase as CredentialBase  # noqa: E402
+from litellm.models.credentials import CredentialItem as CredentialItem  # noqa: E402
+from litellm.models.credentials import (  # noqa: E402
+    CreateCredentialItem as CreateCredentialItem,
+)
 
 
 class ExtractedFileData(TypedDict):

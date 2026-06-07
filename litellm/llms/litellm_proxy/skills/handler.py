@@ -17,6 +17,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
+from litellm.repositories.table_repositories import SkillsRepository
 
 # Skills are looked up on every chat completion that has skills enabled
 # (`SkillsInjectionHook` calls ``fetch_skill_from_db``). 60s LRU/TTL cache
@@ -107,7 +108,7 @@ class LiteLLMSkillsHandler:
             f"LiteLLMSkillsHandler: Creating skill {skill_id} with title={data.display_title}"
         )
 
-        new_skill = await prisma_client.db.litellm_skillstable.create(data=skill_data)
+        new_skill = await SkillsRepository(prisma_client).table.create(data=skill_data)
         return _prisma_skill_to_litellm(new_skill)
 
     @staticmethod
@@ -133,7 +134,7 @@ class LiteLLMSkillsHandler:
                 return []
             find_many_kwargs["where"] = {"created_by": {"in": owner_scopes}}
 
-        skills = await prisma_client.db.litellm_skillstable.find_many(
+        skills = await SkillsRepository(prisma_client).table.find_many(
             **find_many_kwargs
         )
         return [_prisma_skill_to_litellm(s) for s in skills]
@@ -150,7 +151,7 @@ class LiteLLMSkillsHandler:
             return cached
 
         prisma_client = await LiteLLMSkillsHandler._get_prisma_client()
-        skill = await prisma_client.db.litellm_skillstable.find_unique(
+        skill = await SkillsRepository(prisma_client).table.find_unique(
             where={"skill_id": skill_id}
         )
         _SKILL_CACHE.set_cache(
@@ -189,7 +190,7 @@ class LiteLLMSkillsHandler:
         ):
             raise ValueError(f"Skill not found: {skill_id}")
 
-        await prisma_client.db.litellm_skillstable.delete(where={"skill_id": skill_id})
+        await SkillsRepository(prisma_client).table.delete(where={"skill_id": skill_id})
         _SKILL_CACHE.set_cache(skill_id, _NEGATIVE_SKILL_SENTINEL)
 
         return {"id": skill_id, "type": "skill_deleted"}
