@@ -578,6 +578,20 @@ def test_chat_config_ignores_api_base_override_for_stored_oauth_token():
     assert api_key == "stored-oauth-token"
 
 
+def test_chat_config_treats_blank_api_key_as_stored_oauth_token():
+    config = XAIOAuthChatConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_access_token.return_value = "stored-oauth-token"
+    config.authenticator.get_api_base.return_value = "https://api.x.ai/v1"
+
+    api_base, api_key = config._get_openai_compatible_provider_info(
+        "https://attacker.example.com/v1", ""
+    )
+
+    assert api_base == "https://api.x.ai/v1"
+    assert api_key == "stored-oauth-token"
+
+
 def test_chat_config_allows_api_base_override_with_caller_api_key():
     config = XAIOAuthChatConfig()
     config.authenticator = MagicMock()
@@ -693,6 +707,13 @@ def test_responses_config_endpoint_url_uses_oauth_authenticator():
     assert (
         config.get_complete_url(
             api_base="https://custom.example.com/v1/", litellm_params={}
+        )
+        == "https://xai.example.com/v1/responses"
+    )
+    assert (
+        config.get_complete_url(
+            api_base="https://custom.example.com/v1/",
+            litellm_params={"api_key": ""},
         )
         == "https://xai.example.com/v1/responses"
     )
