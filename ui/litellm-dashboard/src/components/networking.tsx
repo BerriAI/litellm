@@ -2822,6 +2822,7 @@ export interface Member {
   max_budget_in_team?: number | null;
   tpm_limit?: number | null;
   rpm_limit?: number | null;
+  budget_duration?: string | null;
   allowed_models?: string[] | null;
 }
 
@@ -2949,18 +2950,21 @@ export const teamMemberUpdateCall = async (
       user_id: formValues.user_id,
     };
 
-    // Add optional budget and rate limit fields
+    const orNull = (value: unknown) => (value === undefined || value === null || value === "" ? null : value);
     if (formValues.user_email !== undefined) {
       requestBody.user_email = formValues.user_email;
     }
-    if (formValues.max_budget_in_team !== undefined && formValues.max_budget_in_team !== null) {
-      requestBody.max_budget_in_team = formValues.max_budget_in_team;
+    if ("max_budget_in_team" in formValues) {
+      requestBody.max_budget_in_team = orNull(formValues.max_budget_in_team);
     }
-    if (formValues.tpm_limit !== undefined && formValues.tpm_limit !== null) {
-      requestBody.tpm_limit = formValues.tpm_limit;
+    if ("tpm_limit" in formValues) {
+      requestBody.tpm_limit = orNull(formValues.tpm_limit);
     }
-    if (formValues.rpm_limit !== undefined && formValues.rpm_limit !== null) {
-      requestBody.rpm_limit = formValues.rpm_limit;
+    if ("rpm_limit" in formValues) {
+      requestBody.rpm_limit = orNull(formValues.rpm_limit);
+    }
+    if ("budget_duration" in formValues) {
+      requestBody.budget_duration = orNull(formValues.budget_duration);
     }
     if (formValues.allowed_models !== undefined) {
       requestBody.allowed_models = formValues.allowed_models;
