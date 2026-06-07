@@ -1,10 +1,12 @@
 import pytest
 
+from litellm.proxy.auth.v2.authn import authenticators
 from litellm.proxy.auth.v2.authn.authenticators import (
     OAuth2IntrospectionAuthenticator,
     JWTAuthenticator,
     MasterKeyAuthenticator,
     VirtualKeyAuthenticator,
+    _jwks_provider,
 )
 from litellm.proxy.auth.v2.context import AuthMethod
 
@@ -18,6 +20,17 @@ def test_each_authenticator_advertises_its_method():
     assert VirtualKeyAuthenticator().method is AuthMethod.VIRTUAL_KEY
     assert JWTAuthenticator().method is AuthMethod.JWT
     assert OAuth2IntrospectionAuthenticator().method is AuthMethod.OAUTH2
+
+
+def test_jwks_provider_is_reused_per_uri():
+    # Regression: a fresh provider per request makes the TTL cache dead and refetches
+    # the JWKS every JWT auth. The same uri must return the same long-lived provider.
+    authenticators._jwks_providers.clear()
+    first = _jwks_provider("https://idp.example/.well-known/jwks.json")
+    again = _jwks_provider("https://idp.example/.well-known/jwks.json")
+    other = _jwks_provider("https://other.example/jwks")
+    assert first is again
+    assert first is not other
 
 
 MASTER = "sk-master-secret-123"

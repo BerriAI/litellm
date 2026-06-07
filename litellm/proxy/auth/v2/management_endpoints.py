@@ -3,7 +3,7 @@ from typing import Dict, List, Optional, cast
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 
 from .authz.policy_admin import (
@@ -14,7 +14,22 @@ from .authz.policy_admin import (
 from .authz.policy_store import reset_cache
 from .protocols import CasbinRuleRow, PolicyAdminDB
 
-router = APIRouter(tags=["auth_v2"])
+
+def _require_auth_v2_enabled() -> None:
+    # These endpoints only exist as a surface when auth_v2 is the active auth path;
+    # the router is registered unconditionally, so gate it per request (general
+    # settings aren't loaded at import time). 404 keeps it invisible on v1.
+    from litellm.proxy.proxy_server import general_settings
+
+    if (general_settings or {}).get("auth_version") != "v2":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not Found")
+
+
+# Authorization is the casbin "policy" resource: every route below is in the v2
+# route map (policy read/write/delete), so user_api_key_auth enforces it before
+# the body runs. No separate v1-role check - that would reject JWT/OAuth2 admins
+# casbin already authorized.
+router = APIRouter(tags=["auth_v2"], dependencies=[Depends(_require_auth_v2_enabled)])
 
 
 class PermissionRequest(BaseModel):
@@ -52,14 +67,6 @@ def row_to_rule(row: CasbinRuleRow) -> List[str]:
     return rule
 
 
-def _require_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
-    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="auth_v2 policy administration requires proxy admin",
-        )
-
-
 def _prisma() -> PolicyAdminDB:
     from litellm.proxy.proxy_server import prisma_client
 
@@ -89,7 +96,6 @@ async def add_permission(
     body: PermissionRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    _require_admin(user_api_key_dict)
     try:
         rule = make_permission_rule(
             role=body.role,
@@ -110,7 +116,6 @@ async def remove_permission(
     body: PermissionRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    _require_admin(user_api_key_dict)
     try:
         rule = make_permission_rule(
             role=body.role,
@@ -131,7 +136,6 @@ async def add_assignment(
     body: AssignmentRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    _require_admin(user_api_key_dict)
     try:
         rule = make_assignment_rule(
             body.subject_type, body.subject_id, body.role, body.domain
@@ -147,7 +151,6 @@ async def remove_assignment(
     body: AssignmentRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    _require_admin(user_api_key_dict)
     try:
         rule = make_assignment_rule(
             body.subject_type, body.subject_id, body.role, body.domain
@@ -162,6 +165,5 @@ async def remove_assignment(
 async def list_policies(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    _require_admin(user_api_key_dict)
     rows = await _prisma().db.litellm_casbinrule.find_many()
     return {"rules": [row_to_rule(row) for row in rows]}

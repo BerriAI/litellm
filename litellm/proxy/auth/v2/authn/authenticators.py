@@ -16,7 +16,24 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
     from .jwt_claims import JWTSettings
+    from .jwt_verifier import JWKSProvider
     from .oauth2_introspection import IntrospectionSettings
+
+
+# JWKS providers are long-lived and keyed by uri so the in-instance TTL cache
+# actually survives between requests; a fresh provider per request would refetch
+# the JWKS over the network on every JWT authentication.
+_jwks_providers: Dict[str, "JWKSProvider"] = {}
+
+
+def _jwks_provider(jwks_uri: str) -> "JWKSProvider":
+    from .jwt_verifier import JWKSProvider
+
+    provider = _jwks_providers.get(jwks_uri)
+    if provider is None:
+        provider = JWKSProvider(jwks_uri)
+        _jwks_providers[jwks_uri] = provider
+    return provider
 
 
 @dataclass(frozen=True)
@@ -155,10 +172,10 @@ class JWTAuthenticator:
         from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
         from .jwt_claims import extract_identity
-        from .jwt_verifier import JWKSProvider, JWTVerificationError, verify
+        from .jwt_verifier import JWTVerificationError, verify
 
         settings = _load_jwt_settings()
-        key_set = await JWKSProvider(settings.jwks_uri).get_key_set()
+        key_set = await _jwks_provider(settings.jwks_uri).get_key_set()
         try:
             claims = verify(api_key, key_set, settings.issuer, settings.audience)
         except JWTVerificationError as e:

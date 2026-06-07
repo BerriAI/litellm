@@ -156,3 +156,11 @@ def test_model_call_requires_call_permission(client):
         "/chat/completions", headers=_h("sk-user-test"), json={"model": "gpt-4o"}
     )
     assert allowed.status_code == 200
+
+
+def test_inference_without_a_model_is_denied(client):
+    # Default-deny: a model call must name a model. Omitting it must not pass
+    # through (it would let a subject with no grants reach inference). Even the
+    # master-key admin is denied, since an unnamed model call can't be authorized.
+    r = client.post("/chat/completions", headers=_h(MASTER_KEY), json={})
+    assert r.status_code == 403

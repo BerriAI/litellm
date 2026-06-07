@@ -191,37 +191,44 @@ async def user_api_key_auth_v2(
         # key.models / access-group mechanism is intentionally not consulted.
         result = await authenticate(token, ctx)
         request_data = await _read_request_body(request=request)
-        if result.method is not AuthMethod.VIRTUAL_KEY:
-            await _enrich_for_limits(result.identity, ctx)
-        principal, identity = _establish_context(request, result, route)
         requested_model = (
             request_data.get("model") if isinstance(request_data, dict) else None
         )
-        if requested_model:
-            enforcer = await _build_enforcer(principal, prisma_client)
-            obj = f"model:{requested_model}"
-            start = time.perf_counter()
-            allowed = enforcer.enforce(principal.subject, principal.domain, obj, "call")
-            metrics.observe_latency(time.perf_counter() - start)
-            decision = Decision.ALLOW if allowed else Decision.DENY
-            metrics.observe_decision(decision, "model", "call")
-            record(
-                AuthzDecision(
-                    decision=decision,
-                    subject=principal.subject,
-                    domain=principal.domain,
-                    obj=obj,
-                    action="call",
-                    route=route,
-                    reason="model call",
-                    auth_method=result.method.value,
-                )
+        # Default-deny means a model call must name a model to be authorized. A
+        # missing/empty model on an inference route can't be authorized, so deny it
+        # up front -- before any enrichment/budget work -- rather than pass through.
+        if not requested_model:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="auth_v2: a model must be specified to call an inference route",
             )
-            if not allowed:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"auth_v2: not permitted to call model '{requested_model}'",
-                )
+        if result.method is not AuthMethod.VIRTUAL_KEY:
+            await _enrich_for_limits(result.identity, ctx)
+        principal, identity = _establish_context(request, result, route)
+        enforcer = await _build_enforcer(principal, prisma_client)
+        obj = f"model:{requested_model}"
+        start = time.perf_counter()
+        allowed = enforcer.enforce(principal.subject, principal.domain, obj, "call")
+        metrics.observe_latency(time.perf_counter() - start)
+        decision = Decision.ALLOW if allowed else Decision.DENY
+        metrics.observe_decision(decision, "model", "call")
+        record(
+            AuthzDecision(
+                decision=decision,
+                subject=principal.subject,
+                domain=principal.domain,
+                obj=obj,
+                action="call",
+                route=route,
+                reason="model call",
+                auth_method=result.method.value,
+            )
+        )
+        if not allowed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"auth_v2: not permitted to call model '{requested_model}'",
+            )
         await _enforce_budgets(identity, route, ctx)
         await resolve_end_user(request, request_data, dict(request.headers))
         seed_request_identity(identity, model=requested_model)

@@ -1,34 +1,26 @@
-from types import SimpleNamespace
-
 import pytest
 from fastapi import HTTPException
 
-from litellm.proxy._types import LitellmUserRoles
+import litellm.proxy.proxy_server as ps
 from litellm.proxy.auth.v2.management_endpoints import (
-    _require_admin,
+    _require_auth_v2_enabled,
     row_to_rule,
     rule_to_row_data,
 )
 
 
-def test_require_admin_allows_only_proxy_admin():
-    # No raise for a full proxy admin.
-    _require_admin(SimpleNamespace(user_role=LitellmUserRoles.PROXY_ADMIN))
+def test_policy_admin_surface_is_404_when_auth_v2_disabled(monkeypatch):
+    # The router is registered unconditionally, so the per-request guard must hide
+    # it on v1 deployments (authz itself is casbin's job once v2 is on).
+    monkeypatch.setattr(ps, "general_settings", {}, raising=False)
+    with pytest.raises(HTTPException) as exc:
+        _require_auth_v2_enabled()
+    assert exc.value.status_code == 404
 
 
-def test_require_admin_blocks_non_admins():
-    # Privilege-escalation guard: only PROXY_ADMIN may edit policies. View-only
-    # admins and every other role (and no role) must be rejected with 403.
-    for role in (
-        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
-        LitellmUserRoles.INTERNAL_USER,
-        LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
-        LitellmUserRoles.TEAM,
-        None,
-    ):
-        with pytest.raises(HTTPException) as exc:
-            _require_admin(SimpleNamespace(user_role=role))
-        assert exc.value.status_code == 403
+def test_policy_admin_surface_is_available_when_auth_v2_enabled(monkeypatch):
+    monkeypatch.setattr(ps, "general_settings", {"auth_version": "v2"}, raising=False)
+    _require_auth_v2_enabled()  # must not raise
 
 
 class _Row:
