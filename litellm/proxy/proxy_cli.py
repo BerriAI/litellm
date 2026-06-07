@@ -488,17 +488,9 @@ class ProxyInitializationHelpers:
             with open(os.devnull, "w") as devnull:
                 subprocess.Popen(command, stdout=devnull, stderr=devnull)
         except Exception as e:
-<<<<<<< HEAD
-            print(
-                f"""
-                LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
-            """
-            )  # noqa  # noqa
-=======
             print(f"""
                 LiteLLM Warning: proxy started with `ollama` model\n`ollama serve` failed with Exception{e}. \nEnsure you run `ollama serve`
             """)  # noqa  # noqa
->>>>>>> upstream/litellm_internal_staging
 
     @staticmethod
     def _is_port_in_use(port):
