@@ -9,7 +9,7 @@ import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
@@ -17,7 +17,7 @@ import httpx
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
 from litellm.exceptions import AuthenticationError
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
 from litellm.llms.xai.chat.transformation import XAIChatConfig
 from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
@@ -92,7 +92,9 @@ class _CallbackServer(HTTPServer):
 
 
 class XAIOAuthAuthenticator:
-    def __init__(self, http_client: Optional[httpx.Client] = None) -> None:
+    def __init__(
+        self, http_client: Optional[Union[httpx.Client, HTTPHandler]] = None
+    ) -> None:
         self.token_dir = get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser(
             "~/.config/litellm/xai_oauth"
         )
@@ -188,7 +190,7 @@ class XAIOAuthAuthenticator:
         self._write_auth_file(auth_data)
         return auth_data
 
-    def _client(self) -> httpx.Client:
+    def _client(self) -> Union[httpx.Client, HTTPHandler]:
         return self.http_client or _get_httpx_client()
 
     def _ensure_token_dir(self) -> None:
