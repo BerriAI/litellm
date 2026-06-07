@@ -4125,6 +4125,10 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
     rpm_limit: Optional[int] = Field(
         default=None, description="Requests per minute limit for this team member"
     )
+    budget_duration: Optional[str] = Field(
+        default=None,
+        description="Duration after which this team member's budget resets (e.g. '1h', '24h', '7d', '30d'). If not set, the budget never resets.",
+    )
     allowed_models: Optional[List[str]] = Field(
         default=None,
         description="List of models this team member can access. Pass an empty list to remove per-member model restrictions.",
@@ -4136,6 +4140,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     max_budget_in_team: Optional[float] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
+    budget_duration: Optional[str] = None
     allowed_models: Optional[List[str]] = None
 
 

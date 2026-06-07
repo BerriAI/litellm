@@ -2733,6 +2733,52 @@ async def team_member_delete(
     return existing_team_row
 
 
+_MEMBER_BUDGET_PATCH_FIELDS = {
+    "max_budget_in_team": "max_budget",
+    "tpm_limit": "tpm_limit",
+    "rpm_limit": "rpm_limit",
+    "budget_duration": "budget_duration",
+    "allowed_models": "allowed_models",
+}
+
+
+def _build_member_budget_patch(data: TeamMemberUpdateRequest) -> Dict[str, Any]:
+    """Map the budget fields the request actually set (merge-patch: a sent
+    value updates, an explicit null clears, an absent field is left untouched)
+    to their budget-table columns."""
+    provided = data.model_dump(exclude_unset=True)
+    return {
+        column: provided[request_field]
+        for request_field, column in _MEMBER_BUDGET_PATCH_FIELDS.items()
+        if request_field in provided
+    }
+
+
+def _validate_budget_duration(budget_duration: Optional[str]) -> None:
+    """Reject budget durations that can't be parsed, are non-positive, or
+    overflow date math, so a bad value can't be persisted and later crash the
+    budget reset job."""
+    if budget_duration is None:
+        return
+
+    from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+    from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+    try:
+        if duration_in_seconds(budget_duration) <= 0:
+            raise ValueError("budget_duration must be positive")
+        get_budget_reset_time(budget_duration=budget_duration)
+    except (ValueError, OverflowError):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid budget_duration '{}'. Use a format like '1h', '24h', '7d', or '30d'.".format(
+                    budget_duration
+                )
+            },
+        )
+
+
 @router.post(
     "/team/member_update",
     tags=["team management"],
@@ -2769,6 +2815,8 @@ async def team_member_update(
             status_code=400,
             detail={"error": "Either user_id or user_email needs to be passed in"},
         )
+
+    _validate_budget_duration(data.budget_duration)
 
     _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
         where={"team_id": data.team_id}
@@ -2843,17 +2891,15 @@ async def team_member_update(
             team_default_budget_id = raw_default_budget_id
 
     ### upsert new budget
+    budget_patch = _build_member_budget_patch(data)
     async with prisma_client.db.tx() as tx:
         await _upsert_budget_and_membership(
             tx=tx,
             team_id=data.team_id,
             user_id=received_user_id,
-            max_budget=data.max_budget_in_team,
             existing_budget_id=identified_budget_id,
             user_api_key_dict=user_api_key_dict,
-            tpm_limit=data.tpm_limit,
-            rpm_limit=data.rpm_limit,
-            allowed_models=data.allowed_models,
+            budget_patch=budget_patch,
             team_default_budget_id=team_default_budget_id,
         )
 
@@ -2887,6 +2933,7 @@ async def team_member_update(
         max_budget_in_team=data.max_budget_in_team,
         tpm_limit=data.tpm_limit,
         rpm_limit=data.rpm_limit,
+        budget_duration=data.budget_duration,
         allowed_models=data.allowed_models,
     )
 
