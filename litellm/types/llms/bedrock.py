@@ -286,8 +286,6 @@ class ToolBlock(TypedDict, total=False):
 
 
 class BedrockToolSpec(dict):
-    """A ``toolSpec`` ToolBlock; the instance is the wire dict itself."""
-
     def __init__(
         self,
         *,
