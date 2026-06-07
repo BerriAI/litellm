@@ -86,6 +86,10 @@ class _LenientListPromptsResult(types.ListPromptsResult):
     prompts: List[Prompt] = Field(default_factory=list)
 
 
+class _LenientListToolsResult(types.ListToolsResult):
+    tools: List[MCPTool] = Field(default_factory=list)
+
+
 class _LenientListResourcesResult(types.ListResourcesResult):
     resources: List[Resource] = Field(default_factory=list)
 
@@ -521,7 +525,10 @@ class MCPClient:
         )
 
         async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
+            return await session.send_request(
+                types.ClientRequest(types.ListToolsRequest(params=None)),
+                _LenientListToolsResult,
+            )
 
         try:
             result = await self.run_with_session(_list_tools_operation)
