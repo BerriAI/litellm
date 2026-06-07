@@ -2,6 +2,7 @@
 MiMo 缓存命中日志回调 v3
 智能提取 usage，兼容流式/非流式/冷启动 edge case
 """
+
 import logging
 import json
 from litellm.integrations.custom_logger import CustomLogger
@@ -69,7 +70,9 @@ def _extract_usage(response_obj, kwargs):
     if usage:
         prompt = _to_int(_deep_get(usage, "prompt_tokens"))
         cached = _to_int(_deep_get(usage, "prompt_tokens_details", "cached_tokens"))
-        creation = _to_int(_deep_get(usage, "prompt_tokens_details", "cache_creation_tokens"))
+        creation = _to_int(
+            _deep_get(usage, "prompt_tokens_details", "cache_creation_tokens")
+        )
         completion = _to_int(_deep_get(usage, "completion_tokens"))
         if prompt > 0:
             return prompt, cached, creation, completion
@@ -128,8 +131,13 @@ def _dump_raw(response_obj, kwargs, model):
                 ru_str = json.dumps(ru, default=str, ensure_ascii=False)[:800]
             else:
                 # Pydantic model - 拿实际字段值
-                fields = ("prompt_tokens", "completion_tokens", "total_tokens",
-                          "prompt_tokens_details", "completion_tokens_details")
+                fields = (
+                    "prompt_tokens",
+                    "completion_tokens",
+                    "total_tokens",
+                    "prompt_tokens_details",
+                    "completion_tokens_details",
+                )
                 ru_str = str({k: getattr(ru, k, None) for k in fields})
         logger.info(f"RAW DUMP #{_raw_dump_count} model={model}")
         logger.info(f"  response_obj.usage = {ru_str}")
@@ -139,7 +147,9 @@ def _dump_raw(response_obj, kwargs, model):
         if hp and isinstance(hp, dict):
             hp_usage = hp.get("usage")
             if hp_usage:
-                logger.info(f"  _hidden_params.usage = {json.dumps(hp_usage, default=str, ensure_ascii=False)[:800]}")
+                logger.info(
+                    f"  _hidden_params.usage = {json.dumps(hp_usage, default=str, ensure_ascii=False)[:800]}"
+                )
             else:
                 logger.info(f"  _hidden_params keys = {list(hp.keys())[:20]}")
     except Exception as e:

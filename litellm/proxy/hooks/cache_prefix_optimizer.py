@@ -12,6 +12,7 @@ MiMo 缓存前缀优化器
   以最后一条 user 消息追加注释的形式重新注入，
   保证 system prompt 前缀完全静态。
 """
+
 import re
 import logging
 import hashlib
@@ -72,9 +73,7 @@ class CachePrefixOptimizer(CustomLogger):
     确保 messages 前缀每天保持一致。
     """
 
-    async def async_pre_call_hook(
-        self, user_api_key_dict, cache, data, call_type
-    ):
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
         try:
             self._optimize_messages(data)
         except Exception as e:
@@ -122,9 +121,7 @@ class CachePrefixOptimizer(CustomLogger):
         cleaned_text = DATE_PATTERN.sub("", text, count=1).strip()
 
         # 重建 system message
-        system_msg["content"] = _rebuild_system_content(
-            original_content, cleaned_text
-        )
+        system_msg["content"] = _rebuild_system_content(original_content, cleaned_text)
 
         # 将日期注入到最后一条 user 消息末尾
         for i in range(len(messages) - 1, -1, -1):
@@ -132,10 +129,7 @@ class CachePrefixOptimizer(CustomLogger):
             if isinstance(msg, dict) and msg.get("role") == "user":
                 user_content = msg.get("content", "")
                 if isinstance(user_content, str):
-                    msg["content"] = (
-                        user_content
-                        + f"\n\n<!-- {extracted_date} -->"
-                    )
+                    msg["content"] = user_content + f"\n\n<!-- {extracted_date} -->"
                 elif isinstance(user_content, list):
                     # Anthropic 格式：追加一个 text block
                     user_content.append(
@@ -146,7 +140,9 @@ class CachePrefixOptimizer(CustomLogger):
                     )
                 break
 
-        logger.info(f"Date extracted from system prompt, moved to end: {extracted_date}")
+        logger.info(
+            f"Date extracted from system prompt, moved to end: {extracted_date}"
+        )
 
         # Debug: log system prompt hash for cache prefix tracking
         # Compare hashes across requests to detect prefix changes
