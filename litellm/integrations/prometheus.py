@@ -29,12 +29,12 @@ from litellm.exceptions import (
     validate_rate_limit_type,
 )
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
-    BoundedPrometheusSeriesTracker,
-)
 from litellm.integrations.prometheus_helpers import (
     PrometheusLabelFactoryContext,
     _get_cached_end_user_id_for_cost_tracking,
+)
+from litellm.integrations.prometheus_helpers.bounded_prometheus_series_tracker import (
+    BoundedPrometheusSeriesTracker,
 )
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
@@ -46,6 +46,9 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,
@@ -3278,12 +3281,12 @@ class PrometheusLogger(CustomLogger):
             page_size: int, page: int
         ) -> Tuple[List[LiteLLM_UserTable], Optional[int]]:
             skip = (page - 1) * page_size
-            users = await prisma_client.db.litellm_usertable.find_many(
+            users = await UserRepository(prisma_client).table.find_many(
                 skip=skip,
                 take=page_size,
                 order={"created_at": "desc"},
             )
-            total_count = await prisma_client.db.litellm_usertable.count()
+            total_count = await UserRepository(prisma_client).table.count()
             return users, total_count
 
         await self._initialize_budget_metrics(
@@ -3306,13 +3309,13 @@ class PrometheusLogger(CustomLogger):
 
         async def fetch_orgs(page_size: int, page: int) -> Tuple[list, Optional[int]]:
             skip = (page - 1) * page_size
-            orgs = await prisma_client.db.litellm_organizationtable.find_many(
+            orgs = await OrganizationRepository(prisma_client).table.find_many(
                 skip=skip,
                 take=page_size,
                 order={"created_at": "desc"},
                 include={"litellm_budget_table": True},
             )
-            total_count = await prisma_client.db.litellm_organizationtable.count()
+            total_count = await OrganizationRepository(prisma_client).table.count()
             return orgs, total_count
 
         await self._initialize_budget_metrics(
@@ -3380,14 +3383,14 @@ class PrometheusLogger(CustomLogger):
 
         try:
             # Get total user count
-            total_users = await prisma_client.db.litellm_usertable.count()
+            total_users = await UserRepository(prisma_client).table.count()
             self.litellm_total_users_metric.set(total_users)
             verbose_logger.debug(
                 f"Prometheus: set litellm_total_users to {total_users}"
             )
 
             # Get total team count
-            total_teams = await prisma_client.db.litellm_teamtable.count()
+            total_teams = await TeamRepository(prisma_client).table.count()
             self.litellm_teams_count_metric.set(total_teams)
             verbose_logger.debug(
                 f"Prometheus: set litellm_teams_count to {total_teams}"
