@@ -23,9 +23,15 @@ const specDir = mkdtempSync(join(tmpdir(), "litellm-openapi-"));
 const specPath = join(specDir, "openapi.json");
 
 const python = (process.env.LITELLM_PYTHON ?? "python3").split(" ");
-// The dashboard calls internal UI routes that the public /openapi.json hides via
-// include_in_schema=False. Force them in so they get typed here; this mutates a
-// throwaway interpreter, so the spec the proxy actually serves is unchanged.
+// Two transforms before emitting the spec, both on a throwaway interpreter so the
+// spec the proxy actually serves is unchanged:
+//   1. Force in internal UI routes the public /openapi.json hides via
+//      include_in_schema=False, so the dashboard can type against them.
+//   2. Strip every `description`. The dashboard consumes shapes, not docstrings,
+//      and FastAPI renders docstring descriptions with environment-dependent
+//      indentation, which made schema.d.ts impossible to reproduce across machines
+//      and flaked this check. Dropping them makes the types byte-identical
+//      regardless of who runs gen:api, and shrinks the file.
 const dumpSpec = [
   "import json, sys",
   "from litellm.proxy.proxy_server import app",
@@ -34,7 +40,20 @@ const dumpSpec = [
   "    if isinstance(route, APIRoute):",
   "        route.include_in_schema = True",
   "app.openapi_schema = None",
-  "with open(sys.argv[1], 'w') as f: json.dump(app.openapi(), f, sort_keys=True)",
+  "",
+  "def _strip_descriptions(node):",
+  "    if isinstance(node, dict):",
+  "        node.pop('description', None)",
+  "        for value in node.values():",
+  "            _strip_descriptions(value)",
+  "    elif isinstance(node, list):",
+  "        for item in node:",
+  "            _strip_descriptions(item)",
+  "",
+  "spec = app.openapi()",
+  "_strip_descriptions(spec)",
+  "with open(sys.argv[1], 'w') as f:",
+  "    json.dump(spec, f, sort_keys=True)",
 ].join("\n");
 
 try {
