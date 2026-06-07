@@ -6,7 +6,7 @@ import copy
 import json
 import time
 import types
-from typing import List, Literal, Optional, Tuple, Union, cast, overload
+from typing import Any, List, Literal, Optional, Tuple, Union, cast, overload
 
 import httpx
 
@@ -410,6 +410,28 @@ class AmazonConverseConfig(BaseConfig):
                 "maxReasoningEffort": reasoning_effort,
             }
         }
+
+    @staticmethod
+    def _coerce_reasoning_effort(value: Any) -> Optional[str]:
+        """
+        Normalize `reasoning_effort` into the bare-string shape that
+        `_handle_reasoning_effort_parameter` and `AnthropicConfig._map_reasoning_effort`
+        expect.
+
+        Accepts:
+        - bare string ("low" / "high" / ...)
+        - OpenAI Responses `Reasoning(effort, summary)` dict — extract `effort`
+          (see #25359 / #28196)
+
+        Returns the effort string, or None if `value` is None / malformed
+        (e.g. dict without an `effort` key). Malformed values are dropped
+        silently to match the direct Anthropic adapter's behavior.
+        """
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            value = value.get("effort")
+        return value if isinstance(value, str) else None
 
     def _handle_reasoning_effort_parameter(
         self, model: str, reasoning_effort: str, optional_params: dict
@@ -946,9 +968,18 @@ class AmazonConverseConfig(BaseConfig):
                 }
             if param == "thinking":
                 optional_params["thinking"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
+            elif (
+                param == "reasoning_effort"
+                and (effort_value := self._coerce_reasoning_effort(value)) is not None
+            ):
+                # See `_coerce_reasoning_effort` — accepts both bare string
+                # and the OpenAI Responses `{effort, summary}` dict shape
+                # (#25359 / #28196). Same coercion the direct Anthropic
+                # adapter already does.
                 self._handle_reasoning_effort_parameter(
-                    model=model, reasoning_effort=value, optional_params=optional_params
+                    model=model,
+                    reasoning_effort=effort_value,
+                    optional_params=optional_params,
                 )
             elif param == "context_management" and isinstance(value, (dict, list)):
                 self._map_context_management_param(value, optional_params)

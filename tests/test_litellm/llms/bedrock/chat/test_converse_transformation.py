@@ -5268,3 +5268,50 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/converse/us.anthropic.claude-opus-4-7",
+        "bedrock/converse/us.anthropic.claude-sonnet-4-6",
+    ],
+)
+def test_reasoning_effort_accepts_dict_shape_on_bedrock_converse(model):
+    """Regression for #28196 — OpenAI Responses callers send
+    ``reasoning_effort={'effort': 'low', 'summary': 'concise'}``; the
+    Bedrock Converse adapter must coerce the dict to ``low`` instead of
+    silently dropping it (the way the direct Anthropic path already does).
+    """
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "reasoning_effort": {"effort": "low", "summary": "concise"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+
+    assert (
+        "thinking" in optional_params
+    ), f"reasoning_effort dict was dropped on {model}: {optional_params!r}"
+    # Adaptive Claude 4.6 / 4.7: dict effort should drive output_config too.
+    assert optional_params.get("output_config") == {"effort": "low"}
+
+
+def test_reasoning_effort_invalid_dict_does_not_crash_or_emit_thinking():
+    """Defensive: a malformed dict (missing ``effort`` key) must silently
+    drop instead of raising, matching the direct Anthropic path."""
+    config = AmazonConverseConfig()
+
+    optional_params = config.map_openai_params(
+        non_default_params={"reasoning_effort": {"summary": "concise"}},
+        optional_params={},
+        model="bedrock/converse/us.anthropic.claude-opus-4-7",
+        drop_params=False,
+    )
+
+    assert "thinking" not in optional_params
+    assert "output_config" not in optional_params
