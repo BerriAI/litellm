@@ -183,9 +183,20 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.presidio_analyzer_api_base.startswith("http://")
             or self.presidio_analyzer_api_base.startswith("https://")
         ):
-            # add http:// if unset, assume communicating over private network - e.g. render
-            self.presidio_analyzer_api_base = (
-                "http://" + self.presidio_analyzer_api_base
+            # PRESIDIO_ANALYZER_API_BASE must include an explicit scheme.
+            # Previous behavior silently prepended http://, which sent the
+            # unredacted prompt to the analyzer in plaintext over any non-
+            # loopback transit (separate pod, namespace, VPC, or managed
+            # service). Refuse to guess so the operator makes a conscious
+            # choice between https:// (direct TLS) and http:// (encryption
+            # handled below by loopback, service mesh, Tailscale, etc.).
+            raise ValueError(
+                "PRESIDIO_ANALYZER_API_BASE must include a URL scheme "
+                "(`https://...` for direct TLS, or `http://...` if your "
+                "deployment encrypts at a lower layer such as loopback, "
+                "a service mesh, or Tailscale). The previous default of "
+                "silently prepending `http://` could send PII in plaintext "
+                "over any non-loopback transit."
             )
 
         if self.presidio_anonymizer_api_base is None:
@@ -196,9 +207,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             self.presidio_anonymizer_api_base.startswith("http://")
             or self.presidio_anonymizer_api_base.startswith("https://")
         ):
-            # add http:// if unset, assume communicating over private network - e.g. render
-            self.presidio_anonymizer_api_base = (
-                "http://" + self.presidio_anonymizer_api_base
+            # See PRESIDIO_ANALYZER_API_BASE note above. Refuse to guess.
+            raise ValueError(
+                "PRESIDIO_ANONYMIZER_API_BASE must include a URL scheme "
+                "(`https://...` for direct TLS, or `http://...` if your "
+                "deployment encrypts at a lower layer such as loopback, "
+                "a service mesh, or Tailscale). The previous default of "
+                "silently prepending `http://` could send PII in plaintext "
+                "over any non-loopback transit."
             )
 
     @asynccontextmanager
