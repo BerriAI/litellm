@@ -3653,17 +3653,13 @@ from litellm.types.llms.bedrock import ContentBlock as BedrockContentBlock
 from litellm.types.llms.bedrock import DocumentBlock as BedrockDocumentBlock
 from litellm.types.llms.bedrock import ImageBlock as BedrockImageBlock
 from litellm.types.llms.bedrock import SourceBlock as BedrockSourceBlock
+from litellm.types.llms.bedrock import BedrockToolSpec
 from litellm.types.llms.bedrock import ToolBlock as BedrockToolBlock
-from litellm.types.llms.bedrock import (
-    ToolInputSchemaBlock as BedrockToolInputSchemaBlock,
-)
-from litellm.types.llms.bedrock import ToolJsonSchemaBlock as BedrockToolJsonSchemaBlock
 from litellm.types.llms.bedrock import SearchResultBlock
 from litellm.types.llms.bedrock import ToolResultBlock as BedrockToolResultBlock
 from litellm.types.llms.bedrock import (
     ToolResultContentBlock as BedrockToolResultContentBlock,
 )
-from litellm.types.llms.bedrock import ToolSpecBlock as BedrockToolSpecBlock
 from litellm.types.llms.bedrock import ToolUseBlock as BedrockToolUseBlock
 from litellm.types.llms.bedrock import VideoBlock as BedrockVideoBlock
 
@@ -5554,22 +5550,16 @@ def _bedrock_tools_pt(
         normalize_json_schema_custom_types_to_object(parameters)
         if parameters.get("type") not in _valid_json_schema_root_types:
             parameters["type"] = "object"
-        json_schema = BedrockToolJsonSchemaBlock(
-            type=parameters["type"],
-            properties=parameters.get("properties", {}),
-            required=parameters.get("required", []),
+        tool_block = cast(
+            BedrockToolBlock,
+            BedrockToolSpec(
+                name=name,
+                description=description,
+                parameters=parameters,
+                strict=tool.get("function", {}).get("strict", None),
+                supports_strict_tools=supports_strict_tools,
+            ),
         )
-        additional_properties = parameters.get("additionalProperties", None)
-        if supports_strict_tools and additional_properties is not None:
-            json_schema["additionalProperties"] = additional_properties
-        tool_input_schema = BedrockToolInputSchemaBlock(json=json_schema)
-        tool_spec = BedrockToolSpecBlock(
-            inputSchema=tool_input_schema, name=name, description=description
-        )
-        strict = tool.get("function", {}).get("strict", None)
-        if supports_strict_tools and strict is not None:
-            tool_spec["strict"] = strict
-        tool_block = BedrockToolBlock(toolSpec=tool_spec)
         tool_block_list.append(tool_block)
 
         ## ADD CACHE POINT TOOL BLOCK ##
