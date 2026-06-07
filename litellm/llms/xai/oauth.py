@@ -194,7 +194,11 @@ class XAIOAuthAuthenticator:
         return self.http_client or _get_httpx_client()
 
     def _ensure_token_dir(self) -> None:
-        os.makedirs(self.token_dir, exist_ok=True)
+        os.makedirs(self.token_dir, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(self.token_dir, 0o700)
+        except OSError:
+            verbose_logger.debug("Could not chmod xAI OAuth token directory")
 
     def _read_auth_file(self) -> Optional[Dict[str, Any]]:
         try:
@@ -206,12 +210,34 @@ class XAIOAuthAuthenticator:
 
     def _write_auth_file(self, data: Dict[str, Any]) -> None:
         self._ensure_token_dir()
-        with open(self.auth_file, "w") as f:
-            json.dump(data, f)
+        tmp_file = os.path.join(
+            self.token_dir,
+            f".{os.path.basename(self.auth_file)}.{uuid.uuid4().hex}.tmp",
+        )
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        fd = os.open(tmp_file, flags, 0o600)
         try:
-            os.chmod(self.auth_file, 0o600)
-        except OSError:
-            verbose_logger.debug("Could not chmod xAI OAuth auth file")
+            with os.fdopen(fd, "w") as f:
+                json.dump(data, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, self.auth_file)
+            try:
+                os.chmod(self.auth_file, 0o600)
+            except OSError:
+                verbose_logger.debug("Could not chmod xAI OAuth auth file")
+        except Exception:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(tmp_file)
+            except OSError:
+                pass
+            raise
 
     def _is_expired(self, auth_data: Dict[str, Any]) -> bool:
         expires_at = auth_data.get("expires_at")
@@ -223,10 +249,15 @@ class XAIOAuthAuthenticator:
             return True
 
     def _discover(self) -> Dict[str, str]:
-        response = self._client().get(
-            XAI_OAUTH_DISCOVERY_URL, headers={"Accept": "application/json"}
-        )
-        response.raise_for_status()
+        try:
+            response = self._client().get(
+                XAI_OAUTH_DISCOVERY_URL, headers={"Accept": "application/json"}
+            )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise XAIOAuthError(
+                f"xAI OAuth discovery request failed: {exc.response.status_code} {exc.response.text}"
+            ) from exc
         data = response.json()
         authorization_endpoint = data.get("authorization_endpoint")
         token_endpoint = data.get("token_endpoint")

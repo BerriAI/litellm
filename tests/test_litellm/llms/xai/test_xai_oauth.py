@@ -195,17 +195,34 @@ def test_write_auth_file_creates_private_file(tmp_path, monkeypatch):
     token_dir = tmp_path / "xai_oauth"
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(token_dir))
     authenticator = XAIOAuthAuthenticator()
+    old_umask = os.umask(0o022)
+    replace_calls = []
+    real_replace = os.replace
 
-    authenticator._write_auth_file(
-        {
-            "access_token": "access-token",
-            "refresh_token": "refresh-token",
-            "expires_at": time.time() + 3600,
-        }
-    )
+    def assert_private_temp_file(src, dst):
+        replace_calls.append((src, dst))
+        assert oct(os.stat(src).st_mode & 0o777) == "0o600"
+        with open(src) as f:
+            assert json.load(f)["refresh_token"] == "refresh-token"
+        real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", assert_private_temp_file)
+
+    try:
+        authenticator._write_auth_file(
+            {
+                "access_token": "access-token",
+                "refresh_token": "refresh-token",
+                "expires_at": time.time() + 3600,
+            }
+        )
+    finally:
+        os.umask(old_umask)
 
     stored = json.loads((token_dir / "auth.json").read_text())
     assert stored["access_token"] == "access-token"
+    assert replace_calls
+    assert oct(os.stat(token_dir).st_mode & 0o777) == "0o700"
     assert oct(os.stat(token_dir / "auth.json").st_mode & 0o777) == "0o600"
 
 
@@ -249,6 +266,25 @@ def test_discover_requires_authorization_and_token_endpoints():
 
     with pytest.raises(XAIOAuthError, match="missing endpoints"):
         authenticator._discover()
+
+
+def test_discover_wraps_http_errors():
+    authenticator = XAIOAuthAuthenticator(
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(
+                    500, text="discovery failed", request=request
+                )
+            )
+        )
+    )
+
+    with pytest.raises(XAIOAuthError) as exc_info:
+        authenticator._discover()
+
+    assert "xAI OAuth discovery request failed: 500 discovery failed" in str(
+        exc_info.value
+    )
 
 
 def test_refresh_discovers_token_endpoint_when_auth_file_is_legacy(
