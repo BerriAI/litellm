@@ -130,6 +130,14 @@ describe("useInfiniteUsers", () => {
     expect(lastRequestUrl(mock).searchParams.has("user_email")).toBe(false);
   });
 
+  it("omits user_email when searchEmail is an empty string", async () => {
+    const mock = stubPagedFetch(1);
+    const { result } = renderHook(() => useInfiniteUsers(50, ""), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(lastRequestUrl(mock).searchParams.has("user_email")).toBe(false);
+  });
+
   it("fetches the next page with an incremented page param", async () => {
     const mock = stubPagedFetch(3);
     const { result } = renderHook(() => useInfiniteUsers(), { wrapper });
