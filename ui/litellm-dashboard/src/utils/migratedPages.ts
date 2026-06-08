@@ -24,6 +24,7 @@ export const MIGRATED_PAGES: Record<string, string> = {
   projects: "projects",
   prompts: "prompts",
   "search-tools": "search-tools",
+  // Canonical sidebar key first, alias after: legacyKeyForPathname returns the first match.
   skills: "skills",
   "claude-code-plugins": "skills",
   "tag-management": "tag-management",
@@ -50,7 +51,11 @@ export function legacyPageHref(pageKey: string): string {
   return `${uiBase()}/?page=${pageKey}`;
 }
 
-/** Reverse-maps a path-routed location back to its legacy page id, e.g. "/ui/api-reference" -> "api_ref". */
+/**
+ * Reverse-maps a path-routed location back to its legacy page id, e.g. "/ui/api-reference" -> "api_ref".
+ * Returns the first key whose segment matches, so when several keys share a segment (aliases) the
+ * canonical sidebar key must be listed before its aliases in MIGRATED_PAGES.
+ */
 export function legacyKeyForPathname(pathname: string): string | null {
   const base = uiBase();
   const rel = (pathname.startsWith(base) ? pathname.slice(base.length) : pathname).replace(/^\/+|\/+$/g, "");
