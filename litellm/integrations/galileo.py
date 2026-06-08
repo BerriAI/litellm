@@ -124,6 +124,18 @@ class GalileoObserve(CustomLogger):
                     "error_message": "Galileo authentication failed",
                 }
 
+            response = await self.async_httpx_handler.get(
+                url=f"{self.base_url}/current_user",
+                headers=self.headers,
+            )
+            if response.status_code >= 400:
+                return {
+                    "status": "unhealthy",
+                    "error_message": (
+                        f"Galileo API returned HTTP {response.status_code}"
+                    ),
+                }
+
             return {
                 "status": "healthy",
                 "message": "Galileo credentials are configured properly",
