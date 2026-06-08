@@ -3263,6 +3263,12 @@ class PrismaClient:
         The retry must reuse the original query byte-for-byte. Mutating the SQL
         (e.g. injecting a unique comment) defeats PostgreSQL's plan cache, forcing
         a fresh plan on every request and pegging the database CPU.
+
+        DEALLOCATE ALL is best-effort: Prisma may dispatch it and the retry onto
+        different pooled connections, so the stale plan is not guaranteed to be
+        cleared on the connection that serves the retry. The retry can then still
+        fail; the get_data backoff decorator re-runs the whole lookup and every
+        attempt terminates cleanly, so there is no re-plan loop.
         """
         try:
             return await self.db.query_first(sql_query, *args)
