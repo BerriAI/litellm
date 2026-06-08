@@ -2792,7 +2792,7 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
                     "model": "vertex_ai/gemini-3.5-flash",
                     "vertex_project": "my-project",
                     "vertex_location": "global",
-                    "bucket_name": "my-batch-bucket",
+                    "gcs_bucket_name": "my-batch-bucket",
                 },
             }
         ],
@@ -2803,7 +2803,7 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     )
 
     assert credentials is not None
-    assert credentials["bucket_name"] == "my-batch-bucket"
+    assert credentials["gcs_bucket_name"] == "my-batch-bucket"
     assert credentials["vertex_project"] == "my-project"
     assert credentials["custom_llm_provider"] == "vertex_ai"
 
