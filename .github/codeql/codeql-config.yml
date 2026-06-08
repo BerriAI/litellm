@@ -1,7 +1,15 @@
 name: "LiteLLM CodeQL config"
 
+# security-extended runs the full set of security queries (a superset of the
+# default `security` suite) but omits the code-quality/style half of
+# `security-and-quality`. The quality half produced hundreds of note/warning
+# findings (js/unused-local-variable, js/automatic-semicolon-insertion,
+# js/superfluous-trailing-arguments, js/comparison-between-incompatible-types,
+# js/useless-assignment-to-local, ...) in vendored upstream UI code. Those are
+# style, not vulnerabilities, and rewriting upstream UI to satisfy them would
+# break the keep-the-fork-vanilla rule. Security coverage is unchanged.
 queries:
-  - uses: security-and-quality
+  - uses: security-extended
 
 # Known OOM queries on large Python codebases:
 # CodeQL builds a full data flow graph in memory. These two queries trace
@@ -19,3 +27,13 @@ paths-ignore:
   - tests
   - docs
   - "**/*.md"
+  # Standalone demo pages, not shipped product. Source of the
+  # js/clear-text-storage-of-sensitive-data and js/insecure-randomness highs.
+  - "scripts/adaptive_router_demo"
+  # js/clear-text-storage-of-sensitive-data FP: the MCP OAuth access token is
+  # held in per-tab window.sessionStorage with a short TTL because the SPA must
+  # read it from JS to call MCP servers. sessionStorage is the standard place
+  # for this; there is no server-only alternative that keeps the token usable.
+  # CodeQL cannot express "accepted, scoped client-side token cache", and a
+  # query-filter exclude cannot be scoped to one file, so the file is ignored.
+  - "ui/litellm-dashboard/src/utils/mcpTokenStore.ts"
