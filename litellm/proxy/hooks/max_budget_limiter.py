@@ -69,6 +69,25 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
                     data.get("model") if data else None
                 )
+
+                # Zero-cost models (self-hosted / on-prem) add nothing to
+                # spend, so exempt them — matching the existing exemption in
+                # common_checks (user_api_key_auth.py) which already skips
+                # budget enforcement for zero-cost models on key, team, and
+                # end-user budget paths.
+                try:
+                    from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                    from litellm.proxy.proxy_server import llm_router
+
+                    if _is_model_cost_zero(resolved_model, llm_router):
+                        verbose_proxy_logger.debug(
+                            "MaxBudgetLimiter: Skipping budget check for zero-cost model: %s",
+                            resolved_model,
+                        )
+                        return
+                except ImportError:
+                    pass
+
                 raise ProxyRateLimitError(
                     detail="Max budget limit reached.",
                     rate_limit_type=RateLimitType.BUDGET,
