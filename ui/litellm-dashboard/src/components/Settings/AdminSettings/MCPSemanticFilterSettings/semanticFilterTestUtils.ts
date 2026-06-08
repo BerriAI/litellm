@@ -18,9 +18,7 @@ const parseFilterHeaders = (headers: FilterHeaders): TestResult | null => {
   }
 
   const [total, selected] = headers.filter.split("->").map(Number);
-  const tools = headers.tools
-    ? headers.tools.split(",").map((name) => name.trim())
-    : [];
+  const tools = headers.tools ? headers.tools.split(",").map((name) => name.trim()) : [];
 
   return { totalTools: total, selectedTools: selected, tools };
 };
@@ -47,17 +45,11 @@ export const runSemanticFilterTest = async ({
   setTestResult(null);
 
   try {
-    const { headers } = await testMCPSemanticFilter(
-      accessToken,
-      testModel,
-      testQuery
-    );
+    const { headers } = await testMCPSemanticFilter(accessToken, testModel, testQuery);
     const parsedResult = parseFilterHeaders(headers);
 
     if (!parsedResult) {
-      NotificationManager.warning(
-        "Semantic filter is not enabled or no tools were filtered"
-      );
+      NotificationManager.warning("Semantic filter is not enabled or no tools were filtered");
       return;
     }
 

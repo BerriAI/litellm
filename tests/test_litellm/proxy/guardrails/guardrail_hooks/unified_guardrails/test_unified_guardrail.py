@@ -8,7 +8,9 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_system_message_for_guardrail,
+    effective_skip_tool_message_for_guardrail,
     openai_messages_without_system,
+    openai_messages_without_tool,
 )
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
@@ -179,6 +181,136 @@ class TestUnifiedLLMGuardrails:
                 for m in (captured["inputs"].get("structured_messages") or [])
             }
             assert "system" in roles
+
+    class TestSkipToolMessageForChatCompletions:
+        def test_openai_messages_without_tool(self):
+            msgs = [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "f", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "tool result", "tool_call_id": "call_1"},
+            ]
+            out = openai_messages_without_tool(msgs)
+            assert len(out) == 2
+            assert all(m["role"] != "tool" for m in out)
+            assert msgs[2]["content"] == "tool result"
+
+        def test_effective_skip_tool_respects_per_guardrail_over_global(
+            self, monkeypatch
+        ):
+            monkeypatch.setattr(
+                litellm, "skip_tool_message_in_guardrail", True, raising=False
+            )
+
+            class G:
+                skip_tool_message_in_guardrail = False
+
+            assert effective_skip_tool_message_for_guardrail(G()) is False
+
+            class G2:
+                skip_tool_message_in_guardrail = None
+
+            assert effective_skip_tool_message_for_guardrail(G2()) is True
+
+        @pytest.mark.asyncio
+        async def test_openai_handler_skips_tool_in_guardrail_inputs(self, monkeypatch):
+            monkeypatch.setattr(
+                litellm, "skip_tool_message_in_guardrail", True, raising=False
+            )
+
+            captured = {}
+
+            class MockGuardrail:
+                skip_tool_message_in_guardrail = None
+
+                async def apply_guardrail(
+                    self, inputs, request_data, input_type, logging_obj=None
+                ):
+                    captured["inputs"] = inputs
+                    return inputs
+
+            data = {
+                "messages": [
+                    {"role": "user", "content": "hello"},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "f", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    {
+                        "role": "tool",
+                        "content": "secret tool result",
+                        "tool_call_id": "call_1",
+                    },
+                ],
+                "model": "gpt-4o",
+            }
+
+            handler = OpenAIChatCompletionsHandler()
+            await handler.process_input_messages(
+                data=data,
+                guardrail_to_apply=MockGuardrail(),
+                litellm_logging_obj=None,
+            )
+
+            assert "secret tool result" not in captured["inputs"]["texts"]
+            sm = captured["inputs"].get("structured_messages") or []
+            assert all(m.get("role") != "tool" for m in sm)
+            assert data["messages"][2]["content"] == "secret tool result"
+
+        @pytest.mark.asyncio
+        async def test_openai_handler_per_guardrail_skip_tool_false_overrides_global(
+            self, monkeypatch
+        ):
+            monkeypatch.setattr(
+                litellm, "skip_tool_message_in_guardrail", True, raising=False
+            )
+
+            captured = {}
+
+            class MockGuardrail:
+                skip_tool_message_in_guardrail = False
+
+                async def apply_guardrail(
+                    self, inputs, request_data, input_type, logging_obj=None
+                ):
+                    captured["inputs"] = inputs
+                    return inputs
+
+            data = {
+                "messages": [
+                    {"role": "user", "content": "u"},
+                    {"role": "tool", "content": "tr", "tool_call_id": "call_1"},
+                ],
+            }
+
+            await OpenAIChatCompletionsHandler().process_input_messages(
+                data=data,
+                guardrail_to_apply=MockGuardrail(),
+                litellm_logging_obj=None,
+            )
+
+            assert "tr" in captured["inputs"]["texts"]
+            roles = {
+                m.get("role")
+                for m in (captured["inputs"].get("structured_messages") or [])
+            }
+            assert "tool" in roles
 
     class TestAsyncPreCallHook:
         @pytest.mark.asyncio

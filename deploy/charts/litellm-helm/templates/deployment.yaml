@@ -30,7 +30,7 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/configmap-litellm.yaml") . | sha256sum }}
         {{- end }}
         {{- with .Values.podAnnotations }}
-        {{- toYaml . | nindent 8 }}
+        {{- tpl (toYaml .) $ | nindent 8 }}
         {{- end }}
       labels:
         {{- include "litellm.labels" . | nindent 8 }}
@@ -53,7 +53,7 @@ spec:
         - name: {{ include "litellm.name" . }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "main-%s" .Chart.AppVersion) }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
             - name: HOST
@@ -99,6 +99,16 @@ spec:
               value: {{ .Values.db.database }}
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
+            {{- end }}
+            {{- if and .Values.db.useExisting .Values.db.secret.readReplicaUrlKey }}
+            - name: DATABASE_URL_READ_REPLICA
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.readReplicaUrlKey }}
+            {{- else if .Values.db.readReplicaUrl }}
+            - name: DATABASE_URL_READ_REPLICA
+              value: {{ .Values.db.readReplicaUrl | quote }}
             {{- end }}
             - name: PROXY_MASTER_KEY
               valueFrom:

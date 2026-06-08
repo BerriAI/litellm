@@ -43,4 +43,4 @@ jobs:
 
       - name: Run MCP tests
         run: |
-          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=litellm --cov-report=xml --durations=5
+          uv run --no-sync pytest tests/mcp_tests -x -vv -n 4 --cov=./litellm --cov-report=xml --durations=5

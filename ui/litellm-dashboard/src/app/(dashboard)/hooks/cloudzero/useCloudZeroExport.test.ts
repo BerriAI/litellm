@@ -4,27 +4,22 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
 import { useCloudZeroExport } from "./useCloudZeroExport";
 
-const {
-  mockProxyBaseUrl,
-  mockAccessToken,
-  mockHeaderName,
-  mockGetProxyBaseUrl,
-  mockGetGlobalLitellmHeaderName,
-} = vi.hoisted(() => {
-  const mockProxyBaseUrl = "https://proxy.example.com";
-  const mockAccessToken = "test-access-token";
-  const mockHeaderName = "X-LiteLLM-API-Key";
-  const mockGetProxyBaseUrl = vi.fn(() => mockProxyBaseUrl);
-  const mockGetGlobalLitellmHeaderName = vi.fn(() => mockHeaderName);
+const { mockProxyBaseUrl, mockAccessToken, mockHeaderName, mockGetProxyBaseUrl, mockGetGlobalLitellmHeaderName } =
+  vi.hoisted(() => {
+    const mockProxyBaseUrl = "https://proxy.example.com";
+    const mockAccessToken = "test-access-token";
+    const mockHeaderName = "X-LiteLLM-API-Key";
+    const mockGetProxyBaseUrl = vi.fn(() => mockProxyBaseUrl);
+    const mockGetGlobalLitellmHeaderName = vi.fn(() => mockHeaderName);
 
-  return {
-    mockProxyBaseUrl,
-    mockAccessToken,
-    mockHeaderName,
-    mockGetProxyBaseUrl,
-    mockGetGlobalLitellmHeaderName,
-  };
-});
+    return {
+      mockProxyBaseUrl,
+      mockAccessToken,
+      mockHeaderName,
+      mockGetProxyBaseUrl,
+      mockGetGlobalLitellmHeaderName,
+    };
+  });
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: mockGetProxyBaseUrl,

@@ -11,9 +11,9 @@ from litellm._uuid import uuid
 async def generate_key(
     session,
     models=[
-        "gpt-4",
-        "text-embedding-ada-002",
-        "dall-e-2",
+        "gpt-5.5",
+        "text-embedding-3-small",
+        "gpt-image-1",
         "fake-openai-endpoint",
         "mistral-embed",
     ],
@@ -38,7 +38,7 @@ async def generate_key(
         return await response.json()
 
 
-async def chat_completion(session, key, model: Union[str, List] = "gpt-4"):
+async def chat_completion(session, key, model: Union[str, List] = "gpt-5.5"):
     url = "http://0.0.0.0:4000/chat/completions"
     headers = {
         "Authorization": f"Bearer {key}",

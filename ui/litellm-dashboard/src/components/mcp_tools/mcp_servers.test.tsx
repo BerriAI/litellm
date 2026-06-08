@@ -15,6 +15,7 @@ vi.mock("../networking", () => ({
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
 }));
 
 // Mock NotificationsManager
@@ -213,7 +214,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
     // Mock health check to never resolve (to test loading state)
     vi.mocked(networking.fetchMCPServerHealth).mockImplementation(
-      () => new Promise(() => { }), // Never resolves
+      () => new Promise(() => {}), // Never resolves
     );
 
     const queryClient = createQueryClient();
@@ -330,9 +331,7 @@ describe("MCPServers", () => {
 
     // Find and click on "Team A" option
     const dropdownOptions = document.querySelectorAll(".ant-select-item-option");
-    const teamAOption = Array.from(dropdownOptions).find((option) =>
-      option.textContent?.includes("Team A"),
-    );
+    const teamAOption = Array.from(dropdownOptions).find((option) => option.textContent?.includes("Team A"));
     expect(teamAOption).toBeTruthy();
 
     act(() => {
@@ -390,9 +389,7 @@ describe("MCPServers", () => {
     const oneServer = twoServers.slice(0, 1);
 
     // First call returns two servers; second (after deletion) returns one
-    vi.mocked(networking.fetchMCPServers)
-      .mockResolvedValueOnce(twoServers)
-      .mockResolvedValueOnce(oneServer);
+    vi.mocked(networking.fetchMCPServers).mockResolvedValueOnce(twoServers).mockResolvedValueOnce(oneServer);
     vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([
       { server_id: "server-1", status: "healthy" },
       { server_id: "server-2", status: "healthy" },

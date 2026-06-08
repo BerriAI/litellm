@@ -27,11 +27,7 @@ export const TEAM_INFO_TAB_LABELS: Record<string, string> = {
  * - Members, Member Permissions, Settings: only when canEditTeam is true
  */
 export function getTeamInfoVisibleTabs(canEditTeam: boolean): readonly string[] {
-  const baseTabs = [
-    TEAM_INFO_TAB_KEYS.OVERVIEW,
-    TEAM_INFO_TAB_KEYS.MY_USER,
-    TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS,
-  ];
+  const baseTabs = [TEAM_INFO_TAB_KEYS.OVERVIEW, TEAM_INFO_TAB_KEYS.MY_USER, TEAM_INFO_TAB_KEYS.VIRTUAL_KEYS];
   if (canEditTeam) {
     return [
       ...baseTabs,
@@ -58,10 +54,7 @@ export function getTeamInfoDefaultTab(editTeam: boolean, canEditTeam: boolean): 
 /**
  * Checks if a specific tab should be visible based on permissions.
  */
-export function isTeamInfoTabVisible(
-  tabKey: string,
-  canEditTeam: boolean
-): boolean {
+export function isTeamInfoTabVisible(tabKey: string, canEditTeam: boolean): boolean {
   const visibleTabs = getTeamInfoVisibleTabs(canEditTeam);
   return visibleTabs.includes(tabKey);
 }

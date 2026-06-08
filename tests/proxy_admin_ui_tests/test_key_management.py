@@ -853,6 +853,18 @@ def test_personal_key_generation_check():
             {"tags": ["old_tag"]},
             {"metadata": {"tags": ["old_tag"], "enforced_params": ["metadata.tags"]}},
         ),
+        (
+            {"disable_global_guardrails": True},
+            {},
+            {},
+            {"metadata": {"disable_global_guardrails": True}},
+        ),
+        (
+            {"disable_global_guardrails": False},
+            {},
+            {"disable_global_guardrails": True},
+            {"metadata": {"disable_global_guardrails": False}},
+        ),
     ],
 )
 def test_prepare_metadata_fields(

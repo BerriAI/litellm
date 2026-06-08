@@ -28,6 +28,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     def __init__(self, dual_cache: DualCache):
         self.dual_cache = dual_cache
         self.redis_increment_operation_queue = []
+        self.deployment_budget_config = None
 
     async def is_key_within_model_budget(
         self,
@@ -318,6 +319,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     start_time_key=end_user_start_time_key,
                     response_cost=response_cost,
                 )
+
+        if self.dual_cache.redis_cache is not None:
+            await self._push_in_memory_increments_to_redis()
 
         verbose_proxy_logger.debug(
             "current state of in memory cache %s",

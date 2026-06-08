@@ -20,17 +20,18 @@ import {
 } from "@tremor/react";
 import { Button, Modal } from "antd";
 import { ArrowLeftIcon, TrashIcon, PencilIcon } from "@heroicons/react/outline";
-import { getPromptInfo, getPromptVersions, PromptSpec, PromptTemplateBase, deletePromptCall } from "@/components/networking";
+import {
+  getPromptInfo,
+  getPromptVersions,
+  PromptSpec,
+  PromptTemplateBase,
+  deletePromptCall,
+} from "@/components/networking";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import NotificationsManager from "../molecules/notifications_manager";
 import PromptCodeSnippets from "./prompt_editor_view/PromptCodeSnippets";
-import {
-  extractModel,
-  extractTemplateVariables,
-  getBasePromptId,
-  getCurrentVersion
-} from "./prompt_utils";
+import { extractModel, extractTemplateVariables, getBasePromptId, getCurrentVersion } from "./prompt_utils";
 
 export interface PromptInfoProps {
   promptId: string;
@@ -190,7 +191,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
   const promptModel = promptData ? extractModel(promptData) || "gpt-4o" : "gpt-4o";
   const basePromptId = getBasePromptId(promptData);
   const currentVersion = getCurrentVersion(promptData);
-  const latestVersion = versionHistory.length > 0 ? Math.max(...versionHistory.map(v => v.version || 1)) : null;
+  const latestVersion = versionHistory.length > 0 ? Math.max(...versionHistory.map((v) => v.version || 1)) : null;
   const isViewingOldVersion = latestVersion !== null && selectedVersion !== null && selectedVersion < latestVersion;
 
   return (
@@ -233,16 +234,16 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             >
               Prompt Studio
             </TremorButton>
-          {isAdmin && (
-            <TremorButton
-              icon={TrashIcon}
-              variant="secondary"
-              onClick={handleDeleteClick}
-              className="flex items-center"
-            >
-              Delete Prompt
-            </TremorButton>
-          )}
+            {isAdmin && (
+              <TremorButton
+                icon={TrashIcon}
+                variant="secondary"
+                onClick={handleDeleteClick}
+                className="flex items-center"
+              >
+                Delete Prompt
+              </TremorButton>
+            )}
           </div>
         </div>
       </div>
@@ -250,34 +251,34 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
       {/* Environment Tabs */}
       {environments.length > 0 && (
         <div className="flex gap-2 mb-4">
-          {[...environments].sort((a, b) => {
-            const order: Record<string, number> = { development: 0, staging: 1, production: 2 };
-            return (order[a] ?? 99) - (order[b] ?? 99);
-          }).map((env) => (
-            <button
-              key={env}
-              onClick={() => {
-                setSelectedEnv(env);
-                setSelectedVersion(null);
-              }}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                selectedEnv === env
-                  ? env === "production"
-                    ? "bg-red-100 text-red-800 border-2 border-red-300"
-                    : env === "staging"
-                    ? "bg-yellow-100 text-yellow-800 border-2 border-yellow-300"
-                    : "bg-green-100 text-green-800 border-2 border-green-300"
-                  : "bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-gray-200"
-              }`}
-            >
-              {env}
-              {versionHistory.length > 0 && selectedEnv === env && (
-                <span className="ml-1 text-xs opacity-75">
-                  (v{latestVersion})
-                </span>
-              )}
-            </button>
-          ))}
+          {[...environments]
+            .sort((a, b) => {
+              const order: Record<string, number> = { development: 0, staging: 1, production: 2 };
+              return (order[a] ?? 99) - (order[b] ?? 99);
+            })
+            .map((env) => (
+              <button
+                key={env}
+                onClick={() => {
+                  setSelectedEnv(env);
+                  setSelectedVersion(null);
+                }}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                  selectedEnv === env
+                    ? env === "production"
+                      ? "bg-red-100 text-red-800 border-2 border-red-300"
+                      : env === "staging"
+                        ? "bg-yellow-100 text-yellow-800 border-2 border-yellow-300"
+                        : "bg-green-100 text-green-800 border-2 border-green-300"
+                    : "bg-gray-100 text-gray-600 border-2 border-transparent hover:bg-gray-200"
+                }`}
+              >
+                {env}
+                {versionHistory.length > 0 && selectedEnv === env && (
+                  <span className="ml-1 text-xs opacity-75">(v{latestVersion})</span>
+                )}
+              </button>
+            ))}
         </div>
       )}
 
@@ -291,7 +292,7 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
             variant="light"
             size="xs"
             onClick={() => {
-              const latest = versionHistory.find(v => v.version === latestVersion);
+              const latest = versionHistory.find((v) => v.version === latestVersion);
               if (latest) handleVersionClick(latest);
             }}
           >
@@ -315,7 +316,9 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                 <Text>Version</Text>
                 <div className="mt-2">
                   <Title>{currentVersion}</Title>
-                  <Badge color="blue" className="mt-1">v{currentVersion}</Badge>
+                  <Badge color="blue" className="mt-1">
+                    v{currentVersion}
+                  </Badge>
                 </div>
               </Card>
 
@@ -371,11 +374,11 @@ const PromptInfoView: React.FC<PromptInfoProps> = ({ promptId, onClose, accessTo
                           onClick={() => handleVersionClick(v)}
                         >
                           <TableCell>
-                            <span className={isSelected ? "font-bold" : ""}>
-                              v{vNum}
-                            </span>
+                            <span className={isSelected ? "font-bold" : ""}>v{vNum}</span>
                             {isLatest && (
-                              <Badge color="blue" className="ml-2" size="xs">latest</Badge>
+                              <Badge color="blue" className="ml-2" size="xs">
+                                latest
+                              </Badge>
                             )}
                           </TableCell>
                           <TableCell>

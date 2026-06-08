@@ -37,13 +37,13 @@ class TestPreCallChecksOptimization:
         router = Router(
             model_list=[
                 {
-                    "model_name": "gpt-3.5-turbo",
-                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+                    "model_name": "gpt-5-mini",
+                    "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
                     "model_info": {"id": "test-1"},
                 },
                 {
-                    "model_name": "gpt-3.5-turbo",
-                    "litellm_params": {"model": "gpt-4", "api_key": "sk-test2"},
+                    "model_name": "gpt-5-mini",
+                    "litellm_params": {"model": "gpt-5.5", "api_key": "sk-test2"},
                     "model_info": {"id": "test-2"},
                 },
             ],
@@ -51,7 +51,7 @@ class TestPreCallChecksOptimization:
             enable_pre_call_checks=True,
         )
 
-        deployments = router.get_model_list(model_name="gpt-3.5-turbo")
+        deployments = router.get_model_list(model_name="gpt-5-mini")
         assert deployments is not None
 
         # Capture the original state
@@ -62,7 +62,7 @@ class TestPreCallChecksOptimization:
 
         # Call the function under test
         router._pre_call_checks(
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             healthy_deployments=deployments,
             messages=[{"role": "user", "content": "test"}],
         )
@@ -92,12 +92,12 @@ class TestPreCallChecksOptimization:
             model_list=[
                 {
                     "model_name": "test",
-                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-test"},
+                    "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-test"},
                     "model_info": {"id": "small", "max_input_tokens": 50},
                 },
                 {
                     "model_name": "test",
-                    "litellm_params": {"model": "gpt-4", "api_key": "sk-test"},
+                    "litellm_params": {"model": "gpt-5.5", "api_key": "sk-test"},
                     "model_info": {"id": "large", "max_input_tokens": 10000},
                 },
             ],

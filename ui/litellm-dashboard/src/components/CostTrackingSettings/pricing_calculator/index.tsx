@@ -18,21 +18,15 @@ const createDefaultEntry = (): ModelEntry => ({
   num_requests_per_month: undefined,
 });
 
-const PricingCalculator: React.FC<PricingCalculatorProps> = ({
-  accessToken,
-  models,
-}) => {
+const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, models }) => {
   const [entries, setEntries] = useState<ModelEntry[]>([createDefaultEntry()]);
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("month");
-  const { debouncedFetchForEntry, removeEntry, getMultiModelResult } =
-    useMultiCostEstimate(accessToken);
+  const { debouncedFetchForEntry, removeEntry, getMultiModelResult } = useMultiCostEstimate(accessToken);
 
   const handleEntryChange = useCallback(
     (id: string, field: keyof ModelEntry, value: string | number | undefined) => {
       setEntries((prev) => {
-        const updated = prev.map((entry) =>
-          entry.id === id ? { ...entry, [field]: value } : entry
-        );
+        const updated = prev.map((entry) => (entry.id === id ? { ...entry, [field]: value } : entry));
         const changedEntry = updated.find((e) => e.id === id);
         if (changedEntry && changedEntry.model) {
           debouncedFetchForEntry(changedEntry);
@@ -40,7 +34,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
         return updated;
       });
     },
-    [debouncedFetchForEntry]
+    [debouncedFetchForEntry],
   );
 
   const handleTimePeriodChange = useCallback((period: TimePeriod) => {
@@ -51,7 +45,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
         ...entry,
         num_requests_per_day: period === "day" ? entry.num_requests_per_day : undefined,
         num_requests_per_month: period === "month" ? entry.num_requests_per_month : undefined,
-      }))
+      })),
     );
   }, []);
 
@@ -64,7 +58,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       setEntries((prev) => prev.filter((entry) => entry.id !== id));
       removeEntry(id);
     },
-    [removeEntry]
+    [removeEntry],
   );
 
   const multiModelResult = getMultiModelResult(entries);
@@ -83,7 +77,9 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
           onChange={(value) => handleEntryChange(record.id, "model", value)}
           optionFilterProp="label"
           filterOption={(input, option) =>
-            String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+            String(option?.label ?? "")
+              .toLowerCase()
+              .includes(input.toLowerCase())
           }
           options={models.map((model) => ({
             value: model,
@@ -139,7 +135,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
             handleEntryChange(
               record.id,
               timePeriod === "day" ? "num_requests_per_day" : "num_requests_per_month",
-              value ?? undefined
+              value ?? undefined,
             )
           }
           style={{ width: "100%" }}
@@ -188,12 +184,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
         pagination={false}
         size="small"
         footer={() => (
-          <Button
-            type="dashed"
-            onClick={handleAddEntry}
-            icon={<PlusOutlined />}
-            className="w-full"
-          >
+          <Button type="dashed" onClick={handleAddEntry} icon={<PlusOutlined />} className="w-full">
             Add Another Model
           </Button>
         )}

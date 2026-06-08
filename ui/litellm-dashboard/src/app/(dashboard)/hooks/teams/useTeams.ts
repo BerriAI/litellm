@@ -4,12 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { fetchTeams } from "@/app/(dashboard)/networking";
 import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { teamInfoCall } from "@/components/networking";
-import {
-  getProxyBaseUrl,
-  getGlobalLitellmHeaderName,
-  deriveErrorMessage,
-  handleError,
-} from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName, deriveErrorMessage, handleError } from "@/components/networking";
 
 export interface TeamsResponse {
   teams: Team[];
@@ -24,11 +19,11 @@ export interface DeletedTeam extends Team {
   deleted_by: string;
 }
 
-
 export interface TeamListCallOptions {
   organizationID?: string | null;
   teamID?: string | null;
   team_alias?: string | null;
+  search?: string | null;
   userID?: string | null;
   sortBy?: string | null;
   sortOrder?: string | null;
@@ -46,12 +41,13 @@ export const teamListCall = async (
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
         organization_id: options.organizationID,
         team_alias: options.team_alias,
+        search: options.search,
         user_id: options.userID,
         page,
         page_size: pageSize,
@@ -126,11 +122,7 @@ export const useTeam = (teamId?: string) => {
 
 const infiniteTeamKeys = createQueryKeys("infiniteTeams");
 
-export const useInfiniteTeams = (
-  pageSize: number = 50,
-  search?: string,
-  organizationId?: string | null,
-) => {
+export const useInfiniteTeams = (pageSize: number = 50, search?: string, organizationId?: string | null) => {
   const { accessToken, userId, userRole } = useAuthorized();
   const isAdmin = userRole === "Admin" || userRole === "Admin Viewer";
 
@@ -172,12 +164,13 @@ const deletedTeamListCall = async (
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
         organization_id: options.organizationID,
         team_alias: options.team_alias,
+        search: options.search,
         user_id: options.userID,
         page,
         page_size: pageSize,
@@ -208,10 +201,10 @@ const deletedTeamListCall = async (
 
     const data = await response.json();
     console.log("/team/list?status=deleted API Response:", data);
-    
+
     // Extract teams array from response if it's wrapped in a response object
     // Otherwise return the data directly if it's already an array
-    if (data && typeof data === 'object' && 'teams' in data) {
+    if (data && typeof data === "object" && "teams" in data) {
       return data.teams as DeletedTeam[];
     }
     return data as DeletedTeam[];
