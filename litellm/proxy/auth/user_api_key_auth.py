@@ -23,6 +23,7 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
 from litellm.identity import build_user_api_key_auth_from_jwt_result, resolve_identity
+from litellm.identity.jwt import decode_unverified_claims, token_is_jwt
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -266,7 +267,7 @@ def _should_route_jwt_to_oauth2_override(token: str, jwt_handler: JWTHandler) ->
     if not routing_overrides:
         return False
 
-    token_claims = jwt_handler.get_unverified_claims(token=token)
+    token_claims = decode_unverified_claims(token)
     if token_claims is None:
         return False
 
@@ -1128,7 +1129,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
         enable_oauth2_auth = general_settings.get("enable_oauth2_auth", False) is True
         enable_jwt_auth = general_settings.get("enable_jwt_auth", False) is True
-        is_jwt = jwt_handler.is_jwt(token=api_key) if enable_jwt_auth else False
+        is_jwt = token_is_jwt(api_key) if enable_jwt_auth else False
 
         # Routing uses unverified JWT claims only to choose auth path.
         # Final authentication is enforced by the selected validator.
@@ -1170,7 +1171,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 raise ValueError(
                     f"JWT Auth is an enterprise only feature. {CommonProxyErrors.not_premium_user.value}"
                 )
-            is_jwt = jwt_handler.is_jwt(token=api_key)
+            is_jwt = token_is_jwt(api_key)
             verbose_proxy_logger.debug("is_jwt: %s", is_jwt)
             if is_jwt:
                 # Try JWT-to-Virtual-Key mapping first to avoid

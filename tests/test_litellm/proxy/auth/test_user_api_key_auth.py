@@ -27,6 +27,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
     JWTRoutingOverride,
 )
+from litellm.identity.jwt import token_is_jwt
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -1365,24 +1366,20 @@ class TestJWTOAuth2Coexistence:
     - Opaque tokens -> OAuth2 auth handler
     """
 
-    def test_is_jwt_detects_jwt_tokens(self):
-        """JWT tokens have 3 dot-separated parts."""
-        assert JWTHandler.is_jwt("header.payload.signature") is True
-        assert (
-            JWTHandler.is_jwt("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.sig123")
-            is True
-        )
+    def test_jwt_handler_wrappers_are_retired(self):
+        """is_jwt / get_unverified_claims were removed from JWTHandler."""
+        assert not hasattr(JWTHandler, "is_jwt")
+        assert not hasattr(JWTHandler, "get_unverified_claims")
+        with pytest.raises(AttributeError):
+            JWTHandler.is_jwt  # noqa: B018
 
-    def test_is_jwt_rejects_opaque_tokens(self):
-        """Opaque OAuth2 tokens do not have 3 dot-separated parts."""
-        assert JWTHandler.is_jwt("some-opaque-oauth2-token") is False
-        assert JWTHandler.is_jwt("sk-12345678") is False
-        assert JWTHandler.is_jwt("Bearer token") is False
-        assert JWTHandler.is_jwt("two.parts") is False
-
-    def test_is_jwt_returns_false_for_none(self):
-        """None token (missing Authorization header) should not be treated as JWT."""
-        assert JWTHandler.is_jwt(None) is False
+    def test_token_is_jwt_classifies_jwt_and_opaque_tokens(self):
+        """The PyJWT-direct replacement preserves JWT vs opaque routing."""
+        assert token_is_jwt("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.sig123") is True
+        assert token_is_jwt("some-opaque-oauth2-token") is False
+        assert token_is_jwt("sk-12345678") is False
+        assert token_is_jwt("Bearer token") is False
+        assert token_is_jwt(None) is False
 
     @pytest.mark.asyncio
     async def test_both_enabled_opaque_token_uses_oauth2(self):
@@ -1491,7 +1488,7 @@ class TestJWTOAuth2Coexistence:
         When both enable_jwt_auth and enable_oauth2_auth are True,
         a JWT-formatted token should skip OAuth2 and reach the JWT handler.
         """
-        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.c2lnbmF0dXJl"
 
         general_settings = {
             "enable_oauth2_auth": True,
@@ -1554,12 +1551,11 @@ class TestJWTOAuth2Coexistence:
 
     @pytest.mark.asyncio
     async def test_auto_register_passes_validated_org_context_to_generated_key(self):
-        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.c2lnbmF0dXJl"
         general_settings = {"enable_jwt_auth": True}
         user_api_key_cache = DualCache()
         prisma_client = MagicMock()
         jwt_handler = MagicMock()
-        jwt_handler.is_jwt.return_value = True
         jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
             virtual_key_claim_field="sub",
@@ -1624,7 +1620,7 @@ class TestJWTOAuth2Coexistence:
         ):
             result = await _user_api_key_auth_builder(
                 request=mock_request,
-                api_key=jwt_token,
+                api_key=f"Bearer {jwt_token}",
                 azure_api_key_header="",
                 anthropic_api_key_header=None,
                 google_ai_studio_api_key_header=None,
@@ -1636,7 +1632,9 @@ class TestJWTOAuth2Coexistence:
         assert mock_auto_register.call_args.kwargs["team_id"] == "validated-team"
         assert mock_auto_register.call_args.kwargs["user_id"] == "validated-user"
         assert mock_auto_register.call_args.kwargs["org_id"] == "validated-org"
-        assert mock_auto_register.call_args.kwargs["end_user_id"] == "validated-end-user"
+        assert (
+            mock_auto_register.call_args.kwargs["end_user_id"] == "validated-end-user"
+        )
         assert result.org_id == "validated-org"
 
     @pytest.mark.asyncio
@@ -2290,7 +2288,7 @@ class TestJWTOAuth2Coexistence:
         When only enable_oauth2_auth is True (no JWT), all LLM API tokens
         should go through OAuth2 - backward compatible behavior.
         """
-        jwt_like_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        jwt_like_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.c2lnbmF0dXJl"
 
         general_settings = {
             "enable_oauth2_auth": True,

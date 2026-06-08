@@ -33,7 +33,7 @@ def test_bearer_prefix_normalized_then_hashed():
 
 
 def test_jwt_shaped_token_gets_hashed_jwt_prefix():
-    fake_jwt = "aaaa.bbbb.cccc"
+    fake_jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.c2lnbmF0dXJl"
     principal = extract_api_key_principal(fake_jwt)
     assert principal is not None
     assert principal.token_hash.startswith("hashed-jwt-")

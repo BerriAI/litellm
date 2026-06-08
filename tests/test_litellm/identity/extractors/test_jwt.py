@@ -2,7 +2,6 @@ import base64
 import json
 import os
 import sys
-from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -64,23 +63,3 @@ def test_raw_claims_preserved():
     p = extract_jwt_principal(token)
     assert p is not None
     assert p.claims["custom"] == {"groups": ["g1"]}
-
-
-def test_extract_jwt_principal_uses_pyjwt_not_jwt_handler():
-    token = _build_unverified_jwt({"sub": "u-pyjwt", "scope": "read write"})
-
-    with (
-        patch(
-            "litellm.proxy.auth.handle_jwt.JWTHandler.is_jwt",
-            side_effect=AssertionError("extractor must not call JWTHandler"),
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.JWTHandler.get_unverified_claims",
-            side_effect=AssertionError("extractor must not call JWTHandler"),
-        ),
-    ):
-        p = extract_jwt_principal(token)
-
-    assert p is not None
-    assert p.sub == "u-pyjwt"
-    assert p.scopes == ("read", "write")

@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from litellm.proxy.auth.user_api_key_auth import (
     _resolve_jwt_to_virtual_key,
 )
+from litellm.identity.jwt import token_is_jwt
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy._types import (
     JWTKeyMappingResponse,
@@ -158,15 +159,13 @@ async def test_virtual_key_mapping_oidc_enabled_jwt_token_uses_auth_jwt():
     )
 
     # Confirm our fixture token is treated as a JWT
-    assert jwt_handler.is_jwt(token=api_key) is True
+    assert token_is_jwt(api_key) is True
 
     auth_jwt_mock = AsyncMock(return_value={"email": "user@example.com", "sub": "123"})
     oidc_userinfo_mock = AsyncMock(return_value={"email": "user@example.com"})
 
     # Simulate the routing condition from user_api_key_auth.py
-    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(
-        token=api_key
-    ):
+    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not token_is_jwt(api_key):
         jwt_claims = await oidc_userinfo_mock(token=api_key)
     else:
         jwt_claims = await auth_jwt_mock(token=api_key)
@@ -192,16 +191,14 @@ async def test_virtual_key_mapping_oidc_enabled_opaque_token_uses_oidc_userinfo(
         virtual_key_claim_field="email",
     )
 
-    assert jwt_handler.is_jwt(token=api_key) is False
+    assert token_is_jwt(api_key) is False
 
     auth_jwt_mock = AsyncMock(return_value={"email": "user@example.com"})
     oidc_userinfo_mock = AsyncMock(
         return_value={"email": "user@example.com", "sub": "123"}
     )
 
-    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not jwt_handler.is_jwt(
-        token=api_key
-    ):
+    if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not token_is_jwt(api_key):
         jwt_claims = await oidc_userinfo_mock(token=api_key)
     else:
         jwt_claims = await auth_jwt_mock(token=api_key)

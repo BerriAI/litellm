@@ -1313,29 +1313,17 @@ def test_user_api_key_auth_jwt_hashing():
     assert user_auth_non_jwt.token == non_jwt_key
 
 
-def test_jwt_handler_is_jwt_static_method():
-    """
-    Test that JWTHandler.is_jwt is a static method and works correctly
-    """
-    from litellm.proxy.auth.handle_jwt import JWTHandler
+def test_token_is_jwt_classifies_tokens():
+    """The PyJWT-direct replacement for the retired JWTHandler.is_jwt wrapper."""
+    from litellm.identity.jwt import token_is_jwt
 
-    # Test with valid JWT format
-    valid_jwt = "test-jwt-token-header.payload.signature"
-    assert JWTHandler.is_jwt(valid_jwt) == True
+    assert token_is_jwt("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sig") is True
 
-    # Test with invalid JWT format (only 2 parts)
-    invalid_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ"
-    assert JWTHandler.is_jwt(invalid_jwt) == False
-
-    # Test with regular API key
-    regular_key = "sk-1234567890abcdef"
-    assert JWTHandler.is_jwt(regular_key) == False
-
-    # Test with empty string
-    assert JWTHandler.is_jwt("") == False
-
-    # Test with None (missing Authorization header)
-    assert JWTHandler.is_jwt(None) == False
+    two_parts = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0"
+    assert token_is_jwt(two_parts) is False
+    assert token_is_jwt("sk-1234567890abcdef") is False
+    assert token_is_jwt("") is False
+    assert token_is_jwt(None) is False
 
 
 @pytest.mark.parametrize(

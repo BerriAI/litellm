@@ -23,6 +23,7 @@ from jwt.api_jwk import PyJWK
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
+from litellm.identity.jwt import decode_unverified_claims, token_is_jwt
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
@@ -131,37 +132,6 @@ class JWTHandler:
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
-
-    @staticmethod
-    def is_jwt(token: Optional[str]) -> bool:
-        if token is None:
-            return False
-        parts = token.split(".")
-        return len(parts) == 3
-
-    @staticmethod
-    def get_unverified_claims(token: str) -> Optional[dict]:
-        """
-        Decode JWT claims without signature verification.
-        Used for routing decisions before selecting validation path.
-        """
-        if not JWTHandler.is_jwt(token):
-            return None
-
-        try:
-            claims = jwt.decode(
-                token,
-                options={"verify_signature": False, "verify_aud": False},
-                algorithms=JWTHandler.SUPPORTED_JWT_ALGORITHMS,
-            )
-            if isinstance(claims, dict):
-                return claims
-            return None
-        except Exception as e:
-            verbose_proxy_logger.debug(
-                "Failed to decode unverified JWT claims for routing: %s", e
-            )
-            return None
 
     def _rbac_role_from_role_mapping(self, token: dict) -> Optional[RBAC_ROLES]:
         """
@@ -900,7 +870,7 @@ class JWTHandler:
         if not issuer_configs:
             return None
 
-        claims = self.get_unverified_claims(token=token)
+        claims = decode_unverified_claims(token)
         if claims is None:
             return None
 
@@ -1947,9 +1917,8 @@ class JWTAuthManager:
         """Main authentication and authorization builder"""
         # Check if OIDC UserInfo endpoint is enabled, but fall back to standard
         # JWT auth if the token itself is a well-formed JWT (3-part structure).
-        if (
-            jwt_handler.litellm_jwtauth.oidc_userinfo_enabled
-            and not jwt_handler.is_jwt(token=api_key)
+        if jwt_handler.litellm_jwtauth.oidc_userinfo_enabled and not token_is_jwt(
+            api_key
         ):
             verbose_proxy_logger.debug(
                 "OIDC UserInfo is enabled. Fetching user info from UserInfo endpoint."
