@@ -450,7 +450,7 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
       error: user.error || "",
     }));
 
-    const csv = Papa.unparse(results);
+    const csv = Papa.unparse(results, { escapeFormulae: true });
     const blob = new Blob([csv], { type: "text/csv" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a");

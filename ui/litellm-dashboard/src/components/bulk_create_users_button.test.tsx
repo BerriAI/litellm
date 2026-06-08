@@ -62,7 +62,7 @@ describe("BulkCreateUsersButton", () => {
 
     fireEvent.click(screen.getByText("+ Bulk Invite Users"));
 
-    uploadCsv("user_email,user_role\nuser@example.com,internal_user\n");
+    uploadCsv("user_email,user_role\n@evil.example.com,internal_user\n");
 
     const createButtons = await screen.findAllByRole("button", { name: "Create 1 Users" });
     fireEvent.click(createButtons[0]);
@@ -72,7 +72,7 @@ describe("BulkCreateUsersButton", () => {
         "test-token",
         null,
         expect.objectContaining({
-          user_email: "user@example.com",
+          user_email: "@evil.example.com",
           user_role: "internal_user",
           auto_create_key: true,
           models: ["no-default-models"],
@@ -83,14 +83,16 @@ describe("BulkCreateUsersButton", () => {
     await screen.findByText("User creation complete");
     fireEvent.click(screen.getByRole("button", { name: /Download User Credentials/i }));
 
-    expect(unparseSpy).toHaveBeenLastCalledWith([
+    const lastUnparseCall = unparseSpy.mock.calls[unparseSpy.mock.calls.length - 1];
+    expect(lastUnparseCall[0]).toEqual([
       expect.objectContaining({
-        user_email: "user@example.com",
+        user_email: "@evil.example.com",
         status: "success",
         key: "sk-test-key",
       }),
     ]);
-    expect(unparseSpy).not.toHaveBeenLastCalledWith([
+    expect(lastUnparseCall[1]).toEqual({ escapeFormulae: true });
+    expect(lastUnparseCall[0]).not.toEqual([
       expect.objectContaining({
         key: "user-1",
       }),
