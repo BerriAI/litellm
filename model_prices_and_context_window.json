@@ -41157,6 +41157,7 @@
     },
     "dashscope/qwen3.7-max": {
       "input_cost_per_token": 1.77e-06,
+      "cache_creation_input_token_cost": 2.21e-06,
       "cache_read_input_token_cost": 3.54e-07,
       "litellm_provider": "dashscope",
       "max_input_tokens": 991000,
@@ -41174,6 +41175,7 @@
     },
     "anthropic/qwen3.7-max": {
       "input_cost_per_token": 1.77e-06,
+      "cache_creation_input_token_cost": 2.21e-06,
       "cache_read_input_token_cost": 3.54e-07,
       "litellm_provider": "anthropic",
       "max_input_tokens": 991000,
