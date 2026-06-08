@@ -309,3 +309,52 @@ def test_encrypt_callback_vars_only_encrypts_credential_fields(monkeypatch):
     assert cv["langfuse_host"] == "https://cloud.langfuse.com"
     assert cv["langsmith_project"] == "my-proj"
     assert cv["langsmith_base_url"] == "https://smith.example"
+
+
+def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings(
+    monkeypatch,
+):
+    """Regression: a non-dict value under callback_settings.lakera_prompt_injection
+    must not crash initialize_callbacks_on_proxy.
+
+    Forwarding callback_settings as callback_specific_params (so callbacks like
+    DatadogCostManagementLogger receive their init params) exposes the lakera
+    branch, which previously did lakeraAI_Moderation(**callback_specific_params[
+    "lakera_prompt_injection"]) with no isinstance(dict) guard. For a config like
+    {"lakera_prompt_injection": "x"} that is `**"x"` -> TypeError: argument after
+    ** must be a mapping, not str. The branch now guards on isinstance(dict),
+    matching the presidio / datadog_cost_management branches.
+    """
+    captured = {}
+
+    class _DummyLakera:
+        def __init__(self, **kwargs):
+            captured["kwargs"] = kwargs
+
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(prisma_client=None),
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.guardrails.guardrail_hooks.lakera_ai.lakeraAI_Moderation",
+        _DummyLakera,
+    )
+
+    original_callbacks = (
+        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
+    )
+    litellm.callbacks = []
+    try:
+        # A non-dict value must be ignored (init_params stays {}), not **-unpacked.
+        initialize_callbacks_on_proxy(
+            value=["lakera_prompt_injection"],
+            premium_user=False,
+            config_file_path=".",
+            litellm_settings={},
+            callback_specific_params={"lakera_prompt_injection": "any-string"},
+        )
+        assert captured["kwargs"] == {}
+        assert any(isinstance(c, _DummyLakera) for c in litellm.callbacks)
+    finally:
+        litellm.callbacks = original_callbacks
