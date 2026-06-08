@@ -43,6 +43,8 @@ from mcp.types import (
     ListResourceTemplatesResult,
     ListResourcesRequest,
     ListResourcesResult,
+    ListToolsRequest,
+    ListToolsResult,
     Prompt,
     ResourceTemplate,
     TextContent,
@@ -89,6 +91,10 @@ def _first_non_cancelled_cause(exc: BaseException) -> Optional[BaseException]:
 
 
 TSessionResult = TypeVar("TSessionResult")
+
+
+class _LenientListToolsResult(ListToolsResult):
+    tools: List[MCPTool] = Field(default_factory=list)
 
 
 class _LenientListPromptsResult(ListPromptsResult):
@@ -531,7 +537,10 @@ class MCPClient:
         )
 
         async def _list_tools_operation(session: ClientSession):
-            return await session.list_tools()
+            return await session.send_request(
+                ClientRequest(ListToolsRequest()),
+                _LenientListToolsResult,
+            )
 
         try:
             result = await self.run_with_session(_list_tools_operation)

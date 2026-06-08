@@ -18,6 +18,7 @@ from mcp.types import (
     ListPromptsRequest,
     ListResourceTemplatesRequest,
     ListResourcesRequest,
+    ListToolsRequest,
 )
 from litellm.types.mcp import MCPAuth, MCPStdioConfig, MCPTransport
 
@@ -29,6 +30,9 @@ class _MissingListResultSession:
     async def send_request(self, request, result_type):
         self.requests.append((request, result_type))
         return result_type.model_validate({})
+
+    async def list_tools(self):
+        raise AssertionError("strict list_tools should not be used")
 
     async def list_prompts(self):
         raise AssertionError("strict list_prompts should not be used")
@@ -74,6 +78,7 @@ class TestMCPClient:
     @pytest.mark.parametrize(
         ("client_method", "request_type"),
         [
+            ("list_tools", ListToolsRequest),
             ("list_prompts", ListPromptsRequest),
             ("list_resources", ListResourcesRequest),
             ("list_resource_templates", ListResourceTemplatesRequest),
