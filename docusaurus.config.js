@@ -168,7 +168,6 @@ const config = {
 
           const docItems = flattenDocs(items);
 
-          // Group by year
           const byYear = {};
           for (const item of docItems) {
             const year = docYearMap[item.id] || 'Other';
@@ -176,23 +175,34 @@ const config = {
             byYear[year].push(item);
           }
 
-          // Sort each year's items by version descending
-          for (const year of Object.keys(byYear)) {
-            byYear[year].sort(compareVersionsDesc);
+          function buildMinorCategories(yearItems, expandNewest) {
+            const byMinor = {};
+            for (const item of yearItems) {
+              const [maj, min] = parseVersion(item.label || item.id || '');
+              const key = `v${maj}.${min}.x`;
+              if (!byMinor[key]) byMinor[key] = {maj, min, items: []};
+              byMinor[key].items.push(item);
+            }
+            const keys = Object.keys(byMinor);
+            for (const key of keys) byMinor[key].items.sort(compareVersionsDesc);
+            keys.sort((a, b) =>
+              (byMinor[b].maj - byMinor[a].maj) || (byMinor[b].min - byMinor[a].min));
+            return keys.map((key, idx) => ({
+              type: 'category',
+              label: key,
+              collapsed: !(expandNewest && idx === 0),
+              items: byMinor[key].items,
+            }));
           }
 
-          // Build categories sorted by year descending
-          const years = Object.keys(byYear).sort((a, b) => {
-            // Object.keys() returns strings; avoid numeric subtraction type errors.
-            const na = Number.parseInt(a, 10);
-            const nb = Number.parseInt(b, 10);
-            return nb - na;
-          });
-          return years.map(year => ({
+          const years = Object.keys(byYear).sort(
+            (a, b) => Number.parseInt(b, 10) - Number.parseInt(a, 10),
+          );
+          return years.map((year, idx) => ({
             type: 'category',
             label: String(year),
             collapsed: year !== String(years[0]),
-            items: byYear[year],
+            items: buildMinorCategories(byYear[year], idx === 0),
           }));
         },
       },
