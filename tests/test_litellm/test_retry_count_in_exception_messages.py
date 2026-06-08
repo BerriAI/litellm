@@ -178,8 +178,9 @@ async def test_decorator_does_not_inject_global_num_retries_for_router_calls():
                 )
 
         raised = exc_info.value
-        assert raised.num_retries != 99, (
-            "Decorator injected litellm.num_retries=99 into a router-managed exception. "
+        assert raised.num_retries == 0, (
+            f"Expected num_retries=0 (router stamped actual count), "
+            f"got {raised.num_retries}. "
             "Router calls should not be polluted by the global litellm.num_retries value."
         )
     finally:
