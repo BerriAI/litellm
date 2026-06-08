@@ -513,6 +513,56 @@ jobs:
       - store_test_results:
           path: test-results
 
+  mcp_e2e_tests:
+    docker:
+      - *python312_image
+      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+      LITELLM_MASTER_KEY: "sk-1234"
+      MCP_FULL_E2E: "1"
+      LITELLM_PROXY_BASE_URL: "http://localhost:4000"
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
+      - run:
+          name: Seed DB schema
+          command: |
+            uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Generate Prisma Client
+          command: uv run --no-sync python -m prisma generate
+      - run:
+          name: Start proxy
+          background: true
+          command: |
+            uv run --no-sync python litellm/proxy/proxy_cli.py --port 4000
+      - wait_for_service:
+          url: http://localhost:4000/health/liveliness
+          timeout: "120"
+      - run:
+          name: Run MCP e2e tests
+          command: |
+            mkdir -p test-results
+            uv run --no-sync python -m pytest tests/mcp_tests/test_mcp_e2e.py \
+              -v --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 10m
+      - store_test_results:
+          path: test-results
+
   proxy_security_tests:
     docker:
       - *python312_image
@@ -2786,6 +2836,8 @@ workflows:
       - auth_ui_unit_tests:
           filters: *main_branches
       - proxy_behavior_tests:
+          filters: *main_branches
+      - mcp_e2e_tests:
           filters: *main_branches
       - proxy_security_tests:
           filters: *main_branches
