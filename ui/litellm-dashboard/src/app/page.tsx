@@ -5,7 +5,6 @@ import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndE
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
 import AdminPanel from "@/components/AdminPanel";
 import AgentsPanel from "@/components/agents";
-import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -442,8 +441,6 @@ function CreateKeyPageContent() {
                   <AdminPanel proxySettings={proxySettings} />
                 ) : page == "logging-and-alerts" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
-                ) : page == "budgets" ? (
-                  <BudgetPanel accessToken={accessToken} />
                 ) : page == "guardrails" ? (
                   <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "policies" ? (

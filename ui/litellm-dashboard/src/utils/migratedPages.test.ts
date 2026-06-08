@@ -67,3 +67,18 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
 });
+
+describe("MIGRATED_PAGES budgets", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("routes budgets to the budgets path and back", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["budgets"]).toBe("budgets");
+    expect(legacyKeyForPathname("/ui/budgets")).toBe("budgets");
+    expect(legacyKeyForPathname("/ui/budgets/")).toBe("budgets");
+  });
+});
