@@ -18,7 +18,8 @@ const ROOT = process.env.SERVER_ROOT_PATH ?? "";
 const WATCH_MS = Number(process.env.E2E_WATCH_MS ?? 0);
 const watch = (page: Page) => (WATCH_MS ? page.waitForTimeout(WATCH_MS) : Promise.resolve());
 
-const pathRe = (segment: string) => new RegExp(`${ROOT}/ui/${segment}/?($|\\?)`);
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const pathRe = (segment: string) => new RegExp(`${esc(ROOT)}/ui/${esc(segment)}/?($|\\?)`);
 const legacyAnchor = (page: Page) => page.locator("a", { hasText: "Virtual Keys" });
 
 /** The dashboard shell is present (sidebar rendered) — page didn't 404 / crash. */
@@ -71,7 +72,7 @@ test.describe("App Router migrated pages", () => {
 
       // 4. Click off to a legacy (not-yet-migrated) page.
       await legacyAnchor(page).click();
-      await expect(page).toHaveURL(new RegExp(`${ROOT}/ui/\\?page=api-keys`));
+      await expect(page).toHaveURL(new RegExp(`${esc(ROOT)}/ui/\\?page=api-keys`));
       await dismissFeedbackPopup(page);
       await expectRendered(page);
       await watch(page);
