@@ -2890,3 +2890,225 @@ class TestCursorProxyRoute:
             assert call_args["target"] == "https://api.cursor.com/v0/agents"
             assert result["id"] == "bc_abc123"
             assert result["status"] == "CREATING"
+
+
+class TestMistralProxyRoute:
+    """Regression tests for the Mistral pass-through route.
+
+    See https://github.com/BerriAI/litellm/issues/29926 — multipart/form-data
+    uploads to `/mistral/v1/files` previously crashed with a 500 because the
+    route called `await request.json()` on every POST. The route now relies on
+    the shared `is_streaming_request_fn` helper, which parses form data for
+    multipart requests instead of forcing JSON parsing.
+    """
+
+    def _make_multipart_request(self):
+        """Build a mock multipart/form-data file-upload request.
+
+        `request.json()` is wired to raise like Starlette does for a non-JSON
+        body, so any code path that calls it will surface as a failure.
+        """
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.headers = {
+            "content-type": "multipart/form-data; boundary=----abc123"
+        }
+        mock_request.form = AsyncMock(
+            return_value={"purpose": "ocr", "file": "<binary>"}
+        )
+        mock_request.json = AsyncMock(
+            side_effect=json.JSONDecodeError("Expecting value", "", 0)
+        )
+        return mock_request
+
+    @pytest.mark.asyncio
+    async def test_mistral_multipart_upload_does_not_parse_json(self):
+        """A multipart upload must not be JSON-parsed and must reach the target."""
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            mistral_proxy_route,
+        )
+
+        mock_request = self._make_multipart_request()
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="test-mistral-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_endpoint_func = AsyncMock(return_value={"id": "file-123"})
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await mistral_proxy_route(
+                endpoint="v1/files",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        # The bug: `request.json()` was called on the multipart body and raised.
+        mock_request.json.assert_not_called()
+        mock_create_route.assert_called_once()
+        call_args = mock_create_route.call_args[1]
+        assert call_args["target"] == "https://api.mistral.ai/v1/files"
+        assert call_args["is_streaming_request"] is False
+        assert call_args["custom_headers"]["Authorization"] == "Bearer test-mistral-key"
+        assert result == {"id": "file-123"}
+
+    @pytest.mark.asyncio
+    async def test_mistral_multipart_upload_streaming_flag(self):
+        """A multipart form carrying `stream=true` is detected as streaming."""
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            mistral_proxy_route,
+        )
+
+        mock_request = self._make_multipart_request()
+        mock_request.form = AsyncMock(return_value={"purpose": "ocr", "stream": "true"})
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="test-mistral-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_create_route.return_value = AsyncMock(return_value={"ok": True})
+
+            await mistral_proxy_route(
+                endpoint="v1/files",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        mock_request.json.assert_not_called()
+        assert mock_create_route.call_args[1]["is_streaming_request"] is True
+
+    @pytest.mark.asyncio
+    async def test_mistral_json_post_streaming_detected(self):
+        """A JSON POST with `stream=true` is still detected as streaming."""
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            mistral_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.body = AsyncMock(
+            return_value=json.dumps(
+                {"model": "mistral-large-latest", "stream": True}
+            ).encode("utf-8")
+        )
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="test-mistral-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_create_route.return_value = AsyncMock(return_value={"ok": True})
+
+            await mistral_proxy_route(
+                endpoint="v1/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        assert mock_create_route.call_args[1]["is_streaming_request"] is True
+        assert (
+            mock_create_route.call_args[1]["target"]
+            == "https://api.mistral.ai/v1/chat/completions"
+        )
+
+    @pytest.mark.asyncio
+    async def test_mistral_json_post_non_streaming(self):
+        """A JSON POST without `stream` is non-streaming."""
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            mistral_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.query_params = {}
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.body = AsyncMock(
+            return_value=json.dumps({"model": "mistral-large-latest"}).encode("utf-8")
+        )
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="test-mistral-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_create_route.return_value = AsyncMock(return_value={"ok": True})
+
+            await mistral_proxy_route(
+                endpoint="v1/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        assert mock_create_route.call_args[1]["is_streaming_request"] is False
+
+    @pytest.mark.asyncio
+    async def test_mistral_get_request_does_not_read_body(self):
+        """A GET request must never attempt to read/parse the body."""
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            mistral_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "GET"
+        mock_request.query_params = {}
+        mock_request.headers = {}
+        mock_request.json = AsyncMock(
+            side_effect=AssertionError("json() must not be called for GET")
+        )
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with (
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+                return_value="test-mistral-key",
+            ),
+            patch(
+                "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+            ) as mock_create_route,
+        ):
+            mock_create_route.return_value = AsyncMock(return_value={"data": []})
+
+            result = await mistral_proxy_route(
+                endpoint="v1/models",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+        mock_request.json.assert_not_called()
+        assert mock_create_route.call_args[1]["is_streaming_request"] is False
+        assert result == {"data": []}

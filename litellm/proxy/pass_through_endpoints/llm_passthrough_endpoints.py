@@ -425,12 +425,10 @@ async def mistral_proxy_route(
     )
 
     ## check for streaming
-    is_streaming_request = False
-    # anthropic is streaming when 'stream' = True is in the body
-    if request.method == "POST":
-        _request_body = await request.json()
-        if _request_body.get("stream"):
-            is_streaming_request = True
+    # Use the shared helper so multipart/form-data uploads (e.g. file uploads to
+    # `/mistral/v1/files`) are not parsed as JSON, which previously raised a 500
+    # before the request was ever forwarded to Mistral.
+    is_streaming_request = await is_streaming_request_fn(request)
 
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
