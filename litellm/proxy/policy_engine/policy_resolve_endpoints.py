@@ -16,6 +16,10 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.proxy.policy_engine import (
     AttachmentImpactResponse,
     PolicyAttachmentCreateRequest,
@@ -76,7 +80,7 @@ def _get_tags_from_metadata(metadata: object, json_metadata: object = None) -> l
 
 async def _fetch_all_teams(prisma_client: object) -> list:
     """Fetch teams from DB once. Reuse the result across tag and alias lookups."""
-    return await prisma_client.db.litellm_teamtable.find_many(  # type: ignore
+    return await TeamRepository(prisma_client).table.find_many(  # type: ignore
         where={},
         order={"created_at": "desc"},
         take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -159,7 +163,7 @@ async def _find_affected_by_team_patterns(
     new_keys: list = []
     unnamed_keys_count = 0
     if matched_team_ids:
-        keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+        keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
             where={"team_id": {"in": matched_team_ids}},
             order={"created_at": "desc"},
             take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -182,7 +186,7 @@ async def _find_affected_keys_by_alias(
 
     affected: list = []
 
-    keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+    keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
         where=_build_alias_where("key_alias", key_patterns),
         order={"created_at": "desc"},
         take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,
@@ -367,7 +371,7 @@ async def estimate_attachment_impact(
 
         # Tag-based impact
         if tag_patterns:
-            keys = await prisma_client.db.litellm_verificationtoken.find_many(  # type: ignore
+            keys = await VerificationTokenRepository(prisma_client).table.find_many(  # type: ignore
                 where={},
                 order={"created_at": "desc"},
                 take=MAX_POLICY_ESTIMATE_IMPACT_ROWS,

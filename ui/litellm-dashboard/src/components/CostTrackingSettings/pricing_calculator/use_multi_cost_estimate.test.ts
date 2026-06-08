@@ -272,13 +272,16 @@ describe("useMultiCostEstimate", () => {
       let callIndex = 0;
       const responses = [
         makeApiResponse({ cost_per_request: 0.05, margin_cost_per_request: 0 }),
-        makeApiResponse({ model: "claude-3", cost_per_request: 0.10, margin_cost_per_request: 0 }),
+        makeApiResponse({ model: "claude-3", cost_per_request: 0.1, margin_cost_per_request: 0 }),
       ];
 
-      vi.spyOn(global, "fetch").mockImplementation(async () => ({
-        ok: true,
-        json: async () => responses[callIndex++],
-      } as Response));
+      vi.spyOn(global, "fetch").mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            json: async () => responses[callIndex++],
+          }) as Response,
+      );
 
       const { result } = renderHook(() => useMultiCostEstimate("token123"));
 
@@ -299,13 +302,22 @@ describe("useMultiCostEstimate", () => {
       let callIndex = 0;
       const responses = [
         makeApiResponse({ daily_cost: 5.0, daily_margin_cost: 0, monthly_cost: null, monthly_margin_cost: null }),
-        makeApiResponse({ model: "claude-3", daily_cost: 10.0, daily_margin_cost: 0, monthly_cost: null, monthly_margin_cost: null }),
+        makeApiResponse({
+          model: "claude-3",
+          daily_cost: 10.0,
+          daily_margin_cost: 0,
+          monthly_cost: null,
+          monthly_margin_cost: null,
+        }),
       ];
 
-      vi.spyOn(global, "fetch").mockImplementation(async () => ({
-        ok: true,
-        json: async () => responses[callIndex++],
-      } as Response));
+      vi.spyOn(global, "fetch").mockImplementation(
+        async () =>
+          ({
+            ok: true,
+            json: async () => responses[callIndex++],
+          }) as Response,
+      );
 
       const { result } = renderHook(() => useMultiCostEstimate("token123"));
 

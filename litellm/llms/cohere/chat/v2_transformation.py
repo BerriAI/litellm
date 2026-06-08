@@ -120,6 +120,7 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             "stream",
             "temperature",
             "max_tokens",
+            "max_completion_tokens",
             "top_p",
             "frequency_penalty",
             "presence_penalty",
@@ -143,7 +144,12 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
                 optional_params["stream"] = value
             if param == "temperature":
                 optional_params["temperature"] = value
-            if param == "max_tokens":
+            if (
+                param == "max_tokens"
+                and "max_completion_tokens" not in non_default_params
+            ):
+                optional_params["max_tokens"] = value
+            if param == "max_completion_tokens":
                 optional_params["max_tokens"] = value
             if param == "n":
                 optional_params["num_generations"] = value

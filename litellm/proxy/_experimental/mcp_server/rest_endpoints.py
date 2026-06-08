@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 from datetime import datetime
 from typing import (
@@ -13,6 +14,7 @@ from typing import (
     Union,
 )
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
@@ -20,7 +22,10 @@ from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthErr
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
-from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
+from litellm.proxy._experimental.mcp_server.utils import (
+    MCPMissingUserEnvVarsError,
+    merge_mcp_headers,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -40,6 +45,28 @@ router = APIRouter(
     prefix="/mcp-rest",
     tags=["mcp"],
 )
+
+
+def _connection_error_message(exc: BaseException) -> str:
+    if isinstance(exc, httpx.LocalProtocolError):
+        return (
+            "Failed to connect to MCP server: a request header is malformed. "
+            "Check static headers for leading/trailing spaces or illegal characters."
+        )
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return (
+            "Failed to connect to MCP server: the server is unreachable. "
+            "Check the URL and that the server is running."
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return "Failed to connect to MCP server: the connection timed out."
+    if isinstance(exc, httpx.HTTPStatusError):
+        return (
+            f"Failed to connect to MCP server: it returned HTTP "
+            f"{exc.response.status_code}."
+        )
+    return "Failed to connect to MCP server. Check proxy logs for details."
+
 
 if MCP_AVAILABLE:
     from mcp.types import Tool as MCPTool
@@ -119,9 +146,10 @@ if MCP_AVAILABLE:
         try:
             from litellm.proxy._experimental.mcp_server.db import (
                 get_user_oauth_credential,
-                is_oauth_credential_expired,
+                resolve_valid_user_oauth_token,
             )
 
+            prisma_client = None
             if prefetched_creds is not None:
                 cred = prefetched_creds.get(server_id)
             else:
@@ -133,13 +161,13 @@ if MCP_AVAILABLE:
                 cred = await get_user_oauth_credential(
                     prisma_client, user_id, server_id
                 )
+            cred = await resolve_valid_user_oauth_token(
+                user_id=user_id,
+                server=server,
+                cred=cred,
+                prisma_client=prisma_client,
+            )
             if cred and cred.get("access_token"):
-                if is_oauth_credential_expired(cred):
-                    verbose_logger.debug(
-                        f"_get_user_oauth_extra_headers: token expired for "
-                        f"user={user_id} server={server_id}"
-                    )
-                    return None
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception as e:
             verbose_logger.warning(
@@ -812,6 +840,23 @@ if MCP_AVAILABLE:
                 requested_server_id=canonical_server_id,
             )
             return result
+        except MCPMissingUserEnvVarsError as e:
+            verbose_logger.info(
+                "MCP tool call missing per-user env vars: server_id=%s missing=%s",
+                e.server_id,
+                e.missing,
+            )
+            raise HTTPException(
+                status_code=412,
+                detail={
+                    "error": "missing_user_env_vars",
+                    "message": str(e),
+                    "server_id": e.server_id,
+                    "server_name": e.server_name,
+                    "missing": e.missing,
+                    "setup_url": e.setup_url,
+                },
+            )
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(
@@ -961,14 +1006,14 @@ if MCP_AVAILABLE:
 
             return await operation(client)
 
-        except (KeyboardInterrupt, SystemExit):
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except BaseException as e:
             verbose_logger.error("Error in MCP operation: %s", e, exc_info=True)
             return {
                 "status": "error",
                 "error": True,
-                "message": "Failed to connect to MCP server. Check proxy logs for details.",
+                "message": _connection_error_message(e),
             }
 
     async def _preview_openapi_tools(spec_path: str) -> dict:

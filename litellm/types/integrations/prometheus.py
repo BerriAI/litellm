@@ -115,6 +115,8 @@ class ValidationResults:
 REQUESTED_MODEL = "requested_model"
 EXCEPTION_STATUS = "exception_status"
 EXCEPTION_CLASS = "exception_class"
+RATE_LIMIT_CATEGORY = "rate_limit_category"
+RATE_LIMIT_TYPE = "rate_limit_type"
 STATUS_CODE = "status_code"
 EXCEPTION_LABELS = [EXCEPTION_STATUS, EXCEPTION_CLASS]
 LATENCY_BUCKETS = (
@@ -174,6 +176,8 @@ class UserAPIKeyLabelNames(Enum):
     API_PROVIDER = "api_provider"
     EXCEPTION_STATUS = EXCEPTION_STATUS
     EXCEPTION_CLASS = EXCEPTION_CLASS
+    RATE_LIMIT_CATEGORY = RATE_LIMIT_CATEGORY
+    RATE_LIMIT_TYPE = RATE_LIMIT_TYPE
     STATUS_CODE = "status_code"
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
@@ -343,6 +347,10 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
+        # ``rate_limit_category`` / ``rate_limit_type`` are appended in
+        # ``get_labels()`` when ``litellm.prometheus_emit_rate_limit_labels``
+        # is True. Kept opt-in so existing dashboards keyed on this metric's
+        # historical label set keep matching after upgrade.
         UserAPIKeyLabelNames.ROUTE.value,
         UserAPIKeyLabelNames.CLIENT_IP.value,
         UserAPIKeyLabelNames.USER_AGENT.value,
@@ -745,6 +753,25 @@ class PrometheusMetricLabels:
         ):
             custom_labels.append(UserAPIKeyLabelNames.STREAM.value)
 
+        # Conditionally add unified rate-limit labels to
+        # litellm_proxy_failed_requests_metric. Off by default so the metric's
+        # historical label set is preserved across upgrade; enable via
+        # ``litellm.prometheus_emit_rate_limit_labels`` once downstream
+        # dashboards include the new labels in their matchers / aggregations.
+        if (
+            label_name == "litellm_proxy_failed_requests_metric"
+            and litellm.prometheus_emit_rate_limit_labels is True
+        ):
+            for _rate_limit_label in (
+                UserAPIKeyLabelNames.RATE_LIMIT_CATEGORY.value,
+                UserAPIKeyLabelNames.RATE_LIMIT_TYPE.value,
+            ):
+                if (
+                    _rate_limit_label not in default_labels
+                    and _rate_limit_label not in custom_labels
+                ):
+                    custom_labels.append(_rate_limit_label)
+
         _user_budget_metrics = {
             "litellm_remaining_user_budget_metric",
             "litellm_user_max_budget_metric",
@@ -807,6 +834,8 @@ class UserAPIKeyLabelValues:
     api_provider: Optional[str] = None
     exception_status: Optional[str] = None
     exception_class: Optional[str] = None
+    rate_limit_category: Optional[str] = None
+    rate_limit_type: Optional[str] = None
     status_code: Optional[str] = None
     fallback_model: Optional[str] = None
     route: Optional[str] = None

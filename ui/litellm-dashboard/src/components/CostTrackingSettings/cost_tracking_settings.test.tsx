@@ -71,7 +71,7 @@ describe("CostTrackingSettings", () => {
 
   it("should return nothing when accessToken is null", () => {
     const { container } = renderWithProviders(
-      <CostTrackingSettings userID="user-1" userRole="proxy_admin" accessToken={null} />
+      <CostTrackingSettings userID="user-1" userRole="proxy_admin" accessToken={null} />,
     );
     expect(container.firstChild).toBeNull();
   });
@@ -103,31 +103,23 @@ describe("CostTrackingSettings", () => {
   });
 
   it("should not show Provider Discounts section for a non-admin role", () => {
-    renderWithProviders(
-      <CostTrackingSettings userID="user-1" userRole="internal_user" accessToken="test-token" />
-    );
+    renderWithProviders(<CostTrackingSettings userID="user-1" userRole="internal_user" accessToken="test-token" />);
     expect(screen.queryByText("Provider Discounts")).not.toBeInTheDocument();
   });
 
   it("should not show Fee/Price Margin section for a non-admin role", () => {
-    renderWithProviders(
-      <CostTrackingSettings userID="user-1" userRole="internal_user" accessToken="test-token" />
-    );
+    renderWithProviders(<CostTrackingSettings userID="user-1" userRole="internal_user" accessToken="test-token" />);
     expect(screen.queryByText("Fee/Price Margin")).not.toBeInTheDocument();
   });
 
   it("should show Provider Discounts for the 'Admin' role as well", () => {
-    renderWithProviders(
-      <CostTrackingSettings userID="user-1" userRole="Admin" accessToken="test-token" />
-    );
+    renderWithProviders(<CostTrackingSettings userID="user-1" userRole="Admin" accessToken="test-token" />);
     expect(screen.getByText("Provider Discounts")).toBeInTheDocument();
   });
 
   it("should show the subtitle describing discount/margin configuration", () => {
     renderWithProviders(<CostTrackingSettings {...ADMIN_PROPS} />);
-    expect(
-      screen.getByText(/configure cost discounts and margins/i)
-    ).toBeInTheDocument();
+    expect(screen.getByText(/configure cost discounts and margins/i)).toBeInTheDocument();
   });
 
   describe("Add Provider Discount modal", () => {
@@ -144,9 +136,7 @@ describe("CostTrackingSettings", () => {
       const addButton = await screen.findByRole("button", { name: /add provider discount/i });
       await user.click(addButton);
 
-      expect(
-        await screen.findByText("Add Provider Discount", { selector: "h2" })
-      ).toBeInTheDocument();
+      expect(await screen.findByText("Add Provider Discount", { selector: "h2" })).toBeInTheDocument();
     });
   });
 
@@ -163,9 +153,7 @@ describe("CostTrackingSettings", () => {
       const addButton = await screen.findByRole("button", { name: /add provider margin/i });
       await user.click(addButton);
 
-      expect(
-        await screen.findByText("Add Provider Margin", { selector: "h2" })
-      ).toBeInTheDocument();
+      expect(await screen.findByText("Add Provider Margin", { selector: "h2" })).toBeInTheDocument();
     });
   });
 
@@ -179,9 +167,7 @@ describe("CostTrackingSettings", () => {
         await userEvent.setup().click(accordionHeader);
       }
 
-      expect(
-        await screen.findByText(/no provider discounts configured/i)
-      ).toBeInTheDocument();
+      expect(await screen.findByText(/no provider discounts configured/i)).toBeInTheDocument();
     });
 
     it("should show the empty state message when no margin config is loaded", async () => {
@@ -193,9 +179,7 @@ describe("CostTrackingSettings", () => {
         await userEvent.setup().click(accordionHeader);
       }
 
-      expect(
-        await screen.findByText(/no provider margins configured/i)
-      ).toBeInTheDocument();
+      expect(await screen.findByText(/no provider margins configured/i)).toBeInTheDocument();
     });
   });
 });

@@ -209,11 +209,10 @@ describe("UserInfoView", () => {
     await user.click(deleteConfirmButton);
 
     await waitFor(() => {
-      expect(mockTeamMemberDeleteCall).toHaveBeenCalledWith(
-        "test-token",
-        "team-1",
-        { role: "user", user_id: "user-123" }
-      );
+      expect(mockTeamMemberDeleteCall).toHaveBeenCalledWith("test-token", "team-1", {
+        role: "user",
+        user_id: "user-123",
+      });
     });
   });
 });

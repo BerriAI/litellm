@@ -1,9 +1,5 @@
 import { test, expect } from "@playwright/test";
-import {
-  E2E_TEAM_CRUD_ID,
-  E2E_VIEWER_KEY_ALIAS,
-  INTERNAL_VIEWER_STORAGE_PATH,
-} from "../../constants";
+import { E2E_TEAM_CRUD_ID, E2E_VIEWER_KEY_ALIAS, INTERNAL_VIEWER_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 

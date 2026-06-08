@@ -246,6 +246,38 @@ async def test__transform_request_body_image_config_with_image_size():
     assert rb["generationConfig"]["imageConfig"]["imageSize"] == "4K"
 
 
+def test__transform_request_body_google_maps_json_schema_uses_response_format():
+    """googleMaps + JSON schema must use responseFormat, not response_mime_type."""
+    messages = [{"role": "user", "content": "Find restaurants in Mumbai"}]
+    schema = {
+        "type": "object",
+        "properties": {"places": {"type": "array"}},
+        "required": ["places"],
+    }
+    optional_params = {
+        "tools": [{"googleMaps": {}}],
+        "response_mime_type": "application/json",
+        "response_json_schema": schema,
+    }
+    transform_request_params = {
+        "messages": messages,
+        "model": "gemini/gemini-3.1-flash-lite",
+        "optional_params": optional_params,
+        "custom_llm_provider": "gemini",
+        "litellm_params": {},
+        "cached_content": None,
+    }
+
+    rb: RequestBody = transformation._transform_request_body(**transform_request_params)
+
+    gen = rb["generationConfig"]
+    assert "responseFormat" in gen
+    assert gen["responseFormat"]["text"]["mimeType"] == "APPLICATION_JSON"
+    assert gen["responseFormat"]["text"]["schema"] == schema
+    assert "response_mime_type" not in gen
+    assert "response_json_schema" not in gen
+
+
 def test_map_function_google_search_snake_case():
     """
     Test that google_search tool (snake_case) is properly mapped to googleSearch.

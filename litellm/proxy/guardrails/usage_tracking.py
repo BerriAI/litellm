@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.table_repositories import (
+    DailyGuardrailMetricsRepository,
+    SpendLogGuardrailIndexRepository,
+)
 
 
 def _guardrail_status_to_action(status: Optional[str]) -> str:
@@ -132,7 +136,7 @@ async def process_spend_logs_guardrail_usage(
                     }
                 )
             try:
-                await prisma_client.db.litellm_spendlogguardrailindex.create_many(
+                await SpendLogGuardrailIndexRepository(prisma_client).table.create_many(
                     data=index_data,
                     skip_duplicates=True,
                 )
@@ -146,7 +150,7 @@ async def process_spend_logs_guardrail_usage(
             n = int(agg["requests_evaluated"])
             if n == 0:
                 continue
-            await prisma_client.db.litellm_dailyguardrailmetrics.upsert(
+            await DailyGuardrailMetricsRepository(prisma_client).table.upsert(
                 where={
                     "guardrail_id_date": {
                         "guardrail_id": guardrail_id,

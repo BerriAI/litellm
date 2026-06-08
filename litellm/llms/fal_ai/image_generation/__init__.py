@@ -7,6 +7,7 @@ from .flux_pro_v11_transformation import FalAIFluxProV11Config
 from .flux_pro_v11_ultra_transformation import FalAIFluxProV11UltraConfig
 from .flux_schnell_transformation import FalAIFluxSchnellConfig
 from .imagen4_transformation import FalAIImagen4Config
+from .nano_banana_transformation import FalAINanoBananaConfig
 from .recraft_v3_transformation import FalAIRecraftV3Config
 from .ideogram_v3_transformation import FalAIIdeogramV3Config
 from .stable_diffusion_transformation import FalAIStableDiffusionConfig
@@ -20,6 +21,7 @@ __all__ = [
     "FalAIBaseConfig",
     "FalAIImageGenerationConfig",
     "FalAIImagen4Config",
+    "FalAINanoBananaConfig",
     "FalAIRecraftV3Config",
     "FalAIBriaConfig",
     "FalAIFluxProV11Config",
@@ -45,7 +47,9 @@ def get_fal_ai_image_generation_config(model: str) -> BaseImageGenerationConfig:
     model_lower = model.lower()
 
     # Map model names to their corresponding configuration classes
-    if "imagen4" in model_lower or "imagen-4" in model_lower:
+    if "nano-banana" in model_lower or "gemini-25-flash-image" in model_lower:
+        return FalAINanoBananaConfig()
+    elif "imagen4" in model_lower or "imagen-4" in model_lower:
         return FalAIImagen4Config()
     elif "recraft" in model_lower:
         return FalAIRecraftV3Config()

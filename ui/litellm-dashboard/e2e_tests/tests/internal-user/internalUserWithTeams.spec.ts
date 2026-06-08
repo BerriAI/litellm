@@ -1,9 +1,5 @@
 import { test, expect } from "@playwright/test";
-import {
-  INTERNAL_USER_STORAGE_PATH,
-  E2E_TEAM_CRUD_ALIAS,
-  E2E_TEAM_ORG_ALIAS,
-} from "../../constants";
+import { INTERNAL_USER_STORAGE_PATH, E2E_TEAM_CRUD_ALIAS, E2E_TEAM_ORG_ALIAS } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 

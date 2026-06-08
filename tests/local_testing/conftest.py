@@ -57,13 +57,10 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
 # blacklisting was masking valid cache opportunities.
 
 # Files where VCR replay breaks the test:
-# - ``test_assistants.py``: polls fresh per-session run IDs that no cassette
-#   can match, so every CI run re-records and the suite times out.
 # - ``test_router_caching.py``: asserts upstream returns a *new* id per call,
 #   which a deterministic cassette replay violates.
 _VCR_INCOMPATIBLE_FILES = frozenset(
     {
-        "test_assistants.py",
         "test_router_caching.py",
     }
 )

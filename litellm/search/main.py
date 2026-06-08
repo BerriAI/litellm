@@ -283,6 +283,7 @@ def search(
         complete_url = search_provider_config.get_complete_url(
             api_base=api_base,
             optional_params=optional_params,
+            api_key=api_key,
         )
 
         # Pre Call logging
