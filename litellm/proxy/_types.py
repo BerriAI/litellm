@@ -2539,6 +2539,17 @@ class UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
         )
 
+    def to_identity_context(self):
+        from litellm.identity.adapter import user_api_key_auth_to_identity_context
+
+        return user_api_key_auth_to_identity_context(self)
+
+    @classmethod
+    def from_identity_context(cls, ctx) -> "UserAPIKeyAuth":
+        from litellm.identity.adapter import identity_context_to_user_api_key_auth
+
+        return identity_context_to_user_api_key_auth(ctx)
+
 
 def user_api_key_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
     """Return True if the caller's role grants unscoped read access to all
