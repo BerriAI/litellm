@@ -128,6 +128,30 @@ def _redact_vertex_provider_metadata(obj: Any) -> None:
             hidden_params.pop(field, None)
 
 
+def _redact_vertex_provider_metadata_from_litellm_params(
+    model_call_details: dict,
+) -> None:
+    """
+    Scrub Vertex provider metadata copied into litellm_params metadata.
+
+    success_handler() merges response._hidden_params into
+    litellm_params.metadata['hidden_params'] before perform_redaction() runs.
+    """
+    litellm_params = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        hidden_params = metadata.get("hidden_params")
+        if not isinstance(hidden_params, dict):
+            continue
+        for field in VERTEX_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
+
+
 def _redact_standard_logging_object(model_call_details: dict):
     """Redact messages and response inside standard_logging_object if present."""
     standard_logging_object = model_call_details.get("standard_logging_object")
@@ -194,6 +218,7 @@ def perform_redaction(model_call_details: dict, result):
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
     _redact_standard_logging_object(model_call_details)
+    _redact_vertex_provider_metadata_from_litellm_params(model_call_details)
 
     # Redact streaming response
     if (
