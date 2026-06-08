@@ -3252,40 +3252,37 @@ class PrismaClient:
         self, sql_query: str, *args
     ) -> Optional[dict]:
         """
-        Execute a query with automatic fallback for PostgreSQL cached plan errors.
+        Execute a query, recovering once from PostgreSQL's "cached plan must not
+        change result type" error.
 
-        This handles the "cached plan must not change result type" error that occurs
-        during rolling deployments when schema changes are applied while old pods
-        still have cached query plans expecting the old schema.
+        That error surfaces during rolling deployments when a schema change
+        invalidates the prepared-statement plans that pooled connections still
+        hold. We clear stale prepared statements with DEALLOCATE ALL, then retry
+        the identical query exactly once.
 
-        Args:
-            sql_query: SQL query string to execute
-
-        Returns:
-            Query result or None
-
-        Raises:
-            Original exception if not a cached plan error
+        The retry must reuse the original query byte-for-byte. Mutating the SQL
+        (e.g. injecting a unique comment) defeats PostgreSQL's plan cache, forcing
+        a fresh plan on every request and pegging the database CPU.
         """
         try:
             return await self.db.query_first(sql_query, *args)
         except Exception as e:
-            error_str = str(e)
-            if "cached plan must not change result type" in error_str:
-                # Force PostgreSQL to re-plan by invalidating the cache
-                # Add a unique comment to make the query different
-                sql_query_retry = sql_query.replace(
-                    "SELECT",
-                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */",
-                )
-                verbose_proxy_logger.warning(
-                    "PostgreSQL cached plan error detected for token lookup, "
-                    "retrying with fresh plan. This may occur during rolling deployments "
-                    "when schema changes are applied."
-                )
-                return await self.db.query_first(sql_query_retry, *args)
-            else:
+            if "cached plan must not change result type" not in str(e):
                 raise
+            verbose_proxy_logger.warning(
+                "PostgreSQL cached plan error detected for token lookup; "
+                "clearing prepared statements and retrying with the same query. "
+                "This may occur during rolling deployments when schema changes "
+                "are applied."
+            )
+            try:
+                await self.db.execute_raw("DEALLOCATE ALL")
+            except Exception as dealloc_error:
+                verbose_proxy_logger.debug(
+                    "DEALLOCATE ALL after cached plan error failed: %s",
+                    dealloc_error,
+                )
+            return await self.db.query_first(sql_query, *args)
 
     @backoff.on_exception(
         backoff.expo,
