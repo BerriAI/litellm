@@ -94,7 +94,10 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                         )
                         return
                 except ImportError:
-                    pass
+                    verbose_proxy_logger.warning(
+                        "MaxBudgetLimiter: ImportError when checking zero-cost model; "
+                        "skipping exemption and enforcing budget limit."
+                    )
 
                 raise ProxyRateLimitError(
                     detail="Max budget limit reached.",
