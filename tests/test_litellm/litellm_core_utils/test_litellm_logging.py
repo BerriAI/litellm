@@ -2529,6 +2529,92 @@ def test_get_assembled_streaming_response_returns_none_for_non_streaming_text_co
     assert assembled is None
 
 
+def test_get_assembled_streaming_response_dict_response_with_dict_usage_does_not_raise():
+    """
+    Regression for #29913.
+
+    Streaming `/v1/responses` builds a `ResponseCompletedEvent` whose `.response`
+    field — typed `ResponsesAPIResponse` but `extra="allow"` — is populated with a
+    plain dict at runtime. Reading `result.response.usage` then raised
+    `AttributeError: 'dict' object has no attribute 'usage'` and the spend log
+    silently never landed. The function must now read `usage` via dict-key when
+    `.response` is a dict, and return the dict unchanged.
+    """
+    import datetime
+
+    from litellm.types.llms.openai import (
+        ResponseCompletedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    logging_obj = _make_logging_obj(stream=True)
+    response_dict = {
+        "id": "resp-1",
+        "created_at": 0,
+        "usage": {"input_tokens": 3, "output_tokens": 5, "total_tokens": 8},
+    }
+    # streaming-assembly stores a dict in `.response` via model_construct (bypass
+    # validation) — repro the runtime shape that triggered #29913.
+    event = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=response_dict,
+    )
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert assembled is response_dict
+    assert assembled["usage"] == {
+        "input_tokens": 3,
+        "output_tokens": 5,
+        "total_tokens": 8,
+    }
+
+
+def test_get_assembled_streaming_response_dict_response_with_responseapiusage_writes_back():
+    """
+    When `.response` is a dict but `usage` is still a `ResponseAPIUsage` instance,
+    the transformed usage must be written back into the dict (not via setattr,
+    which would fail on a plain dict).
+    """
+    import datetime
+
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseCompletedEvent,
+        ResponsesAPIStreamEvents,
+    )
+
+    logging_obj = _make_logging_obj(stream=True)
+    usage = ResponseAPIUsage(input_tokens=3, output_tokens=5, total_tokens=8)
+    response_dict = {"id": "resp-1", "created_at": 0, "usage": usage}
+    # streaming-assembly stores a dict in `.response` via model_construct (bypass
+    # validation) — repro the runtime shape that triggered #29913.
+    event = ResponseCompletedEvent.model_construct(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=response_dict,
+    )
+
+    assembled = logging_obj._get_assembled_streaming_response(
+        result=event,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        is_async=True,
+        streaming_chunks=[],
+    )
+
+    assert assembled is response_dict
+    assert isinstance(response_dict["usage"], dict)
+    assert response_dict["usage"]["prompt_tokens"] == 3
+    assert response_dict["usage"]["completion_tokens"] == 5
+    assert response_dict["usage"]["total_tokens"] == 8
+
+
 @pytest.mark.asyncio
 async def test_non_streaming_computes_standard_logging_object_once():
     """
