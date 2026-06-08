@@ -3,7 +3,7 @@ import json
 import os
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union, cast
 
 import httpx
 from httpx import Headers, Response
@@ -22,9 +22,13 @@ from litellm.litellm_core_utils.cloud_storage_security import (
     validate_managed_cloud_file_id,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    extract_file_data,
+    extract_file_metadata,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
+    BaseFileUploadStream,
     BaseFilesConfig,
     LiteLLMLoggingObj,
 )
@@ -44,8 +48,9 @@ from litellm.types.llms.openai import (
     OpenAIFileObject,
     PathLike,
 )
+from litellm.types.files import ResumableChunkedUploadConfig
 from litellm.types.llms.vertex_ai import GcsBucketResponse
-from litellm.types.utils import ExtractedFileData, LlmProviders, ModelResponse
+from litellm.types.utils import LlmProviders, ModelResponse
 
 from ..common_utils import VertexAIError
 from ..vertex_llm_base import VertexBase
@@ -137,42 +142,197 @@ def _get_litellm_batch_custom_id_from_labels(labels: Dict[str, Any]) -> str:
     return str(labels.get("litellm_custom_id", "unknown"))
 
 
-def _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
-    openai_jsonl_content: List[Dict[str, Any]],
+def _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+    openai_entry: Dict[str, Any],
     map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
-) -> List[Dict[str, Any]]:
+) -> Dict[str, Any]:
     """
-    Transforms OpenAI JSONL batch entries to Vertex AI JSONL lines.
+    Transforms a single OpenAI JSONL batch entry into its Vertex wrapped request.
 
     jsonl body for vertex is {"request": <request_body>}
     Example Vertex jsonl
     {"request":{"contents": [{"role": "user", "parts": [{"text": "What is the relation between the following video and image samples?"}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/animals.mp4", "mimeType": "video/mp4"}}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/image/cricket.jpeg", "mimeType": "image/jpeg"}}]}]}}
-    {"request":{"contents": [{"role": "user", "parts": [{"text": "Describe what is happening in this video."}, {"fileData": {"fileUri": "gs://cloud-samples-data/generative-ai/video/another_video.mov", "mimeType": "video/mov"}}]}]}}
+    """
+    openai_request_body = openai_entry.get("body") or {}
+    vertex_request_body = _transform_request_body(
+        messages=openai_request_body.get("messages", []),
+        model=openai_request_body.get("model", ""),
+        optional_params=map_openai_to_vertex_params(openai_request_body),
+        custom_llm_provider="vertex_ai",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    custom_id = openai_entry.get("custom_id")
+    if custom_id is not None:
+        if "labels" not in vertex_request_body:
+            vertex_request_body["labels"] = {}
+        _set_litellm_batch_custom_id_labels(vertex_request_body["labels"], custom_id)
+
+    return {"request": vertex_request_body}
+
+
+def _openai_batch_jsonl_entries_to_vertex_wrapped_requests(
+    openai_jsonl_content: List[Dict[str, Any]],
+    map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    return [
+        _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+            entry, map_openai_to_vertex_params
+        )
+        for entry in openai_jsonl_content
+    ]
+
+
+def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
+    """
+    Yield non-empty JSONL lines one at a time without materializing the whole
+    payload, so peak memory stays bounded regardless of payload size. Mirrors
+    ``str.splitlines()`` + ``line.strip()`` for ``\\n`` / ``\\r\\n`` delimited
+    JSONL.
+    """
+    content: Any = openai_file_content
+    if isinstance(content, tuple):
+        content = content[1]
+
+    if isinstance(content, PathLike):
+        with open(str(content), "rb") as handle:
+            for raw in handle:
+                line = raw.decode("utf-8").strip()
+                if line:
+                    yield line
+        return
+
+    if isinstance(content, (bytes, bytearray)):
+        newline = ord("\n")
+        start, length = 0, len(content)
+        while start < length:
+            idx = content.find(newline, start)
+            if idx == -1:
+                chunk, start = content[start:], length
+            else:
+                chunk, start = content[start:idx], idx + 1
+            line = chunk.decode("utf-8").strip()
+            if line:
+                yield line
+        return
+
+    if isinstance(content, str):
+        str_start, str_length = 0, len(content)
+        while str_start < str_length:
+            str_idx = content.find("\n", str_start)
+            if str_idx == -1:
+                str_chunk, str_start = content[str_start:], str_length
+            else:
+                str_chunk, str_start = content[str_start:str_idx], str_idx + 1
+            str_line = str_chunk.strip()
+            if str_line:
+                yield str_line
+        return
+
+    if hasattr(content, "read"):
+        # The handle is read twice per upload (first-row probe for the GCS
+        # object name, then the body stream), so it must rewind to 0. A
+        # non-seekable handle would silently resume mid-stream and drop the
+        # already-consumed first row, so reject it loudly instead.
+        seek = getattr(content, "seek", None)
+        if seek is None:
+            raise ValueError(
+                "Batch upload file handle must be seekable; got a non-seekable "
+                "stream. Pass bytes, a path, or a seekable handle."
+            )
+        try:
+            seek(0)
+        except (OSError, ValueError) as e:
+            raise ValueError(
+                "Batch upload file handle must be seekable so it can be re-read "
+                "for the GCS object name and the upload body."
+            ) from e
+        for raw in content:
+            line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
+            line = line.strip()
+            if line:
+                yield line
+        return
+
+    raise ValueError("Unsupported file content type")
+
+
+def _iter_openai_jsonl_entries(
+    openai_file_content: FileTypes,
+) -> Iterator[Dict[str, Any]]:
+    for line in _iter_openai_jsonl_lines(openai_file_content):
+        yield json.loads(line)
+
+
+def _stream_openai_jsonl_to_vertex(
+    openai_file_content: FileTypes,
+    map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+    as_bytes: bool,
+) -> Tuple[Union[str, bytes], Optional[Dict[str, Any]]]:
+    """
+    Stream the OpenAI -> Vertex JSONL transform entry-by-entry.
+
+    Returns the joined Vertex JSONL payload and the first parsed OpenAI entry,
+    so callers can derive the GCS object name without re-parsing. ``as_bytes``
+    returns bytes (the upload path ships them to httpx without a str->bytes
+    re-encode); otherwise a str is returned.
+
+    The bytes path extends one ``bytearray`` in place instead of collecting a
+    list of encoded lines and joining, which would hold both the list and the
+    joined result at once and double peak output memory.
+    """
+    first_entry: Optional[Dict[str, Any]] = None
+    byte_buf = bytearray()
+    str_parts: List[str] = []
+    for entry in _iter_openai_jsonl_entries(openai_file_content):
+        if first_entry is None:
+            first_entry = entry
+        line = json.dumps(
+            _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+                entry, map_openai_to_vertex_params
+            )
+        )
+        if as_bytes:
+            if byte_buf:
+                byte_buf.extend(b"\n")
+            byte_buf.extend(line.encode("utf-8"))
+        else:
+            str_parts.append(line)
+
+    if as_bytes:
+        return bytes(byte_buf), first_entry
+    return "\n".join(str_parts), first_entry
+
+
+class _OpenAIToVertexBatchUploadStream(BaseFileUploadStream):
+    """Streams an OpenAI batch JSONL upload as Vertex-wrapped JSONL one row at a
+    time, so the transformed payload is never held in full.
+
+    The transform runs lazily as the HTTP client pulls each chunk, which keeps
+    peak memory at one row regardless of how large the batch file is.
     """
 
-    vertex_jsonl_content = []
-    for _openai_jsonl_content in openai_jsonl_content:
-        openai_request_body = _openai_jsonl_content.get("body") or {}
-        vertex_request_body = _transform_request_body(
-            messages=openai_request_body.get("messages", []),
-            model=openai_request_body.get("model", ""),
-            optional_params=map_openai_to_vertex_params(openai_request_body),
-            custom_llm_provider="vertex_ai",
-            litellm_params={},
-            cached_content=None,
-        )
+    def __init__(
+        self,
+        openai_file_content: FileTypes,
+        map_openai_to_vertex_params: Callable[[Dict[str, Any]], Dict[str, Any]],
+    ) -> None:
+        self._openai_file_content = openai_file_content
+        self._map_openai_to_vertex_params = map_openai_to_vertex_params
 
-        # Add custom_id as a label for correlation in batch outputs
-        custom_id = _openai_jsonl_content.get("custom_id")
-        if custom_id is not None:
-            if "labels" not in vertex_request_body:
-                vertex_request_body["labels"] = {}
-            _set_litellm_batch_custom_id_labels(
-                vertex_request_body["labels"], custom_id
+    def _iter_vertex_jsonl_chunks(self) -> Iterator[bytes]:
+        first = True
+        for entry in _iter_openai_jsonl_entries(self._openai_file_content):
+            wrapped = _openai_batch_jsonl_entry_to_vertex_wrapped_request(
+                entry, self._map_openai_to_vertex_params
             )
+            prefix = b"" if first else b"\n"
+            first = False
+            yield prefix + json.dumps(wrapped).encode("utf-8")
 
-        vertex_jsonl_content.append({"request": vertex_request_body})
-    return vertex_jsonl_content
+    def iter_bytes(self) -> Iterator[bytes]:
+        return self._iter_vertex_jsonl_chunks()
 
 
 class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
@@ -208,43 +368,6 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
-        """
-        Helper to extract content from various OpenAI file types and return as string.
-
-        Handles:
-        - Direct content (str, bytes, IO[bytes])
-        - Tuple formats: (filename, content, [content_type], [headers])
-        - PathLike objects
-        """
-        content: Union[str, bytes] = b""
-        # Extract file content from tuple if necessary
-        if isinstance(openai_file_content, tuple):
-            # Take the second element which is always the file content
-            file_content = openai_file_content[1]
-        else:
-            file_content = openai_file_content
-
-        # Handle different file content types
-        if isinstance(file_content, str):
-            # String content can be used directly
-            content = file_content
-        elif isinstance(file_content, bytes):
-            # Bytes content can be decoded
-            content = file_content
-        elif isinstance(file_content, PathLike):  # PathLike
-            with open(str(file_content), "rb") as f:
-                content = f.read()
-        elif hasattr(file_content, "read"):  # IO[bytes]
-            # File-like objects need to be read
-            content = file_content.read()
-
-        # Ensure content is string
-        if isinstance(content, bytes):
-            content = content.decode("utf-8")
-
-        return content
-
     def _get_gcs_object_name_from_batch_jsonl(
         self,
         openai_jsonl_content: List[Dict[str, Any]],
@@ -261,32 +384,21 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         object_name = f"{VERTEX_AI_MANAGED_GCS_PREFIX}{safe_model_path}/{uuid.uuid4()}"
         return object_name
 
-    def get_object_name(
-        self, extracted_file_data: ExtractedFileData, purpose: str
-    ) -> str:
+    def get_object_name(self, file_data: FileTypes, purpose: str) -> str:
         """
-        Get the object name for the request
+        Get the object name for the request.
+
+        Reads only the first JSONL entry (streamed) for batch files, so a large
+        upload is never materialized just to derive the GCS object name.
         """
-        extracted_file_data_content = extracted_file_data.get("content")
-
-        if extracted_file_data_content is None:
-            raise ValueError("file content is required")
-
         if purpose == "batch":
-            ## 1. If jsonl, check if there's a model name
-            file_content = self._get_content_from_openai_file(
-                extracted_file_data_content
-            )
-
-            # Split into lines and parse each line as JSON
-            openai_jsonl_content = [
-                json.loads(line) for line in file_content.splitlines() if line.strip()
-            ]
-            if len(openai_jsonl_content) > 0:
-                return self._get_gcs_object_name_from_batch_jsonl(openai_jsonl_content)
+            ## 1. If jsonl, derive the object name from the first entry's model
+            first_entry = next(_iter_openai_jsonl_entries(file_data), None)
+            if first_entry is not None:
+                return self._get_gcs_object_name_from_batch_jsonl([first_entry])
 
         ## 2. If not jsonl, store under a server-generated managed object name
-        filename = extracted_file_data.get("filename")
+        filename, _ = extract_file_metadata(file_data)
         return build_managed_cloud_object_name(
             prefix=f"{VERTEX_AI_MANAGED_GCS_PREFIX}uploads/",
             filename=filename,
@@ -294,7 +406,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         )
 
     def _get_configured_bucket_name(self, litellm_params: Dict) -> str:
-        bucket_name = litellm_params.get("bucket_name") or os.getenv("GCS_BUCKET_NAME")
+        bucket_name = litellm_params.get("gcs_bucket_name") or os.getenv(
+            "GCS_BUCKET_NAME"
+        )
         if not bucket_name:
             raise ValueError("GCS bucket_name is required")
         return bucket_name
@@ -319,12 +433,21 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         if purpose is None:
             raise ValueError("purpose is required")
-        extracted_file_data = extract_file_data(file_data)
-        object_name = self.get_object_name(extracted_file_data, purpose)
+        _, content_type = extract_file_metadata(file_data)
+        object_name = self.get_object_name(file_data, purpose)
         if object_prefix:
             object_name = f"{object_prefix}/{object_name}"
         encoded_object_name = encode_gcs_object_name_for_url(object_name)
-        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType=media&name={encoded_object_name}"
+        # Batch jsonl is streamed via a resumable session (bounded memory on
+        # large uploads); everything else is a single simple-media upload.
+        upload_type = (
+            "resumable"
+            if FilesAPIUtils.is_batch_jsonl_request(
+                create_file_data=data, content_type=content_type
+            )
+            else "media"
+        )
+        endpoint = f"upload/storage/v1/b/{bucket_name}/o?uploadType={upload_type}&name={encoded_object_name}"
         api_base = api_base or "https://storage.googleapis.com"
         if not api_base:
             raise ValueError("api_base is required")
@@ -384,40 +507,34 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         """
         2 Cases:
         1. Handle basic file upload
-        2. Handle batch file upload (.jsonl)
+        2. Handle batch file upload (.jsonl), streamed to a GCS resumable
+           session so large uploads stay memory-bounded.
         """
         file_data = create_file_data.get("file")
         if file_data is None:
             raise ValueError("file is required")
-        extracted_file_data = extract_file_data(file_data)
-        extracted_file_data_content = extracted_file_data.get("content")
 
-        if extracted_file_data_content is None:
-            raise ValueError("file content is required")
-
-        if FilesAPIUtils.is_batch_jsonl_file(
+        _, content_type = extract_file_metadata(file_data)
+        if FilesAPIUtils.is_batch_jsonl_request(
             create_file_data=create_file_data,
-            extracted_file_data=extracted_file_data,
+            content_type=content_type,
         ):
-            ## 1. If jsonl, check if there's a model name
-            file_content = self._get_content_from_openai_file(
-                extracted_file_data_content
-            )
-
-            # Split into lines and parse each line as JSON
-            openai_jsonl_content = [
-                json.loads(line) for line in file_content.splitlines() if line.strip()
-            ]
-            vertex_jsonl_content = (
-                self._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                    openai_jsonl_content
+            return {
+                "resumable_chunked_upload": ResumableChunkedUploadConfig(
+                    body_stream=_OpenAIToVertexBatchUploadStream(
+                        file_data,
+                        self._map_openai_to_vertex_params,
+                    ),
+                    initiate_headers={
+                        "X-Upload-Content-Type": "application/json",
+                    },
                 )
-            )
-            return "\n".join(json.dumps(item) for item in vertex_jsonl_content)
-        elif isinstance(extracted_file_data_content, bytes):
+            }
+
+        extracted_file_data_content = extract_file_data(file_data).get("content")
+        if isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
-        else:
-            raise ValueError("Unsupported file content type")
+        raise ValueError("Unsupported file content type")
 
     def transform_create_file_response(
         self,
@@ -811,25 +928,16 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
 
         if openai_file_content is None:
             raise ValueError("contents of file are None")
-        # Read the content of the file
-        file_content = self._get_content_from_openai_file(openai_file_content)
 
-        # Split into lines and parse each line as JSON
-        openai_jsonl_content = [
-            json.loads(line) for line in file_content.splitlines() if line.strip()
-        ]
-        vertex_jsonl_content = (
-            self._transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
-                openai_jsonl_content
-            )
+        vertex_jsonl_string, first_entry = _stream_openai_jsonl_to_vertex(
+            openai_file_content,
+            self._map_openai_to_vertex_params,
+            as_bytes=False,
         )
-        vertex_jsonl_string = "\n".join(
-            json.dumps(item) for item in vertex_jsonl_content
-        )
-        object_name = self._get_gcs_object_name(
-            openai_jsonl_content=openai_jsonl_content
-        )
-        return vertex_jsonl_string, object_name
+        if first_entry is None:
+            raise ValueError("contents of file are empty")
+        object_name = self._get_gcs_object_name(openai_jsonl_content=[first_entry])
+        return cast(str, vertex_jsonl_string), object_name
 
     def _transform_openai_jsonl_content_to_vertex_ai_jsonl_content(
         self, openai_jsonl_content: List[Dict[str, Any]]
@@ -870,43 +978,6 @@ class VertexAIJsonlFilesTransformation(VertexGeminiConfig):
             drop_params=False,
         )
         return vertex_params
-
-    def _get_content_from_openai_file(self, openai_file_content: FileTypes) -> str:
-        """
-        Helper to extract content from various OpenAI file types and return as string.
-
-        Handles:
-        - Direct content (str, bytes, IO[bytes])
-        - Tuple formats: (filename, content, [content_type], [headers])
-        - PathLike objects
-        """
-        content: Union[str, bytes] = b""
-        # Extract file content from tuple if necessary
-        if isinstance(openai_file_content, tuple):
-            # Take the second element which is always the file content
-            file_content = openai_file_content[1]
-        else:
-            file_content = openai_file_content
-
-        # Handle different file content types
-        if isinstance(file_content, str):
-            # String content can be used directly
-            content = file_content
-        elif isinstance(file_content, bytes):
-            # Bytes content can be decoded
-            content = file_content
-        elif isinstance(file_content, PathLike):  # PathLike
-            with open(str(file_content), "rb") as f:
-                content = f.read()
-        elif hasattr(file_content, "read"):  # IO[bytes]
-            # File-like objects need to be read
-            content = file_content.read()
-
-        # Ensure content is string
-        if isinstance(content, bytes):
-            content = content.decode("utf-8")
-
-        return content
 
     def transform_gcs_bucket_response_to_openai_file_object(
         self, create_file_data: CreateFileRequest, gcs_upload_response: Dict[str, Any]

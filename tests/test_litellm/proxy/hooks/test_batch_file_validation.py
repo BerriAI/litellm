@@ -15,6 +15,16 @@ from fastapi import HTTPException
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
+def _models(file_content_as_dict):
+    """Distinct body.model values, mirroring how the rate limiter collects the
+    models from a streamed batch file before the access check."""
+    return [
+        entry["body"]["model"]
+        for entry in file_content_as_dict
+        if (entry.get("body") or {}).get("model")
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Token counter — covers all three batch payload shapes
 # ---------------------------------------------------------------------------
@@ -212,7 +222,7 @@ async def test_pre_call_rejects_unauthorized_model_in_batch_file():
         with pytest.raises(HTTPException) as exc:
             await rate_limiter._enforce_batch_file_model_access(
                 user_api_key_dict=user,
-                file_content_as_dict=file_dict,
+                models=_models(file_dict),
             )
 
     assert exc.value.status_code == 403
@@ -256,7 +266,7 @@ async def test_pre_call_allows_authorized_model_in_batch_file():
         # Should not raise
         await rate_limiter._enforce_batch_file_model_access(
             user_api_key_dict=user,
-            file_content_as_dict=file_dict,
+            models=_models(file_dict),
         )
 
 
@@ -277,9 +287,123 @@ async def test_pre_call_skips_check_when_no_models_present():
     # entirely.
     await rate_limiter._enforce_batch_file_model_access(
         user_api_key_dict=user,
-        file_content_as_dict=[],
+        models=_models([]),
     )
     await rate_limiter._enforce_batch_file_model_access(
         user_api_key_dict=user,
-        file_content_as_dict=[{"body": {}}],
+        models=_models([{"body": {}}]),
     )
+
+
+# Streaming input counting — peak memory must not scale with a full dict list
+# ---------------------------------------------------------------------------
+
+
+def _make_batch_input_bytes(n_rows: int, padding: int = 200) -> bytes:
+    import json as _json
+
+    pad = "x" * padding
+    rows = []
+    for i in range(n_rows):
+        rows.append(
+            _json.dumps(
+                {
+                    "custom_id": f"request-{i}",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "gpt-4o" if i % 2 else "gpt-3.5-turbo",
+                        "messages": [{"role": "user", "content": f"{pad} {i}"}],
+                    },
+                }
+            )
+        )
+    return ("\n".join(rows)).encode("utf-8")
+
+
+def test_iter_batch_input_entries_matches_dict_list():
+    from litellm.batches.batch_utils import (
+        _get_file_content_as_dictionary,
+        _iter_batch_input_entries,
+    )
+
+    raw = _make_batch_input_bytes(50)
+    streamed = list(_iter_batch_input_entries(raw))
+    assert streamed == _get_file_content_as_dictionary(raw)
+    assert streamed[0]["custom_id"] == "request-0"
+    # tolerant of blank lines and a missing trailing newline
+    assert list(_iter_batch_input_entries(raw + b"\n\n")) == streamed
+
+
+def test_streaming_count_peak_below_dict_list():
+    import gc
+    import tracemalloc
+
+    from litellm.batches.batch_utils import (
+        _get_file_content_as_dictionary,
+        _iter_batch_input_entries,
+    )
+
+    raw = _make_batch_input_bytes(8000)
+
+    def _measure(fn):
+        gc.collect()
+        tracemalloc.start()
+        try:
+            fn()
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return peak
+
+    def _stream():
+        count = 0
+        models: set = set()
+        for entry in _iter_batch_input_entries(raw):
+            count += 1
+            model = (entry.get("body") or {}).get("model")
+            if model:
+                models.add(model)
+        return count
+
+    def _build_list():
+        return len(_get_file_content_as_dictionary(raw))
+
+    stream_peak = _measure(_stream)
+    list_peak = _measure(_build_list)
+    assert stream_peak < list_peak * 0.5, (
+        f"streaming count peak {stream_peak} is not a clear win over the dict "
+        f"list {list_peak} (ratio {stream_peak / list_peak:.2f})"
+    )
+
+
+@pytest.mark.asyncio
+async def test_count_input_file_usage_streams_without_building_list():
+    """count_input_file_usage must count requests/tokens in one streaming pass.
+    Mocks the download; asserts the count is correct and that the dict-list
+    helper is never called (a revert to the list approach would call it)."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    raw = _make_batch_input_bytes(10)
+    fake_content = MagicMock()
+    fake_content.content = raw
+
+    with (
+        patch("litellm.afile_content", new=AsyncMock(return_value=fake_content)),
+        patch(
+            "litellm.batches.batch_utils._get_file_content_as_dictionary"
+        ) as mock_dict_list,
+    ):
+        usage = await rate_limiter.count_input_file_usage(
+            file_id="file-not-managed",
+            custom_llm_provider="openai",
+            user_api_key_dict=None,
+        )
+
+    assert usage.request_count == 10
+    assert usage.total_tokens > 0
+    mock_dict_list.assert_not_called()
