@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Tuple
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 def parse_jwt_scopes(claims: dict) -> Tuple[str, ...]:
