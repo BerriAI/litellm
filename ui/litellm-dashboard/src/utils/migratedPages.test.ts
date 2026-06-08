@@ -67,3 +67,18 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
 });
+
+describe("MIGRATED_PAGES workflows", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("routes workflows to the workflows path and back", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["workflows"]).toBe("workflows");
+    expect(legacyKeyForPathname("/ui/workflows")).toBe("workflows");
+    expect(legacyKeyForPathname("/ui/workflows/")).toBe("workflows");
+  });
+});
