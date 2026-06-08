@@ -1,4 +1,3 @@
-# All settings
 
 ```yaml
 environment_variables: {}
@@ -732,6 +731,8 @@ router_settings:
 | FOCUS_S3_ACCESS_KEY | AWS access key ID used by the Focus export S3 client.
 | FOCUS_S3_SECRET_KEY | AWS secret access key used by the Focus export S3 client.
 | FOCUS_S3_SESSION_TOKEN | AWS session token used by the Focus export S3 client (optional).
+| FOCUS_GCS_BUCKET_NAME | GCS bucket to upload Focus export files when using the GCS destination.
+| FOCUS_GCS_PATH_SERVICE_ACCOUNT | Path to a service account JSON key file for the Focus export GCS client. Falls back to Application Default Credentials if unset.
 | FUNCTION_DEFINITION_TOKEN_COUNT | Token count for function definitions. Default is 9
 | GALILEO_API_KEY | API key for Galileo Cloud (hosted). Used with the v2 spans API when `success_callback` includes `galileo`.
 | GALILEO_BASE_URL | Base URL for Galileo platform. For Galileo Cloud, use `https://api.galileo.ai`. For enterprise/self-hosted, replace `console` with `api` in your console URL.

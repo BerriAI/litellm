@@ -9,7 +9,7 @@ Interfaces, schema mappings, and configuration options may change as we iterate 
 Please treat this integration as a preview and report any issues or suggestions to help us stabilize and improve the workflow.
 :::
 
-LiteLLM can emit usage data in the [FinOps FOCUS format](https://focus.finops.org/focus-specification/v1-2/) and push artifacts (for example Parquet files) to destinations such as Amazon S3. This enables downstream cost-analysis tooling to ingest a standardised dataset directly from LiteLLM.
+LiteLLM can emit usage data in the [FinOps FOCUS format](https://focus.finops.org/focus-specification/v1-2/) and push artifacts (for example Parquet files) to destinations such as Amazon S3 or Google Cloud Storage. This enables downstream cost-analysis tooling to ingest a standardised dataset directly from LiteLLM.
 
 LiteLLM currently conforms to the FinOps FOCUS v1.2 specification when emitting this dataset.
 
@@ -17,10 +17,10 @@ LiteLLM currently conforms to the FinOps FOCUS v1.2 specification when emitting 
 
 | Property | Details |
 |----------|---------|
-| Destination | Export LiteLLM usage data in FOCUS format to managed storage (currently S3) |
+| Destination | Export LiteLLM usage data in FOCUS format to managed storage (S3, GCS) |
 | Callback name | `focus` |
 | Supported operations | Automatic scheduled export |
-| Data format | FOCUS Normalised Dataset (Parquet) |
+| Data format | FOCUS Normalised Dataset (Parquet or CSV) |
 
 ## Environment Variables
 
@@ -28,8 +28,8 @@ LiteLLM currently conforms to the FinOps FOCUS v1.2 specification when emitting 
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `FOCUS_PROVIDER` | No | Destination provider (defaults to `s3`). |
-| `FOCUS_FORMAT` | No | Output format (currently only `parquet`). |
+| `FOCUS_PROVIDER` | No | Destination provider. One of `s3`, `gcs`, `vantage`. Defaults to `s3`. |
+| `FOCUS_FORMAT` | No | Output format. One of `parquet`, `csv`. Defaults to `parquet`. |
 | `FOCUS_FREQUENCY` | No | Export cadence. Prefer `hourly` or `daily` for production; `interval` is intended for short test loops. Defaults to `hourly`. |
 | `FOCUS_CRON_OFFSET` | No | Minute offset used for hourly/daily cron triggers. Defaults to `5`. |
 | `FOCUS_INTERVAL_SECONDS` | No | Interval (seconds) when `FOCUS_FREQUENCY="interval"`. |
@@ -46,20 +46,45 @@ LiteLLM currently conforms to the FinOps FOCUS v1.2 specification when emitting 
 | `FOCUS_S3_SECRET_KEY` | Yes | AWS secret key for uploads. |
 | `FOCUS_S3_SESSION_TOKEN` | No | AWS session token if using temporary credentials. |
 
+### GCS destination
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `FOCUS_GCS_BUCKET_NAME` | Yes | Destination GCS bucket for exported files. |
+| `FOCUS_GCS_PATH_SERVICE_ACCOUNT` | No | Path to a service account JSON key file. Falls back to Application Default Credentials (ADC) if unset. |
+
 ## Setup via Config
 
 ### Configure environment variables
 
+<Tabs>
+<TabItem value="s3" label="S3">
+
 ```bash
 export FOCUS_PROVIDER="s3"
 export FOCUS_PREFIX="focus_exports"
-
-# S3 example
 export FOCUS_S3_BUCKET_NAME="my-litellm-focus-bucket"
 export FOCUS_S3_REGION_NAME="us-east-1"
 export FOCUS_S3_ACCESS_KEY="AKIA..."
 export FOCUS_S3_SECRET_KEY="..."
 ```
+
+</TabItem>
+<TabItem value="gcs" label="GCS">
+
+```bash
+export FOCUS_PROVIDER="gcs"
+export FOCUS_PREFIX="focus_exports"
+export FOCUS_GCS_BUCKET_NAME="my-litellm-focus-bucket"
+
+# Optional: path to service account JSON. Omit to use Application Default Credentials.
+export FOCUS_GCS_PATH_SERVICE_ACCOUNT="/path/to/service-account.json"
+```
+
+The service account (or ADC principal) needs the `storage.objects.create` permission on the destination bucket (`roles/storage.objectCreator` or broader).
+
+</TabItem>
+</Tabs>
 
 ### Update LiteLLM config
 
@@ -84,10 +109,8 @@ During boot LiteLLM registers the Focus logger and a background job that runs ac
 
 ## Planned Enhancements
 - Add "Setup on UI" flow alongside the current configuration-based setup.
-- Add GCS / Azure Blob to the Destination options.
-- Support CSV output alongside Parquet.
+- Add Azure Blob to the Destination options.
 
 ## Related Links
 
 - [Focus](https://focus.finops.org/)
-
