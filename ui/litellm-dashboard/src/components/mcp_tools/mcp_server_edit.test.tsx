@@ -727,3 +727,30 @@ describe("MCPServerEdit (tool list fetch)", () => {
     expect(networking.listMCPTools).not.toHaveBeenCalled();
   });
 });
+
+describe("MCPServerEdit (form resync)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: [], error: null });
+  });
+
+  it("repopulates the form when the server data arrives after mount", async () => {
+    const props = {
+      accessToken: "access-token",
+      onCancel: vi.fn(),
+      onSuccess: vi.fn(),
+      availableAccessGroups: [],
+    };
+
+    // Mount before the server is loaded (mirrors landing on the page mid OAuth return).
+    const { rerender } = render(<MCPServerEdit mcpServer={{ server_id: "" } as any} {...props} />);
+    expect(screen.queryByDisplayValue("https://example.com/mcp")).not.toBeInTheDocument();
+
+    // Server data arrives; the form must repopulate rather than staying blank.
+    rerender(<MCPServerEdit mcpServer={interactiveOAuthServer} {...props} />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("https://example.com/mcp")).toBeInTheDocument();
+    });
+  });
+});

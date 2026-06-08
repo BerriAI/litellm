@@ -217,6 +217,20 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvVars, initialEnvJson],
   );
 
+  // antd applies `initialValues` only at first mount. When the server loads after
+  // mount (e.g. returning from the OAuth redirect lands on Overview and the form
+  // mounts before the server data is ready), the form would stay blank. Re-sync it
+  // from the loaded server once per server_id so it always reflects the saved config;
+  // the OAuth-restore effect below then overlays any in-progress edits on top.
+  const syncedServerIdRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (!mcpServer.server_id || syncedServerIdRef.current === mcpServer.server_id) {
+      return;
+    }
+    syncedServerIdRef.current = mcpServer.server_id;
+    form.setFieldsValue(initialValues);
+  }, [mcpServer.server_id, initialValues, form]);
+
   // Initialize cost config from existing server data
   useEffect(() => {
     if (mcpServer.mcp_info?.mcp_server_cost_info) {
@@ -280,6 +294,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!pendingRestoredValues) {
       return;
     }
+    // Set transport first so transport-dependent fields render, then apply the rest
+    // on the re-run triggered by the transportType watch (without it the effect's
+    // deps never change and the second pass never runs, leaving fields blank).
     const transport = pendingRestoredValues.transport || mcpServer.transport;
     if (transport && transport !== form.getFieldValue("transport")) {
       form.setFieldsValue({ transport });
@@ -287,7 +304,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     form.setFieldsValue(pendingRestoredValues);
     setPendingRestoredValues(null);
-  }, [pendingRestoredValues, form, mcpServer.transport]);
+  }, [pendingRestoredValues, form, mcpServer.transport, transportType]);
 
   // Transform string array to object array for initial form values
   useEffect(() => {
