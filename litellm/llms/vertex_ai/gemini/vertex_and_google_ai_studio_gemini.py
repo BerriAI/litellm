@@ -2253,6 +2253,71 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             citation_metadata,
         )
 
+    _STREAM_METADATA_FIELDS = (
+        "vertex_ai_grounding_metadata",
+        "vertex_ai_url_context_metadata",
+        "vertex_ai_safety_ratings",
+        "vertex_ai_citation_metadata",
+    )
+
+    @staticmethod
+    def _get_stream_chunk_attr(chunk: Any, field_name: str) -> Any:
+        if isinstance(chunk, dict):
+            value = chunk.get(field_name)
+            if value is not None:
+                return value
+            model_extra = chunk.get("model_extra")
+            if isinstance(model_extra, dict):
+                return model_extra.get(field_name)
+            return None
+        return getattr(chunk, field_name, None)
+
+    @staticmethod
+    def _set_stream_metadata_on_response(
+        model_response: Any,
+        grounding_metadata: List[dict],
+        url_context_metadata: List[dict],
+        safety_ratings: List[dict],
+        citation_metadata: List[dict],
+    ) -> None:
+        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
+        if grounding_metadata:
+            model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+                grounding_metadata
+            )
+        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
+        if url_context_metadata:
+            model_response._hidden_params["vertex_ai_url_context_metadata"] = (
+                url_context_metadata
+            )
+        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
+        if safety_ratings:
+            model_response._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
+        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+        if citation_metadata:
+            model_response._hidden_params["vertex_ai_citation_metadata"] = (
+                citation_metadata
+            )
+
+    def apply_assembled_streaming_response_metadata(
+        self,
+        response: ModelResponse,
+        chunks: List[Any],
+    ) -> None:
+        for field_name in VertexGeminiConfig._STREAM_METADATA_FIELDS:
+            merged: List[Any] = []
+            for chunk in chunks:
+                value = VertexGeminiConfig._get_stream_chunk_attr(chunk, field_name)
+                if not value:
+                    continue
+                if isinstance(value, list):
+                    merged.extend(value)
+                else:
+                    merged.append(value)
+            if merged:
+                setattr(response, field_name, merged)
+                response._hidden_params[field_name] = merged
+
     @staticmethod
     def _convert_grounding_metadata_to_annotations(
         grounding_metadata: List[dict],
@@ -3385,18 +3450,13 @@ class ModelResponseIterator:
                 if choice.finish_reason == "stop":
                     choice.finish_reason = "tool_calls"
 
-        setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
-        model_response._hidden_params["vertex_ai_grounding_metadata"] = (
-            grounding_metadata
+        VertexGeminiConfig._set_stream_metadata_on_response(
+            model_response,
+            grounding_metadata,
+            url_context_metadata,
+            safety_ratings,
+            citation_metadata,
         )
-        setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
-        model_response._hidden_params["vertex_ai_url_context_metadata"] = (
-            url_context_metadata
-        )
-        setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
-        model_response._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
-        setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
-        model_response._hidden_params["vertex_ai_citation_metadata"] = citation_metadata
 
         return (
             grounding_metadata,

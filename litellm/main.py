@@ -7761,7 +7761,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                     "cost",
                     logging_obj._response_cost_calculator(result=response),
                 )
-            processor.propagate_vertex_ai_metadata_from_chunks(response, chunks)
+            processor.apply_provider_assembled_streaming_metadata(
+                response, chunks, logging_obj
+            )
             return response
 
         tool_call_chunks = [
@@ -7941,7 +7943,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                 usage, "cost", logging_obj._response_cost_calculator(result=response)
             )
 
-        processor.propagate_vertex_ai_metadata_from_chunks(response, chunks)
+        processor.apply_provider_assembled_streaming_metadata(
+            response, chunks, logging_obj
+        )
         return response
     except Exception as e:
         verbose_logger.exception(

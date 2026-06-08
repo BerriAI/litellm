@@ -32,14 +32,6 @@ if TYPE_CHECKING:
     )
 
 
-VERTEX_AI_STREAM_METADATA_FIELDS = (
-    "vertex_ai_grounding_metadata",
-    "vertex_ai_url_context_metadata",
-    "vertex_ai_safety_ratings",
-    "vertex_ai_citation_metadata",
-)
-
-
 class ChunkProcessor:
     def __init__(self, chunks: List, messages: Optional[list] = None):
         self.chunks = self._sort_chunks(chunks)
@@ -88,40 +80,53 @@ class ChunkProcessor:
         return model_response
 
     @staticmethod
-    def _get_chunk_attr(chunk: Any, field_name: str) -> Any:
-        if isinstance(chunk, dict):
-            value = chunk.get(field_name)
-            if value is not None:
-                return value
-            model_extra = chunk.get("model_extra")
-            if isinstance(model_extra, dict):
-                return model_extra.get(field_name)
-            return None
-        return getattr(chunk, field_name, None)
-
-    @staticmethod
-    def propagate_vertex_ai_metadata_from_chunks(
-        response: ModelResponse, chunks: List[Any]
+    def apply_provider_assembled_streaming_metadata(
+        response: ModelResponse,
+        chunks: List[Any],
+        logging_obj: Optional[Any] = None,
     ) -> None:
-        """
-        Merge Vertex AI metadata from streaming chunks into the assembled response.
+        if not chunks:
+            return
 
-        Gemini/Vertex streaming sets these fields on individual chunks but
-        stream_chunk_builder must propagate them for logging callbacks.
-        """
-        for field_name in VERTEX_AI_STREAM_METADATA_FIELDS:
-            merged: List[Any] = []
-            for chunk in chunks:
-                value = ChunkProcessor._get_chunk_attr(chunk, field_name)
-                if not value:
-                    continue
-                if isinstance(value, list):
-                    merged.extend(value)
-                else:
-                    merged.append(value)
-            if merged:
-                setattr(response, field_name, merged)
-                response._hidden_params[field_name] = merged
+        first_chunk = chunks[0]
+        model = (
+            first_chunk.get("model")
+            if isinstance(first_chunk, dict)
+            else getattr(first_chunk, "model", None)
+        )
+        if not model:
+            return
+
+        custom_llm_provider = None
+        if logging_obj is not None:
+            custom_llm_provider = logging_obj.model_call_details.get(
+                "custom_llm_provider"
+            )
+
+        try:
+            from litellm.litellm_core_utils.get_llm_provider_logic import (
+                get_llm_provider,
+            )
+            from litellm.types.utils import LlmProviders
+            from litellm.utils import ProviderConfigManager
+
+            if custom_llm_provider:
+                provider = LlmProviders(custom_llm_provider)
+            else:
+                _, provider_str, _, _ = get_llm_provider(model)
+                provider = LlmProviders(provider_str)
+
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model,
+                provider=provider,
+            )
+            if provider_config is not None:
+                provider_config.apply_assembled_streaming_response_metadata(
+                    response=response,
+                    chunks=chunks,
+                )
+        except Exception:
+            return
 
     @staticmethod
     def _get_chunk_id(chunks: List[Dict[str, Any]]) -> str:
