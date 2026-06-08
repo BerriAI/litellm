@@ -8922,25 +8922,33 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # gpt frontier models (gpt-5.x, future gpt-6) live on the
-            # /openai/v1/responses path; any other model declared mode=responses
-            # (price-map entry or a user model_info block) is served on the
-            # standard /v1/responses path. Everything else returns None and keeps
-            # the chat-completions emulation (see responses/main.py "config is None").
-            model_lower = model.lower() if model else ""
-            if "openai.gpt-" in model_lower and "gpt-oss" not in model_lower:
+            # Mantle serves Responses on two upstream paths. A model takes the
+            # /openai/v1/responses path when its price-map entry declares
+            # use_openai_responses_path (data-driven, so a non-gpt-named frontier
+            # model can be onboarded by JSON alone), or, as a fallback needing no
+            # price-map entry, when its name matches the openai.gpt- frontier
+            # convention (minus gpt-oss) -- this keeps a future gpt-6 routing
+            # correctly before its entry loads. Any other model declared
+            # mode=responses takes the standard /v1/responses path. Everything
+            # else returns None and keeps the chat-completions emulation (see
+            # responses/main.py "config is None").
+            if not model:
+                return None
+            model_lower = model.lower()
+            entry = litellm.model_cost.get(f"bedrock_mantle/{model}", {})
+            on_openai_path = entry.get("use_openai_responses_path") is True
+            name_is_frontier = (
+                "openai.gpt-" in model_lower and "gpt-oss" not in model_lower
+            )
+            if on_openai_path or name_is_frontier:
                 return litellm.BedrockMantleResponsesAPIConfig(use_openai_path=True)
-            if model:
-                try:
-                    if (
-                        get_model_info(model, "bedrock_mantle").get("mode")
-                        == "responses"
-                    ):
-                        return litellm.BedrockMantleResponsesAPIConfig(
-                            use_openai_path=False
-                        )
-                except Exception:
-                    pass
+            try:
+                if get_model_info(model, "bedrock_mantle").get("mode") == "responses":
+                    return litellm.BedrockMantleResponsesAPIConfig(
+                        use_openai_path=False
+                    )
+            except Exception:
+                pass
             return None
         return None
 
