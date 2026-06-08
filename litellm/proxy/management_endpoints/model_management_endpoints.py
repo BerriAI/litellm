@@ -561,7 +561,7 @@ async def _setup_new_team_model_assignment(
 
 
 async def _get_team_deployments(
-    team_id: str, prisma_client: PrismaClient
+    team_id: str, prisma_client: PrismaClient, table: Optional[Any] = None
 ) -> List[LiteLLM_ProxyModelTable]:
     """
     Fetch all deployments for a given team_id from the database.
@@ -572,9 +572,13 @@ async def _get_team_deployments(
     Note: prisma-client-py 0.11.0 does not support JSON path filtering, so we filter
     by the model_name prefix (team models use "model_name_{team_id}_*") and confirm
     team_id in model_info with Python-side filtering.
+
+    Pass ``table`` (a transaction's proxy-model table) to run the read inside an
+    existing transaction.
     """
     prefix = f"model_name_{team_id}_"
-    response = await ModelRepository(prisma_client).table.find_many(
+    table = table or ModelRepository(prisma_client).table
+    response = await table.find_many(
         where={
             "model_name": {"startswith": prefix},
         }
@@ -594,6 +598,42 @@ async def _get_team_deployments(
         if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
             result.append(row)
     return result
+
+
+async def delete_team_models(
+    team_ids: List[str],
+    prisma_client: PrismaClient,
+    llm_router: Optional[Any],
+) -> List[str]:
+    """
+    Delete every BYOK model owned by the given teams, from the DB and the router.
+
+    The DB rows are removed inside a single transaction, so deletion is atomic
+    across all team_ids. Each team's rows are deleted by the exact model_ids read
+    in the same transaction, which keeps the deleted set identical to the set
+    handed to the router. The router is synced only after the transaction commits,
+    so a rollback can never leave a deployment live in the router without its row.
+
+    Returns the model_ids that were deleted.
+    """
+    deleted_model_ids: List[str] = []
+    async with prisma_client.db.tx() as tx:
+        for team_id in team_ids:
+            rows = await _get_team_deployments(
+                team_id, prisma_client, table=tx.litellm_proxymodeltable
+            )
+            model_ids = [row.model_id for row in rows]
+            if model_ids:
+                await tx.litellm_proxymodeltable.delete_many(
+                    where={"model_id": {"in": model_ids}}
+                )
+                deleted_model_ids.extend(model_ids)
+
+    if llm_router is not None:
+        for model_id in deleted_model_ids:
+            llm_router.delete_deployment(id=model_id)
+
+    return deleted_model_ids
 
 
 async def _get_team_public_model_names(

@@ -6350,6 +6350,14 @@ async def test_delete_team_persists_deleted_teams(monkeypatch):
     mock_find_many_keys = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many_keys
 
+    # delete_team now deletes team BYOK models inside a transaction; this team has none.
+    mock_tx = AsyncMock()
+    mock_tx.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_tx_cm = MagicMock()
+    mock_tx_cm.__aenter__ = AsyncMock(return_value=mock_tx)
+    mock_tx_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_prisma_client.db.tx = MagicMock(return_value=mock_tx_cm)
+
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.prisma_client",
         mock_prisma_client,
@@ -8499,6 +8507,8 @@ async def test_new_team_encrypts_callback_vars(
     assert cv["langfuse_secret_key"] != "sk-real"
     recovered = decrypt_callback_vars(metadata)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-real"
+
+
 def _non_admin_auth():
     return UserAPIKeyAuth(
         user_id="u-team-admin", user_role=LitellmUserRoles.INTERNAL_USER
