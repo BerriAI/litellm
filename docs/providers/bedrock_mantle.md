@@ -137,6 +137,97 @@ curl -X POST http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+## OpenAI Models (GPT-5.4 / GPT-5.5)
+
+### /responses
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+import os
+
+os.environ['BEDROCK_MANTLE_API_KEY'] = "your-bedrock-api-key"
+os.environ['BEDROCK_MANTLE_REGION'] = "us-east-2"
+
+response = litellm.responses(
+    model="bedrock_mantle/openai.gpt-5.5",
+    input="Hello! How can you help me today?",
+)
+print(response)
+```
+
+#### Streaming
+
+```python
+import litellm
+import os
+
+os.environ['BEDROCK_MANTLE_API_KEY'] = "your-bedrock-api-key"
+
+response = litellm.responses(
+    model="bedrock_mantle/openai.gpt-5.5",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    stream=True,
+)
+
+for event in response:
+    print(event)
+```
+
+</TabItem>
+<TabItem value="ai-gateway" label="AI Gateway">
+
+**1. Add to config.yaml**
+
+```yaml
+model_list:
+  - model_name: gpt-5.5-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.5
+      api_key: os.environ/BEDROCK_MANTLE_API_KEY
+      api_base: https://bedrock-mantle.us-east-2.api.aws/v1
+```
+
+**2. Start LiteLLM AI Gateway**
+
+```shell
+litellm --config /path/to/config.yaml
+```
+
+**3. Call `/v1/responses` via curl**
+
+```bash
+curl -X POST http://0.0.0.0:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_API_KEY" \
+  -d '{
+    "model": "gpt-5.5-mantle",
+    "input": "Hello! How can you help me today?"
+  }'
+```
+
+**4. Or use the OpenAI SDK**
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://0.0.0.0:4000",
+)
+
+response = client.responses.create(
+    model="gpt-5.5-mantle",
+    input="Hello! How can you help me today?",
+)
+print(response)
+```
+
+</TabItem>
+</Tabs>
+
 ## API Key
 
 ```python
@@ -149,12 +240,14 @@ os.environ['BEDROCK_MANTLE_REGION'] = "us-east-1"  # or use AWS_REGION
 
 ## Supported Models
 
-| Model | Context Window | Input (per 1M tokens) | Output (per 1M tokens) |
-|-------|---------------|----------------------|------------------------|
-| `openai.gpt-oss-120b` | 131K | $0.15 | $0.60 |
-| `openai.gpt-oss-20b` | 131K | $0.075 | $0.30 |
-| `openai.gpt-oss-safeguard-120b` | 131K | $0.15 | $0.60 |
-| `openai.gpt-oss-safeguard-20b` | 131K | $0.075 | $0.30 |
+| Model | Endpoint | Context Window | Input (per 1M tokens) | Output (per 1M tokens) |
+|-------|----------|---------------|----------------------|------------------------|
+| `openai.gpt-5.5` | `/responses` | 272K | $5.50 | $33.00 |
+| `openai.gpt-5.4` | `/responses` | 272K | $2.75 | $16.50 |
+| `openai.gpt-oss-120b` | `/chat/completions` | 131K | $0.15 | $0.60 |
+| `openai.gpt-oss-20b` | `/chat/completions` | 131K | $0.075 | $0.30 |
+| `openai.gpt-oss-safeguard-120b` | `/chat/completions` | 131K | $0.15 | $0.60 |
+| `openai.gpt-oss-safeguard-20b` | `/chat/completions` | 131K | $0.075 | $0.30 |
 
 ## Sample Usage
 
@@ -244,6 +337,12 @@ response = completion(
 
 ```yaml
 model_list:
+  - model_name: gpt-5.5-mantle
+    litellm_params:
+      model: bedrock_mantle/openai.gpt-5.5
+      api_key: os.environ/BEDROCK_MANTLE_API_KEY
+      api_base: "https://bedrock-mantle.us-east-2.api.aws/v1"
+
   - model_name: gpt-oss-120b
     litellm_params:
       model: bedrock_mantle/openai.gpt-oss-120b
