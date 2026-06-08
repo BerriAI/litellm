@@ -57,6 +57,15 @@ def test_roundtrip_preserves_api_key_identity_fields():
     assert back.token == uak.token
 
 
+def test_access_group_ids_empty_list_survives_roundtrip():
+    uak = UserAPIKeyAuth(api_key="sk-x", user_id="u", access_group_ids=[])
+    ctx = user_api_key_auth_to_identity_context(uak)
+    assert ctx.access_group_ids == []
+
+    back = identity_context_to_user_api_key_auth(ctx)
+    assert back.access_group_ids == []
+
+
 def test_token_hash_not_double_hashed():
     ctx = IdentityContext(principal=ApiKeyPrincipal(token_hash="abc123"))
     back = identity_context_to_user_api_key_auth(ctx)

@@ -104,7 +104,7 @@ def identity_context_to_user_api_key_auth(
     kwargs: dict = {
         "end_user_id": ctx.end_user_id,
         "access_group_ids": (
-            list(ctx.access_group_ids) if ctx.access_group_ids else None
+            list(ctx.access_group_ids) if ctx.access_group_ids is not None else None
         ),
     }
 
