@@ -720,7 +720,6 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
             )
         ],
     ).model_dump()
-    chunk_dict["vertex_ai_grounding_metadata"] = [{"webSearchQueries": ["test query"]}]
     chunk_dict["_hidden_params"] = {
         "vertex_ai_grounding_metadata": [{"webSearchQueries": ["test query"]}]
     }

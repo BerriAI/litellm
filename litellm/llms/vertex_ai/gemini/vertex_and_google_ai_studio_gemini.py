@@ -2268,7 +2268,12 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 return value
             model_extra = chunk.get("model_extra")
             if isinstance(model_extra, dict):
-                return model_extra.get(field_name)
+                value = model_extra.get(field_name)
+                if value is not None:
+                    return value
+            hidden_params = chunk.get("_hidden_params")
+            if isinstance(hidden_params, dict):
+                return hidden_params.get(field_name)
             return None
         return getattr(chunk, field_name, None)
 
