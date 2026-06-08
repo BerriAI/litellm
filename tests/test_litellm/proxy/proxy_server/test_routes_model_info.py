@@ -60,6 +60,15 @@ def test_v2_model_info_invalid_page_returns_422(client, auth_as, empty_router):
     assert "detail" in response.json()
 
 
+def test_v2_model_info_in_openapi_schema():
+    """``GET /v2/model/info`` is published in the proxy OpenAPI/Swagger spec."""
+    from litellm.proxy.proxy_server import get_openapi_schema
+
+    schema = get_openapi_schema()
+    assert "/v2/model/info" in schema["paths"]
+    assert "get" in schema["paths"]["/v2/model/info"]
+
+
 # ---------------------------------------------------------------------------
 # GET /v1/model/info, GET /model/info
 # ---------------------------------------------------------------------------

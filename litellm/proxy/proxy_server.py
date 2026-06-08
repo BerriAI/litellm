@@ -11742,10 +11742,8 @@ async def _find_model_by_id(
 
 @router.get(
     "/v2/model/info",
-    description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
     tags=["model management"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def model_info_v2(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -11781,7 +11779,49 @@ async def model_info_v2(
     ),
 ):
     """
-    BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
+    Paginated model metadata for proxy deployments (pricing, provider, team access).
+
+    Returns configured router deployments with enriched `model_info` (costs, provider,
+    context window, etc.). Sensitive fields such as API keys and api_base are omitted.
+
+    Query parameters:
+        model: Filter to a single public `model_name`.
+        user_models_only: When true, only return models created by the calling user.
+        include_team_models: When true, populate `access_via_team_ids` and `direct_access`
+            on each model and filter to deployments the caller can use.
+        page / size: Pagination controls (defaults: page=1, size=50).
+        search: Case-insensitive partial match on model name or team public name.
+        modelId: Return a single deployment by LiteLLM model id.
+        teamId: Filter to models with direct access or team membership for this team id.
+        sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+
+    Example request:
+    ```
+    curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \\
+    --header 'Authorization: Bearer sk-1234'
+    ```
+
+    Example response:
+    ```json
+    {
+        "data": [
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4.1"},
+                "model_info": {
+                    "id": "abc123",
+                    "litellm_provider": "openai",
+                    "access_via_team_ids": ["team-1"],
+                    "direct_access": true
+                }
+            }
+        ],
+        "total_count": 1,
+        "current_page": 1,
+        "total_pages": 1,
+        "size": 50
+    }
+    ```
     """
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
