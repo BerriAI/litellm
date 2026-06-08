@@ -13,6 +13,7 @@ import asyncio
 import math
 import re
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Type, Union, cast
 
 from fastapi import HTTPException, Request, status
@@ -3514,13 +3515,41 @@ async def _virtual_key_max_budget_check(
 
     """
     if valid_token.max_budget is not None:
-        from litellm.proxy.proxy_server import get_current_spend
+        from litellm.proxy.proxy_server import (
+            _invalidate_spend_counter,
+            get_current_spend,
+        )
+
+        fallback_spend = valid_token.spend or 0.0
+        counter_key = f"spend:key:{valid_token.token}"
 
         # Read spend from cross-pod counter (Redis-first) or cached object (fallback)
         spend = await get_current_spend(
-            counter_key=f"spend:key:{valid_token.token}",
-            fallback_spend=valid_token.spend or 0.0,
+            counter_key=counter_key,
+            fallback_spend=fallback_spend,
         )
+
+        # Stale-counter reconciliation for explicit budget-window resets.
+        # If DB spend is reset to 0 but the counter still holds stale value,
+        # clear it to avoid false lockouts in the fresh budget window.
+        if (
+            fallback_spend == 0.0
+            and spend > 0.0
+            and valid_token.budget_reset_at is not None
+        ):
+            try:
+                reset_at = valid_token.budget_reset_at
+                if isinstance(reset_at, str):
+                    reset_at = datetime.fromisoformat(reset_at)
+                if reset_at is not None and getattr(reset_at, "tzinfo", None) is None:
+                    reset_at = reset_at.replace(tzinfo=timezone.utc)
+
+                if reset_at is not None and datetime.now(timezone.utc) < reset_at:
+                    await _invalidate_spend_counter(counter_key=counter_key)
+                    spend = 0.0
+            except Exception:
+                # Never fail auth because stale-counter cleanup failed.
+                pass
 
         ####################################
         # collect information for alerting #
