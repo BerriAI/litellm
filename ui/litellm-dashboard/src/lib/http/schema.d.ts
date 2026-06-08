@@ -5880,7 +5880,9 @@ export interface paths {
          *     Note:
          *     - If the model is configured in proxy_config.yaml, credentials (api_key, api_base, etc.)
          *       will be automatically loaded from the config (with resolved environment variables).
-         *     - You can override specific params by including them in the request.
+         *     - You can override specific params by including them in the request. If the
+         *       model is configured in proxy_config.yaml, the configured provider model is
+         *       used for the connection test.
          *     - You can use `os.environ/VARIABLE_NAME` syntax to reference environment variables,
          *       which will be resolved automatically (same as in proxy_config.yaml).
          *
