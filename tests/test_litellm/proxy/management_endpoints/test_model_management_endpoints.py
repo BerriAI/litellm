@@ -1915,15 +1915,16 @@ class TestDeleteTeamBYOKModelGhost:
         mock_refresh.assert_not_awaited()
 
 
-class TestDeleteOrphanedTeamModel:
-    """Deleting a team BYOK model whose team was deleted.
+class TestDeleteModelTeamAuth:
+    """Team auth on the /model/delete path.
 
     A model added via /model/new with model_info.team_id is orphaned once its
     team is deleted: can_user_make_model_call looked the team up and raised
     'Team id=... does not exist in db' before the delete could run, so the model
     was undeletable from the Models + Endpoints page. Without the team, team-admin
     membership can't be verified, so a proxy admin (and only a proxy admin) may
-    delete the orphan; a missing team must never let a non-admin through.
+    delete the orphan; a missing team must never let a non-admin through. The team
+    is also looked up exactly once -- the auth check must not add a second query.
     """
 
     def _orphaned_model_mocks(self, team_id, model_id):
@@ -2026,6 +2027,75 @@ class TestDeleteOrphanedTeamModel:
                 )
 
         assert str(exc_info.value.code) == "403"
+        mock_prisma.db.litellm_proxymodeltable.delete.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_live_team_delete_looks_up_team_once(self):
+        """The auth check must not add a redundant team query on the live-team path."""
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            ModelInfoDelete,
+            delete_model as delete_model_endpoint,
+        )
+        from litellm.proxy.proxy_server import ProxyException
+
+        team_id = "live-team-1"
+        model_id = "live-byok-1"
+        db_row = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name=f"model_name_{team_id}_abc-uuid",
+            litellm_params={"model": "openai/gpt-4.1-nano"},
+            model_info={
+                "id": model_id,
+                "team_id": team_id,
+                "team_public_model_name": "live-gpt",
+            },
+            created_by="admin",
+            updated_by="admin",
+        )
+        team_row = LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias="live-team",
+            members_with_roles=[Member(user_id="admin", role="admin")],
+            models=["live-gpt"],
+        )
+        mock_prisma = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=db_row
+        )
+        mock_prisma.db.litellm_proxymodeltable.delete = AsyncMock(return_value=db_row)
+        mock_prisma.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_teamtable = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+        mock_prisma.db.litellm_modeltable = AsyncMock()
+        mock_prisma.db.litellm_modeltable.find_many = AsyncMock(return_value=[])
+
+        # A team member who is not the team admin: rejected before the delete runs,
+        # so the only team lookup is the single one inside the auth check.
+        non_admin = UserAPIKeyAuth(
+            user_id="someone", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        _PS = "litellm.proxy.proxy_server"
+        _MOD = "litellm.proxy.management_endpoints.model_management_endpoints"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", MagicMock()),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.user_api_key_cache", MagicMock()),
+            patch(f"{_MOD}._refresh_cached_team", new=AsyncMock()),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await delete_model_endpoint(
+                    model_info=ModelInfoDelete(id=model_id),
+                    user_api_key_dict=non_admin,
+                )
+
+        assert str(exc_info.value.code) == "403"
+        assert mock_prisma.db.litellm_teamtable.find_unique.await_count == 1
         mock_prisma.db.litellm_proxymodeltable.delete.assert_not_awaited()
 
 

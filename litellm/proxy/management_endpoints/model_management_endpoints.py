@@ -857,6 +857,7 @@ class ModelManagementAuthChecks:
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
+        allow_missing_team: bool = False,
     ) -> Literal[True]:
         ## Check team model auth
         if (
@@ -867,6 +868,18 @@ class ModelManagementAuthChecks:
                 where={"team_id": model_params.model_info.team_id}
             )
             if team_obj_row is None:
+                # The team was deleted. Callers that opt in (e.g. model deletion) may
+                # act on the orphaned model, but only as a proxy admin -- without the
+                # team there is no team-admin membership left to verify.
+                if allow_missing_team:
+                    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+                        return True
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "Only a proxy admin can delete a model whose team has been deleted."
+                        },
+                    )
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -947,31 +960,13 @@ async def delete_model(
             )
 
         model_params = Deployment(**model_in_db.model_dump())
-
-        team_id = model_params.model_info.team_id if model_params.model_info else None
-        team_exists = team_id is None or (
-            await prisma_client.db.litellm_teamtable.find_unique(
-                where={"team_id": team_id}
-            )
-            is not None
+        await ModelManagementAuthChecks.can_user_make_model_call(
+            model_params=model_params,
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            premium_user=premium_user,
+            allow_missing_team=True,
         )
-
-        if team_exists:
-            await ModelManagementAuthChecks.can_user_make_model_call(
-                model_params=model_params,
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-                premium_user=premium_user,
-            )
-        elif user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            # The model's team was deleted; without it team-admin membership can't be
-            # verified, so only a proxy admin may delete the orphaned model.
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "Only a proxy admin can delete a model whose team has been deleted."
-                },
-            )
 
         # update DB
         if store_model_in_db is True:
