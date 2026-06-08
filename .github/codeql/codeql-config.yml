@@ -22,6 +22,13 @@ query-filters:
       id: py/clear-text-logging-sensitive-data  # CWE-312
   - exclude:
       id: py/polynomial-redos                   # CWE-730
+  # py/weak-sensitive-data-hashing: litellm's SHA256 calls derive stable lookup
+  # keys / rate-limit-bucket ids from API keys and tokens (e.g.
+  # mcp_server/server.py builds `key:{sha256(api_key)}` as a cache key); they are
+  # never used to store a password for later verification, which is the threat
+  # this rule targets. SHA256 is the correct, intended choice for keyed lookups.
+  - exclude:
+      id: py/weak-sensitive-data-hashing        # CWE-327/916
 
 paths-ignore:
   - tests
