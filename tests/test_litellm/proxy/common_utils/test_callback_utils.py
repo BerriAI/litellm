@@ -1,7 +1,7 @@
 import copy
 import sys
 import os
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -331,14 +331,21 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
         def __init__(self, **kwargs):
             captured["kwargs"] = kwargs
 
+    # Inject a fake lakera_ai module so the branch's
+    # `from ...lakera_ai import lakeraAI_Moderation` resolves to our stub without
+    # importing the real module (which imports proxy_server symbols not present
+    # under the stubbed proxy_server below).
+    fake_lakera = ModuleType("litellm.proxy.guardrails.guardrail_hooks.lakera_ai")
+    fake_lakera.lakeraAI_Moderation = _DummyLakera
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.guardrails.guardrail_hooks.lakera_ai",
+        fake_lakera,
+    )
     monkeypatch.setitem(
         sys.modules,
         "litellm.proxy.proxy_server",
         SimpleNamespace(prisma_client=None),
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.lakera_ai.lakeraAI_Moderation",
-        _DummyLakera,
     )
 
     original_callbacks = (
