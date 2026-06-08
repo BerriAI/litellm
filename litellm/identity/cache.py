@@ -54,9 +54,7 @@ def _generation_attr_key(scope: str) -> str:
     return f"identity_cache_generation_{scope}"
 
 
-def _attach_generations(
-    uak: "UserAPIKeyAuth", generations: dict
-) -> None:
+def _attach_generations(uak: "UserAPIKeyAuth", generations: dict) -> None:
     """Stash the generation counters this entry was minted under.
 
     Stored on the model's ``metadata`` so the value survives Pydantic
@@ -91,12 +89,13 @@ class IdentityCache:
         self._cache = dual_cache
         self._ttl_seconds = ttl_seconds
 
-    @traced("identity.cache.get", role=SpanRole.DB_CALL,
-            attrs=lambda result: {
-                "identity.cache.layer": (
-                    "miss" if result is None else "memory_or_redis"
-                ),
-            })
+    @traced(
+        "identity.cache.get",
+        role=SpanRole.DB_CALL,
+        attrs=lambda result: {
+            "identity.cache.layer": ("miss" if result is None else "memory_or_redis"),
+        },
+    )
     async def get(self, token_hash: str) -> Optional["UserAPIKeyAuth"]:
         from litellm.proxy._types import UserAPIKeyAuth
 
@@ -112,9 +111,7 @@ class IdentityCache:
         return cached
 
     @traced("identity.cache.set", role=SpanRole.DB_CALL)
-    async def set(
-        self, token_hash: str, uak: "UserAPIKeyAuth"
-    ) -> None:
+    async def set(self, token_hash: str, uak: "UserAPIKeyAuth") -> None:
         generations = await self._snapshot_generations_for(uak)
         _attach_generations(uak, generations)
         await self._cache.async_set_cache(
@@ -133,9 +130,7 @@ class IdentityCache:
         current = await self._snapshot_generations_for(uak)
         return any(stored.get(k) != current.get(k) for k in stored)
 
-    async def _snapshot_generations_for(
-        self, uak: "UserAPIKeyAuth"
-    ) -> dict:
+    async def _snapshot_generations_for(self, uak: "UserAPIKeyAuth") -> dict:
         scopes: list[tuple[str, str]] = []
         if uak.team_id:
             scopes.append(("team", team_generation_key(uak.team_id)))
@@ -143,9 +138,15 @@ class IdentityCache:
             scopes.append(("user", user_generation_key(uak.user_id)))
         if uak.org_id:
             scopes.append(("org", org_generation_key(uak.org_id)))
+        if not scopes:
+            return {}
+
+        values = await self._cache.async_batch_get_cache(
+            keys=[key for _, key in scopes]
+        )
         return {
-            scope: await self._cache.async_get_cache(key=key) or 0
-            for scope, key in scopes
+            scope: (values[index] or 0) if index < len(values) else 0
+            for index, (scope, _) in enumerate(scopes)
         }
 
     async def bump_generation(self, scope_key: str) -> None:

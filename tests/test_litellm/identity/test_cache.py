@@ -10,6 +10,7 @@ from litellm.identity.cache import (
     IdentityCache,
     identity_cache_key,
     team_generation_key,
+    user_generation_key,
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -75,3 +76,44 @@ async def test_generation_bump_for_unrelated_team_keeps_entry():
 
 def test_key_format_is_versioned():
     assert identity_cache_key("abc").startswith("identity:v1:")
+
+
+class _CountingCache:
+    def __init__(self):
+        self.batch_get_calls = 0
+        self.single_get_calls = 0
+        self.values: dict = {}
+
+    async def async_batch_get_cache(self, keys, **kwargs):
+        self.batch_get_calls += 1
+        return [self.values.get(key) for key in keys]
+
+    async def async_get_cache(self, key, **kwargs):
+        self.single_get_calls += 1
+        return self.values.get(key)
+
+
+@pytest.mark.asyncio
+async def test_snapshot_generations_uses_single_batch_read():
+    fake = _CountingCache()
+    cache = IdentityCache(dual_cache=fake)  # type: ignore[arg-type]
+    uak = UserAPIKeyAuth(token="hash-x", user_id="u1", team_id="t1", org_id="o1")
+
+    snapshot = await cache._snapshot_generations_for(uak)
+
+    assert fake.batch_get_calls == 1
+    assert fake.single_get_calls == 0
+    assert snapshot == {"team": 0, "user": 0, "org": 0}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_generations_maps_returned_values_by_scope():
+    fake = _CountingCache()
+    fake.values[team_generation_key("t1")] = 7
+    fake.values[user_generation_key("u1")] = 3
+    cache = IdentityCache(dual_cache=fake)  # type: ignore[arg-type]
+    uak = UserAPIKeyAuth(token="hash-x", user_id="u1", team_id="t1")
+
+    snapshot = await cache._snapshot_generations_for(uak)
+
+    assert snapshot == {"team": 7, "user": 3}
