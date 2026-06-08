@@ -1,18 +1,14 @@
-"""Pure transforms for Alice WonderFence: context build, text extract, action dispatch."""
+"""Pure transforms for Alice WonderFence: context build, user-text mapping, verdict apply."""
 
-from typing import Any, Literal, Optional, Tuple
+from typing import Any, List, Optional
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_last_user_message,
-    set_last_user_message,
-)
 from litellm.types.utils import GenericGuardrailAPIInputs
 
+from .chunked_evaluation import SegmentVerdict
 from .credentials import get_metadata
 from .exceptions import WonderFenceBlockedError
-
 
 logger = verbose_proxy_logger.getChild("alice_wonderfence")
 
@@ -56,88 +52,93 @@ def build_analysis_context(
     )
 
 
-def extract_relevant_text(
-    inputs: GenericGuardrailAPIInputs,
-    input_type: Literal["request", "response"],
-) -> Tuple[Optional[str], Optional[Literal["structured_messages", "texts"]]]:
-    """Extract latest user message (request) or latest assistant message (response).
+def request_user_text_indices(
+    structured_messages: Optional[List[Any]],
+    texts: List[str],
+) -> List[int]:
+    """Return indices into ``texts`` that came from user-role messages.
 
-    Returns (text, source) — ``source`` identifies which slot the text came
-    from so MASK can write the redacted version back to the same place.
+    Replays the same flatten the translation layer uses to build ``texts``
+    (string content -> one entry; list content -> one entry per item with a
+    ``text`` field) over ``structured_messages`` and tags each entry's role. If
+    ``structured_messages`` is absent or the replayed count diverges from
+    ``len(texts)``, every index is returned: over-scanning is safe, mis-mapping
+    a mask onto a non-user slot is not.
     """
-    if input_type == "request":
-        structured_messages = inputs.get("structured_messages", [])
-        if structured_messages:
-            return (
-                get_last_user_message(structured_messages),
-                "structured_messages",
-            )
-        texts = inputs.get("texts", [])
-        return (texts[-1] if texts else None), ("texts" if texts else None)
-    texts = inputs.get("texts", [])
-    return (texts[-1] if texts else None), ("texts" if texts else None)
+    n = len(texts)
+    if not structured_messages:
+        return list(range(n))
+
+    roles: List[str] = []
+    for message in structured_messages:
+        role = str(message.get("role") or "").lower()
+        content = message.get("content", None)
+        if content is None:
+            continue
+        if isinstance(content, str):
+            roles.append(role)
+        elif isinstance(content, list):
+            for item in content:
+                if item.get("text", None) is not None:
+                    roles.append(role)
+
+    if len(roles) != n:
+        return list(range(n))
+    return [i for i, role in enumerate(roles) if role == "user"]
 
 
-def handle_action(
-    result: Any,
+def apply_verdicts(
     inputs: GenericGuardrailAPIInputs,
-    text_source: Optional[Literal["structured_messages", "texts"]],
+    indices: List[int],
+    verdicts: List[SegmentVerdict],
     guardrail_name: str,
     block_message: str,
-) -> None:
-    """Dispatch BLOCK/MASK/DETECT/NO_ACTION. Raises ``WonderFenceBlockedError`` on BLOCK.
+) -> GenericGuardrailAPIInputs:
+    """Apply per-segment verdicts back onto ``inputs["texts"]``.
 
-    ``text_source`` identifies which inputs slot supplied the analyzed text;
-    MASK writes the redacted value back to the same slot.
+    Any BLOCK raises ``WonderFenceBlockedError`` with detections/correlation ids
+    aggregated across all blocked segments. Otherwise each MASK verdict rewrites
+    its mapped ``texts`` index and DETECT is logged.
     """
-    action = result.action.value if hasattr(result.action, "value") else result.action
-    correlation_id = getattr(result, "correlation_id", None)
-
-    if action == "BLOCK":
+    blocked = [v for v in verdicts if v.action == "BLOCK"]
+    if blocked:
+        detections: list = []
+        correlation_ids: List[str] = []
+        for v in blocked:
+            detections.extend(v.detections)
+            correlation_ids.extend(v.correlation_ids)
         detail: dict = {
             "error": block_message,
             "type": "alice_wonderfence_content_policy_violation",
             "guardrail_name": guardrail_name,
             "action": "BLOCK",
-            "wonderfence_correlation_id": correlation_id,
+            "wonderfence_correlation_id": (
+                correlation_ids[0] if correlation_ids else None
+            ),
+            "wonderfence_correlation_ids": correlation_ids,
         }
-        if hasattr(result, "detections") and result.detections:
+        if detections:
             detail["detections"] = [
-                d.model_dump() if hasattr(d, "model_dump") else str(d)
-                for d in result.detections
+                d.model_dump() if hasattr(d, "model_dump") else d for d in detections
             ]
         raise WonderFenceBlockedError(detail)
-    if action == "MASK":
-        masked_text = result.action_text or "[MASKED]"
-        wrote = False
-        if text_source == "structured_messages":
-            inputs["structured_messages"] = set_last_user_message(
-                inputs.get("structured_messages", []), masked_text
+
+    texts = inputs.get("texts") or []
+    for idx, verdict in zip(indices, verdicts):
+        if verdict.action == "MASK":
+            texts[idx] = (
+                verdict.masked_text if verdict.masked_text is not None else "[MASKED]"
             )
-            wrote = True
-        # Always also overwrite texts[-1] when texts is populated. The OpenAI
-        # chat translation layer reads back only ``texts`` after
-        # apply_guardrail returns and maps it onto messages — masking only
-        # ``structured_messages`` lets the unmasked ``texts`` slot win and the
-        # original prompt reaches the LLM.
-        texts = inputs.get("texts")
-        if texts:
-            texts[-1] = masked_text
-            inputs["texts"] = texts
-            wrote = True
-        if not wrote:  # pragma: no cover
-            raise RuntimeError(
-                "Alice WonderFence MASK requested but no text source — refusing "
-                "to silently no-op."
+            logger.info(
+                "Alice WonderFence (apply_guardrail): MASK applied guardrail=%s correlation_id=%s",
+                guardrail_name,
+                verdict.correlation_ids[0] if verdict.correlation_ids else None,
             )
-        logger.info(
-            "Alice WonderFence (apply_guardrail): MASK applied guardrail=%s correlation_id=%s",
-            guardrail_name,
-            correlation_id,
-        )
-    elif action == "DETECT":
-        logger.warning(
-            "Alice WonderFence (apply_guardrail): DETECT guardrail=%s correlation_id=%s",
-            guardrail_name,
-            correlation_id,
-        )
+        elif verdict.action == "DETECT":
+            logger.warning(
+                "Alice WonderFence (apply_guardrail): DETECT guardrail=%s correlation_id=%s",
+                guardrail_name,
+                verdict.correlation_ids[0] if verdict.correlation_ids else None,
+            )
+    inputs["texts"] = texts
+    return inputs

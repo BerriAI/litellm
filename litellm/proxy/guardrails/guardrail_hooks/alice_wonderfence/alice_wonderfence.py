@@ -3,7 +3,7 @@
 import logging
 import os
 from collections import OrderedDict
-from typing import TYPE_CHECKING, List, Literal, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type, Union
 
 from fastapi import HTTPException
 
@@ -21,10 +21,15 @@ from litellm.types.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
+from .chunked_evaluation import DEFAULT_MAX_CONCURRENCY, evaluate_segments
 from .client_cache import get_or_create_client, load_sdk
 from .credentials import resolve_credentials
 from .exceptions import WonderFenceBlockedError, WonderFenceMissingSecrets
-from .processing import build_analysis_context, extract_relevant_text, handle_action
+from .processing import (
+    apply_verdicts,
+    build_analysis_context,
+    request_user_text_indices,
+)
 
 if TYPE_CHECKING:
     from wonderfence_sdk.client import (  # type: ignore[import-untyped]
@@ -168,10 +173,10 @@ class WonderFenceGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """Apply WonderFence guardrail using V2 client + per-request app_id."""
-        text, text_source = extract_relevant_text(inputs, input_type)
-        if not text:
+        texts = inputs.get("texts") or []
+        if not texts:
             logger.debug(
-                "Alice WonderFence (apply_guardrail): no relevant text for %s",
+                "Alice WonderFence (apply_guardrail): no text to scan for %s",
                 input_type,
             )
             return inputs
@@ -191,32 +196,44 @@ class WonderFenceGuardrail(CustomGuardrail):
             )
 
             if input_type == "request":
-                logger.debug(
-                    "Alice WonderFence (apply_guardrail): evaluating prompt app_id=%s guardrail=%s",
-                    app_id,
-                    self.guardrail_name,
-                )
-                result = await client.evaluate_prompt(
-                    app_id=app_id,
-                    prompt=text,
-                    context=context,
-                    custom_fields=None,
-                )
-            else:
-                logger.debug(
-                    "Alice WonderFence (apply_guardrail): evaluating response app_id=%s guardrail=%s",
-                    app_id,
-                    self.guardrail_name,
-                )
-                result = await client.evaluate_response(
-                    app_id=app_id,
-                    response=text,
-                    context=context,
-                    custom_fields=None,
+                indices = request_user_text_indices(
+                    inputs.get("structured_messages"), texts
                 )
 
-            handle_action(
-                result, inputs, text_source, self.guardrail_name, self.block_message
+                async def evaluate(text: str) -> Any:
+                    return await client.evaluate_prompt(
+                        app_id=app_id, prompt=text, context=context, custom_fields=None
+                    )
+
+            else:
+                indices = list(range(len(texts)))
+
+                async def evaluate(text: str) -> Any:
+                    return await client.evaluate_response(
+                        app_id=app_id,
+                        response=text,
+                        context=context,
+                        custom_fields=None,
+                    )
+
+            segments = [texts[i] for i in indices]
+            if not segments:
+                return inputs
+
+            logger.debug(
+                "Alice WonderFence (apply_guardrail): evaluating %d segment(s) app_id=%s guardrail=%s input_type=%s",
+                len(segments),
+                app_id,
+                self.guardrail_name,
+                input_type,
+            )
+            verdicts = await evaluate_segments(
+                segments,
+                evaluate,
+                max_concurrency=self._connection_pool_limit or DEFAULT_MAX_CONCURRENCY,
+            )
+            apply_verdicts(
+                inputs, indices, verdicts, self.guardrail_name, self.block_message
             )
 
         except WonderFenceBlockedError as e:

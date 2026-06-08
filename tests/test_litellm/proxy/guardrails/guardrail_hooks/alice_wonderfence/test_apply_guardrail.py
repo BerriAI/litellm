@@ -6,7 +6,6 @@ from unittest.mock import Mock
 import pytest
 from fastapi import HTTPException
 
-
 # ----------------------------- BLOCK -----------------------------
 
 
@@ -80,7 +79,7 @@ async def test_block_not_bypassed_by_fail_open(make_guardrail, make_request_data
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_replaces_last_text(
+async def test_apply_guardrail_mask_replaces_scanned_text(
     guardrail_and_client, make_request_data
 ):
     guardrail, client = guardrail_and_client
@@ -92,60 +91,31 @@ async def test_apply_guardrail_mask_replaces_last_text(
     client.evaluate_prompt.return_value = result_obj
 
     out = await guardrail.apply_guardrail(
-        inputs={"texts": ["a", "b", "c"]},
+        inputs={"texts": ["sensitive"]},
         request_data=make_request_data(),
         input_type="request",
     )
-    assert out["texts"] == ["a", "b", "[REDACTED]"]
+    assert out["texts"] == ["[REDACTED]"]
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_replaces_structured_messages(
+async def test_apply_guardrail_mask_targets_correct_user_slot(
     guardrail_and_client, make_request_data
 ):
-    """MASK on the request path must rewrite structured_messages when that's
-    the source of the extracted text. Otherwise the user's prompt reaches the
-    LLM unredacted while the header still claims the guardrail applied."""
+    """MASK must rewrite the ``texts`` entry of the offending user message in
+    place; assistant/system entries are never sent for evaluation, so they must
+    survive untouched. Confirms the positional mapping is correct."""
     guardrail, client = guardrail_and_client
-    result_obj = Mock()
-    result_obj.action = "MASK"
-    result_obj.action_text = "[REDACTED]"
-    result_obj.detections = []
-    result_obj.correlation_id = None
-    client.evaluate_prompt.return_value = result_obj
 
-    inputs = {
-        "structured_messages": [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "ack"},
-            {"role": "user", "content": "sensitive content"},
-        ],
-    }
-    out = await guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data=make_request_data(),
-        input_type="request",
-    )
-    last_user = [m for m in out["structured_messages"] if m.get("role") == "user"][-1]
-    assert last_user["content"] == "[REDACTED]"
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "MASK" if prompt == "sensitive content" else "NO_ACTION"
+        r.action_text = "[REDACTED]"
+        r.detections = []
+        r.correlation_id = None
+        return r
 
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_mask_rewrites_texts_when_both_slots_present(
-    guardrail_and_client, make_request_data
-):
-    """OpenAI chat translation populates both ``structured_messages`` and ``texts``,
-    then reads back only ``texts``. MASK must overwrite ``texts[-1]`` even when
-    the analyzed text was extracted from ``structured_messages``, otherwise the
-    unmasked ``texts`` slot wins downstream and the original prompt reaches the
-    LLM while the response header still claims the guardrail applied."""
-    guardrail, client = guardrail_and_client
-    result_obj = Mock()
-    result_obj.action = "MASK"
-    result_obj.action_text = "[REDACTED]"
-    result_obj.detections = []
-    result_obj.correlation_id = None
-    client.evaluate_prompt.return_value = result_obj
+    client.evaluate_prompt.side_effect = evaluate
 
     inputs = {
         "structured_messages": [
@@ -161,12 +131,13 @@ async def test_apply_guardrail_mask_rewrites_texts_when_both_slots_present(
         input_type="request",
     )
     assert out["texts"] == ["first", "ack", "[REDACTED]"]
-    last_user = [m for m in out["structured_messages"] if m.get("role") == "user"][-1]
-    assert last_user["content"] == "[REDACTED]"
+    evaluated = {c.kwargs["prompt"] for c in client.evaluate_prompt.call_args_list}
+    assert evaluated == {"first", "sensitive content"}
+    assert "ack" not in evaluated
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_replaces_last_text_response(
+async def test_apply_guardrail_mask_replaces_scanned_text_response(
     guardrail_and_client, make_request_data
 ):
     guardrail, client = guardrail_and_client
@@ -178,11 +149,11 @@ async def test_apply_guardrail_mask_replaces_last_text_response(
     client.evaluate_response.return_value = result_obj
 
     out = await guardrail.apply_guardrail(
-        inputs={"texts": ["a", "b", "c"]},
+        inputs={"texts": ["model output"]},
         request_data=make_request_data(),
         input_type="response",
     )
-    assert out["texts"] == ["a", "b", "[REDACTED]"]
+    assert out["texts"] == ["[REDACTED]"]
 
 
 @pytest.mark.asyncio
@@ -198,11 +169,11 @@ async def test_apply_guardrail_mask_fallback_when_action_text_is_none(
     client.evaluate_prompt.return_value = result_obj
 
     out = await guardrail.apply_guardrail(
-        inputs={"texts": ["a", "b", "c"]},
+        inputs={"texts": ["a"]},
         request_data=make_request_data(),
         input_type="request",
     )
-    assert out["texts"] == ["a", "b", "[MASKED]"]
+    assert out["texts"] == ["[MASKED]"]
 
 
 # ----------------------------- DETECT / NO_ACTION -----------------------------
@@ -301,9 +272,11 @@ async def test_apply_guardrail_response_path_passes_app_id(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_evaluates_only_last_text(
+async def test_apply_guardrail_evaluates_every_text_without_structured_messages(
     guardrail_and_client, make_request_data
 ):
+    """With no structured_messages to identify roles, every text entry is
+    scanned (over-scan is safe); the old code scanned only the last."""
     guardrail, client = guardrail_and_client
     result_obj = Mock()
     result_obj.action = "NO_ACTION"
@@ -316,8 +289,78 @@ async def test_apply_guardrail_evaluates_only_last_text(
         request_data=make_request_data(),
         input_type="request",
     )
-    assert client.evaluate_prompt.call_count == 1
-    assert client.evaluate_prompt.call_args.kwargs["prompt"] == "t3"
+    assert client.evaluate_prompt.call_count == 3
+    prompts = {c.kwargs["prompt"] for c in client.evaluate_prompt.call_args_list}
+    assert prompts == {"t1", "t2", "t3"}
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_on_earlier_user_turn(
+    guardrail_and_client, make_request_data
+):
+    """Bypass regression: disallowed content in an earlier user turn followed by
+    a benign final turn must still BLOCK. The old last-only path only saw the
+    benign final message and let the request through."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if prompt == "disallowed" else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {
+        "structured_messages": [
+            {"role": "user", "content": "disallowed"},
+            {"role": "assistant", "content": "ok"},
+            {"role": "user", "content": "hello"},
+        ],
+        "texts": ["disallowed", "ok", "hello"],
+    }
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["action"] == "BLOCK"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_when_oversized_message_trips_in_late_chunk(
+    guardrail_and_client, make_request_data
+):
+    """A single user message over the prompt limit is chunked; a BLOCK in a
+    non-first chunk still blocks the request."""
+    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence import (
+        chunked_evaluation,
+    )
+
+    guardrail, client = guardrail_and_client
+    long_prompt = ("safe " * 5000) + "TRIPWIRE"
+    assert len(long_prompt) > chunked_evaluation.MAX_PROMPT_CHARS
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "TRIPWIRE" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [long_prompt]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+    assert client.evaluate_prompt.call_count > 1
 
 
 @pytest.mark.asyncio
@@ -475,22 +518,3 @@ def test_build_analysis_context_falls_back_to_slash_split(monkeypatch, make_guar
     kwargs = AnalysisContext.call_args.kwargs
     assert kwargs["provider"] == "myorg"
     assert kwargs["model_name"] == "custom-llm"
-
-
-def test_extract_relevant_text_uses_structured_messages():
-    """Request path with structured_messages routes through get_last_user_message."""
-    from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.processing import (
-        extract_relevant_text,
-    )
-
-    inputs = {
-        "structured_messages": [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "ack"},
-            {"role": "user", "content": "latest user msg"},
-        ],
-        "texts": ["unused-fallback"],
-    }
-    text, source = extract_relevant_text(inputs, input_type="request")  # type: ignore[arg-type]
-    assert text == "latest user msg"
-    assert source == "structured_messages"
