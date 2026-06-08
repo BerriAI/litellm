@@ -29,6 +29,14 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObject = Any
 
+VERTEX_PROVIDER_METADATA_FIELDS = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)
+
 
 def redact_message_input_output_from_custom_logger(
     litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
@@ -100,6 +108,26 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
                     summary_item["text"] = redacted_str
 
 
+def _redact_vertex_provider_metadata(obj: Any) -> None:
+    if isinstance(obj, dict):
+        for field in VERTEX_PROVIDER_METADATA_FIELDS:
+            if field in obj:
+                obj[field] = []
+        hidden_params = obj.get("_hidden_params")
+        if isinstance(hidden_params, dict):
+            for field in VERTEX_PROVIDER_METADATA_FIELDS:
+                hidden_params.pop(field, None)
+        return
+
+    for field in VERTEX_PROVIDER_METADATA_FIELDS:
+        if hasattr(obj, field):
+            setattr(obj, field, [])
+    hidden_params = getattr(obj, "_hidden_params", None)
+    if isinstance(hidden_params, dict):
+        for field in VERTEX_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
+
+
 def _redact_standard_logging_object(model_call_details: dict):
     """Redact messages and response inside standard_logging_object if present."""
     standard_logging_object = model_call_details.get("standard_logging_object")
@@ -119,10 +147,12 @@ def _redact_standard_logging_object(model_call_details: dict):
             # ResponsesAPIResponse format - redact content in output items
             if isinstance(response.get("output"), list):
                 _redact_responses_api_output_dict(response["output"], redacted_str)
+            _redact_vertex_provider_metadata(response)
         elif isinstance(response, dict) and "choices" in response:
             # ModelResponse dict format - redact content in choices
             if isinstance(response.get("choices"), list):
                 _redact_model_response_dict_choices(response["choices"], redacted_str)
+            _redact_vertex_provider_metadata(response)
         elif isinstance(response, str):
             standard_logging_object["response"] = redacted_str
         else:
@@ -174,6 +204,7 @@ def perform_redaction(model_call_details: dict, result):
         if hasattr(_streaming_response, "choices"):
             for choice in _streaming_response.choices:
                 _redact_choice_content(choice)
+            _redact_vertex_provider_metadata(_streaming_response)
         elif hasattr(_streaming_response, "output"):
             _redact_responses_api_output(_streaming_response.output)
             # Redact reasoning field in ResponsesAPIResponse
@@ -200,12 +231,14 @@ def perform_redaction(model_call_details: dict, result):
             if hasattr(_result, "choices") and _result.choices is not None:
                 for choice in _result.choices:
                     _redact_choice_content(choice)
+            _redact_vertex_provider_metadata(_result)
         elif isinstance(_result, dict) and "choices" in _result:
             # Handle dict representation of ModelResponse (e.g., from model_dump())
             if _result.get("choices") is not None:
                 _redact_model_response_dict_choices(
                     _result["choices"], "redacted-by-litellm"
                 )
+            _redact_vertex_provider_metadata(_result)
         elif isinstance(_result, dict) and "output" in _result:
             if isinstance(_result.get("output"), list):
                 _redact_responses_api_output_dict(
