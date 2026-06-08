@@ -36,6 +36,15 @@ class RedisSemanticCache(BaseCache):
 
     DEFAULT_REDIS_INDEX_NAME: str = "litellm_semantic_cache_index"
     CACHE_KEY_FIELD_NAME: str = "litellm_cache_key"
+    API_KEY_HASH_FIELD_NAME: str = "litellm_user_api_key_hash"
+    TEAM_ID_FIELD_NAME: str = "litellm_user_api_key_team_id"
+    USER_ID_FIELD_NAME: str = "litellm_user_id"
+    _SCOPE_FIELD_TO_METADATA_KEY: Tuple[Tuple[str, str], ...] = (
+        (API_KEY_HASH_FIELD_NAME, "user_api_key_hash"),
+        (TEAM_ID_FIELD_NAME, "user_api_key_team_id"),
+        (TEAM_ID_FIELD_NAME, "team_id"),
+        (USER_ID_FIELD_NAME, "user_id"),
+    )
 
     def __init__(
         self,
@@ -124,6 +133,15 @@ class RedisSemanticCache(BaseCache):
             "type": "tag",
         }
 
+    @classmethod
+    def _filterable_fields(cls) -> List[Dict[str, str]]:
+        return [
+            cls._cache_key_filterable_field(),
+            {"name": cls.API_KEY_HASH_FIELD_NAME, "type": "tag"},
+            {"name": cls.TEAM_ID_FIELD_NAME, "type": "tag"},
+            {"name": cls.USER_ID_FIELD_NAME, "type": "tag"},
+        ]
+
     def _init_semantic_cache(
         self,
         semantic_cache_cls: Any,
@@ -144,7 +162,7 @@ class RedisSemanticCache(BaseCache):
                 redis_url=redis_url,
                 vectorizer=cache_vectorizer,
                 distance_threshold=self.distance_threshold,
-                filterable_fields=[self._cache_key_filterable_field()],
+                filterable_fields=self._filterable_fields(),
                 overwrite=False,
             )
         except ValueError as exc:
@@ -162,7 +180,7 @@ class RedisSemanticCache(BaseCache):
                     redis_url=redis_url,
                     vectorizer=cache_vectorizer,
                     distance_threshold=self.distance_threshold,
-                    filterable_fields=[self._cache_key_filterable_field()],
+                    filterable_fields=self._filterable_fields(),
                     overwrite=False,
                 )
             except ValueError as isolated_exc:
@@ -178,25 +196,84 @@ class RedisSemanticCache(BaseCache):
                     redis_url=redis_url,
                     vectorizer=cache_vectorizer,
                     distance_threshold=self.distance_threshold,
-                    filterable_fields=[self._cache_key_filterable_field()],
+                    filterable_fields=self._filterable_fields(),
                     overwrite=True,
                 )
 
-    def _get_cache_filters(self, key: str) -> Dict[str, str]:
-        return {self.CACHE_KEY_FIELD_NAME: str(key)}
+    def _get_metadata_from_kwargs(self, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        metadata: Dict[str, Any] = {}
+        for key in ("metadata", "litellm_metadata"):
+            value = kwargs.get(key)
+            if isinstance(value, dict):
+                metadata.update(value)
 
-    def _get_cache_key_filter_expression(self, key: str) -> Any:
+        litellm_params = kwargs.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            value = litellm_params.get("metadata")
+            if isinstance(value, dict):
+                metadata.update(value)
+
+        return metadata
+
+    def _get_scope_filters(self, **kwargs) -> List[Tuple[str, str]]:
+        metadata = self._get_metadata_from_kwargs(kwargs)
+        filters: List[Tuple[str, str]] = []
+        seen_fields: set[str] = set()
+        for field_name, metadata_key in self._SCOPE_FIELD_TO_METADATA_KEY:
+            value = metadata.get(metadata_key)
+            if value and field_name not in seen_fields:
+                filters.append((field_name, str(value)))
+                seen_fields.add(field_name)
+        return filters
+
+    def _get_scope_filter(self, **kwargs) -> Optional[Tuple[str, str]]:
+        filters = self._get_scope_filters(**kwargs)
+        return filters[0] if filters else None
+
+    def _get_cache_filters(self, key: str, **kwargs) -> Dict[str, str]:
+        filters = {self.CACHE_KEY_FIELD_NAME: str(key)}
+        for field_name, value in self._get_scope_filters(**kwargs):
+            filters[field_name] = value
+        return filters
+
+    def _get_scope_filter_expression(self, **kwargs) -> Any:
+        scope_filter = self._get_scope_filter(**kwargs)
+        if scope_filter is None:
+            return None
+
         from redisvl.query.filter import Tag  # type: ignore[import-not-found, import-untyped]
 
-        return Tag(self.CACHE_KEY_FIELD_NAME) == str(key)
+        return Tag(scope_filter[0]) == scope_filter[1]
 
-    def _cache_hit_matches_key(self, cache_hit: Dict[str, Any], key: str) -> bool:
-        # Pre-isolation entries with no ``litellm_cache_key`` field cannot be
-        # safely reassigned to a caller's scope and are treated as misses.
-        cached_key = cache_hit.get(self.CACHE_KEY_FIELD_NAME)
-        if isinstance(cached_key, bytes):
-            cached_key = cached_key.decode("utf-8")
-        return cached_key is not None and str(cached_key) == str(key)
+    def _cache_hit_matches_scope(self, cache_hit: Dict[str, Any], **kwargs) -> bool:
+        scope_filters = self._get_scope_filters(**kwargs)
+        if not scope_filters:
+            return not any(
+                self._normalize_scope_value(cache_hit.get(field_name)) is not None
+                for field_name in self._scope_field_names()
+            )
+
+        for field_name, expected_value in scope_filters:
+            cached_value = self._normalize_scope_value(cache_hit.get(field_name))
+            if cached_value is not None and cached_value == expected_value:
+                return True
+        return False
+
+    @classmethod
+    def _scope_field_names(cls) -> Tuple[str, ...]:
+        return (
+            cls.API_KEY_HASH_FIELD_NAME,
+            cls.TEAM_ID_FIELD_NAME,
+            cls.USER_ID_FIELD_NAME,
+        )
+
+    @staticmethod
+    def _normalize_scope_value(value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, bytes):
+            value = value.decode("utf-8")
+        return str(value)
 
     def _get_ttl(self, **kwargs) -> Optional[int]:
         """
@@ -288,7 +365,7 @@ class RedisSemanticCache(BaseCache):
             value_str = str(value)
 
             store_kwargs: Dict[str, Any] = {
-                "filters": self._get_cache_filters(key),
+                "filters": self._get_cache_filters(key, **kwargs),
             }
 
             # Get TTL and store in Redis semantic cache
@@ -323,12 +400,15 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             prompt = get_str_from_messages(messages)
-            # Check the cache for semantically similar prompts in this exact
-            # LiteLLM cache-key scope.
+            # Keep caller isolation separate from prompt similarity. Filtering
+            # on the full request hash would make KNN unreachable for
+            # non-identical prompts.
             check_kwargs: Dict[str, Any] = {
                 "prompt": prompt,
-                "filter_expression": self._get_cache_key_filter_expression(key),
             }
+            filter_expression = self._get_scope_filter_expression(**kwargs)
+            if filter_expression is not None:
+                check_kwargs["filter_expression"] = filter_expression
             results = self.llmcache.check(**check_kwargs)
 
             # Return None if no similar prompts found
@@ -338,8 +418,8 @@ class RedisSemanticCache(BaseCache):
 
             # Process the best matching result
             cache_hit = results[0]
-            if not self._cache_hit_matches_key(cache_hit=cache_hit, key=key):
-                print_verbose("Redis semantic-cache hit did not match cache key scope")
+            if not self._cache_hit_matches_scope(cache_hit=cache_hit, **kwargs):
+                print_verbose("Redis semantic-cache hit did not match caller scope")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
             vector_distance = float(cache_hit["vector_distance"])
@@ -442,7 +522,7 @@ class RedisSemanticCache(BaseCache):
 
             store_kwargs: Dict[str, Any] = {
                 "vector": prompt_embedding,
-                "filters": self._get_cache_filters(key),
+                "filters": self._get_cache_filters(key, **kwargs),
             }
 
             # Get TTL and store in Redis semantic cache
@@ -483,13 +563,16 @@ class RedisSemanticCache(BaseCache):
             # Generate embedding for the prompt
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)
 
-            # Check the cache for semantically similar prompts in this exact
-            # LiteLLM cache-key scope.
+            # Keep caller isolation separate from prompt similarity. Filtering
+            # on the full request hash would make KNN unreachable for
+            # non-identical prompts.
             check_kwargs: Dict[str, Any] = {
                 "prompt": prompt,
                 "vector": prompt_embedding,
-                "filter_expression": self._get_cache_key_filter_expression(key),
             }
+            filter_expression = self._get_scope_filter_expression(**kwargs)
+            if filter_expression is not None:
+                check_kwargs["filter_expression"] = filter_expression
             results = await self.llmcache.acheck(**check_kwargs)
 
             # handle results / cache hit
@@ -498,8 +581,8 @@ class RedisSemanticCache(BaseCache):
                 return None
 
             cache_hit = results[0]
-            if not self._cache_hit_matches_key(cache_hit=cache_hit, key=key):
-                print_verbose("Redis semantic-cache hit did not match cache key scope")
+            if not self._cache_hit_matches_scope(cache_hit=cache_hit, **kwargs):
+                print_verbose("Redis semantic-cache hit did not match caller scope")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
             vector_distance = float(cache_hit["vector_distance"])

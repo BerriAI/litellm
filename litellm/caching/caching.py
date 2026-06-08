@@ -511,7 +511,6 @@ class Cache:
         try:  # never block execution
             if self.should_use_cache(**kwargs) is not True:
                 return
-            messages = kwargs.get("messages", [])
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             else:
@@ -523,12 +522,13 @@ class Cache:
                     or cache_control_args.get("s-max-age")
                     or float("inf")
                 )
+                cache_kwargs = {k: v for k, v in kwargs.items() if k != "cache_key"}
                 if dynamic_cache_object is not None:
                     cached_result = dynamic_cache_object.get_cache(
-                        cache_key, messages=messages
+                        cache_key, **cache_kwargs
                     )
                 else:
-                    cached_result = self.cache.get_cache(cache_key, messages=messages)
+                    cached_result = self.cache.get_cache(cache_key, **cache_kwargs)
                 return self._get_cache_logic(
                     cached_result=cached_result, max_age=max_age
                 )
