@@ -26,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 
 GALILEO_CLOUD_API_BASE_URL = "https://api.galileo.ai"
 # Cap the in-memory buffer so persistent flush failures (e.g. Galileo
@@ -88,6 +89,52 @@ class GalileoObserve(CustomLogger):
         if self.use_v2_api:
             return bool(self.api_key)
         return bool(self.username and self.password)
+
+    async def async_health_check(self) -> IntegrationHealthCheckStatus:
+        try:
+            if not self.project_id:
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message="GALILEO_PROJECT_ID environment variable not set",
+                )
+
+            if not self.base_url:
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message="GALILEO_BASE_URL environment variable not set",
+                )
+
+            if not self.use_v2_api and (not self.username or not self.password):
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message=(
+                        "GALILEO_API_KEY or GALILEO_USERNAME and GALILEO_PASSWORD "
+                        "environment variables must be set"
+                    ),
+                )
+
+            if not await self._ensure_headers():
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message="Galileo authentication failed",
+                )
+
+            response = await self.async_httpx_handler.get(
+                url=f"{self.base_url}/current_user",
+                headers=self.headers,
+            )
+            if response.status_code >= 400:
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message=(f"Galileo API returned HTTP {response.status_code}"),
+                )
+
+            return IntegrationHealthCheckStatus(status="healthy", error_message=None)
+        except Exception as e:
+            return IntegrationHealthCheckStatus(
+                status="unhealthy",
+                error_message=f"Galileo health check failed: {str(e)}",
+            )
 
     async def async_set_galileo_headers(self) -> None:
         galileo_login_response = await self.async_httpx_handler.post(
@@ -399,9 +446,9 @@ class GalileoObserve(CustomLogger):
         return prompt
 
     @staticmethod
-    def _serialize_galileo_output(value: Any) -> Optional[str]:
+    def _serialize_galileo_output(value: Any) -> str:
         if value is None:
-            return None
+            return ""
         if isinstance(value, str):
             return value
 
@@ -460,11 +507,11 @@ class GalileoObserve(CustomLogger):
         response_obj: Any,
         level: str = "DEFAULT",
         status_message: Optional[str] = None,
-    ) -> Tuple[str, Optional[str], Any]:
+    ) -> Tuple[str, str, Any]:
         """
         Mirror Langfuse _get_langfuse_input_output_content for Galileo ingest.
 
-        Returns (input_text, output_text, messages_for_span). output_text None skips ingest.
+        Returns (input_text, output_text, messages_for_span).
         """
         call_type = kwargs.get("call_type")
         prompt = self._build_prompt(kwargs)
@@ -477,10 +524,11 @@ class GalileoObserve(CustomLogger):
             return self._prompt_to_input_text(prompt), status_message, prompt
 
         if response_obj is not None and (
-            call_type == "embedding"
+            call_type in ("embedding", "aembedding")
             or isinstance(response_obj, litellm.EmbeddingResponse)
         ):
-            return self._prompt_to_input_text(prompt), None, prompt
+            # Match Langfuse OTEL: log embeddings without serializing vectors.
+            return self._prompt_to_input_text(prompt), "embedding-output", prompt
 
         if response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
             output = self._get_chat_content_for_galileo(response_obj)
@@ -549,7 +597,7 @@ class GalileoObserve(CustomLogger):
         ):
             input_val = kwargs.get("input")
             return (
-                self._serialize_galileo_output(input_val) or "",
+                self._serialize_galileo_output(input_val),
                 self._serialize_galileo_output(response_obj),
                 input_val,
             )
@@ -574,11 +622,11 @@ class GalileoObserve(CustomLogger):
                 kwargs.get("messages") or [],
             )
 
-        return self._prompt_to_input_text(prompt), None, kwargs.get("messages") or []
+        return self._prompt_to_input_text(prompt), "", kwargs.get("messages") or []
 
     def get_output_str_from_response(
         self, response_obj: Any, kwargs: Dict[str, Any]
-    ) -> Optional[str]:
+    ) -> str:
         _, output_text, _ = self._get_galileo_input_output_content(
             kwargs=kwargs, response_obj=response_obj
         )
@@ -659,11 +707,6 @@ class GalileoObserve(CustomLogger):
         input_text, output_text, messages = self._get_galileo_input_output_content(
             kwargs=kwargs, response_obj=response_obj
         )
-        if output_text is None:
-            verbose_logger.debug(
-                "Galileo Logger: skipping %s — no text output to log", _call_type
-            )
-            return
 
         raw_start = slo.get("startTime")
         raw_end = slo.get("endTime")
