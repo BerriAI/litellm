@@ -26,6 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 
 GALILEO_CLOUD_API_BASE_URL = "https://api.galileo.ai"
 # Cap the in-memory buffer so persistent flush failures (e.g. Galileo
@@ -89,62 +90,57 @@ class GalileoObserve(CustomLogger):
             return bool(self.api_key)
         return bool(self.username and self.password)
 
-    async def async_health_check(self) -> dict:
+    async def async_health_check(self) -> IntegrationHealthCheckStatus:
         try:
             if not self.project_id:
-                return {
-                    "status": "unhealthy",
-                    "error_message": "GALILEO_PROJECT_ID environment variable not set",
-                }
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message="GALILEO_PROJECT_ID environment variable not set",
+                )
 
             if not self.base_url:
-                return {
-                    "status": "unhealthy",
-                    "error_message": "GALILEO_BASE_URL environment variable not set",
-                }
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message="GALILEO_BASE_URL environment variable not set",
+                )
 
             if self.use_v2_api:
                 if not self.api_key:
-                    return {
-                        "status": "unhealthy",
-                        "error_message": "GALILEO_API_KEY environment variable not set",
-                    }
+                    return IntegrationHealthCheckStatus(
+                        status="unhealthy",
+                        error_message="GALILEO_API_KEY environment variable not set",
+                    )
             elif not self.username or not self.password:
-                return {
-                    "status": "unhealthy",
-                    "error_message": (
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message=(
                         "GALILEO_USERNAME and GALILEO_PASSWORD environment "
                         "variables must be set"
                     ),
-                }
+                )
 
             if not await self._ensure_headers():
-                return {
-                    "status": "unhealthy",
-                    "error_message": "Galileo authentication failed",
-                }
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message="Galileo authentication failed",
+                )
 
             response = await self.async_httpx_handler.get(
                 url=f"{self.base_url}/current_user",
                 headers=self.headers,
             )
             if response.status_code >= 400:
-                return {
-                    "status": "unhealthy",
-                    "error_message": (
-                        f"Galileo API returned HTTP {response.status_code}"
-                    ),
-                }
+                return IntegrationHealthCheckStatus(
+                    status="unhealthy",
+                    error_message=(f"Galileo API returned HTTP {response.status_code}"),
+                )
 
-            return {
-                "status": "healthy",
-                "message": "Galileo credentials are configured properly",
-            }
+            return IntegrationHealthCheckStatus(status="healthy", error_message=None)
         except Exception as e:
-            return {
-                "status": "unhealthy",
-                "error_message": f"Galileo health check failed: {str(e)}",
-            }
+            return IntegrationHealthCheckStatus(
+                status="unhealthy",
+                error_message=f"Galileo health check failed: {str(e)}",
+            )
 
     async def async_set_galileo_headers(self) -> None:
         galileo_login_response = await self.async_httpx_handler.post(
