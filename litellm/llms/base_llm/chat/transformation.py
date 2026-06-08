@@ -108,10 +108,9 @@ class BaseConfig(ABC):
         return type_to_response_format_param(response_format=response_format)
 
     def is_thinking_enabled(self, non_default_params: dict) -> bool:
-        return (
-            non_default_params.get("thinking", {}).get("type") == "enabled"
-            or non_default_params.get("reasoning_effort") is not None
-        )
+        return (non_default_params.get("thinking") or {}).get(
+            "type"
+        ) == "enabled" or non_default_params.get("reasoning_effort") is not None
 
     def is_max_tokens_in_request(self, non_default_params: dict) -> bool:
         """
@@ -442,6 +441,14 @@ class BaseConfig(ABC):
     def post_stream_processing(self, stream: Any) -> Any:
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
+
+    def apply_assembled_streaming_response_metadata(
+        self,
+        response: "ModelResponse",
+        chunks: List[Any],
+    ) -> None:
+        """Hook for providers to merge chunk metadata into assembled streaming responses."""
+        return None
 
     def calculate_additional_costs(
         self, model: str, prompt_tokens: int, completion_tokens: int

@@ -9,20 +9,14 @@ vi.mock("antd", () => ({
   Select: Object.assign(
     ({ value, onChange, children }: any) => (
       <div data-testid="ant-select">
-        <select
-          data-testid="strategy-select"
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-        >
+        <select data-testid="strategy-select" value={value ?? ""} onChange={(e) => onChange(e.target.value)}>
           {children}
         </select>
       </div>
     ),
     {
-      Option: ({ value, children }: any) => (
-        <option value={value}>{children}</option>
-      ),
-    }
+      Option: ({ value, children }: any) => <option value={value}>{children}</option>,
+    },
   ),
 }));
 

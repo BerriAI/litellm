@@ -50,7 +50,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
   const [isTesting, setIsTesting] = useState(false);
 
   const filteredGuardrails = guardrailsList.filter((guardrail) =>
-    guardrail.guardrail_name?.toLowerCase().includes(searchQuery.toLowerCase())
+    guardrail.guardrail_name?.toLowerCase().includes(searchQuery.toLowerCase()),
   );
 
   const toggleGuardrailSelection = (guardrailName: string) => {
@@ -95,7 +95,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
             latency,
           });
         }
-      })
+      }),
     );
 
     setTestResults(results);
@@ -103,14 +103,10 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
     setIsTesting(false);
 
     if (results.length > 0) {
-      NotificationsManager.success(
-        `${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`
-      );
+      NotificationsManager.success(`${results.length} guardrail${results.length > 1 ? "s" : ""} applied successfully`);
     }
     if (errors.length > 0) {
-      NotificationsManager.fromBackend(
-        `${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`
-      );
+      NotificationsManager.fromBackend(`${errors.length} guardrail${errors.length > 1 ? "s" : ""} failed`);
     }
   };
 
@@ -139,11 +135,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                 </div>
               ) : filteredGuardrails.length === 0 ? (
                 <div className="p-4">
-                  <Empty
-                    description={
-                      searchQuery ? "No guardrails match your search" : "No guardrails available"
-                    }
-                  />
+                  <Empty description={searchQuery ? "No guardrails match your search" : "No guardrails available"} />
                 </div>
               ) : (
                 <List
@@ -166,24 +158,18 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                         title={
                           <div className="flex items-center space-x-2">
                             <ExperimentOutlined className="text-gray-400" />
-                            <span className="font-medium text-gray-900">
-                              {guardrail.guardrail_name}
-                            </span>
+                            <span className="font-medium text-gray-900">{guardrail.guardrail_name}</span>
                           </div>
                         }
                         description={
                           <div className="text-xs space-y-1 mt-1">
                             <div>
                               <span className="font-medium">Type: </span>
-                              <span className="text-gray-600">
-                                {guardrail.litellm_params.guardrail}
-                              </span>
+                              <span className="text-gray-600">{guardrail.litellm_params.guardrail}</span>
                             </div>
                             <div>
                               <span className="font-medium">Mode: </span>
-                              <span className="text-gray-600">
-                                {guardrail.litellm_params.mode}
-                              </span>
+                              <span className="text-gray-600">{guardrail.litellm_params.mode}</span>
                             </div>
                           </div>
                         }
@@ -217,8 +203,7 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
                     Select Guardrails to Test
                   </Typography.Paragraph>
                   <Typography.Paragraph className="text-center text-gray-500 max-w-md">
-                    Choose one or more guardrails from the left sidebar to start testing and
-                    comparing results.
+                    Choose one or more guardrails from the left sidebar to start testing and comparing results.
                   </Typography.Paragraph>
                 </div>
               ) : (
@@ -242,4 +227,3 @@ const GuardrailTestPlayground: React.FC<GuardrailTestPlaygroundProps> = ({
 };
 
 export default GuardrailTestPlayground;
-

@@ -18,11 +18,13 @@ export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" |
 
 interface UseMcpOAuthFlowOptions {
   accessToken: string | null;
-  getCredentials: () => {
-    client_id?: string;
-    client_secret?: string;
-    scopes?: string[];
-  } | undefined;
+  getCredentials: () =>
+    | {
+        client_id?: string;
+        client_secret?: string;
+        scopes?: string[];
+      }
+    | undefined;
   getTemporaryPayload: () => Record<string, any> | null;
   onTokenReceived: (tokenResponse: Record<string, any>) => void;
   onBeforeRedirect?: () => void;
@@ -134,7 +136,9 @@ export const useMcpOAuthFlow = ({
       }
 
       let registeredClient: { clientId?: string; clientSecret?: string } = {};
-      const hasPreconfiguredCredentials = Boolean(temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret);
+      const hasPreconfiguredCredentials = Boolean(
+        temporaryPayload.credentials?.client_id && temporaryPayload.credentials?.client_secret,
+      );
 
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
@@ -224,12 +228,21 @@ export const useMcpOAuthFlow = ({
       if (!storedPayload) {
         return;
       }
-      
+
+      // Guard: the callback page writes to the admin result key for *all* OAuth
+      // flows (including the tools re-auth flow).  Only proceed if this hook's
+      // own flow state exists, meaning startOAuthFlow() was actually called here.
+      // Without this guard, a tools re-auth redirect triggers a spurious
+      // "OAuth session state was lost" error from this hook.
+      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
+      if (!storedFlowState) {
+        return;
+      }
+
       // Mark as processing
       processingRef.current = true;
       payload = JSON.parse(storedPayload);
-      const storedFlowState = getStorageItem(FLOW_STATE_KEY);
-      flowState = storedFlowState ? JSON.parse(storedFlowState) : null;
+      flowState = JSON.parse(storedFlowState);
     } catch (err) {
       clearStoredFlow();
       processingRef.current = false;
@@ -258,7 +271,7 @@ export const useMcpOAuthFlow = ({
       if (!flowState || !flowState.state || !flowState.codeVerifier || !flowState.serverId) {
         throw new Error(
           "OAuth session state was lost. This can happen if you have strict browser privacy settings. " +
-          "Please try again and ensure cookies/storage is enabled."
+            "Please try again and ensure cookies/storage is enabled.",
         );
       }
       if (!payload.state || payload.state !== flowState.state) {
@@ -279,6 +292,7 @@ export const useMcpOAuthFlow = ({
         clientSecret: flowState.clientSecret,
         codeVerifier: flowState.codeVerifier,
         redirectUri: flowState.redirectUri,
+        accessToken,
       });
 
       onTokenReceived(token);

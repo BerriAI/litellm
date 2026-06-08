@@ -14,6 +14,8 @@ import os
 import sys
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../.."))
 )
@@ -1229,6 +1231,104 @@ class TestAnthropicThinkingSignatureSelfHeal:
         assert "thinking" not in data
         assert data["messages"] == []
 
+    def test_strip_empty_text_blocks_from_anthropic_messages(self):
+        """Covers #22930.  The core regression scenario: an assistant message
+        with an empty text block alongside ``tool_use`` loses the empty block
+        and keeps the ``tool_use``; a whole message that reduces to no blocks
+        is dropped; whitespace-only text counts as empty; the caller's list
+        is never mutated."""
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        tu = {"type": "tool_use", "id": "x", "name": "Bash", "input": {}}
+        msgs = [
+            {"role": "user", "content": "hello"},
+            {"role": "assistant", "content": [{"type": "text", "text": "  \n "}, tu]},
+            {"role": "assistant", "content": [{"type": "text", "text": ""}]},
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert len(out) == 2 and out[0] is msgs[0]
+        assert [b["type"] for b in out[1]["content"]] == ["tool_use"]
+        assert len(msgs[1]["content"]) == 2  # caller's content unchanged
+
+    def test_strip_empty_text_blocks_preserves_thinking_blocks(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "plan", "signature": "sig"},
+                    {"type": "text", "text": ""},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["thinking"]
+
+    def test_strip_empty_text_blocks_treats_null_text_as_empty(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": None},
+                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+
+    def test_strip_empty_text_blocks_treats_missing_text_key_as_empty(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text"},
+                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+
+    def test_strip_empty_text_blocks_leaves_non_empty_text_alone(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [{"role": "assistant", "content": [{"type": "text", "text": "hi"}]}]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert out[0] is msgs[0]  # untouched messages keep identity
+
+    def test_strip_empty_text_blocks_treats_non_string_text_value_as_empty(self):
+        from litellm.llms.anthropic.common_utils import (
+            strip_empty_text_blocks_from_anthropic_messages,
+        )
+
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": 123},
+                    {"type": "tool_result", "tool_use_id": "x", "content": "y"},
+                ],
+            }
+        ]
+        out = strip_empty_text_blocks_from_anthropic_messages(msgs)
+        assert [b["type"] for b in out[0]["content"]] == ["tool_result"]
+
     def test_anthropic_messages_config_http_retry_helpers(self):
         import httpx
 
@@ -1280,3 +1380,73 @@ class TestAnthropicThinkingSignatureSelfHeal:
         config.transform_anthropic_messages_request_on_http_error(err, data)
         assert "thinking" not in data
         assert data["messages"] == []
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so detection doesn't depend on the
+    network-fetched ``main`` copy (which lacks this branch's flags until merge)."""
+    import litellm
+
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
+
+
+class TestClaudeOpus48AdaptiveThinking:
+    """Opus 4.8 requires adaptive thinking (``thinking.type='adaptive'`` +
+    ``output_config.effort``). Detection is driven by the
+    ``supports_adaptive_thinking`` cost-map flag, resolved through provider
+    prefixes. Before the fix the Bedrock entries lacked the flag and the lookup
+    didn't strip the ``us.anthropic.``/``invoke/`` prefixes, so a
+    ``bedrock/us.anthropic.claude-opus-4-8`` call sent the legacy
+    ``thinking.type='enabled'`` shape and Bedrock rejected it (issue #29188)."""
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-8",
+            "anthropic/claude-opus-4-8",
+            "anthropic.claude-opus-4-8",
+            "bedrock/us.anthropic.claude-opus-4-8",
+            "bedrock/invoke/us.anthropic.claude-opus-4-8",
+            "bedrock/eu.anthropic.claude-opus-4-8",
+            "vertex_ai/claude-opus-4-8",
+            "azure_ai/claude-opus-4-8",
+        ],
+    )
+    def test_adaptive_thinking_detected_for_opus_4_8(self, local_model_cost_map, model):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    def test_resolver_reads_flag_through_bedrock_invoke_prefix(
+        self, local_model_cost_map
+    ):
+        """The resolver fix: ``bedrock/invoke/...`` resolves to the flagged
+        Bedrock entry. Pure ``_supports_factory`` without prefix-stripping
+        returns False here, which is why the data-only fix alone was not enough."""
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert (
+            AnthropicModelInfo._supports_model_capability(
+                "bedrock/invoke/us.anthropic.claude-opus-4-8",
+                "supports_adaptive_thinking",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        "model",
+        ["claude-opus-4-5", "claude-3-7-sonnet", "claude-3-5-haiku-20241022"],
+    )
+    def test_non_adaptive_models_not_detected(self, local_model_cost_map, model):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False

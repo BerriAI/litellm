@@ -30,6 +30,7 @@ const mockUserDropdownData = vi.hoisted(() => ({
 vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
   const React = await import("react");
   const { useState } = React;
+  const { Button } = await import("antd");
   const localStorageUtils = await import("@/utils/localStorageUtils");
   return {
     default: function MockUserDropdown({ onLogout }: { onLogout: () => void }) {
@@ -37,9 +38,9 @@ vi.mock("./Navbar/UserDropdown/UserDropdown", async (importOriginal) => {
       const [open, setOpen] = useState(false);
       return (
         <div>
-          <button type="button" onClick={() => setOpen(!open)}>
-            User
-          </button>
+          <Button type="text" aria-label="Open account menu" onClick={() => setOpen(!open)}>
+            Account
+          </Button>
           {open && (
             <div data-testid="user-dropdown-content">
               <span>{userId}</span>
@@ -90,7 +91,7 @@ vi.mock("./Navbar/CommunityEngagementButtons/CommunityEngagementButtons", () => 
 
 // Create mock functions that can be controlled in tests
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
-let mockUseHealthReadinessImpl = () => ({ data: null as any });
+let mockUseHealthReadinessDetailsImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
 let mockUseAuthorizedImpl = () => ({
   userId: "test-user",
@@ -99,12 +100,17 @@ let mockUseAuthorizedImpl = () => ({
   premiumUser: false,
 });
 
+const useHealthReadinessDetailsSpy = vi.hoisted(() => vi.fn());
+
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness", () => ({
-  useHealthReadiness: () => mockUseHealthReadinessImpl(),
+vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadinessDetails", () => ({
+  useHealthReadinessDetails: (accessToken: string | null | undefined) => {
+    useHealthReadinessDetailsSpy(accessToken);
+    return mockUseHealthReadinessDetailsImpl();
+  },
 }));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -131,30 +137,25 @@ Object.defineProperty(window, "location", {
 
 describe("Navbar", () => {
   const defaultProps = {
-    userID: "test-user",
-    userEmail: "test@example.com",
-    userRole: "Admin",
-    premiumUser: false,
     proxySettings: {},
     setProxySettings: vi.fn(),
     accessToken: "test-token",
     isPublicPage: false,
-    isDarkMode: false,
-    toggleDarkMode: vi.fn(),
   };
 
   it("should render without crashing", () => {
     renderWithProviders(<Navbar {...defaultProps} />);
 
+    expect(screen.getByRole("button", { name: /^notifications$/i })).toBeInTheDocument();
     expect(screen.getByText("Docs")).toBeInTheDocument();
-    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /open account menu/i })).toBeInTheDocument();
   });
 
   it("should display user information in dropdown", async () => {
     const user = userEvent.setup();
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();
@@ -193,7 +194,7 @@ describe("Navbar", () => {
     });
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Premium")).toBeInTheDocument();
@@ -204,14 +205,30 @@ describe("Navbar", () => {
   });
 
   it("should show version badge when health data contains version", () => {
-    mockUseHealthReadinessImpl = () => ({ data: { litellm_version: "1.0.0" } });
+    mockUseHealthReadinessDetailsImpl = () => ({ data: { litellm_version: "1.0.0" } });
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
     expect(screen.getByText("v1.0.0")).toBeInTheDocument();
 
     // Reset mock
-    mockUseHealthReadinessImpl = () => ({ data: null });
+    mockUseHealthReadinessDetailsImpl = () => ({ data: null });
+  });
+
+  it("should forward accessToken to the readiness hook", () => {
+    useHealthReadinessDetailsSpy.mockClear();
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken="my-token" />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith("my-token");
+  });
+
+  it("should forward a null accessToken to the readiness hook (disables the hook)", () => {
+    useHealthReadinessDetailsSpy.mockClear();
+
+    renderWithProviders(<Navbar {...defaultProps} accessToken={null} />);
+
+    expect(useHealthReadinessDetailsSpy).toHaveBeenCalledWith(null);
   });
 
   it("should use custom logo from theme context", () => {
@@ -226,11 +243,12 @@ describe("Navbar", () => {
     mockUseThemeImpl = () => ({ logoUrl: null });
   });
 
-  it("should hide user dropdown on public pages", () => {
+  it("should hide user dropdown and notifications on public pages", () => {
     const publicPageProps = { ...defaultProps, isPublicPage: true };
     renderWithProviders(<Navbar {...publicPageProps} />);
 
-    expect(screen.queryByText("User")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /open account menu/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^notifications$/i })).not.toBeInTheDocument();
   });
 
   it("should handle hide new features toggle", async () => {
@@ -244,7 +262,7 @@ describe("Navbar", () => {
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();
@@ -269,7 +287,7 @@ describe("Navbar", () => {
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
-    await user.click(screen.getByText("User"));
+    await user.click(screen.getByRole("button", { name: /open account menu/i }));
 
     await waitFor(() => {
       expect(screen.getByText("test-user")).toBeInTheDocument();

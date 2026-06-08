@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     LiteLLM_ManagedVectorStore,
 )
@@ -12,9 +13,11 @@ from litellm.proxy.vector_store_endpoints.management_endpoints import (
     _resolve_embedding_config,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
+    assert_proxy_admin_for_vector_store_index_management,
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
 )
+from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.vector_stores import IndexCreateRequest
 
 router = APIRouter()
@@ -575,17 +578,20 @@ async def index_create(
     """
     from litellm.proxy.proxy_server import prisma_client
 
+    assert_proxy_admin_for_vector_store_index_management(
+        user_api_key_dict,
+        operation="create",
+    )
+
     if prisma_client is None:
         raise HTTPException(
             status_code=500,
             detail=CommonProxyErrors.db_not_connected_error.value,
         )
     ## 1. check if index already exists
-    existing_index = (
-        await prisma_client.db.litellm_managedvectorstoreindextable.find_unique(
-            where={"index_name": index_create_request.index_name}
-        )
-    )
+    existing_index = await ManagedVectorStoreIndexRepository(
+        prisma_client
+    ).table.find_unique(where={"index_name": index_create_request.index_name})
 
     ## 2. set created_by and updated_by
 
@@ -599,7 +605,7 @@ async def index_create(
     index_data = index_create_request.model_dump(exclude_none=True)
     index_data["created_by"] = user_api_key_dict.user_id
     index_data["updated_by"] = user_api_key_dict.user_id
-    new_index = await prisma_client.db.litellm_managedvectorstoreindextable.create(
+    new_index = await ManagedVectorStoreIndexRepository(prisma_client).table.create(
         data=jsonify_object(index_data)
     )
 

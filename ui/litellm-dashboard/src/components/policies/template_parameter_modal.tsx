@@ -16,7 +16,7 @@ interface TemplateParameterModalProps {
   template: any;
   onConfirm: (
     parameters: Record<string, string>,
-    enrichmentOptions?: { model?: string; competitors?: string[] }
+    enrichmentOptions?: { model?: string; competitors?: string[] },
   ) => void;
   onCancel: () => void;
   isLoading?: boolean;
@@ -48,9 +48,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
   const hasEnrichment = !!template?.llm_enrichment;
   const enrichmentParam = hasEnrichment ? template.llm_enrichment.parameter : null;
 
-  const nonEnrichmentParams = hasEnrichment
-    ? parameters.filter((p) => p.name !== enrichmentParam)
-    : parameters;
+  const nonEnrichmentParams = hasEnrichment ? parameters.filter((p) => p.name !== enrichmentParam) : parameters;
 
   useEffect(() => {
     if (visible && template) {
@@ -83,9 +81,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     try {
       const fetchedModels = await modelHubCall(accessToken);
       if (fetchedModels?.data?.length > 0) {
-        const models = fetchedModels.data
-          .map((item: any) => item.model_group as string)
-          .sort();
+        const models = fetchedModels.data.map((item: any) => item.model_group as string).sort();
         setAvailableModels(models);
       }
     } catch (error) {
@@ -179,9 +175,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
     .filter((p) => p.required)
     .every((p) => (parameterValues[p.name] || "").trim().length > 0);
 
-  const brandNameFilled = enrichmentParam
-    ? (parameterValues[enrichmentParam] || "").trim().length > 0
-    : true;
+  const brandNameFilled = enrichmentParam ? (parameterValues[enrichmentParam] || "").trim().length > 0 : true;
 
   const canContinue = hasEnrichment
     ? allNonEnrichmentFilled && brandNameFilled && competitorTags.length > 0
@@ -196,9 +190,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       title={
         <div>
           <h3 className="text-lg font-semibold mb-1">{template?.title}</h3>
-          <p className="text-sm text-gray-500 font-normal">
-            Configure competitor blocking for your brand
-          </p>
+          <p className="text-sm text-gray-500 font-normal">Configure competitor blocking for your brand</p>
         </div>
       }
       open={visible}
@@ -208,12 +200,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
         <Button key="cancel" variant="secondary" onClick={onCancel} disabled={isLoading}>
           Cancel
         </Button>,
-        <Button
-          key="confirm"
-          onClick={handleConfirm}
-          loading={isLoading}
-          disabled={!canContinue || isLoading}
-        >
+        <Button key="confirm" onClick={handleConfirm} loading={isLoading} disabled={!canContinue || isLoading}>
           {isLoading ? "Creating guardrails..." : "Continue"}
         </Button>,
       ]}
@@ -241,9 +228,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
         {hasEnrichment && (
           <>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Competitor Discovery
-              </label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Competitor Discovery</label>
               <Radio.Group
                 value={competitorMode}
                 onChange={(e) => setCompetitorMode(e.target.value)}
@@ -293,9 +278,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                     showSearch
                     className="w-full"
                     options={availableModels.map((m) => ({ label: m, value: m }))}
-                    filterOption={(input, option) =>
-                      (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-                    }
+                    filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
                   />
                 </div>
 
@@ -315,9 +298,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               <label className="block text-sm font-medium text-gray-700 mb-1">
                 Competitor Names
                 {competitorTags.length > 0 && (
-                  <span className="text-gray-400 font-normal ml-2">
-                    ({competitorTags.length})
-                  </span>
+                  <span className="text-gray-400 font-normal ml-2">({competitorTags.length})</span>
                 )}
               </label>
               <Select
@@ -330,9 +311,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                 open={false}
                 suffixIcon={null}
               />
-              <p className="text-xs text-gray-500 mt-1">
-                Type a name and press Enter to add. Click ✕ to remove.
-              </p>
+              <p className="text-xs text-gray-500 mt-1">Type a name and press Enter to add. Click ✕ to remove.</p>
               {statusMessage && (
                 <div className="flex items-center gap-2 mt-2 p-2 bg-blue-50 rounded border border-blue-100">
                   <Spin size="small" />
@@ -341,7 +320,8 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               )}
               {Object.keys(variationsMap).length > 0 && !statusMessage && (
                 <p className="text-xs text-green-600 mt-1">
-                  ✓ {Object.values(variationsMap).flat().length} alternate spellings & variations auto-generated for guardrail matching
+                  ✓ {Object.values(variationsMap).flat().length} alternate spellings & variations auto-generated for
+                  guardrail matching
                 </p>
               )}
             </div>
@@ -349,9 +329,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
             {/* Refinement input — shown after initial generation in AI mode */}
             {competitorMode === "ai" && hasGenerated && competitorTags.length > 0 && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Refine List
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Refine List</label>
                 <div className="flex gap-2">
                   <TextInput
                     placeholder="e.g. add 10 more from Asia, increase to 50 total..."

@@ -33,7 +33,7 @@ async def test_send_llm_exception_alert_success():
 
     # Create mock request kwargs
     request_kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
@@ -65,7 +65,7 @@ async def test_send_llm_exception_alert_no_logger():
 
     # Create mock request kwargs
     request_kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "messages": [{"role": "user", "content": "Hello"}],
     }
 
@@ -94,7 +94,7 @@ async def test_send_llm_exception_alert_when_proxy_server_request_in_kwargs():
 
     # Create mock request kwargs
     request_kwargs = {
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-5-mini",
         "messages": [{"role": "user", "content": "Hello"}],
         "proxy_server_request": {},
     }
@@ -145,7 +145,7 @@ async def test_async_raise_no_deployment_exception():
         # Call the function
         result = await async_raise_no_deployment_exception(
             litellm_router_instance=mock_router,
-            model="gpt-3.5-turbo",
+            model="gpt-5-mini",
             parent_otel_span=None,
         )
 
@@ -153,7 +153,7 @@ async def test_async_raise_no_deployment_exception():
     assert isinstance(result, RouterRateLimitError)
 
     # Assert that the error has the correct properties
-    assert result.model == "gpt-3.5-turbo"
+    assert result.model == "gpt-5-mini"
     assert result.cooldown_time == 30.0
     assert result.enable_pre_call_checks is True
 
@@ -166,7 +166,7 @@ async def test_async_raise_no_deployment_exception():
         assert isinstance(item, str), f"Expected string ID, got {type(item)}: {item}"
 
     # Verify mock calls
-    mock_router.get_model_ids.assert_called_once_with(model_name="gpt-3.5-turbo")
+    mock_router.get_model_ids.assert_called_once_with(model_name="gpt-5-mini")
     mock_router.cooldown_cache.get_min_cooldown.assert_called_once_with(
         model_ids=["deployment-1", "deployment-2"], parent_otel_span=None
     )
@@ -241,7 +241,7 @@ async def test_async_raise_no_deployment_exception_none_cooldown_list():
         # After the defensive fix, this should handle None gracefully and return empty list
         result = await async_raise_no_deployment_exception(
             litellm_router_instance=mock_router,
-            model="gpt-4",
+            model="gpt-5.5",
             parent_otel_span=None,
         )
 
@@ -249,7 +249,7 @@ async def test_async_raise_no_deployment_exception_none_cooldown_list():
     assert isinstance(result, RouterRateLimitError)
 
     # Assert that the error has the correct properties
-    assert result.model == "gpt-4"
+    assert result.model == "gpt-5.5"
     assert result.cooldown_time == 45.0
     assert result.enable_pre_call_checks is True
 

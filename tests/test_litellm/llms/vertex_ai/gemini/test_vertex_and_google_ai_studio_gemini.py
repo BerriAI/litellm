@@ -1459,6 +1459,26 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
     assert len(result[0]) == 1
 
 
+def test_set_stream_metadata_mirrors_non_streaming_safety_field_names():
+    safety_ratings = [
+        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
+    ]
+
+    model_response = ModelResponse()
+    VertexGeminiConfig._set_stream_metadata_on_response(
+        model_response=model_response,
+        grounding_metadata=[],
+        url_context_metadata=[],
+        safety_ratings=safety_ratings,
+        citation_metadata=[],
+    )
+
+    assert getattr(model_response, "vertex_ai_safety_ratings") == safety_ratings
+    assert getattr(model_response, "vertex_ai_safety_results") == safety_ratings
+    assert model_response._hidden_params["vertex_ai_safety_ratings"] == safety_ratings
+    assert model_response._hidden_params["vertex_ai_safety_results"] == safety_ratings
+
+
 def test_vertex_ai_tool_call_id_format():
     """
     Test that tool call IDs have the correct format and length.
@@ -2095,6 +2115,125 @@ def test_is_gemini_3_or_newer():
 
     # Edge cases
     assert VertexGeminiConfig._is_gemini_3_or_newer("") == False
+
+
+def test_forward_gemini_function_call_id_vertex_vs_google_ai_studio():
+    """Vertex AI rejects `id` on function_call/function_response; Google AI Studio accepts it on Gemini 3.5+."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    model = "gemini-3.5-flash"
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai") is False
+    )
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(model, "vertex_ai_beta")
+        is False
+    )
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, "gemini") is True
+    assert VertexGeminiConfig._forward_gemini_function_call_id(model, None) is False
+    assert (
+        VertexGeminiConfig._forward_gemini_function_call_id(
+            "gemini-2.5-flash", "gemini"
+        )
+        is False
+    )
+
+
+def test_vertex_ai_gemini_35_tool_calls_omit_function_call_id():
+    """Regression: Vertex must not send OpenAI tool_call id inside Gemini function_call parts."""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {"role": "user", "content": "Explore this directory"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "call_50e7e0fe0989464a89f188eda443",
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"filePath": "/tmp"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_50e7e0fe0989464a89f188eda443",
+            "content": "ok",
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages,
+        model="gemini-3.5-flash",
+        custom_llm_provider="vertex_ai",
+    )
+
+    for content in contents:
+        for part in content.get("parts", []):
+            fc = part.get("function_call")
+            if fc is not None:
+                assert "id" not in fc, f"Vertex payload must not include id: {fc}"
+            fr = part.get("function_response")
+            if fr is not None:
+                assert "id" not in fr, f"Vertex payload must not include id: {fr}"
+
+
+def test_google_ai_studio_gemini_35_tool_calls_include_function_call_id():
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    tool_call_id = "call_50e7e0fe0989464a89f188eda443"
+    messages = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": "read",
+                        "arguments": '{"filePath": "/tmp"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": "ok",
+        },
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages,
+        model="gemini-3.5-flash",
+        custom_llm_provider="gemini",
+    )
+
+    function_call_ids = []
+    function_response_ids = []
+    for content in contents:
+        for part in content.get("parts", []):
+            fc = part.get("function_call")
+            if fc is not None:
+                function_call_ids.append(fc.get("id"))
+            fr = part.get("function_response")
+            if fr is not None:
+                function_response_ids.append(fr.get("id"))
+
+    assert function_call_ids == [tool_call_id]
+    assert function_response_ids == [tool_call_id]
 
 
 def test_reasoning_effort_maps_to_thinking_level_gemini_3():
@@ -2959,6 +3098,115 @@ def test_vertex_ai_gemini3_tool_combination_no_drop():
     assert len(tools) == 3
 
 
+def test_get_optional_params_keeps_google_search_with_server_side_flag():
+    """
+    include_server_side_tool_invocations must be in non_default_params before
+    map_openai_params runs (not only via add_provider_specific_params after).
+    """
+    from litellm.utils import get_optional_params
+
+    optional_params = get_optional_params(
+        model="gemini-3.1-pro-preview",
+        custom_llm_provider="gemini",
+        tools=[
+            {"google_search": {}},
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": "Send a message back",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    },
+                },
+            },
+        ],
+        include_server_side_tool_invocations=True,
+    )
+
+    assert optional_params.get("include_server_side_tool_invocations") is True
+    tool_keys = set()
+    for tool in optional_params.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" in tool_keys
+
+
+def test_map_openai_params_tools_before_include_server_side_flag():
+    """
+    Request bodies often list tools before include_server_side_tool_invocations.
+    Search tools must not be dropped when the flag is present later in the dict.
+    """
+    v = VertexGeminiConfig()
+    optional_params: dict = {}
+    non_default_params = {
+        "tools": [
+            {"google_search": {}},
+            {
+                "type": "function",
+                "function": {
+                    "name": "send_message",
+                    "description": "Send a message back",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"message": {"type": "string"}},
+                        "required": ["message"],
+                    },
+                },
+            },
+        ],
+        "include_server_side_tool_invocations": True,
+    }
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-3.1-pro-preview",
+        drop_params=True,
+    )
+
+    assert result.get("include_server_side_tool_invocations") is True
+    tool_keys = set()
+    for tool in result.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" in tool_keys
+
+
+def test_vertex_ai_mixed_tools_and_web_search_options_drops_search():
+    """
+    When function tools and web_search_options are sent separately (Codex-style),
+    search tools are dropped unless include_server_side_tool_invocations is set.
+    """
+    v = VertexGeminiConfig()
+    optional_params: dict = {}
+    non_default_params = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "exec_command", "description": "Run a command"},
+            }
+        ],
+        "web_search_options": {},
+    }
+
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-3.5-flash",
+        drop_params=True,
+    )
+
+    assert not result.get("include_server_side_tool_invocations")
+    tool_keys = set()
+    for tool in result.get("tools", []):
+        tool_keys.update(tool.keys())
+    assert "function_declarations" in tool_keys
+    assert "googleSearch" not in tool_keys
+
+
 def test_vertex_ai_openai_web_search_tool_transformation():
     """
     Test that OpenAI-style web_search and web_search_preview tools are transformed to googleSearch.
@@ -3499,7 +3747,12 @@ def test_video_metadata_supported_for_all_gemini_models():
         }
     ]
 
-    for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-pro-preview"]:
+    for model in [
+        "gemini-1.5-pro",
+        "gemini-2.5-flash",
+        "gemini-2.5-pro",
+        "gemini-3-pro-preview",
+    ]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
 
         file_part = None
@@ -3509,19 +3762,25 @@ def test_video_metadata_supported_for_all_gemini_models():
                 break
 
         assert file_part is not None, f"{model}: file part should exist"
-        assert "video_metadata" in file_part, f"{model}: video_metadata should be present"
+        assert (
+            "video_metadata" in file_part
+        ), f"{model}: video_metadata should be present"
         assert file_part["video_metadata"]["fps"] == 5, f"{model}: fps should be 5"
 
     # Per-part media_resolution is Gemini 3+ only; 2.x uses generation_config global
     for model in ["gemini-3-pro-preview"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" in file_part, f"{model}: media_resolution should be present"
+        assert (
+            "media_resolution" in file_part
+        ), f"{model}: media_resolution should be present"
 
     for model in ["gemini-1.5-pro", "gemini-2.5-flash", "gemini-2.5-pro"]:
         contents = _gemini_convert_messages_with_history(messages=messages, model=model)
         file_part = next(p for p in contents[0]["parts"] if "file_data" in p)
-        assert "media_resolution" not in file_part, f"{model}: per-part media_resolution should not be set"
+        assert (
+            "media_resolution" not in file_part
+        ), f"{model}: per-part media_resolution should not be set"
 
 
 def test_chunk_parser_handles_prompt_feedback_block():
@@ -4154,8 +4413,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_in_prompt():
 
     # DOCUMENT tokens should be included in text_tokens: 8 (TEXT) + 774 (DOCUMENT) = 782
     assert result.prompt_tokens_details is not None
-    assert result.prompt_tokens_details.text_tokens == 782, \
-        "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
+    assert (
+        result.prompt_tokens_details.text_tokens == 782
+    ), "DOCUMENT modality tokens should be added to text_tokens (8 TEXT + 774 DOCUMENT = 782)"
 
     # Verify completion token details
     assert result.completion_tokens_details is not None
@@ -4190,8 +4450,9 @@ def test_vertex_ai_usage_metadata_with_document_tokens_cached():
 
     # DOCUMENT cached tokens map to cached_text_tokens, so:
     # text_tokens = (8 TEXT + 774 DOCUMENT) - 400 cached = 382
-    assert result.prompt_tokens_details.text_tokens == 382, \
-        "text_tokens should be (8 + 774) - 400 cached = 382"
+    assert (
+        result.prompt_tokens_details.text_tokens == 382
+    ), "text_tokens should be (8 + 774) - 400 cached = 382"
     assert result.prompt_tokens_details.cached_tokens == 400
 
 
@@ -4290,3 +4551,448 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+def test_chunk_parser_raises_on_429_error_chunk():
+    """Test chunk_parser raises VertexAIError on 429 RESOURCE_EXHAUSTED error chunk"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": 429,
+            "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",
+            "status": "RESOURCE_EXHAUSTED",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 429
+    assert "RESOURCE_EXHAUSTED" in exc_info.value.message
+    assert "Resource exhausted" in exc_info.value.message
+
+
+def test_chunk_parser_raises_on_500_error_chunk():
+    """Test chunk_parser raises VertexAIError on 500 INTERNAL error chunk"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": 500,
+            "message": "Internal error encountered.",
+            "status": "INTERNAL",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "INTERNAL" in exc_info.value.message
+
+
+def test_chunk_parser_raises_on_error_chunk_with_minimal_fields():
+    """Test chunk_parser handles error chunks with missing optional fields"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": 429,
+            "message": "Resource exhausted.",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 429
+
+
+def test_chunk_parser_normal_chunk_unaffected_by_error_check():
+    """Test that normal streaming chunks still work correctly after error check addition"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    normal_chunk = {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [{"text": "Hello"}],
+                },
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {
+            "promptTokenCount": 5,
+            "candidatesTokenCount": 1,
+            "totalTokenCount": 6,
+        },
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    result = streaming_obj.chunk_parser(normal_chunk)
+    assert result is not None
+    assert len(result.choices) > 0
+    assert result.choices[0].delta.content == "Hello"
+
+
+def test_chunk_parser_raises_on_non_dict_error():
+    """Test chunk_parser raises VertexAIError when chunk['error'] is not a dict"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": "something went wrong"}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Unexpected error format" in exc_info.value.message
+
+
+def test_chunk_parser_raises_on_string_error_code():
+    """Test chunk_parser correctly converts string error code to int"""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # code field is a string "429" rather than an int
+    error_chunk = {
+        "error": {
+            "code": "429",
+            "message": "Resource exhausted.",
+            "status": "RESOURCE_EXHAUSTED",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 429
+    assert isinstance(exc_info.value.status_code, int)
+
+
+def test_chunk_parser_error_chunk_explicit_null_code_uses_500():
+    """JSON null for code must not call int(None); status defaults to 500."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": None,
+            "message": "Something went wrong.",
+            "status": "UNKNOWN",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Something went wrong" in exc_info.value.message
+
+
+def test_chunk_parser_error_chunk_non_numeric_code_defaults_to_500():
+    """Non-numeric code must not become ValueError -> RuntimeError in __next__."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {
+        "error": {
+            "code": "NOT_A_NUMBER",
+            "message": "Malformed.",
+            "status": "INVALID",
+        }
+    }
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Malformed" in exc_info.value.message
+
+
+def test_chunk_parser_error_chunk_empty_dict_defaults_to_500():
+    """Empty error object {} uses default code 500 and default message/status strings."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": {}}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "UNKNOWN" in exc_info.value.message
+    assert "Unknown error" in exc_info.value.message
+
+
+def test_chunk_parser_error_chunk_non_dict_int_value():
+    """Non-dict error payloads (e.g. bare JSON number) must raise with status 500, not TypeError."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": 503}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Unexpected error format" in exc_info.value.message
+    assert "503" in exc_info.value.message
+
+
+def test_chunk_parser_error_chunk_non_dict_null_value():
+    """JSON null for error must hit the non-dict branch (same as int/string)."""
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    error_chunk = {"error": None}
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=iter([]),
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    with pytest.raises(VertexAIError) as exc_info:
+        streaming_obj.chunk_parser(error_chunk)
+
+    assert exc_info.value.status_code == 500
+    assert "Unexpected error format" in exc_info.value.message
+
+
+def test_mid_stream_429_error_raises_during_iteration():
+    """
+    Simulate a full streaming scenario: normal thinking chunks arrive first,
+    then a 429 RESOURCE_EXHAUSTED error chunk arrives mid-stream.
+    Verify that ModelResponseIterator raises VertexAIError during iteration.
+    """
+    import json
+    from unittest.mock import Mock
+
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        ModelResponseIterator,
+    )
+
+    # Simulate Vertex AI SSE stream: normal chunks followed by a 429 error chunk
+    normal_chunk_1 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "Let me think about this...", "thought": True}
+                        ],
+                    },
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 5,
+                "totalTokenCount": 15,
+            },
+            "modelVersion": "gemini-3.1-flash-image-preview",
+        }
+    )
+
+    normal_chunk_2 = json.dumps(
+        {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [
+                            {"text": "I'll generate the image now.", "thought": True}
+                        ],
+                    },
+                    "index": 0,
+                }
+            ],
+            "usageMetadata": {
+                "promptTokenCount": 10,
+                "candidatesTokenCount": 12,
+                "totalTokenCount": 22,
+            },
+        }
+    )
+
+    error_chunk = json.dumps(
+        {
+            "error": {
+                "code": 429,
+                "message": "Resource exhausted. Please try again later. Please refer to https://cloud.google.com/vertex-ai/generative-ai/docs/error-code-429 for more details.",
+                "status": "RESOURCE_EXHAUSTED",
+            }
+        }
+    )
+
+    # Build a mock SSE stream (lines returned by iter_lines)
+    sse_lines = iter([normal_chunk_1, normal_chunk_2, error_chunk])
+
+    logging_obj = Mock()
+    logging_obj.optional_params = {}
+
+    streaming_obj = ModelResponseIterator(
+        streaming_response=sse_lines,
+        sync_stream=True,
+        logging_obj=logging_obj,
+    )
+
+    # Iterate the stream: first chunks should succeed, then 429 error should be raised
+    results = []
+    with pytest.raises(VertexAIError) as exc_info:
+        for chunk in streaming_obj:
+            if chunk is not None:
+                results.append(chunk)
+
+    # Verify: received normal chunks before the error
+    assert (
+        len(results) >= 1
+    ), "Should have received at least 1 normal chunk before the error"
+
+    # Verify: 429 error is properly raised
+    assert exc_info.value.status_code == 429
+    assert "RESOURCE_EXHAUSTED" in str(exc_info.value.message)

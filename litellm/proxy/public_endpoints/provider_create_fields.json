@@ -2571,6 +2571,24 @@
     "default_model_placeholder": "snowflake/mistral-7b"
   },
   {
+    "provider": "Soniox",
+    "provider_display_name": "Soniox",
+    "litellm_provider": "soniox",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "Soniox API Key",
+        "placeholder": null,
+        "tooltip": "Currently only the async Speech-to-Text REST API (api.soniox.com) is supported. Realtime STT (stt-rt.soniox.com) and TTS (tts-rt.soniox.com) are not yet available.",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "soniox/stt-async-v4"
+  },
+  {
     "provider": "TEXT_COMPLETION_CODESTRAL",
     "provider_display_name": "Text-Completion-Codestral",
     "litellm_provider": "text-completion-codestral",

@@ -61,9 +61,7 @@ export function LoggingSettingsView({
         <div className="flex items-center gap-2">
           <CogIcon className="h-4 w-4 text-blue-600" />
           <span className="font-semibold text-gray-900">Logging Integrations</span>
-          <Tag color="blue">
-            {loggingConfigs.length}
-          </Tag>
+          <Tag color="blue">{loggingConfigs.length}</Tag>
         </div>
 
         {loggingConfigs.length > 0 ? (
@@ -90,9 +88,7 @@ export function LoggingSettingsView({
                       </span>
                     </div>
                   </div>
-                  <Tag color={getEventTypeColor(config.callback_type)}>
-                    {getEventTypeLabel(config.callback_type)}
-                  </Tag>
+                  <Tag color={getEventTypeColor(config.callback_type)}>{getEventTypeLabel(config.callback_type)}</Tag>
                 </div>
               );
             })}
@@ -110,9 +106,7 @@ export function LoggingSettingsView({
         <div className="flex items-center gap-2">
           <BanIcon className="h-4 w-4 text-red-600" />
           <span className="font-semibold text-gray-900">Disabled Callbacks</span>
-          <Tag color="red">
-            {disabledCallbacks.length}
-          </Tag>
+          <Tag color="red">{disabledCallbacks.length}</Tag>
         </div>
 
         {disabledCallbacks.length > 0 ? (
@@ -138,9 +132,7 @@ export function LoggingSettingsView({
                       <span className="block text-xs text-red-600">Disabled for this key</span>
                     </div>
                   </div>
-                  <Tag color="red">
-                    Disabled
-                  </Tag>
+                  <Tag color="red">Disabled</Tag>
                 </div>
               );
             })}

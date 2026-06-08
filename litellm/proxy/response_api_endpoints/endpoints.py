@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import ModifyResponseException
@@ -935,12 +935,146 @@ async def cancel_response(
         )
 
 
+async def _read_ws_model_from_first_frame(
+    websocket: WebSocket,
+) -> Optional[tuple]:
+    """Read the first WS frame and return (model, raw_message), or None on error.
+
+    Sends an appropriate error frame and closes the socket before returning None.
+    """
+    try:
+        first_message = await asyncio.wait_for(websocket.receive_text(), timeout=30)
+    except asyncio.TimeoutError:
+        await websocket.close(code=1008, reason="Timed out waiting for first message")
+        return None
+    except WebSocketDisconnect:
+        return None
+    except Exception:
+        verbose_proxy_logger.exception(
+            "Responses WebSocket error reading first message"
+        )
+        await websocket.close(code=1011, reason="Internal server error")
+        return None
+
+    try:
+        first_event = json.loads(first_message)
+    except json.JSONDecodeError:
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "First message is not valid JSON.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="Invalid JSON in first message")
+        return None
+
+    if (
+        not isinstance(first_event, dict)
+        or first_event.get("type") != "response.create"
+    ):
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "First message must be a response.create JSON object.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="Invalid first message")
+        return None
+
+    model = _extract_model_from_first_ws_event(first_event)
+    if not model:
+        await websocket.send_text(
+            json.dumps(
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "invalid_request_error",
+                        "message": "No model provided. Supply ?model=<model> in the URL or include 'model' in the first response.create event.",
+                    },
+                }
+            )
+        )
+        await websocket.close(code=1008, reason="No model provided")
+        return None
+
+    return model, first_message
+
+
+def _extract_model_from_first_ws_event(first_event: Any) -> Optional[str]:
+    """Extract model from a response.create WS event, handling flat and nested formats.
+
+    Flat:   {"type": "response.create", "model": "gpt-4o", ...}
+    Nested: {"type": "response.create", "response": {"model": "gpt-4o", ...}}
+    """
+    if not isinstance(first_event, dict):
+        return None
+    nested = first_event.get("response")
+    return (
+        nested.get("model") if isinstance(nested, dict) else None
+    ) or first_event.get("model")
+
+
+async def _enforce_responses_ws_first_frame_model_auth(
+    request: Request,
+    model: str,
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Optional[Any],
+) -> None:
+    from litellm.proxy.auth.user_api_key_auth import (
+        _enforce_key_and_fallback_model_access,
+        _run_centralized_common_checks,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_model_list,
+        master_key,
+        user_custom_auth,
+    )
+
+    request_data = {"model": model}
+    route = request.scope.get("path") or "/v1/responses"
+    if master_key is None and not (
+        general_settings.get("enable_jwt_auth", False)
+        or general_settings.get("enable_oauth2_auth", False)
+        or general_settings.get("enable_oauth2_proxy_auth", False)
+    ):
+        return
+    if user_custom_auth is not None and not general_settings.get(
+        "custom_auth_run_common_checks", False
+    ):
+        return
+    await _enforce_key_and_fallback_model_access(
+        valid_token=user_api_key_dict,
+        request_data=request_data,
+        route=route,
+        request=request,
+        llm_model_list=llm_model_list,
+        llm_router=llm_router,
+    )
+    await _run_centralized_common_checks(
+        user_api_key_auth_obj=user_api_key_dict,
+        request=request,
+        request_data=request_data,
+        route=route,
+    )
+
+
 @router.websocket("/v1/responses")
 @router.websocket("/responses")
 async def responses_websocket_endpoint(
     websocket: WebSocket,
-    model: str = fastapi.Query(
-        ..., description="The model to use for the responses WebSocket session."
+    model: Optional[str] = fastapi.Query(
+        None, description="The model to use for the responses WebSocket session."
     ),
     user_api_key_dict=Depends(user_api_key_auth_websocket),
 ):
@@ -949,6 +1083,10 @@ async def responses_websocket_endpoint(
 
     Keeps a persistent WebSocket connection for response.create events,
     enabling lower-latency agentic workflows with many tool-call round trips.
+
+    Follows the OpenAI split: the bearer token is validated at connection time
+    (before accept); the model is resolved either from the ?model= query param
+    or from the first response.create frame, whichever is present.
 
     See: https://developers.openai.com/api/docs/guides/websocket-mode/
     """
@@ -966,7 +1104,8 @@ async def responses_websocket_endpoint(
     )
     from litellm.proxy.route_llm_request import route_request
 
-    # Accept the WebSocket handshake
+    # Accept the WebSocket handshake. Key was already validated by the Depends
+    # above; we can safely accept regardless of whether ?model= was supplied.
     requested_protocols = [
         p.strip()
         for p in (websocket.headers.get("sec-websocket-protocol") or "").split(",")
@@ -977,10 +1116,19 @@ async def responses_websocket_endpoint(
         accept_kwargs["subprotocol"] = requested_protocols[0]
     await websocket.accept(**accept_kwargs)
 
+    first_message: Optional[str] = None
+    if not model:
+        result = await _read_ws_model_from_first_frame(websocket)
+        if result is None:
+            return
+        model, first_message = result
+
     data: Dict[str, Any] = {
         "model": model,
         "websocket": websocket,
     }
+    if first_message is not None:
+        data["first_message"] = first_message
 
     # Construct a synthetic Request for pre-call processing
     headers_list = list(websocket.scope.get("headers") or [])
@@ -993,14 +1141,23 @@ async def responses_websocket_endpoint(
     request = Request(scope=scope)
     request._url = websocket.url
 
+    _body_bytes = json.dumps({"model": model}).encode()
+
     async def return_body():
-        return f'{{"model": "{model}"}}'.encode()
+        return _body_bytes
 
     request.body = return_body  # type: ignore
 
     # Phase 1: pre-call processing (auth, guardrails, rate limits)
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
+        if first_message is not None:
+            await _enforce_responses_ws_first_frame_model_auth(
+                request=request,
+                model=model,
+                user_api_key_dict=user_api_key_dict,
+                llm_router=llm_router,
+            )
         (
             data,
             litellm_logging_obj,
@@ -1027,7 +1184,7 @@ async def responses_websocket_endpoint(
                     {
                         "type": "error",
                         "error": {
-                            "type": "pre_call_error",
+                            "type": "invalid_request_error",
                             "message": str(e),
                         },
                     }
@@ -1035,7 +1192,7 @@ async def responses_websocket_endpoint(
             )
         except Exception:
             pass
-        await websocket.close(code=1011, reason="Pre-call error")
+        await websocket.close(code=1008, reason="Pre-call error")
         return
 
     # Phase 2: route to upstream provider

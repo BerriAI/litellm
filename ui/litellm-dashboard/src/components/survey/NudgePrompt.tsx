@@ -76,8 +76,9 @@ export function NudgePrompt({
   if (showConfirmation) {
     return (
       <div
-        className={`fixed bottom-6 right-6 z-40 w-80 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden transform transition-all duration-300 ease-out ${isVisible ? "translate-y-0 opacity-100 scale-100" : "translate-y-4 opacity-0 scale-95"
-          }`}
+        className={`fixed bottom-6 right-6 z-40 w-80 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden transform transition-all duration-300 ease-out ${
+          isVisible ? "translate-y-0 opacity-100 scale-100" : "translate-y-4 opacity-0 scale-95"
+        }`}
       >
         <div className="p-4">
           <div className="flex items-center gap-3">
@@ -100,8 +101,9 @@ export function NudgePrompt({
 
   return (
     <div
-      className={`fixed bottom-6 right-6 z-40 w-80 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden transform transition-all duration-300 ease-out ${isVisible ? "translate-y-0 opacity-100 scale-100" : "translate-y-4 opacity-0 scale-95"
-        }`}
+      className={`fixed bottom-6 right-6 z-40 w-80 bg-white rounded-lg shadow-xl border border-gray-200 overflow-hidden transform transition-all duration-300 ease-out ${
+        isVisible ? "translate-y-0 opacity-100 scale-100" : "translate-y-4 opacity-0 scale-95"
+      }`}
     >
       {/* Progress bar at top showing time remaining */}
       <div className="h-1 bg-gray-100 w-full">
@@ -131,13 +133,7 @@ export function NudgePrompt({
           <Button type="primary" block onClick={onOpen} style={buttonStyle}>
             {buttonText}
           </Button>
-          <Button
-            variant="outlined"
-            danger
-            block
-            onClick={handleDontAskAgain}
-            className="text-xs"
-          >
+          <Button variant="outlined" danger block onClick={handleDontAskAgain} className="text-xs">
             Don&apos;t ask me again
           </Button>
         </div>
@@ -145,4 +141,3 @@ export function NudgePrompt({
     </div>
   );
 }
-
