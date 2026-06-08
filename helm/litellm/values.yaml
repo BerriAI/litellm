@@ -186,6 +186,16 @@ backend:
   envSecrets: []
   extraVolumes: []
   extraVolumeMounts: []
+  # Example — mount a custom CA for TLS to upstream LLM providers (mirrors gateway example above):
+  # extraVolumes:
+  #   - name: custom-ca
+  #     secret:
+  #       secretName: litellm-custom-ca
+  # extraVolumeMounts:
+  #   - name: custom-ca
+  #     mountPath: /etc/ssl/certs/custom-ca.crt
+  #     subPath: ca.crt
+  #     readOnly: true
   image:
     repository: ghcr.io/berriai/litellm-backend
     tag: ""
