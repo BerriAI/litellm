@@ -80,6 +80,15 @@ class TestAzureMAIImageEdit:
                 drop_params=True,
             )
 
+    def test_map_openai_params_invalid_size_format_raises(self):
+        config = AzureFoundryMAIImageEditConfig()
+        with pytest.raises(ValueError, match="Invalid size format: '1024xabc'"):
+            config.map_openai_params(
+                image_edit_optional_params={"size": "1024xabc"},
+                model="MAI-Image-2.5",
+                drop_params=True,
+            )
+
     def test_transform_image_edit_request_uses_image_field(self):
         config = AzureFoundryMAIImageEditConfig()
         image_bytes = io.BytesIO(b"fake-image-bytes")

@@ -73,7 +73,7 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
 
         if "x" in size:
             try:
-                map(int, size.lower().split("x"))
+                tuple(map(int, size.lower().split("x", 1)))
                 return
             except ValueError:
                 raise ValueError(
