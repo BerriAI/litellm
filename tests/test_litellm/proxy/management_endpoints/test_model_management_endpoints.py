@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     _get_team_deployments,
     clear_cache,
+    delete_team_models,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.types.router import Deployment, LiteLLM_Params, updateDeployment
@@ -2182,6 +2183,148 @@ class TestGetTeamDeployments:
         result = await _get_team_deployments(team_id, prisma_client)
         assert len(result) == 1
         assert result[0] is dep1
+
+
+def _model_row(model_id: str, team_id: str):
+    row = MagicMock()
+    row.model_id = model_id
+    row.model_name = f"model_name_{team_id}_{model_id}"
+    row.model_info = {"team_id": team_id}
+    return row
+
+
+class _TxProxyModelTable:
+    """Transactional proxy-model table that records the order of DB writes."""
+
+    def __init__(self, rows, events):
+        self._rows = list(rows)
+        self.events = events
+
+    async def find_many(self, where):
+        prefix = where["model_name"]["startswith"]
+        return [r for r in self._rows if r.model_name.startswith(prefix)]
+
+    async def delete_many(self, where):
+        ids = list(where["model_id"]["in"])
+        self.events.append(("delete_many", tuple(ids)))
+        self._rows = [r for r in self._rows if r.model_id not in ids]
+        return len(ids)
+
+
+class _TxPrismaClient:
+    """Minimal prisma stub whose ``db.tx()`` yields a transaction and records commit."""
+
+    def __init__(self, rows):
+        self.events: list = []
+        self._table = _TxProxyModelTable(rows, self.events)
+        tx = MagicMock()
+        tx.litellm_proxymodeltable = self._table
+        outer = self
+
+        class _TxCM:
+            async def __aenter__(self):
+                return tx
+
+            async def __aexit__(self, *exc):
+                outer.events.append(("commit",))
+                return False
+
+        self.db = MagicMock()
+        self.db.tx = MagicMock(return_value=_TxCM())
+
+
+class _RecordingRouter:
+    def __init__(self, events):
+        self.events = events
+        self.deleted: list = []
+
+    def delete_deployment(self, id):  # noqa: A002 - matches router signature
+        self.events.append(("router", id))
+        self.deleted.append(id)
+
+
+class TestDeleteTeamModels:
+    """delete_team_models must remove every team's BYOK models in one transaction
+    and sync the in-memory router only after that transaction commits."""
+
+    @pytest.mark.asyncio
+    async def test_deletes_all_teams_models_and_syncs_router(self):
+        rows = [_model_row("a1", "team_a"), _model_row("b1", "team_b")]
+        prisma = _TxPrismaClient(rows)
+        router = _RecordingRouter(prisma.events)
+
+        deleted = await delete_team_models(
+            team_ids=["team_a", "team_b"],
+            prisma_client=prisma,
+            llm_router=router,
+        )
+
+        assert sorted(deleted) == ["a1", "b1"]
+        assert sorted(router.deleted) == ["a1", "b1"]
+
+    @pytest.mark.asyncio
+    async def test_router_sync_happens_after_commit(self):
+        """Race-safety: the router is touched only once the DB transaction has
+        committed, so a rollback can never leave a deployment without its row."""
+        rows = [_model_row("a1", "team_a"), _model_row("b1", "team_b")]
+        prisma = _TxPrismaClient(rows)
+        router = _RecordingRouter(prisma.events)
+
+        await delete_team_models(
+            team_ids=["team_a", "team_b"], prisma_client=prisma, llm_router=router
+        )
+
+        commit_idx = prisma.events.index(("commit",))
+        router_indices = [i for i, e in enumerate(prisma.events) if e[0] == "router"]
+        delete_indices = [
+            i for i, e in enumerate(prisma.events) if e[0] == "delete_many"
+        ]
+        assert router_indices, "router was never synced"
+        assert all(i > commit_idx for i in router_indices)
+        assert all(i < commit_idx for i in delete_indices)
+
+    @pytest.mark.asyncio
+    async def test_only_owning_team_models_deleted(self):
+        """A row sharing the prefix but a different model_info.team_id is left alone."""
+        mine = _model_row("a1", "team_a")
+        intruder = MagicMock()
+        intruder.model_id = "x9"
+        intruder.model_name = "model_name_team_a_x9"
+        intruder.model_info = {"team_id": "someone_else"}
+        prisma = _TxPrismaClient([mine, intruder])
+        router = _RecordingRouter(prisma.events)
+
+        deleted = await delete_team_models(
+            team_ids=["team_a"], prisma_client=prisma, llm_router=router
+        )
+
+        assert deleted == ["a1"]
+        assert router.deleted == ["a1"]
+
+    @pytest.mark.asyncio
+    async def test_no_models_no_writes(self):
+        prisma = _TxPrismaClient([])
+        router = _RecordingRouter(prisma.events)
+
+        deleted = await delete_team_models(
+            team_ids=["team_a"], prisma_client=prisma, llm_router=router
+        )
+
+        assert deleted == []
+        assert router.deleted == []
+        assert not any(e[0] == "delete_many" for e in prisma.events)
+
+    @pytest.mark.asyncio
+    async def test_missing_router_is_safe(self):
+        rows = [_model_row("a1", "team_a")]
+        prisma = _TxPrismaClient(rows)
+
+        deleted = await delete_team_models(
+            team_ids=["team_a"], prisma_client=prisma, llm_router=None
+        )
+
+        assert deleted == ["a1"]
+        assert any(e[0] == "delete_many" for e in prisma.events)
 
 
 def _build_db_model_for_blocked_test():
