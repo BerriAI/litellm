@@ -188,7 +188,7 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
                     content_blocks: List[Dict[str, Any]] = []
                     if content:
                         content_blocks.append({"type": "text", "text": content})
-                    for tc in tool_calls:  # type: ignore[union-attr]
+                    for tc in tool_calls:  # type: ignore[attr-defined]
                         func = (
                             tc.get("function", {})
                             if isinstance(tc, dict)
@@ -385,7 +385,7 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
         )
 
         model_response.choices = [choice]
-        model_response.usage = usage  # type: ignore[assignment]
+        model_response.usage = usage  # type: ignore[attr-defined]
         model_response.model = "snowflake/" + response_json.get("model", model)
         model_response.id = response_json.get("id", "")
 
