@@ -45,9 +45,7 @@ async def test_cache_hit_skips_db():
     prisma = _stub_prisma_client()
     from litellm.proxy._types import UserAPIKeyAuth
 
-    seed = UserAPIKeyAuth(
-        token="hash-cached", user_id="u-cache", team_id="t-cache"
-    )
+    seed = UserAPIKeyAuth(token="hash-cached", user_id="u-cache", team_id="t-cache")
     await identity_cache.set("hash-cached", seed)
 
     result = await load_identity(
@@ -71,9 +69,7 @@ async def test_cache_miss_hits_db_once_and_caches():
         token="hash-db", user_id="u-db", team_id="t-db"
     )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ):
+    with patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()):
         result = await load_identity(
             hashed_token="hash-db",
             prisma_client=prisma,
@@ -97,9 +93,7 @@ async def test_warm_load_after_cold_does_not_hit_db():
         token="hash-warm", user_id="u-warm", team_id="t-warm"
     )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ):
+    with patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()):
         await load_identity(
             hashed_token="hash-warm",
             prisma_client=prisma,
@@ -146,9 +140,7 @@ async def test_bundled_user_survives_cache_roundtrip_as_typed_model():
     uak = UserAPIKeyAuth(
         api_key="sk-bundle",
         user_id="u-bundle",
-        user=LiteLLM_UserTable(
-            user_id="u-bundle", user_email="x@y.com", tpm_limit=10
-        ),
+        user=LiteLLM_UserTable(user_id="u-bundle", user_email="x@y.com", tpm_limit=10),
     )
     await identity_cache.set(uak.token, uak)
     got = await identity_cache.get(uak.token)
@@ -177,11 +169,12 @@ async def test_cold_path_bundles_user_into_cache():
             user_id=user_id, user_email="bundle@litellm.io", tpm_limit=42
         )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ), patch(
-        "litellm.proxy.auth.auth_checks.get_user_object",
-        side_effect=_fake_get_user_object,
+    with (
+        patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            side_effect=_fake_get_user_object,
+        ),
     ):
         result = await load_identity(
             hashed_token="hash-user",
@@ -206,9 +199,7 @@ async def test_hydrated_copy_is_request_scoped():
         token="hash-copy", user_id="u-copy", team_id="t-copy"
     )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ):
+    with patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()):
         a = await load_identity(
             hashed_token="hash-copy",
             prisma_client=prisma,

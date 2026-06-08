@@ -100,9 +100,7 @@ def traced(
 
     def _decorator(func: Callable) -> Callable:
         if not inspect.iscoroutinefunction(func):
-            raise TypeError(
-                f"@traced requires an async function; got {func!r}"
-            )
+            raise TypeError(f"@traced requires an async function; got {func!r}")
 
         @functools.wraps(func)
         async def _wrapper(*args, **kwargs):

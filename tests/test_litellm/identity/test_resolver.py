@@ -27,9 +27,7 @@ def _fake_request(headers=None, client_host=None):
 
 def _jwt(claims):
     def b(d):
-        return (
-            base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
-        )
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
 
     return f"{b({'alg':'HS256','typ':'JWT'})}.{b(claims)}.sig"
 

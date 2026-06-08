@@ -69,6 +69,7 @@ async def test_db_call_role_does_not_open_a_new_span():
 
 def test_decorator_rejects_sync_functions():
     with pytest.raises(TypeError):
+
         @traced("identity.sync-not-allowed", role=SpanRole.SERVICE)
         def sync_fn():
             return None
