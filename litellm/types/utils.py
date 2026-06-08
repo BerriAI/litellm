@@ -1540,6 +1540,11 @@ class ServerToolUse(BaseModel):
     web_search_requests: Optional[int] = None
     tool_search_requests: Optional[int] = None
 
+    def __getitem__(self, key: str) -> Optional[int]:
+        if key not in self.__class__.model_fields:
+            raise KeyError(key)
+        return getattr(self, key)
+
 
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
@@ -1570,7 +1575,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         completion_tokens_details: Optional[
             Union[CompletionTokensDetailsWrapper, dict]
         ] = None,
-        server_tool_use: Optional[ServerToolUse] = None,
+        server_tool_use: Optional[Union[ServerToolUse, dict]] = None,
         cost: Optional[float] = None,
         **params,
     ):
@@ -1670,6 +1675,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
         )
+
+        if isinstance(server_tool_use, dict):
+            server_tool_use = ServerToolUse(**server_tool_use)
 
         if server_tool_use is not None:
             self.server_tool_use = server_tool_use
@@ -3392,6 +3400,7 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     NEOSANTARA = "neosantara"
+    PARASAIL = "parasail"
     XIAOMI_MIMO = "xiaomi_mimo"
     TENSORMESH = "tensormesh"
     LITELLM_AGENT = "litellm_agent"

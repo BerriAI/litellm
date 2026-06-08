@@ -312,10 +312,26 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
             event_type = "output"
             hook_name = "apply_guardrail (response)"
 
-        ai_guard_payload = {
+        ai_guard_payload: dict[str, Any] = {
             "guard_input": guard_input.model_dump(mode="json"),
             "event_type": event_type,
         }
+
+        model = inputs.get("model")
+        if model:
+            ai_guard_payload["model"] = model
+
+        metadata = request_data.get("litellm_metadata", request_data.get("metadata"))
+        if isinstance(metadata, Mapping):
+            user_id = metadata.get("user_api_key_user_id")
+            if user_id:
+                ai_guard_payload["user_id"] = user_id
+
+            extra_info: dict[str, str] = {}
+            user_email = metadata.get("user_api_key_user_email")
+            if user_email:
+                extra_info["user_name"] = user_email
+            ai_guard_payload["extra_info"] = extra_info
 
         ai_guard_response = await self._call_crowdstrike_aidr_guard(
             ai_guard_payload, hook_name

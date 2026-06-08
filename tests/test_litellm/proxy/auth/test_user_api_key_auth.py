@@ -112,9 +112,69 @@ async def test_should_clear_stale_budget_reservation_when_budget_checks_skip():
         user_api_key_cache=MagicMock(),
         proxy_logging_obj=MagicMock(),
         skip_budget_checks=True,
+        general_settings={},
     )
 
     assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_disable_budget_reservation_skips_reservation():
+    """#27639: general_settings.disable_budget_reservation turns off the optimistic Redis
+    reservation so operators hit by phantom BudgetExceededError can opt out of it."""
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new=AsyncMock(return_value={"reserved_cost": 0.5, "entries": []}),
+    ) as mock_reserve:
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+            general_settings={"disable_budget_reservation": True},
+        )
+
+    mock_reserve.assert_not_called()
+    assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_budget_reservation_runs_when_not_disabled():
+    """Control for #27639: with the flag absent, the reservation still runs and is stored."""
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+    reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:test_token"}],
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new=AsyncMock(return_value=reservation),
+    ) as mock_reserve:
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+            general_settings={},
+        )
+
+    mock_reserve.assert_awaited_once()
+    assert user_api_key_auth_obj.budget_reservation == reservation
 
 
 @pytest.mark.asyncio

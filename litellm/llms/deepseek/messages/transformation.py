@@ -26,6 +26,9 @@ class DeepSeekAnthropicMessagesConfig(AnthropicMessagesConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "deepseek"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         return api_key or get_secret_str("DEEPSEEK_API_KEY") or litellm.api_key

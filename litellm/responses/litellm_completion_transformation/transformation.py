@@ -148,7 +148,9 @@ class LiteLLMCompletionResponsesConfig:
                 # which is equivalent to "required" in OpenAI format
                 return "required"
             elif tool_choice_type == "function":
-                # function type without name - fall back to required
+                function_name = tool_choice.get("name")
+                if function_name:
+                    return {"type": "function", "function": {"name": function_name}}
                 return "required"
 
         # Return as-is for unknown formats

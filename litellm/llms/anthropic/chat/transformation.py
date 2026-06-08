@@ -1607,6 +1607,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return _tool
 
+    def should_strip_billing_metadata(self) -> bool:
+        """
+        Whether to drop x-anthropic-billing-header system blocks before sending upstream.
+
+        The first-party Anthropic API uses these blocks for Claude Code attribution, so the
+        base config keeps them. Providers that reject them (e.g. Bedrock) override this to True.
+        """
+        return False
+
     def translate_system_message(
         self, messages: List[AllMessageValues]
     ) -> List[AnthropicSystemMessageContent]:
@@ -1614,7 +1623,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
-        Filters out system messages containing x-anthropic-billing-header metadata.
+        When should_strip_billing_metadata() is True, x-anthropic-billing-header system blocks are dropped.
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
@@ -1626,10 +1635,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
                         continue
-                    # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
-                    ):
+                    if self.should_strip_billing_metadata() and system_message_block[
+                        "content"
+                    ].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -1648,9 +1656,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
                             continue
-                        # Skip system messages containing x-anthropic-billing-header metadata
                         if (
-                            _content.get("type") == "text"
+                            self.should_strip_billing_metadata()
+                            and _content.get("type") == "text"
                             and text_value
                             and text_value.startswith("x-anthropic-billing-header:")
                         ):

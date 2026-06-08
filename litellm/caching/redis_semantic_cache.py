@@ -213,6 +213,78 @@ class RedisSemanticCache(BaseCache):
             ttl = int(ttl)
         return ttl
 
+    @classmethod
+    def _get_prompt_from_kwargs(cls, **kwargs) -> Optional[str]:
+        """
+        Extract a semantic-cache prompt from chat or Responses API request kwargs.
+        """
+        messages = kwargs.get("messages")
+        if messages:
+            return get_str_from_messages(messages)
+
+        if "input" not in kwargs:
+            return None
+
+        prompt_parts: List[str] = []
+        cls._collect_responses_input_text(kwargs.get("input"), prompt_parts)
+        prompt = "\n".join(prompt_parts).strip()
+        return prompt or None
+
+    @classmethod
+    def _collect_responses_input_text(cls, value: Any, prompt_parts: List[str]) -> None:
+        value = cls._coerce_response_input_value(value)
+        if value is None:
+            return
+
+        if isinstance(value, str):
+            stripped_value = value.strip()
+            if stripped_value:
+                prompt_parts.append(stripped_value)
+            return
+
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                cls._collect_responses_input_text(item, prompt_parts)
+            return
+
+        if isinstance(value, dict):
+            content = value.get("content")
+            if content is not None:
+                cls._collect_responses_input_text(content, prompt_parts)
+                return
+
+            for text_key in ("text", "output", "input_text", "output_text"):
+                text_value = value.get(text_key)
+                if isinstance(text_value, str):
+                    stripped_text = text_value.strip()
+                    if stripped_text:
+                        prompt_parts.append(stripped_text)
+                        return
+            return
+
+        content = getattr(value, "content", None)
+        if content is not None:
+            cls._collect_responses_input_text(content, prompt_parts)
+            return
+
+        for text_key in ("text", "output", "input_text", "output_text"):
+            text_value = getattr(value, text_key, None)
+            if isinstance(text_value, str):
+                stripped_text = text_value.strip()
+                if stripped_text:
+                    prompt_parts.append(stripped_text)
+                    return
+
+    @staticmethod
+    def _coerce_response_input_value(value: Any) -> Any:
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            return model_dump()
+        dict_method = getattr(value, "dict", None)
+        if callable(dict_method):
+            return dict_method()
+        return value
+
     def _get_embedding(self, prompt: str) -> List[float]:
         """
         Generate an embedding vector for the given prompt using the configured embedding model.
@@ -278,13 +350,11 @@ class RedisSemanticCache(BaseCache):
 
         value_str: Optional[str] = None
         try:
-            # Extract the prompt from messages
-            messages = kwargs.get("messages", [])
-            if not messages:
-                print_verbose("No messages provided for semantic caching")
+            prompt = self._get_prompt_from_kwargs(**kwargs)
+            if prompt is None:
+                print_verbose("No prompt provided for semantic caching")
                 return
 
-            prompt = get_str_from_messages(messages)
             value_str = str(value)
 
             store_kwargs: Dict[str, Any] = {
@@ -315,14 +385,12 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Redis semantic-cache get_cache, kwargs: {kwargs}")
 
         try:
-            # Extract the prompt from messages
-            messages = kwargs.get("messages", [])
-            if not messages:
-                print_verbose("No messages provided for semantic cache lookup")
+            prompt = self._get_prompt_from_kwargs(**kwargs)
+            if prompt is None:
+                print_verbose("No prompt provided for semantic cache lookup")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
 
-            prompt = get_str_from_messages(messages)
             # Check the cache for semantically similar prompts in this exact
             # LiteLLM cache-key scope.
             check_kwargs: Dict[str, Any] = {
@@ -428,13 +496,11 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Async Redis semantic-cache set_cache, kwargs: {kwargs}")
 
         try:
-            # Extract the prompt from messages
-            messages = kwargs.get("messages", [])
-            if not messages:
-                print_verbose("No messages provided for semantic caching")
+            prompt = self._get_prompt_from_kwargs(**kwargs)
+            if prompt is None:
+                print_verbose("No prompt provided for semantic caching")
                 return
 
-            prompt = get_str_from_messages(messages)
             value_str = str(value)
 
             # Generate embedding for the value (response) to cache
@@ -471,14 +537,11 @@ class RedisSemanticCache(BaseCache):
         print_verbose(f"Async Redis semantic-cache get_cache, kwargs: {kwargs}")
 
         try:
-            # Extract the prompt from messages
-            messages = kwargs.get("messages", [])
-            if not messages:
-                print_verbose("No messages provided for semantic cache lookup")
+            prompt = self._get_prompt_from_kwargs(**kwargs)
+            if prompt is None:
+                print_verbose("No prompt provided for semantic cache lookup")
                 kwargs.setdefault("metadata", {})["semantic-similarity"] = 0.0
                 return None
-
-            prompt = get_str_from_messages(messages)
 
             # Generate embedding for the prompt
             prompt_embedding = await self._get_async_embedding(prompt, **kwargs)

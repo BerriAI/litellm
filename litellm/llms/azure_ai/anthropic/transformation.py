@@ -40,6 +40,9 @@ class AzureAnthropicConfig(AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "azure_ai"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         headers: dict,

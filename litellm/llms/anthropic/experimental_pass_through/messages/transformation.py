@@ -84,6 +84,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     if isinstance(content, list):
                         _process_content_list(content)
 
+    def should_strip_billing_metadata(self) -> bool:
+        """
+        Whether to drop x-anthropic-billing-header system blocks before sending upstream.
+
+        The first-party Anthropic API uses these blocks for Claude Code attribution, so the
+        base config keeps them. Providers that reject them override this to True.
+        """
+        return False
+
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
         """
@@ -286,14 +295,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
         )
 
-        # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")
-        if system_param is not None:
+        if self.should_strip_billing_metadata() and system_param is not None:
             filtered_system = self._filter_billing_headers_from_system(system_param)
             if filtered_system is not None and len(filtered_system) > 0:
                 anthropic_messages_optional_request_params["system"] = filtered_system
             else:
-                # Remove system parameter if all content was filtered out
                 anthropic_messages_optional_request_params.pop("system", None)
 
         # Transform context_management from OpenAI format to Anthropic format if needed

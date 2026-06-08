@@ -257,6 +257,64 @@ class TestOpenAIPassthroughLoggingHandler:
         )
         assert OpenAIPassthroughLoggingHandler.is_openai_responses_route("") == False
 
+    def test_is_openai_route_recognizes_cognitiveservices_azure_com(self):
+        """Azure OpenAI resources created via the newer "Azure AI Foundry" /
+        Cognitive Services pathway live on `*.cognitiveservices.azure.com`
+        subdomains rather than the older `openai.azure.com`. All four
+        is_openai_*_route methods must recognize both Azure subdomains so
+        cost tracking applies regardless of which Azure naming the user's
+        resource happens to be on.
+        """
+        cognitive_chat = (
+            "https://my-resource.cognitiveservices.azure.com/v1/chat/completions"
+        )
+        cognitive_images_gen = (
+            "https://my-resource.cognitiveservices.azure.com/v1/images/generations"
+        )
+        cognitive_images_edit = (
+            "https://my-resource.cognitiveservices.azure.com/v1/images/edits"
+        )
+        cognitive_responses = (
+            "https://my-resource.cognitiveservices.azure.com/v1/responses"
+        )
+
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(
+                cognitive_chat
+            )
+            is True
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_image_generation_route(
+                cognitive_images_gen
+            )
+            is True
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_image_editing_route(
+                cognitive_images_edit
+            )
+            is True
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_responses_route(
+                cognitive_responses
+            )
+            is True
+        )
+
+        # Cross-route negatives still hold for cognitiveservices hosts.
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_chat_completions_route(
+                cognitive_responses
+            )
+            is False
+        )
+        assert (
+            OpenAIPassthroughLoggingHandler.is_openai_responses_route(cognitive_chat)
+            is False
+        )
+
     @patch("litellm.completion_cost")
     @patch(
         "litellm.litellm_core_utils.litellm_logging.get_standard_logging_object_payload"
@@ -766,6 +824,14 @@ class TestOpenAIPassthroughIntegration:
             == True
         )
         assert self.handler.is_openai_route("https://api.openai.com/v1/models") == True
+        # Azure OpenAI on the shared Cognitive Services domain, identified by an
+        # OpenAI-style path segment.
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/v1/chat/completions"
+            )
+            == True
+        )
 
         # Negative cases
         assert (
@@ -780,6 +846,28 @@ class TestOpenAIPassthroughIntegration:
         )
         assert (
             self.handler.is_openai_route("https://api.assemblyai.com/v2/transcript")
+            == False
+        )
+        # Non-OpenAI Azure Cognitive Services share the `cognitiveservices.azure.com`
+        # domain but must NOT be classified as OpenAI routes (no OpenAI path segment).
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/speechtotext/v3.1/recognize"
+            )
+            == False
+        )
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/vision/v3.2/analyze"
+            )
+            == False
+        )
+        # A look-alike domain that merely contains an OpenAI host as a substring
+        # must be rejected by the suffix-based hostname match.
+        assert (
+            self.handler.is_openai_route(
+                "https://cognitiveservices.azure.com.attacker.example/v1/chat/completions"
+            )
             == False
         )
         assert self.handler.is_openai_route("") == False

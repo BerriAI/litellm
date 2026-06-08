@@ -62,6 +62,26 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """Sign the request after the body is finalized.
+
+        Default is a no-op (returns headers unchanged, no signed body). Providers
+        whose endpoint requires request signing (e.g. Bedrock Mantle SigV4)
+        override this and return the signed body bytes so the handler sends those
+        exact bytes.
+        """
+        return headers, None
+
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:
         pass

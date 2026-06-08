@@ -1467,11 +1467,10 @@ def test_transform_request_with_function_tool():
     )
 
     # Verify the structure
-    assert "additionalModelRequestFields" in request_data
-    additional_fields = request_data["additionalModelRequestFields"]
+    # Function tools are not computer use tools, so they don't get anthropic_beta —
+    # additionalModelRequestFields should be absent (not serialized as empty {})
+    assert "additionalModelRequestFields" not in request_data
 
-    # Function tools are not computer use tools, so they don't get anthropic_beta
-    # They are processed through the regular tool config
     assert "toolConfig" in request_data
     assert "tools" in request_data["toolConfig"]
     assert len(request_data["toolConfig"]["tools"]) == 1
