@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { ArrowLeftIcon, EyeIcon, EyeOffIcon } from "@heroicons/react/outline";
 import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels, Tab, Icon } from "@tremor/react";
 
@@ -24,6 +24,24 @@ interface MCPServerViewProps {
   availableAccessGroups: string[];
 }
 
+// True when this render is the return from the edit-settings OAuth redirect for this
+// server: the edit form wrote its UI-state snapshot before redirecting. Used to open
+// the editing Settings tab on first render instead of defaulting to Overview.
+function isReturningFromEditOAuth(isProxyAdmin: boolean, serverId: string): boolean {
+  if (typeof window === "undefined" || !isProxyAdmin) {
+    return false;
+  }
+  const stored = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
+  if (!stored) {
+    return false;
+  }
+  try {
+    return JSON.parse(stored)?.serverId === serverId;
+  } catch {
+    return false;
+  }
+}
+
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
   mcpServer,
   onBack,
@@ -34,37 +52,18 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userID,
   availableAccessGroups,
 }) => {
-  const [editing, setEditing] = useState(isEditing);
+  // Open the editing Settings tab on first render when returning from the edit OAuth
+  // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
+  const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
+  const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : 0);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
     onBack();
   };
-
-  // Returning from the edit-settings OAuth redirect: the edit form wrote its UI-state
-  // snapshot before redirecting, so land back on the editing Settings tab instead of
-  // defaulting to Overview, so the "token fetched" feedback shows where the user left off.
-  useEffect(() => {
-    if (typeof window === "undefined" || !isProxyAdmin) {
-      return;
-    }
-    const stored = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
-    if (!stored) {
-      return;
-    }
-    try {
-      const parsed = JSON.parse(stored);
-      if (parsed?.serverId === mcpServer.server_id) {
-        setEditing(true);
-        setSelectedTabIndex(2); // Settings tab (Overview=0, MCP Tools=1, Settings=2)
-      }
-    } catch {
-      // ignore a malformed snapshot
-    }
-  }, [isProxyAdmin, mcpServer.server_id]);
 
   const urlValue = mcpServer.url ?? "";
   const { maskedUrl, hasToken } = urlValue ? getMaskedAndFullUrl(urlValue) : { maskedUrl: "—", hasToken: false };
