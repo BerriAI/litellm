@@ -165,16 +165,23 @@ def _redact_standard_logging_object(model_call_details: dict):
             standard_logging_object["response"] = {"text": redacted_str}
 
 
-# Input-bearing keys that show up in request-body snapshots
-# (proxy_server_request.body and additional_args.complete_input_dict).
+# Input-bearing keys that show up in the proxy_server_request.body snapshot.
+# This is the LiteLLM-API (OpenAI-compat) request body, so its input keys are
+# a finite, stable set; it must stay key-based (not wholesale-redacted) because
+# downstream consumers read named keys off it (`user`->Lago billing,
+# `tools`->spend-log index, `input`/`messages`->Responses session).
 # "messages"/"prompt"/"input" are the OpenAI-style payload entry points;
 # "contents" is the Gemini/Vertex native user-turn field.
+# "query"/"documents" are the rerank inputs and "document" the OCR input —
+# all top-level keys the proxy preserves verbatim in this snapshot.
 # "system"/"system_prompt"/"instructions" are the provider-native top-level
 # system-prompt fields (Anthropic `system`, Responses API `instructions`);
 # "system_instruction"/"systemInstruction" are the Gemini/Vertex equivalents.
 # All carry user content just as the messages do.
+# (additional_args.complete_input_dict is the provider-native wire body and is
+# wholesale-redacted in _redact_additional_args_complete_input_dict instead.)
 def _redact_request_body_dict(body: dict):
-    """Scrub the input/system-prompt keys on a materialised request-body dict."""
+    """Scrub the input/system-prompt keys on the proxy_server_request body dict."""
     if "messages" in body:
         body["messages"] = [{"role": "user", "content": "redacted-by-litellm"}]
     if "prompt" in body:
@@ -185,6 +192,12 @@ def _redact_request_body_dict(body: dict):
         body["contents"] = [
             {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
         ]
+    if "query" in body:  # rerank
+        body["query"] = "redacted-by-litellm"
+    if "documents" in body:  # rerank
+        body["documents"] = ["redacted-by-litellm"]
+    if "document" in body:  # OCR
+        body["document"] = "redacted-by-litellm"
     for key in (
         "system",
         "system_prompt",
@@ -236,7 +249,19 @@ def _redact_additional_args_complete_input_dict(model_call_details: dict):
     if not isinstance(complete_input_dict, dict):
         return
 
-    _redact_request_body_dict(complete_input_dict)
+    # complete_input_dict is the provider-NATIVE wire body. User input lands
+    # under ~20+ provider-specific, often nested key shapes (Vertex embeddings
+    # `instances`, rerank `query`/`documents`, image `prompt`, audio `file`,
+    # OCR `document`, Bedrock invoke `inputText`, passthrough arbitrary bodies),
+    # so a key-allowlist cannot close the class. No consumer reads a named key
+    # from this dict (the OTel exporter iterates `.items()` generically; logging
+    # treats it as an opaque curl-command payload), so we wholesale-redact it,
+    # preserving only the non-input `model` for span/debug usefulness.
+    redacted: dict = {"redacted-by-litellm": True}
+    model = complete_input_dict.get("model")
+    if isinstance(model, str):
+        redacted["model"] = model
+    additional_args["complete_input_dict"] = redacted
 
 
 def _redact_model_response_dict_choices(choices, redacted_str: str):

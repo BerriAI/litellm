@@ -504,10 +504,9 @@ class TestPerformRedaction:
         assert redacted.choices[0].message.content == "redacted-by-litellm"
 
     def test_redacts_additional_args_complete_input_dict_messages(self):
-        """perform_redaction must scrub the provider-native request payload
-        stashed on additional_args.complete_input_dict. Anthropic-shape
-        content blocks (list of dicts) and the OpenAI prompt / input keys
-        must all be wiped."""
+        """perform_redaction wholesale-redacts the provider-native request
+        payload stashed on additional_args.complete_input_dict: every input
+        key is dropped and only the non-input `model` survives."""
         details = {
             "additional_args": {
                 "complete_input_dict": {
@@ -532,9 +531,11 @@ class TestPerformRedaction:
         perform_redaction(details, None)
 
         cid = details["additional_args"]["complete_input_dict"]
-        assert cid["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
-        assert cid["prompt"] == ""
-        assert cid["input"] == ""
+        assert cid == {"redacted-by-litellm": True, "model": "claude-3-7-sonnet"}
+        assert "messages" not in cid
+        assert "prompt" not in cid
+        assert "input" not in cid
+        assert "CANARY_INPUT_should_be_redacted" not in str(cid)
 
     def test_redact_additional_args_complete_input_dict_is_safe_when_missing(self):
         """No KeyError / TypeError when additional_args / complete_input_dict
@@ -571,8 +572,8 @@ class TestPerformRedaction:
 
     def test_redacts_system_prompt_in_complete_input_dict(self):
         """Provider-native system-prompt keys (Anthropic `system`, the
-        `system_prompt` variant, Responses API `instructions`) must be
-        scrubbed from the wire-format request body too."""
+        `system_prompt` variant, Responses API `instructions`) are dropped by
+        the wholesale redaction of the wire-format request body."""
         details = {
             "additional_args": {
                 "complete_input_dict": {
@@ -589,15 +590,17 @@ class TestPerformRedaction:
         perform_redaction(details, None)
 
         cid = details["additional_args"]["complete_input_dict"]
-        assert cid["system"] == "redacted-by-litellm"
-        assert cid["system_prompt"] == "redacted-by-litellm"
-        assert cid["instructions"] == "redacted-by-litellm"
+        assert cid == {"redacted-by-litellm": True, "model": "claude-3-7-sonnet"}
+        assert "system" not in cid
+        assert "system_prompt" not in cid
+        assert "instructions" not in cid
+        assert "CANARY_SYSTEM_should_be_redacted" not in str(cid)
 
     def test_redacts_gemini_native_fields_in_complete_input_dict(self):
         """Gemini/Vertex wire-format requests carry the user turn in `contents`
         and the system prompt in `system_instruction` / `systemInstruction`,
-        not the OpenAI-style `messages` / `system` keys — these provider-native
-        fields must be scrubbed from the wire-format request snapshot too."""
+        not the OpenAI-style `messages` / `system` keys — the wholesale
+        redaction drops them all, preserving only `model`."""
         details = {
             "additional_args": {
                 "complete_input_dict": {
@@ -621,11 +624,11 @@ class TestPerformRedaction:
         perform_redaction(details, None)
 
         cid = details["additional_args"]["complete_input_dict"]
-        assert cid["contents"] == [
-            {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
-        ]
-        assert cid["system_instruction"] == "redacted-by-litellm"
-        assert cid["systemInstruction"] == "redacted-by-litellm"
+        assert cid == {"redacted-by-litellm": True, "model": "gemini-2.0-flash"}
+        assert "contents" not in cid
+        assert "system_instruction" not in cid
+        assert "systemInstruction" not in cid
+        assert "CANARY" not in str(cid)
 
     def test_redacts_gemini_native_fields_in_proxy_server_request_body(self):
         """Same Gemini/Vertex native input fields can also land in the proxy
@@ -656,3 +659,114 @@ class TestPerformRedaction:
             {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
         ]
         assert body["system_instruction"] == "redacted-by-litellm"
+
+    def test_complete_input_dict_wholesale_redacts_embeddings_instances(self):
+        """Vertex embeddings carry user input under `instances` — a key the old
+        allowlist never enumerated. Wholesale redaction drops it regardless."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "text-embedding-004",
+                    "instances": [{"content": "CANARY_INPUT_should_be_redacted"}],
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {"redacted-by-litellm": True, "model": "text-embedding-004"}
+        assert "instances" not in cid
+        assert "CANARY_INPUT_should_be_redacted" not in str(cid)
+
+    def test_complete_input_dict_wholesale_redacts_rerank_query_documents(self):
+        """Cohere/Bedrock rerank carry user input under `query` / `documents` —
+        wholesale redaction of the native body drops both."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "rerank-english-v3.0",
+                    "query": "CANARY_QUERY_should_be_redacted",
+                    "documents": ["CANARY_DOC_should_be_redacted"],
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {"redacted-by-litellm": True, "model": "rerank-english-v3.0"}
+        assert "query" not in cid
+        assert "documents" not in cid
+        assert "CANARY" not in str(cid)
+
+    def test_complete_input_dict_wholesale_redacts_passthrough_arbitrary(self):
+        """An arbitrary/passthrough provider key with no allowlist entry must
+        still be dropped — proving the redaction has no allowlist dependency."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "some-provider/some-model",
+                    "totally_unknown_provider_key": "CANARY_should_be_redacted",
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid == {
+            "redacted-by-litellm": True,
+            "model": "some-provider/some-model",
+        }
+        assert "totally_unknown_provider_key" not in cid
+        assert "CANARY_should_be_redacted" not in str(cid)
+
+    def test_redacts_rerank_keys_in_proxy_server_request_body(self):
+        """The keyed proxy body snapshot scrubs the rerank input keys
+        (`query` / `documents`) while leaving non-input keys (`model`, `user`)
+        intact for downstream consumers."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "rerank-english-v3.0",
+                        "user": "user-123",
+                        "query": "CANARY_QUERY_should_be_redacted",
+                        "documents": ["CANARY_DOC_should_be_redacted"],
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["query"] == "redacted-by-litellm"
+        assert body["documents"] == ["redacted-by-litellm"]
+        assert body["model"] == "rerank-english-v3.0"
+        assert body["user"] == "user-123"
+
+    def test_redacts_ocr_document_in_proxy_server_request_body(self):
+        """The OCR route lands the user's `document` as a top-level key in the
+        proxy body snapshot — it must be scrubbed while `model` survives."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "mistral/mistral-ocr-latest",
+                        "document": {
+                            "type": "document_url",
+                            "document_url": "CANARY_DOC_should_be_redacted",
+                        },
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["document"] == "redacted-by-litellm"
+        assert body["model"] == "mistral/mistral-ocr-latest"
+        assert "CANARY_DOC_should_be_redacted" not in str(body)
