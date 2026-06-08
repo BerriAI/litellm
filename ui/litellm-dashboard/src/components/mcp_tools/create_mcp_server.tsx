@@ -1088,7 +1088,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <div className="mt-6">
             <MCPToolConfiguration
               accessToken={accessToken}
-              oauthAccessToken={oauthAccessToken}
               formValues={formValues}
               allowedTools={allowedTools}
               existingAllowedTools={null}

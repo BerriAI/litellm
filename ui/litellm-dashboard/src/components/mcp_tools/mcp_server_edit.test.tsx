@@ -37,12 +37,19 @@ vi.mock("./MCPPermissionManagement", () => ({
 vi.mock("./mcp_tool_configuration", () => ({
   default: ({
     existingAllowedTools,
+    externalTools,
+    externalError,
     onAllowedToolsChange,
     onToolAllowlistInteraction,
     onToolNameToDisplayNameChange,
     onToolNameToDescriptionChange,
   }: any) => (
-    <div data-testid="mcp-tool-config" data-existing-allowed-tools={JSON.stringify(existingAllowedTools)}>
+    <div
+      data-testid="mcp-tool-config"
+      data-existing-allowed-tools={JSON.stringify(existingAllowedTools)}
+      data-external-tools={JSON.stringify(externalTools)}
+      data-external-error={externalError ?? ""}
+    >
       <button
         type="button"
         onClick={() => {
@@ -63,6 +70,13 @@ vi.mock("./mcp_tool_configuration", () => ({
       </button>
     </div>
   ),
+}));
+
+const mockGetToken = vi.fn();
+const mockIsTokenValid = vi.fn();
+vi.mock("@/utils/mcpTokenStore", () => ({
+  getToken: (...args: any[]) => mockGetToken(...args),
+  isTokenValid: (...args: any[]) => mockIsTokenValid(...args),
 }));
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
@@ -624,5 +638,88 @@ describe("MCPServerEdit (interactive OAuth)", () => {
 
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.token_storage_ttl_seconds).toBe(7200);
+  });
+});
+
+describe("MCPServerEdit (tool list fetch)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: [], error: null });
+  });
+
+  it("loads an OBO server's tools via GET listMCPTools with no passthrough headers", async () => {
+    vi.mocked(networking.listMCPTools).mockResolvedValue({
+      tools: [{ name: "read_user" }],
+      error: null,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(networking.listMCPTools).toHaveBeenCalledWith("access-token", "oauth_server_1", undefined);
+    });
+    // OBO uses the backend-stored token; the browser passthrough store is never consulted.
+    expect(mockIsTokenValid).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-tools",
+        JSON.stringify([{ name: "read_user" }]),
+      );
+    });
+  });
+
+  it("forwards the sessionStorage token as the x-mcp passthrough header for a passthrough server", async () => {
+    mockIsTokenValid.mockReturnValue(true);
+    mockGetToken.mockReturnValue({ access_token: "browser-token" });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, delegate_auth_to_upstream: true }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(networking.listMCPTools).toHaveBeenCalledWith("access-token", "oauth_server_1", {
+        "x-mcp-oauth_server-authorization": "Bearer browser-token",
+      });
+    });
+    expect(mockGetToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
+  });
+
+  it("prompts to authenticate and does not fetch when a passthrough server has no session token", async () => {
+    mockIsTokenValid.mockReturnValue(false);
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, delegate_auth_to_upstream: true }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
+        "Authenticate with this server in the Tools tab",
+      );
+    });
+    expect(networking.listMCPTools).not.toHaveBeenCalled();
   });
 });

@@ -210,6 +210,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 <MCPServerEdit
                   mcpServer={mcpServer}
                   accessToken={accessToken}
+                  userID={userID}
                   onCancel={() => setEditing(false)}
                   onSuccess={handleSuccess}
                   availableAccessGroups={availableAccessGroups}
