@@ -4195,6 +4195,16 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
     )
+    team_claim_fallback: bool = Field(
+        default=False,
+        description=(
+            "If True, when a configured team_id_jwt_field / team_ids_jwt_field "
+            "claim is present but does not resolve to any known team, defer to "
+            "the single-team DB fallback (caller's only team membership) "
+            "instead of raising. Default False preserves strict claim-based "
+            "authorization."
+        ),
+    )
     issuers: Optional[List[JWTIssuerConfig]] = Field(
         default=None,
         description="Optional issuer-bound JWT validation rules. When a token's `iss` matches a configured issuer, validation uses that issuer's JWKS, audience, and claim mappings. Tokens with an unlisted `iss` fall back to the global JWT_AUDIENCE/JWT_ISSUER validation path — this is additive routing, not an allow-list.",
