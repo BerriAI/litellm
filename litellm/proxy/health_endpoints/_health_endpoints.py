@@ -129,6 +129,7 @@ services = Union[
         "datadog_llm_observability",
         "generic_api",
         "arize",
+        "galileo",
         "sqs",
     ],
     str,
@@ -206,6 +207,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
+            "galileo",
             "sqs",
         ]:
             raise HTTPException(
@@ -293,6 +295,19 @@ async def health_services_endpoint(  # noqa: PLR0915
                     response["error_message"]
                     if response["status"] == "unhealthy"
                     else "Arize is healthy"
+                ),
+            }
+        elif service == "galileo":
+            from litellm.integrations.galileo import GalileoObserve
+
+            galileo_logger = GalileoObserve()
+            response = await galileo_logger.async_health_check()
+            return {
+                "status": response["status"],
+                "message": (
+                    response["error_message"]
+                    if response["status"] == "unhealthy"
+                    else "Galileo is healthy"
                 ),
             }
         elif service == "langfuse":
