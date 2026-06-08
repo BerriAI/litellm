@@ -1,0 +1,74 @@
+model_list:
+  - model_name: fake-model
+    litellm_params:
+      model: openai/fake
+      api_key: fake-key
+
+general_settings:
+  mcp_internal_ip_ranges:
+    - "10.0.0.0/8"
+    - "192.168.0.0/16"
+    - "0.0.0.0/0"
+
+mcp_servers:
+  math_no_auth:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+
+  math_api_key:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    auth_type: "api_key"
+    auth_value: "test-api-key"
+
+  math_bearer_token:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    auth_type: "bearer_token"
+    auth_value: "test-bearer-token"
+
+  math_authorization:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    auth_type: "authorization"
+    auth_value: "Custom raw-auth-value"
+
+  math_custom_header:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    extra_headers:
+      - "x-custom-token"
+
+# Machine to Machine (M2M)
+  test_oauth2_server:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    auth_type: "oauth2"
+    client_id: "test-client"
+    client_secret: "test-secret"
+    token_url: "http://localhost:0/oauth/token"
+
+# Interactive PKCE
+  test_pkce_server:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    auth_type: "oauth2"
+    client_id: "test-client"
+    client_secret: "test-secret"
+    token_url: "http://localhost:0/oauth/token"
+    authorization_url: "http://localhost:0/oauth/authorize"
+    scopes: ["create_ticket", "update_ticket", "delete_ticket"]
+
+# MCP OBO (OAuth2 Token Exchange, RFC 8693)
+  internal_mcp_server:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    auth_type: "oauth2_token_exchange"
+    token_exchange_endpoint: "http://localhost:0/oauth/token"
+    client_id: "test-client"
+    client_secret: "test-secret"
+    audience: "api://internal-tools-mcp"
+    scopes:
+      - "mcp.tools.read"
+      - "mcp.tools.execute"
+    subject_token_type: "urn:ietf:params:oauth:token-type:access_token"

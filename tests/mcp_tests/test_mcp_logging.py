@@ -446,3 +446,124 @@ async def test_mcp_tool_call_hook():
                 logged_standard_logging_payload is not None
             ), "Standard logging payload should not be None"
             assert logged_standard_logging_payload["response_cost"] == 1.42
+
+
+@pytest.mark.asyncio
+async def test_auto_executed_mcp_tool_call_attributes_cost_to_key_and_team():
+    """
+    Regression test: when an MCP tool is auto-executed via the responses handler
+    (`_execute_tool_calls`), the resulting spend row must charge the cost to the
+    calling key/team/user/end_user. Previously this path hand-rolled the logging
+    metadata and dropped the attribution fields, so SpendLogs recorded the cost
+    with NULL user/team_id/end_user (cost charged to nobody).
+
+    Asserting on the StandardLoggingPayload couples the two facts that matter for
+    the spend table: `response_cost` (the spend column) and the
+    `user_api_key_*` metadata (the user/team_id/end_user columns).
+    """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+
+    litellm.logging_callback_manager._reset_all_callbacks()
+    mock_result = CallToolResult(
+        content=[TextContent(type="text", text="Test response")], isError=False
+    )
+
+    mock_client = AsyncMock()
+    mock_client.call_tool = AsyncMock(return_value=mock_result)
+    mock_client.list_tools = AsyncMock(
+        return_value=[
+            MCPTool(
+                name="add_tools",
+                description="Test tool",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"test": {"type": "string"}},
+                },
+            )
+        ]
+    )
+
+    def mock_client_constructor(*args, **kwargs):
+        return mock_client
+
+    local_mcp_server_manager = MCPServerManager()
+
+    expected_cost = 1.2
+
+    with patch(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        mock_client_constructor,
+    ):
+        await local_mcp_server_manager.load_servers_from_config(
+            mcp_servers_config={
+                "zapier_gmail_server": {
+                    "url": os.getenv("ZAPIER_MCP_HTTPS_SERVER_URL"),
+                    "mcp_info": {
+                        "mcp_server_cost_info": {
+                            "default_cost_per_query": expected_cost,
+                        }
+                    },
+                }
+            }
+        )
+
+        test_logger = TestMCPLogger()
+        litellm.callbacks = [test_logger]
+
+        await local_mcp_server_manager._initialize_tool_name_to_mcp_server_name_mapping()
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "add_tools"
+        ] = "zapier_gmail_server"
+        local_mcp_server_manager.tool_name_to_mcp_server_name_mapping[
+            "zapier_gmail_server-add_tools"
+        ] = "zapier_gmail_server"
+
+        server_ids = local_mcp_server_manager.get_all_mcp_server_ids()
+        user_auth = UserAPIKeyAuth(
+            api_key="sk-attribution-test",
+            user_id="user-123",
+            team_id="team-456",
+            end_user_id="end-user-789",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="mcp-test-permissions",
+                mcp_servers=list(server_ids),
+            ),
+        )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                local_mcp_server_manager,
+            ),
+            patch(
+                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                local_mcp_server_manager,
+            ),
+        ):
+            tool_name = "zapier_gmail_server-add_tools"
+            await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+                tool_server_map={tool_name: "zapier_gmail_server"},
+                tool_calls=[
+                    {
+                        "id": "call-1",
+                        "function": {"name": tool_name, "arguments": "{}"},
+                    }
+                ],
+                user_api_key_auth=user_auth,
+                litellm_call_id="cid",
+                litellm_trace_id="tid",
+            )
+
+            await asyncio.sleep(2)
+
+            payload = test_logger.standard_logging_payload
+            assert payload is not None, "Standard logging payload should not be None"
+
+            assert payload["response_cost"] == expected_cost
+
+            metadata = payload["metadata"]
+            assert metadata["user_api_key_user_id"] == "user-123"
+            assert metadata["user_api_key_team_id"] == "team-456"
+            assert metadata["user_api_key_end_user_id"] == "end-user-789"
