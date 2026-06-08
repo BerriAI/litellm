@@ -36,6 +36,21 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
             if user_api_key_dict.team_id is not None:
                 return
 
+            # Zero-cost models (e.g. free / on-prem models configured with
+            # input+output cost == 0) bypass budget enforcement, matching
+            # common_checks()/_should_skip_budget_checks(). Without this, an
+            # over-budget user is incorrectly blocked from free models even
+            # though those requests add nothing to spend.
+            # Imported lazily to avoid a circular import via proxy.utils.
+            from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+            from litellm.proxy.proxy_server import llm_router
+
+            if _is_model_cost_zero(
+                model=data.get("model") if data else None,
+                llm_router=llm_router,
+            ):
+                return
+
             # The reservation path admits at the strict-`<` boundary and
             # atomically pre-fills the same counter we'd read here. Re-checking
             # with `>=` would reject a request the reservation already admitted
