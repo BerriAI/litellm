@@ -8,6 +8,7 @@ import NotificationsManager from "../molecules/notifications_manager";
 vi.mock("../networking", () => ({
   updateMCPServer: vi.fn(),
   listMCPTools: vi.fn().mockResolvedValue({ tools: [], error: null }),
+  storeMCPOAuthUserCredential: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("../molecules/notifications_manager", () => ({
@@ -17,12 +18,13 @@ vi.mock("../molecules/notifications_manager", () => ({
   },
 }));
 
+const mockOauth: { tokenResponse: any } = { tokenResponse: null };
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: () => ({
     startOAuthFlow: vi.fn(),
     status: "idle",
     error: null,
-    tokenResponse: null,
+    tokenResponse: mockOauth.tokenResponse,
   }),
 }));
 
@@ -74,9 +76,11 @@ vi.mock("./mcp_tool_configuration", () => ({
 
 const mockGetToken = vi.fn();
 const mockIsTokenValid = vi.fn();
+const mockSetToken = vi.fn();
 vi.mock("@/utils/mcpTokenStore", () => ({
   getToken: (...args: any[]) => mockGetToken(...args),
   isTokenValid: (...args: any[]) => mockIsTokenValid(...args),
+  setToken: (...args: any[]) => mockSetToken(...args),
 }));
 
 // ── fixtures ──────────────────────────────────────────────────────────────────
@@ -752,5 +756,110 @@ describe("MCPServerEdit (form resync)", () => {
     await waitFor(() => {
       expect(screen.getByDisplayValue("https://example.com/mcp")).toBeInTheDocument();
     });
+  });
+});
+
+describe("MCPServerEdit (OAuth token persistence on save)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: [], error: null });
+    mockOauth.tokenResponse = null;
+  });
+
+  it("persists the OBO token to the DB on save after authorize", async () => {
+    mockOauth.tokenResponse = {
+      access_token: "obo-tok",
+      refresh_token: "obo-refresh",
+      expires_in: 3600,
+      scope: "read write",
+    };
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalledWith(
+        "access-token",
+        "oauth_server_1",
+        expect.objectContaining({
+          access_token: "obo-tok",
+          refresh_token: "obo-refresh",
+          expires_in: 3600,
+          scopes: ["read", "write"],
+        }),
+      );
+    });
+    expect(mockSetToken).not.toHaveBeenCalled();
+  });
+
+  it("persists the passthrough token to sessionStorage on save after authorize", async () => {
+    mockOauth.tokenResponse = { access_token: "pt-tok", expires_in: 1800, token_type: "bearer" };
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      delegate_auth_to_upstream: true,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer, delegate_auth_to_upstream: true }}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(mockSetToken).toHaveBeenCalledWith(
+        "oauth_server_1",
+        expect.objectContaining({ access_token: "pt-tok", expires_in: 1800, token_type: "bearer" }),
+        "user-1",
+      );
+    });
+    expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+  });
+
+  it("persists nothing on save when no token was fetched", async () => {
+    mockOauth.tokenResponse = null;
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalled();
+    });
+    expect(networking.storeMCPOAuthUserCredential).not.toHaveBeenCalled();
+    expect(mockSetToken).not.toHaveBeenCalled();
   });
 });

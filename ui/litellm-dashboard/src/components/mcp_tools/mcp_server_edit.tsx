@@ -2,9 +2,17 @@ import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT, getMcpOAuthMode } from "./types";
-import { updateMCPServer, listMCPTools } from "../networking";
-import { getToken, isTokenValid } from "@/utils/mcpTokenStore";
+import {
+  AUTH_TYPE,
+  OAUTH_FLOW,
+  MCP_OAUTH2_FLOW_M2M,
+  MCPServer,
+  MCPServerCostInfo,
+  TRANSPORT,
+  getMcpOAuthMode,
+} from "./types";
+import { updateMCPServer, listMCPTools, storeMCPOAuthUserCredential } from "../networking";
+import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
 import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
@@ -28,7 +36,7 @@ interface MCPServerEditProps {
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
-const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
+export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   mcpServer,
@@ -666,6 +674,42 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
 
       const updated = await updateMCPServer(accessToken, payload);
+
+      // Persist the token staged via "Authorize & Fetch" (mirrors the create flow's
+      // commit-on-submit): OBO writes the per-user token to the DB, passthrough keeps
+      // it in sessionStorage. M2M/static auth resolve server-side and need neither.
+      if (oauthTokenResponse?.access_token) {
+        const oauthMode = getMcpOAuthMode({
+          auth_type: restValues.auth_type,
+          oauth2_flow: isM2MFlow ? MCP_OAUTH2_FLOW_M2M : null,
+          delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream),
+        });
+        try {
+          if (oauthMode === "obo") {
+            const scope = oauthTokenResponse.scope;
+            await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, {
+              access_token: oauthTokenResponse.access_token,
+              refresh_token: oauthTokenResponse.refresh_token,
+              expires_in: oauthTokenResponse.expires_in,
+              scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
+            });
+          } else if (oauthMode === "passthrough") {
+            setToken(
+              mcpServer.server_id,
+              {
+                access_token: oauthTokenResponse.access_token,
+                expires_in: oauthTokenResponse.expires_in,
+                refresh_token: oauthTokenResponse.refresh_token,
+                token_type: oauthTokenResponse.token_type,
+              },
+              userID,
+            );
+          }
+        } catch (err) {
+          console.error("Failed to persist MCP OAuth token after save", err);
+        }
+      }
+
       NotificationsManager.success("MCP Server updated successfully");
       onSuccess(updated);
     } catch (error: any) {
