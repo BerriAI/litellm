@@ -67,3 +67,18 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
 });
+
+describe("MIGRATED_PAGES tool-policies", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("routes tool-policies to the tool-policies path and back", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["tool-policies"]).toBe("tool-policies");
+    expect(legacyKeyForPathname("/ui/tool-policies")).toBe("tool-policies");
+    expect(legacyKeyForPathname("/ui/tool-policies/")).toBe("tool-policies");
+  });
+});

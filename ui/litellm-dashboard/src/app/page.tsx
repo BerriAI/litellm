@@ -38,7 +38,6 @@ import UserDashboard from "@/components/user_dashboard";
 import { AccessGroupsPage } from "@/components/AccessGroups/AccessGroupsPage";
 import { ProjectsPage } from "@/components/Projects/ProjectsPage";
 import VectorStoreManagement from "@/components/vector_store_management";
-import ToolPoliciesView from "@/components/ToolPoliciesView";
 import { MemoryView } from "@/components/MemoryView";
 import WorkflowRuns from "@/components/workflow_runs";
 import SpendLogsTable from "@/components/view_logs";
@@ -514,8 +513,6 @@ function CreateKeyPageContent() {
                   <ProjectsPage />
                 ) : page == "vector-stores" ? (
                   <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
-                ) : page == "tool-policies" ? (
-                  <ToolPoliciesView accessToken={accessToken} userRole={userRole} />
                 ) : page == "workflows" ? (
                   <WorkflowRuns accessToken={accessToken} />
                 ) : page == "memory" ? (
