@@ -1,8 +1,11 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
+import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation.http_utils import (
     azure_deployment_image_generation_json_body,
@@ -11,6 +14,10 @@ from litellm.llms.azure_ai.image_generation import (
     AzureFoundryMAIImageGenerationConfig,
     get_azure_ai_image_generation_config,
 )
+from litellm.llms.azure_ai.image_generation.cost_calculator import (
+    cost_calculator as azure_ai_image_cost_calculator,
+)
+from litellm.types.utils import ImageObject, ImageResponse, ImageUsage, ImageUsageInputTokensDetails
 from litellm.utils import get_optional_params_image_gen
 
 
@@ -112,3 +119,119 @@ class TestAzureMAIImageGeneration:
         }
         out = azure_deployment_image_generation_json_body(api, data)
         assert out == data
+
+    def test_map_openai_params_custom_size(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"size": "768x768"},
+            optional_params={},
+            model="MAI-Image-2.5",
+            drop_params=True,
+        )
+        assert optional_params["width"] == 768
+        assert optional_params["height"] == 768
+
+    def test_map_openai_params_width_only_gets_height_default(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"width": 1792},
+            optional_params={},
+            model="MAI-Image-2.5",
+            drop_params=True,
+        )
+        assert optional_params["width"] == 1792
+        assert optional_params["height"] == config.DEFAULT_HEIGHT
+
+    def test_map_openai_params_height_only_gets_width_default(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"height": 1792},
+            optional_params={},
+            model="MAI-Image-2.5",
+            drop_params=True,
+        )
+        assert optional_params["width"] == config.DEFAULT_WIDTH
+        assert optional_params["height"] == 1792
+
+    def test_map_openai_params_unsupported_size_raises(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(ValueError, match="Unsupported size value: 'auto'"):
+            config.map_openai_params(
+                non_default_params={"size": "auto"},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=True,
+            )
+
+    def test_map_openai_params_invalid_custom_size_raises(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(ValueError, match="Invalid size format: '1024xabc'"):
+            config.map_openai_params(
+                non_default_params={"size": "1024xabc"},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=True,
+            )
+
+    def test_map_openai_params_unsupported_param_raises(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        with pytest.raises(ValueError, match="Parameter quality is not supported"):
+            config.map_openai_params(
+                non_default_params={"quality": "hd"},
+                optional_params={},
+                model="MAI-Image-2.5",
+                drop_params=False,
+            )
+
+    def test_mai_image_cost_calculator_token_based(self):
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        model = "azure_ai/MAI-Image-2.5"
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider="azure_ai"
+        )
+        input_text_tokens = 100
+        output_image_tokens = 1024
+
+        image_response = ImageResponse(
+            data=[ImageObject(b64_json="img1")],
+            usage=ImageUsage(
+                input_tokens=input_text_tokens,
+                input_tokens_details=ImageUsageInputTokensDetails(
+                    text_tokens=input_text_tokens,
+                    image_tokens=0,
+                ),
+                output_tokens=output_image_tokens,
+                total_tokens=input_text_tokens + output_image_tokens,
+            ),
+        )
+
+        cost = azure_ai_image_cost_calculator(
+            model=model,
+            image_response=image_response,
+        )
+
+        expected_cost = (
+            input_text_tokens * model_info["input_cost_per_token"]
+            + output_image_tokens * model_info["output_cost_per_image_token"]
+        )
+        assert round(cost, 10) == round(expected_cost, 10)
+
+    def test_mai_image_cost_calculator_falls_back_to_flat_image_pricing(self):
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        model = "azure_ai/MAI-Image-2.5"
+        model_info = litellm.get_model_info(
+            model=model, custom_llm_provider="azure_ai"
+        )
+        image_response = ImageResponse(
+            data=[ImageObject(b64_json="img1"), ImageObject(b64_json="img2")]
+        )
+
+        cost = azure_ai_image_cost_calculator(
+            model=model,
+            image_response=image_response,
+        )
+
+        assert cost == len(image_response.data or []) * model_info["output_cost_per_image"]
+        assert cost > 0

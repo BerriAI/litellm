@@ -74,8 +74,9 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
                     f"Set drop_params=True to drop unsupported parameters."
                 )
 
-        if "width" not in optional_params and "height" not in optional_params:
+        if "width" not in optional_params:
             optional_params["width"] = self.DEFAULT_WIDTH
+        if "height" not in optional_params:
             optional_params["height"] = self.DEFAULT_HEIGHT
 
         optional_params.pop("size", None)
@@ -103,6 +104,11 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
                 raise ValueError(
                     f"Invalid size format: '{size}'. Expected format 'WIDTHxHEIGHT' (e.g., '1024x1024')."
                 )
+        else:
+            raise ValueError(
+                f"Unsupported size value: '{size}'. "
+                f"Use a known size (e.g., '1024x1024') or a custom 'WIDTHxHEIGHT' string."
+            )
 
     def transform_image_generation_response(
         self,
@@ -134,5 +140,5 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         width = optional_params.get("width", self.DEFAULT_WIDTH)
         height = optional_params.get("height", self.DEFAULT_HEIGHT)
-        image_response.size = f"{width}x{height}"
+        image_response.size = f"{width}x{height}"  # type: ignore[assignment]
         return image_response
