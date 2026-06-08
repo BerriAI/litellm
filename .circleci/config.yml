@@ -557,7 +557,7 @@ jobs:
           name: Run MCP e2e tests
           command: |
             mkdir -p test-results
-            uv run --no-sync python -m pytest tests/mcp_tests/test_mcp_e2e.py \
+            uv run --no-sync python -m pytest tests/mcp_tests/test_mcp_byok_pkce_e2e.py \
               -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 10m
       - store_test_results:
