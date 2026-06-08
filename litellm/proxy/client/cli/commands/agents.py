@@ -145,6 +145,26 @@ def _exec(path: str, args: Sequence[str], env: Mapping[str, str]) -> None:
     os.execvpe(path, list(args), dict(env))
 
 
+def _restore_controlling_terminal() -> None:
+    """Reattach the controlling terminal to stdin before handing off to the agent.
+
+    Completing the browser SSO login can leave stdin detached from the terminal,
+    which makes a TUI agent like Claude Code start in non-interactive mode and
+    exit immediately. Reopening /dev/tty onto fd 0 gives the agent a live
+    terminal; when stdin is still a tty (no login happened) this is a no-op.
+    """
+    if sys.stdin.isatty():
+        return
+    try:
+        fd = os.open("/dev/tty", os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.dup2(fd, 0)
+    finally:
+        os.close(fd)
+
+
 def run_agent(
     base_url: str,
     api_key: str,
@@ -155,11 +175,13 @@ def run_agent(
     which: Callable[[str], Optional[str]] = shutil.which,
     verify: Callable[[str, str], None] = verify_proxy_key,
     launcher: Callable[[str, Sequence[str], Mapping[str, str]], None] = _exec,
+    reattach_terminal: Optional[Callable[[], None]] = None,
 ) -> None:
     """Validate, wire the environment, and hand off to the agent.
 
     On success this replaces the current process and never returns. Raises
     AgentRunError for missing binaries, an unreachable proxy, or a rejected key.
+    reattach_terminal, when given, runs just before handoff to restore stdin.
     """
     if not command:
         raise AgentRunError("Nothing to run.")
@@ -181,6 +203,8 @@ def run_agent(
         profiles,
     )
     extra_args = agent_launch_args(command[0], base_url)
+    if reattach_terminal is not None:
+        reattach_terminal()
     launcher(binary, [command[0], *extra_args, *command[1:]], env)
 
 
@@ -217,6 +241,7 @@ def _launch(
     ctx: click.Context, binary: str, args: Sequence[str], *, skip_verify: bool
 ) -> None:
     base_url = ctx.obj["base_url"]
+    started_interactive = _is_interactive()
     api_key = _resolve_api_key(ctx)
 
     display_name, _ = agent_profile(binary)
@@ -225,7 +250,15 @@ def _launch(
     )
 
     try:
-        run_agent(base_url, api_key, [binary, *args], skip_verify=skip_verify)
+        run_agent(
+            base_url,
+            api_key,
+            [binary, *args],
+            skip_verify=skip_verify,
+            reattach_terminal=(
+                _restore_controlling_terminal if started_interactive else None
+            ),
+        )
     except AgentRunError as e:
         raise click.ClickException(str(e))
 

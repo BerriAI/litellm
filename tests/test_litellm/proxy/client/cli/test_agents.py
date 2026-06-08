@@ -286,6 +286,33 @@ class TestRunAgent:
         with pytest.raises(AgentRunError):
             run_agent("http://localhost:4000", "sk-key", [])
 
+    def test_reattach_terminal_runs_just_before_launch(self):
+        order = []
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            skip_verify=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            launcher=lambda *a: order.append("launch"),
+            reattach_terminal=lambda: order.append("reattach"),
+        )
+        assert order == ["reattach", "launch"]
+
+    def test_no_reattach_terminal_by_default(self):
+        order = []
+        run_agent(
+            "http://localhost:4000",
+            "sk-key",
+            ["claude"],
+            skip_verify=True,
+            base_env={},
+            which=lambda name: "/usr/local/bin/claude",
+            launcher=lambda *a: order.append("launch"),
+        )
+        assert order == ["launch"]
+
 
 class TestAgentCommands:
     def setup_method(self):
@@ -408,3 +435,41 @@ class TestAgentCommands:
             )
         assert result.exit_code != 0
         assert "could not reach proxy" in result.output
+
+    def test_interactive_session_reattaches_terminal_before_handoff(self):
+        from litellm.proxy.client.cli.commands.agents import (
+            _restore_controlling_terminal,
+        )
+
+        captured = {}
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=True),
+            patch(
+                f"{AGENTS_MODULE}.run_agent",
+                side_effect=lambda b, k, c, **kw: captured.update(kw),
+            ),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
+            )
+        assert result.exit_code == 0, result.output
+        assert captured["reattach_terminal"] is _restore_controlling_terminal
+
+    def test_non_interactive_agent_mode_leaves_stdin_alone(self):
+        captured = {}
+        with (
+            patch(f"{AGENTS_MODULE}._is_interactive", return_value=False),
+            patch(
+                f"{AGENTS_MODULE}.run_agent",
+                side_effect=lambda b, k, c, **kw: captured.update(kw),
+            ),
+        ):
+            result = self.runner.invoke(
+                _agent_command("claude"),
+                [],
+                obj={"base_url": "http://localhost:4000", "api_key": "sk-key"},
+            )
+        assert result.exit_code == 0, result.output
+        assert captured["reattach_terminal"] is None
