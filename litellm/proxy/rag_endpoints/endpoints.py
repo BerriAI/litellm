@@ -17,16 +17,17 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy._types import *
+from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
     get_form_data,
 )
-from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
+from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 
 router = APIRouter()
 
@@ -230,11 +231,9 @@ async def _save_vector_store_to_db_from_rag_ingest(
 
     try:
         # Check if vector store already exists in database
-        existing_vector_store = (
-            await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-                where={"vector_store_id": vector_store_id}
-            )
-        )
+        existing_vector_store = await ManagedVectorStoresRepository(
+            prisma_client
+        ).table.find_unique(where={"vector_store_id": vector_store_id})
 
         # Only create if it doesn't exist
         if existing_vector_store is None:
@@ -289,7 +288,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
             # Update the vector store
             from litellm.proxy.utils import safe_dumps
 
-            await prisma_client.db.litellm_managedvectorstorestable.update(
+            await ManagedVectorStoresRepository(prisma_client).table.update(
                 where={"vector_store_id": vector_store_id},
                 data={"vector_store_metadata": safe_dumps(existing_metadata)},
             )

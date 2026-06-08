@@ -43,30 +43,8 @@ import {
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
-import { serverRootPath } from "./networking";
+import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
 const { Sider } = Layout;
-
-/**
- * Pages migrated to path-based routing under (dashboard)/.
- * Key = legacy page id, Value = route segment.
- * Keep in sync with MIGRATED_PAGES in (dashboard)/layout.tsx.
- */
-const MIGRATED_PAGES: Record<string, string> = {};
-
-/** Build an absolute href for a migrated page, respecting base URL + serverRootPath. */
-function migratedHref(routeSegment: string): string {
-  const raw = process.env.NEXT_PUBLIC_BASE_URL ?? "";
-  const trimmed = raw.replace(/^\/+|\/+$/g, "");
-  let base = trimmed ? `/${trimmed}/` : "/";
-
-  if (serverRootPath && serverRootPath !== "/") {
-    const cleanRoot = serverRootPath.replace(/\/+$/, "");
-    const cleanBase = base.replace(/^\/+/, "");
-    base = `${cleanRoot}/${cleanBase}`;
-  }
-
-  return `${base}${routeSegment}`;
-}
 
 // Define the props type
 interface SidebarProps {
