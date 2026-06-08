@@ -21,6 +21,15 @@ if TYPE_CHECKING:
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.repositories.table_repositories import (
+    SpendLogsRepository,
+    SpendLogToolIndexRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
     ToolDetailResponse,
@@ -256,8 +265,10 @@ async def get_tool_usage_logs(
                 if end_time_filter is not None:
                     where["start_time"]["lte"] = end_time_filter
 
-        total = await prisma_client.db.litellm_spendlogtoolindex.count(where=where)
-        index_rows = await prisma_client.db.litellm_spendlogtoolindex.find_many(
+        total = await SpendLogToolIndexRepository(prisma_client).table.count(
+            where=where
+        )
+        index_rows = await SpendLogToolIndexRepository(prisma_client).table.find_many(
             where=where,
             order={"start_time": "desc"},
             skip=(page - 1) * page_size,
@@ -269,7 +280,7 @@ async def get_tool_usage_logs(
                 logs=[], total=total, page=page, page_size=page_size
             )
 
-        spend_logs = await prisma_client.db.litellm_spendlogs.find_many(
+        spend_logs = await SpendLogsRepository(prisma_client).table.find_many(
             where={"request_id": {"in": request_ids}}
         )
         log_by_id = {s.request_id: s for s in spend_logs}
@@ -348,7 +359,7 @@ async def _resolve_key_hash_to_object_permission_id(
     hashed = key_hash if "sk-" not in (key_hash or "") else hash_token(key_hash)
     if not hashed:
         return None
-    row = await prisma_client.db.litellm_verificationtoken.find_unique(
+    row = await VerificationTokenRepository(prisma_client).table.find_unique(
         where={"token": hashed}
     )
     if row is None:
@@ -357,18 +368,18 @@ async def _resolve_key_hash_to_object_permission_id(
     if op_id:
         return op_id
     new_id = str(uuid.uuid4())
-    await prisma_client.db.litellm_objectpermissiontable.create(
+    await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count = await prisma_client.db.litellm_verificationtoken.update_many(
+    updated_count = await VerificationTokenRepository(prisma_client).table.update_many(
         where={"token": hashed, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await prisma_client.db.litellm_objectpermissiontable.delete(
+        await ObjectPermissionRepository(prisma_client).table.delete(
             where={"object_permission_id": new_id}
         )
-        row = await prisma_client.db.litellm_verificationtoken.find_unique(
+        row = await VerificationTokenRepository(prisma_client).table.find_unique(
             where={"token": hashed}
         )
         return getattr(row, "object_permission_id", None) if row else None
@@ -383,7 +394,7 @@ async def _resolve_team_id_to_object_permission_id(
     if not team_id or not team_id.strip():
         return None
     team_id_clean = team_id.strip()
-    row = await prisma_client.db.litellm_teamtable.find_unique(
+    row = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id_clean},
         select={"object_permission_id": True},
     )
@@ -393,18 +404,18 @@ async def _resolve_team_id_to_object_permission_id(
     if op_id:
         return op_id
     new_id = str(uuid.uuid4())
-    await prisma_client.db.litellm_objectpermissiontable.create(
+    await ObjectPermissionRepository(prisma_client).table.create(
         data={"object_permission_id": new_id, "blocked_tools": []}
     )
-    updated_count = await prisma_client.db.litellm_teamtable.update_many(
+    updated_count = await TeamRepository(prisma_client).table.update_many(
         where={"team_id": team_id_clean, "object_permission_id": None},
         data={"object_permission_id": new_id},
     )
     if updated_count == 0:
-        await prisma_client.db.litellm_objectpermissiontable.delete(
+        await ObjectPermissionRepository(prisma_client).table.delete(
             where={"object_permission_id": new_id}
         )
-        row = await prisma_client.db.litellm_teamtable.find_unique(
+        row = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": team_id_clean},
             select={"object_permission_id": True},
         )

@@ -4146,7 +4146,7 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "_resolve_accessible_mcp_servers",
                 AsyncMock(return_value=[]),
             ),
         ):
@@ -4174,7 +4174,7 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "_resolve_accessible_mcp_servers",
                 AsyncMock(return_value=[server_with, server_without]),
             ),
             patch.object(
@@ -4204,7 +4204,7 @@ class TestListMCPUserEnvVarStatus:
             ),
             patch.object(
                 mgmt_endpoints,
-                "get_all_mcp_servers_for_user",
+                "_resolve_accessible_mcp_servers",
                 AsyncMock(return_value=[server]),
             ),
             patch.object(
@@ -4220,6 +4220,51 @@ class TestListMCPUserEnvVarStatus:
         assert by_name["CORP_USERNAME"].is_set is True
         assert by_name["CORP_PASSWORD"].is_set is False
         assert "alice" not in result[0].model_dump_json()
+
+    @pytest.mark.asyncio
+    async def test_admin_view_all_flags_missing_fields_without_key_grants(self):
+        """Regression: the red "user fields missing" card must light up for an
+        admin in view_all mode even when their key carries no per-server MCP
+        grant. The bulk status feed has to resolve the same server set the
+        dashboard grid renders; the old narrow key-scoped listing returned
+        nothing for such an admin, leaving every card un-highlighted."""
+        server = _make_env_var_server(
+            server_id="srv-with",
+            env_vars=_ENV_VARS_MIXED,
+            static_headers=_STATIC_HEADERS_MIXED,
+        )
+        with (
+            patch.object(
+                mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "_get_user_mcp_management_mode",
+                return_value="view_all",
+            ),
+            patch.object(
+                mgmt_endpoints.global_mcp_server_manager,
+                "get_all_mcp_servers_unfiltered",
+                AsyncMock(return_value=[server]),
+            ),
+            patch.object(
+                mgmt_endpoints,
+                "get_user_env_vars_bulk",
+                AsyncMock(return_value={}),
+            ),
+        ):
+            result = await mgmt_endpoints.list_mcp_user_env_var_status(
+                user_api_key_dict=generate_mock_user_api_key_auth(
+                    user_id="admin",
+                    user_role=LitellmUserRoles.PROXY_ADMIN,
+                )
+            )
+        assert [s.server_id for s in result] == ["srv-with"]
+        assert result[0].missing_count == 2
+        assert {f.name for f in result[0].required} == {
+            "CORP_USERNAME",
+            "CORP_PASSWORD",
+        }
 
 
 class TestMCPUserEnvVarsAccessControl:
