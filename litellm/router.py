@@ -5561,7 +5561,14 @@ class Router:
                 request_kwargs=kwargs,
             )
 
+            selected_deployment_id = (deployment.get("model_info") or {}).get("id")
             data = deployment["litellm_params"].copy()
+            resolved_credentials = self.get_deployment_credentials_with_provider(
+                model_id=selected_deployment_id or model
+            )
+            if resolved_credentials is not None:
+                data.update(resolved_credentials)
+            data.pop("litellm_credential_name", None)
             model_name = data["model"]
             self._update_kwargs_with_deployment(
                 deployment=deployment, kwargs=kwargs, function_name="_acancel_batch"

@@ -12,6 +12,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
+from litellm.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 CONTAINER_OBJECT_PURPOSE = "container"
@@ -213,7 +214,7 @@ async def record_container_owner(
         )
         return response
 
-    table = prisma_client.db.litellm_managedobjecttable
+    table = ManagedObjectRepository(prisma_client).table
     existing = await table.find_unique(where={"model_object_id": model_object_id})
     if existing is not None:
         if getattr(existing, "file_purpose", None) != CONTAINER_OBJECT_PURPOSE:
@@ -273,7 +274,7 @@ async def _get_container_owner(
     if prisma_client is None:
         return None
 
-    row = await prisma_client.db.litellm_managedobjecttable.find_first(
+    row = await ManagedObjectRepository(prisma_client).table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
@@ -319,7 +320,7 @@ async def _get_stored_container_id(
     if prisma_client is None:
         return None
 
-    row = await prisma_client.db.litellm_managedobjecttable.find_first(
+    row = await ManagedObjectRepository(prisma_client).table.find_first(
         where={
             "model_object_id": model_object_id,
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
@@ -411,7 +412,7 @@ async def _get_allowed_container_ids(
     if prisma_client is None:
         return set()
 
-    rows = await prisma_client.db.litellm_managedobjecttable.find_many(
+    rows = await ManagedObjectRepository(prisma_client).table.find_many(
         where={
             "file_purpose": CONTAINER_OBJECT_PURPOSE,
             "created_by": {"in": owner_scopes},

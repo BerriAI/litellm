@@ -385,6 +385,51 @@ def test_handle_realtime_stream_cost_calculation():
     )
     assert cost == 0.0  # No usage, no cost
 
+    
+def test_realtime_stream_combines_text_and_audio_token_details():
+    """Realtime response.done usage with input_token_details / output_token_details."""
+    from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 20,
+                    "total_tokens": 30,
+                    "input_token_details": {"text_tokens": 8, "audio_tokens": 2},
+                    "output_token_details": {"text_tokens": 12, "audio_tokens": 8},
+                }
+            },
+        },
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 5,
+                    "output_tokens": 15,
+                    "total_tokens": 20,
+                    "input_token_details": {"text_tokens": 3, "audio_tokens": 2},
+                    "output_token_details": {"text_tokens": 5, "audio_tokens": 10},
+                }
+            },
+        },
+    ]
+
+    combined = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    assert combined.prompt_tokens_details is not None
+    assert combined.prompt_tokens_details.text_tokens == 11
+    assert combined.prompt_tokens_details.audio_tokens == 4
+
+    assert combined.completion_tokens_details is not None
+    assert combined.completion_tokens_details.text_tokens == 17
+    assert combined.completion_tokens_details.audio_tokens == 18
+
 
 def test_realtime_logging_object_allows_null_transcript_in_conversation_item_added():
     results: OpenAIRealtimeStreamList = [

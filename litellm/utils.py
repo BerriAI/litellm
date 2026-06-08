@@ -8816,6 +8816,12 @@ class ProviderConfigManager:
             )
 
             return NvidiaRivaAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SONIOX == provider:
+            from litellm.llms.soniox.audio_transcription.transformation import (
+                SonioxAudioTranscriptionConfig,
+            )
+
+            return SonioxAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8889,7 +8895,13 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.XAI == provider:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
-            return litellm.GithubCopilotResponsesAPIConfig()
+            from litellm.llms.github_copilot.responses.transformation import (
+                github_copilot_supports_responses_api,
+            )
+
+            if model is None or github_copilot_supports_responses_api(model=model):
+                return litellm.GithubCopilotResponsesAPIConfig()
+            return None
         elif litellm.LlmProviders.CHATGPT == provider:
             return litellm.ChatGPTResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
@@ -9518,6 +9530,7 @@ class ProviderConfigManager:
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
+        from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
             SearchProviders.PERPLEXITY: PerplexitySearchConfig,
@@ -9533,6 +9546,7 @@ class ProviderConfigManager:
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
             SearchProviders.SEARCHAPI: SearchAPIConfig,
             SearchProviders.SERPER: SerperSearchConfig,
+            SearchProviders.YOU_COM: YouComSearchConfig,
             SearchProviders.APISERPENT: APISerpentSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)

@@ -434,14 +434,19 @@ class PassThroughEndpointLogging:
         return False
 
     def is_openai_route(self, url_route: str):
-        """Check if the URL route is an OpenAI API route."""
+        """Check if the URL route is an OpenAI API route.
+
+        Uses the URL-aware helper so that non-OpenAI Azure Cognitive Services
+        (Speech, Vision, Language, ...) sharing the `*.cognitiveservices.azure.com`
+        / `*.openai.azure.com` domains are not misclassified as OpenAI routes.
+        """
         if not url_route:
             return False
-        parsed_url = urlparse(url_route)
-        return parsed_url.hostname and (
-            "api.openai.com" in parsed_url.hostname
-            or "openai.azure.com" in parsed_url.hostname
+        from .llm_provider_handlers.openai_passthrough_logging_handler import (
+            _is_openai_compatible_url,
         )
+
+        return _is_openai_compatible_url(url_route)
 
     def is_gemini_route(
         self, url_route: str, custom_llm_provider: Optional[str] = None

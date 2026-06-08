@@ -21,6 +21,7 @@ interface MCPServerViewProps {
   userRole: string | null;
   userID: string | null;
   availableAccessGroups: string[];
+  initialTabIndex?: number;
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -32,11 +33,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
   availableAccessGroups,
+  initialTabIndex = 0,
 }) => {
   const [editing, setEditing] = useState(isEditing);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(initialTabIndex);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -185,6 +187,8 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
               serverId={mcpServer.server_id}
               accessToken={accessToken}
               auth_type={mcpServer.auth_type}
+              oauth2_flow={mcpServer.oauth2_flow}
+              delegate_auth_to_upstream={mcpServer.delegate_auth_to_upstream}
               tokenUrl={mcpServer.token_url}
               userRole={userRole}
               userID={userID}
