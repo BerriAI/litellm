@@ -1388,6 +1388,14 @@ class LiteLLMCompletionResponsesConfig:
                 )
             elif tool.get("type") in ("function", "namespace"):
                 typed_tool = cast(FunctionToolParam, tool)
+                if tool.get("type") == "namespace" and (
+                    not typed_tool.get("description")
+                    or not typed_tool.get("parameters")
+                ):
+                    raise ValueError(
+                        "Responses API namespace tools require description and "
+                        "parameters before converting to Chat Completion tools"
+                    )
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:

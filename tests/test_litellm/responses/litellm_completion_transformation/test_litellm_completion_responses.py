@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -1222,10 +1224,21 @@ class TestToolTransformation:
         assert result_tool["type"] == "function"
         assert result_tool["function"]["name"] == "mcp__node_repl"
         assert (
-            result_tool["function"]["description"]
-            == "Run JavaScript in the node REPL"
+            result_tool["function"]["description"] == "Run JavaScript in the node REPL"
         )
         assert result_tool["function"]["parameters"] == namespace_tool["parameters"]
+
+    def test_transform_namespace_tools_without_schema_raises(self):
+        """Name-only namespace tools cannot be converted into usable functions."""
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+        }
+
+        with pytest.raises(ValueError, match="namespace tools require description"):
+            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+                tools=[namespace_tool]
+            )
 
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""

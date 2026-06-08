@@ -680,6 +680,13 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     f"Gemini: Transforming OpenAI-style '{tool['type']}' tool to googleSearch"
                 )
                 tool = {VertexToolName.GOOGLE_SEARCH.value: {}}
+            elif tool.get("type") == "namespace" and (
+                not tool.get("description") or not tool.get("parameters")
+            ):
+                raise ValueError(
+                    "Namespace tools require description and parameters before "
+                    "converting to Gemini function declarations"
+                )
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             elif "type" in tool:
                 tool = {k: tool[k] for k in tool if k != "type"}
