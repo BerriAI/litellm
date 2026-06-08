@@ -7,10 +7,38 @@ the carrier.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
+
+import jwt
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
+
+
+def token_is_jwt(token: Optional[str]) -> bool:
+    """Return True if ``token`` is JWT-shaped (its header decodes via PyJWT)."""
+    if not token:
+        return False
+    try:
+        jwt.get_unverified_header(token)
+        return True
+    except jwt.PyJWTError:
+        return False
+
+
+def decode_unverified_claims(token: Optional[str]) -> Optional[dict]:
+    """Decode JWT claims without verifying the signature.
+
+    Returns ``None`` when the token is missing or not a JWT. Used for
+    routing decisions before a validation path is selected; callers must
+    not trust the claims for authorization.
+    """
+    if not token:
+        return None
+    try:
+        return jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError:
+        return None
 
 
 def parse_jwt_scopes(claims: dict) -> Tuple[str, ...]:

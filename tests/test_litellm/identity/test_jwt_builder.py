@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import sys
 from types import SimpleNamespace
@@ -5,7 +7,11 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.identity import build_user_api_key_auth_from_jwt_result
-from litellm.identity.jwt import parse_jwt_scopes
+from litellm.identity.jwt import (
+    decode_unverified_claims,
+    parse_jwt_scopes,
+    token_is_jwt,
+)
 from litellm.identity.principal import JWTPrincipal
 from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
@@ -154,3 +160,37 @@ def test_team_object_permission_propagates_when_present():
     )
     assert uak.team_object_permission is not None
     assert uak.team_object_permission.object_permission_id == "perm-1"
+
+
+def _unverified_jwt(claims: dict) -> str:
+    def seg(payload: dict) -> str:
+        raw = json.dumps(payload).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    return f"{seg({'alg': 'HS256', 'typ': 'JWT'})}.{seg(claims)}.sig"
+
+
+def test_token_is_jwt_accepts_real_jwt_and_rejects_opaque_tokens():
+    assert token_is_jwt(_unverified_jwt({"sub": "u"})) is True
+    assert token_is_jwt("sk-1234567890") is False
+    assert token_is_jwt("some-opaque-oauth2-token") is False
+    assert token_is_jwt("Bearer token") is False
+    assert token_is_jwt("two.parts") is False
+    assert token_is_jwt("") is False
+    assert token_is_jwt(None) is False
+
+
+def test_token_is_jwt_rejects_three_segments_with_undecodable_header():
+    assert token_is_jwt("not-base64.payload.signature") is False
+
+
+def test_decode_unverified_claims_returns_payload_without_verification():
+    token = _unverified_jwt({"sub": "u-1", "iss": "https://idp.example"})
+    claims = decode_unverified_claims(token)
+    assert claims == {"sub": "u-1", "iss": "https://idp.example"}
+
+
+def test_decode_unverified_claims_returns_none_for_non_jwt():
+    assert decode_unverified_claims("sk-1234567890") is None
+    assert decode_unverified_claims("") is None
+    assert decode_unverified_claims(None) is None
