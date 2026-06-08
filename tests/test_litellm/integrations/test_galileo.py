@@ -357,12 +357,18 @@ def test_galileo_record_to_v2_span_with_tags_and_offset():
 
 def test_galileo_get_output_str_variants(galileo_v2_env):
     logger = GalileoObserve()
-    assert logger.get_output_str_from_response(None, {}) is None
+    assert logger.get_output_str_from_response(None, {}) == ""
     assert (
         logger.get_output_str_from_response(
             EmbeddingResponse(), {"call_type": "embedding"}
         )
-        is None
+        == "embedding-output"
+    )
+    assert (
+        logger.get_output_str_from_response(
+            EmbeddingResponse(), {"call_type": "aembedding"}
+        )
+        == "embedding-output"
     )
 
     text_resp = TextCompletionResponse()
@@ -414,7 +420,7 @@ def test_galileo_get_output_str_variants(galileo_v2_env):
         {"call_type": "acompletion", "messages": [{"role": "user", "content": "hi"}]},
     )
 
-    assert logger.get_output_str_from_response("not-a-supported-type", {}) is None
+    assert logger.get_output_str_from_response("not-a-supported-type", {}) == ""
 
 
 def test_galileo_get_input_output_error_status_message(galileo_v2_env):
@@ -443,6 +449,48 @@ def test_galileo_get_output_str_rerank_response(galileo_v2_env):
     assert output is not None
     assert '"index": 2' in output
     assert '"relevance_score": 0.98' in output
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_log_success_embedding(galileo_v2_env):
+    import datetime
+
+    logger = GalileoObserve()
+    embedding_response = EmbeddingResponse(
+        data=[{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}]
+    )
+
+    mock_response = MagicMock()
+    mock_response.is_success = True
+    mock_response.status_code = 201
+
+    with patch.object(logger.async_httpx_handler, "post", return_value=mock_response):
+        await logger.async_log_success_event(
+            kwargs={
+                "call_type": "aembedding",
+                "model": "text-embedding-3-small",
+                "input": "hello world",
+                "standard_logging_object": {
+                    "call_type": "aembedding",
+                    "model": "text-embedding-3-small",
+                    "prompt_tokens": 2,
+                    "completion_tokens": 0,
+                    "total_tokens": 2,
+                    "response_cost": 0.0,
+                    "startTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "endTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                },
+            },
+            response_obj=embedding_response,
+            start_time=datetime.datetime(2026, 5, 25, 12, 0, 0),
+            end_time=datetime.datetime(2026, 5, 25, 12, 0, 1),
+        )
+
+    assert logger.in_memory_records == []
 
 
 @pytest.mark.asyncio
