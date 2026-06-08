@@ -67,3 +67,47 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
 });
+
+describe("MIGRATED_PAGES leaf cutover", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("routes every migrated leaf page to its segment and back to a sidebar key", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, legacyKeyForPathname } = await import("./migratedPages");
+
+    const cases: [string, string][] = [
+      ["budgets", "budgets"],
+      ["caching", "caching"],
+      ["cost-tracking", "cost-tracking"],
+      ["guardrails", "guardrails"],
+      ["guardrails-monitor", "guardrails-monitor"],
+      ["logs", "logs"],
+      ["mcp-servers", "mcp-servers"],
+      ["memory", "memory"],
+      ["policies", "policies"],
+      ["projects", "projects"],
+      ["prompts", "prompts"],
+      ["search-tools", "search-tools"],
+      ["skills", "skills"],
+      ["claude-code-plugins", "skills"],
+      ["tag-management", "tag-management"],
+      ["tool-policies", "tool-policies"],
+      ["transform-request", "transform-request"],
+      ["ui-theme", "ui-theme"],
+      ["vector-stores", "vector-stores"],
+      ["workflows", "workflows"],
+      ["access-groups", "access-groups"],
+    ];
+    for (const [key, seg] of cases) {
+      expect(MIGRATED_PAGES[key]).toBe(seg);
+      expect(legacyKeyForPathname(`/ui/${seg}`)).not.toBeNull();
+      expect(legacyKeyForPathname(`/ui/${seg}/`)).not.toBeNull();
+    }
+
+    // The skills alias resolves to the "skills" sidebar key, not "claude-code-plugins".
+    expect(legacyKeyForPathname("/ui/skills")).toBe("skills");
+    expect(legacyKeyForPathname("/ui/budgets")).toBe("budgets");
+  });
+});
