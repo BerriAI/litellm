@@ -127,7 +127,7 @@ export function LogDetailsDrawer({
           const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
           const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
           if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
-          return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+          return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
         });
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
