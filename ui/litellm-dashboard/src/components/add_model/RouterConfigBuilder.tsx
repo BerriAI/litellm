@@ -1,5 +1,18 @@
 import { DeleteOutlined, InfoCircleOutlined, PlusOutlined } from "@ant-design/icons";
-import { Select as AntdSelect, Button, Card, Collapse, Divider, Empty, Flex, Input, InputNumber, Space, Tooltip, Typography } from "antd";
+import {
+  Select as AntdSelect,
+  Button,
+  Card,
+  Collapse,
+  Divider,
+  Empty,
+  Flex,
+  Input,
+  InputNumber,
+  Space,
+  Tooltip,
+  Typography,
+} from "antd";
 import React, { useEffect, useState } from "react";
 import { ModelGroup } from "../playground/llm_calls/fetch_models";
 
@@ -142,7 +155,9 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
     <div className="w-full max-w-none">
       <Flex justify="space-between" align="center" gap="middle" style={{ width: "100%", marginBottom: 24 }}>
         <Space align="center">
-          <Typography.Title level={4} style={{ margin: 0 }}>Routes Configuration</Typography.Title>
+          <Typography.Title level={4} style={{ margin: 0 }}>
+            Routes Configuration
+          </Typography.Title>
           <Tooltip title="Configure routing logic to automatically select the best model based on user input patterns">
             <InfoCircleOutlined className="text-gray-400" />
           </Tooltip>
@@ -155,7 +170,7 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
       {/* Routes */}
       {routes.length === 0 ? (
         <Card>
-          <Empty description="No routes configured. Click &quot;Add Route&quot; to get started." />
+          <Empty description='No routes configured. Click "Add Route" to get started.' />
         </Card>
       ) : (
         <Collapse
@@ -269,7 +284,6 @@ const RouterConfigBuilder: React.FC<RouterConfigBuilderProps> = ({ modelInfo, va
           <pre className="text-sm overflow-auto max-h-64 w-full">{JSON.stringify(generateConfig(), null, 2)}</pre>
         </Card>
       )}
-
     </div>
   );
 };

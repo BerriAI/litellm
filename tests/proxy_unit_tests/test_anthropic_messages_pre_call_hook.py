@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy.proxy_server import app, initialize
 
-
 EXAMPLE_ANTHROPIC_MESSAGES_RESULT = {
     "id": "msg_test",
     "type": "message",

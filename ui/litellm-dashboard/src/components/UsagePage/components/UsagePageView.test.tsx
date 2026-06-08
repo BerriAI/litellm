@@ -14,9 +14,9 @@ import UsagePage from "./UsagePageView";
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
     window.ResizeObserver = class ResizeObserver {
-      observe() { }
-      unobserve() { }
-      disconnect() { }
+      observe() {}
+      unobserve() {}
+      disconnect() {}
     } as any;
   }
 });
@@ -57,7 +57,8 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
 
 vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
   const React = await import("react");
-  const UsageViewSelect = ({ value, onChange }: any) => {
+  const UsageViewSelect = ({ value, onChange, canViewTagUsage = false }: any) => {
+    const tagOption = canViewTagUsage ? React.createElement("option", { value: "tag" }, "Tag Usage") : null;
     return React.createElement(
       "select",
       {
@@ -70,7 +71,7 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
       React.createElement("option", { value: "team" }, "Team Usage"),
       React.createElement("option", { value: "organization" }, "Organization Usage"),
       React.createElement("option", { value: "customer" }, "Customer Usage"),
-      React.createElement("option", { value: "tag" }, "Tag Usage"),
+      tagOption,
       React.createElement("option", { value: "agent" }, "Agent Usage"),
       React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
     );
@@ -639,6 +640,29 @@ describe("UsagePage", () => {
     });
   });
 
+  it("should show tag usage selector option for internal users", async () => {
+    mockUseAuthorized.mockReturnValue({
+      isLoading: false,
+      isAuthorized: true,
+      token: "mock-token",
+      accessToken: "test-token",
+      userId: "user-123",
+      userEmail: "test@example.com",
+      userRole: "internal_user",
+      premiumUser: true,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    expect(screen.getByRole("option", { name: "Tag Usage" })).toBeInTheDocument();
+  });
+
   it("should show organization usage banner and view for admins", async () => {
     renderWithProviders(<UsagePage {...defaultProps} organizations={mockOrganizations} />);
 
@@ -715,9 +739,7 @@ describe("UsagePage", () => {
 
       // Admin should see the user selector select element with the placeholder attribute
       const userSelects = screen.getAllByRole("combobox");
-      const userSelect = userSelects.find(
-        (el) => el.getAttribute("placeholder") === "Select user to filter...",
-      );
+      const userSelect = userSelects.find((el) => el.getAttribute("placeholder") === "Select user to filter...");
       expect(userSelect).toBeDefined();
     });
 
@@ -752,9 +774,7 @@ describe("UsagePage", () => {
         data: {
           pages: [
             {
-              users: [
-                { user_id: "user-dup", user_alias: "DupUser", user_email: null },
-              ],
+              users: [{ user_id: "user-dup", user_alias: "DupUser", user_email: null }],
               page: 1,
               total_pages: 2,
               total_count: 2,
@@ -830,9 +850,7 @@ describe("UsagePage", () => {
 
       // Non-admin should not see the user selector
       const userSelects = screen.getAllByRole("combobox");
-      const userSelect = userSelects.find(
-        (el) => el.getAttribute("placeholder") === "Select user to filter...",
-      );
+      const userSelect = userSelects.find((el) => el.getAttribute("placeholder") === "Select user to filter...");
       expect(userSelect).toBeUndefined();
     });
 
@@ -920,9 +938,7 @@ describe("UsagePage", () => {
         },
       };
 
-      mockUserDailyActivityCall
-        .mockResolvedValueOnce(page1Data)
-        .mockResolvedValueOnce(page2Data);
+      mockUserDailyActivityCall.mockResolvedValueOnce(page1Data).mockResolvedValueOnce(page2Data);
 
       renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -932,22 +948,10 @@ describe("UsagePage", () => {
       });
 
       // Verify first page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
-        "test-token",
-        expect.any(Date),
-        expect.any(Date),
-        1,
-        null,
-      );
+      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, null);
 
       // Verify second page call
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
-        "test-token",
-        expect.any(Date),
-        expect.any(Date),
-        2,
-        null,
-      );
+      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 2, null);
     });
   });
 

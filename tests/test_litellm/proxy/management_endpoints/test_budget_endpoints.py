@@ -186,7 +186,7 @@ async def test_new_budget_negative_max_budget(client_and_mocks):
     assert resp.status_code == 400, resp.text
 
     detail = resp.json()["detail"]
-    assert "max_budget cannot be negative" in str(detail)
+    assert "max_budget must be a non-negative finite number" in str(detail)
 
 
 @pytest.mark.asyncio
@@ -204,7 +204,7 @@ async def test_new_budget_negative_soft_budget(client_and_mocks):
     assert resp.status_code == 400, resp.text
 
     detail = resp.json()["detail"]
-    assert "soft_budget cannot be negative" in str(detail)
+    assert "soft_budget must be a non-negative finite number" in str(detail)
 
 
 @pytest.mark.asyncio
@@ -222,7 +222,7 @@ async def test_update_budget_negative_max_budget(client_and_mocks):
     assert resp.status_code == 400, resp.text
 
     detail = resp.json()["detail"]
-    assert "max_budget cannot be negative" in str(detail)
+    assert "max_budget must be a non-negative finite number" in str(detail)
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_update_budget_negative_soft_budget(client_and_mocks):
     assert resp.status_code == 400, resp.text
 
     detail = resp.json()["detail"]
-    assert "soft_budget cannot be negative" in str(detail)
+    assert "soft_budget must be a non-negative finite number" in str(detail)
 
 
 @pytest.mark.asyncio

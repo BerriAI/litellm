@@ -14,6 +14,7 @@ from typing import (
     AsyncIterator,
     Coroutine,
     Dict,
+    Iterator,
     List,
     Optional,
     Union,
@@ -22,6 +23,9 @@ from typing import (
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.common_utils import (
+    strip_empty_text_blocks_from_anthropic_messages,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -246,10 +250,22 @@ async def anthropic_messages(
     client: Optional[AsyncHTTPHandler] = None,
     custom_llm_provider: Optional[str] = None,
     **kwargs,
-) -> Union[AnthropicMessagesResponse, AsyncIterator]:
+) -> Union[AnthropicMessagesResponse, Iterator[bytes], AsyncIterator[Any]]:
     """
-    Async: Make llm api request in Anthropic /messages API spec
+    Async: Make llm api request in Anthropic /messages API spec.
+
+    Runs the empty-text-block sanitizer before any backend dispatch.
     """
+    # Anthropic's API rejects requests containing empty / whitespace-only
+    # text content blocks with "messages: text content blocks must be
+    # non-empty".  Multi-turn tool-use clients (e.g. Claude Code) routinely
+    # loop assistant responses that contain {"type": "text", "text": ""}
+    # alongside tool_use blocks back as conversation history, which then
+    # causes the next /v1/messages call to 400.  /v1/chat/completions
+    # already handles this in anthropic_messages_pt; sanitize the native
+    # Anthropic Messages path here for the same guarantee.  See #22930.
+    messages = strip_empty_text_blocks_from_anthropic_messages(messages)
+
     original_stream = stream or kwargs.get(
         "_websearch_interception_converted_stream", False
     )
@@ -273,7 +289,10 @@ async def anthropic_messages(
         **kwargs,
     )
 
-    # Extract modified parameters
+    # Extract modified parameters. Pop every named param of `anthropic_messages`
+    # that we may forward explicitly downstream, so we (a) honor pre-request hook
+    # overrides and (b) avoid duplicate-keyword conflicts when splatting `kwargs`
+    # into call sites that already pass these as named arguments.
     model = request_kwargs.pop("model", model)
     messages = request_kwargs.pop("messages", messages)
     max_tokens = request_kwargs.pop("max_tokens", max_tokens)
@@ -320,8 +339,8 @@ async def anthropic_messages(
         return short_circuit_response
 
     # Run registered MessagesInterceptors (e.g. advisor orchestration loop).
-    # api_key and api_base are explicit params (not in **kwargs) so pass them
-    # explicitly so interceptor sub-calls can route to the same backend.
+    # Named params on `anthropic_messages` are bound to locals, not `**kwargs`,
+    # so forward them explicitly — otherwise interceptor sub-calls drop them.
     for interceptor in get_messages_interceptors():
         if interceptor.can_handle(tools, custom_llm_provider):
             return await interceptor.handle(
@@ -333,6 +352,14 @@ async def anthropic_messages(
                 custom_llm_provider=custom_llm_provider,
                 api_key=api_key,
                 api_base=api_base,
+                metadata=metadata,
+                stop_sequences=stop_sequences,
+                system=system,
+                temperature=temperature,
+                thinking=thinking,
+                tool_choice=tool_choice,
+                top_k=top_k,
+                top_p=top_p,
                 **kwargs,
             )
 
@@ -358,6 +385,12 @@ async def anthropic_messages(
         api_base=api_base,
         client=client,
         custom_llm_provider=custom_llm_provider,
+        # messages were already empty-text-block sanitized at the top of this
+        # function and are NOT reassigned before this dispatch, so the handler
+        # can skip its (otherwise redundant) second full-messages scan. Passed
+        # explicitly (not via **kwargs) so it only affects this direct
+        # dispatch -- interceptor / sync entry points still sanitize.
+        _litellm_messages_presanitized=True,
         **kwargs,
     )
     ctx = contextvars.copy_context()
@@ -405,8 +438,11 @@ def anthropic_messages_handler(
     **kwargs,
 ) -> Union[
     AnthropicMessagesResponse,
+    Iterator[bytes],
     AsyncIterator[Any],
-    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+    Coroutine[
+        Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any], Iterator[bytes]]
+    ],
 ]:
     """
     Makes Anthropic `/v1/messages` API calls In the Anthropic API Spec
@@ -415,6 +451,15 @@ def anthropic_messages_handler(
         container: Container config with skills for code execution
     """
     from litellm.types.utils import LlmProviders
+
+    # Sanitize empty text blocks so the sync entry point
+    # (litellm.messages.create -> anthropic_messages_handler) gets the same
+    # protection as the async wrapper. The async wrapper already sanitized and
+    # does not reassign messages before dispatch, so it sets
+    # ``_litellm_messages_presanitized`` to skip this redundant second
+    # full-messages scan. Pop it so it never leaks into provider params.
+    if not kwargs.pop("_litellm_messages_presanitized", False):
+        messages = strip_empty_text_blocks_from_anthropic_messages(messages)
 
     metadata = validate_anthropic_api_metadata(metadata)
 
@@ -506,9 +551,14 @@ def anthropic_messages_handler(
             return LiteLLMMessagesToResponsesAPIHandler.anthropic_messages_handler(
                 **_shared_kwargs
             )
+
+        # The in-gateway context_management polyfill runs inside
+        # ``async_anthropic_messages_handler`` so it can ``await`` the
+        # summarization model for ``compact_20260112``. ``context_management``
+        # is passed through as a regular kwarg.
         return (
             LiteLLMMessagesToCompletionTransformationHandler.anthropic_messages_handler(
-                **_shared_kwargs
+                **_shared_kwargs,
             )
         )
 

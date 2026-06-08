@@ -28,7 +28,15 @@ const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 const infiniteModelKeys = createQueryKeys("infiniteModels");
 
-export const useModelsInfo = (page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
+export const useModelsInfo = (
+  page: number = 1,
+  size: number = 50,
+  search?: string,
+  modelId?: string,
+  teamId?: string,
+  sortBy?: string,
+  sortOrder?: string,
+) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<PaginatedModelInfoResponse>({
     queryKey: modelKeys.list({
@@ -44,7 +52,8 @@ export const useModelsInfo = (page: number = 1, size: number = 50, search?: stri
         ...(sortOrder && { sortOrder }),
       },
     }),
-    queryFn: async () => await modelInfoCall(accessToken!, userId!, userRole!, page, size, search, modelId, teamId, sortBy, sortOrder),
+    queryFn: async () =>
+      await modelInfoCall(accessToken!, userId!, userRole!, page, size, search, modelId, teamId, sortBy, sortOrder),
     enabled: Boolean(accessToken && userId && userRole),
   });
 };
@@ -76,10 +85,7 @@ export const useSelectedTeamModels = (teamID: string | null) => {
   });
 };
 
-export const useInfiniteModelInfo = (
-  size: number = 50,
-  search?: string,
-) => {
+export const useInfiniteModelInfo = (size: number = 50, search?: string) => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useInfiniteQuery<PaginatedModelInfoResponse>({
     queryKey: infiniteModelKeys.list({
@@ -91,14 +97,7 @@ export const useInfiniteModelInfo = (
       },
     }),
     queryFn: async ({ pageParam }) => {
-      return await modelInfoCall(
-        accessToken!,
-        userId!,
-        userRole!,
-        pageParam as number,
-        size,
-        search,
-      );
+      return await modelInfoCall(accessToken!, userId!, userRole!, pageParam as number, size, search);
     },
     initialPageParam: 1,
     getNextPageParam: (lastPage) => {

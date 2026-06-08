@@ -16,7 +16,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
 )
-from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.guardrails import GuardrailEventHooks, LitellmParams
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
     ToolPermissionRule,
@@ -60,53 +60,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         super().__init__(**kwargs)
 
-        self.rules: List[ToolPermissionRule] = []
-        self._compiled_rule_patterns: Dict[str, Dict[str, re.Pattern]] = {}
-        self._compiled_rule_targets: Dict[str, Dict[str, Optional[re.Pattern]]] = {}
-        if rules:
-            for rule_item in rules:
-                if isinstance(rule_item, ToolPermissionRule):
-                    rule = rule_item
-                else:
-                    rule = ToolPermissionRule(**rule_item)
-                self.rules.append(rule)
-
-                compiled_target_patterns: Dict[str, Optional[re.Pattern]] = {
-                    "tool_name": None,
-                    "tool_type": None,
-                }
-                if rule.tool_name is not None:
-                    try:
-                        compiled_target_patterns["tool_name"] = re.compile(
-                            rule.tool_name
-                        )
-                    except re.error as exc:
-                        raise ValueError(
-                            f"Invalid regex for tool_name in rule '{rule.id}': {exc}"
-                        ) from exc
-                if rule.tool_type is not None:
-                    try:
-                        compiled_target_patterns["tool_type"] = re.compile(
-                            rule.tool_type
-                        )
-                    except re.error as exc:
-                        raise ValueError(
-                            f"Invalid regex for tool_type in rule '{rule.id}': {exc}"
-                        ) from exc
-                self._compiled_rule_targets[rule.id] = compiled_target_patterns
-
-                if rule.allowed_param_patterns:
-                    compiled_patterns: Dict[str, re.Pattern] = {}
-                    for path, pattern in rule.allowed_param_patterns.items():
-                        try:
-                            compiled_patterns[path] = re.compile(pattern)
-                        except re.error as exc:
-                            raise ValueError(
-                                f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}"
-                            ) from exc
-
-                    if compiled_patterns:
-                        self._compiled_rule_patterns[rule.id] = compiled_patterns
+        self._load_rules(rules)
 
         # Normalize to lowercase for case-insensitive handling
         self.default_action = (
@@ -125,6 +79,115 @@ class ToolPermissionGuardrail(CustomGuardrail):
             len(self.rules),
             self.default_action,
         )
+
+    def _load_rules(self, rules: Optional[List[Any]]) -> None:
+        """Parse ``rules`` and (re)build the compiled target/pattern lookups.
+
+        ``self.rules`` plus ``_compiled_rule_targets`` / ``_compiled_rule_patterns``
+        are the state every matching path reads. Centralizing the build here lets
+        both ``__init__`` and ``update_in_memory_litellm_params`` recompile from a
+        single source of truth, so an in-place update (PUT /guardrails, immediate
+        sync) reflects rule changes instead of keeping the construction-time maps.
+        """
+        parsed_rules: List[ToolPermissionRule] = []
+        compiled_targets: Dict[str, Dict[str, Optional[re.Pattern]]] = {}
+        compiled_patterns: Dict[str, Dict[str, re.Pattern]] = {}
+
+        for rule_item in rules or []:
+            rule = (
+                rule_item
+                if isinstance(rule_item, ToolPermissionRule)
+                else ToolPermissionRule(**rule_item)
+            )
+
+            target_patterns: Dict[str, Optional[re.Pattern]] = {
+                "tool_name": None,
+                "tool_type": None,
+            }
+            if rule.tool_name is not None:
+                try:
+                    target_patterns["tool_name"] = re.compile(rule.tool_name)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex for tool_name in rule '{rule.id}': {exc}"
+                    ) from exc
+            if rule.tool_type is not None:
+                try:
+                    target_patterns["tool_type"] = re.compile(rule.tool_type)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex for tool_type in rule '{rule.id}': {exc}"
+                    ) from exc
+
+            rule_patterns: Dict[str, re.Pattern] = {}
+            for path, pattern in (rule.allowed_param_patterns or {}).items():
+                try:
+                    rule_patterns[path] = re.compile(pattern)
+                except re.error as exc:
+                    raise ValueError(
+                        f"Invalid regex in allowed_param_patterns for rule '{rule.id}': {exc}"
+                    ) from exc
+
+            parsed_rules.append(rule)
+            compiled_targets[rule.id] = target_patterns
+            if rule_patterns:
+                compiled_patterns[rule.id] = rule_patterns
+
+        # Swap in the fully-built maps only after every rule compiles, so an
+        # invalid regex raises without leaving a partially-built ruleset (a
+        # missing compiled target is read as a match-all wildcard).
+        self.rules = parsed_rules
+        self._compiled_rule_targets = compiled_targets
+        self._compiled_rule_patterns = compiled_patterns
+
+    def update_in_memory_litellm_params(
+        self, litellm_params: Union[LitellmParams, dict]
+    ) -> None:
+        """Apply updated params in place, rebuilding the compiled rule state.
+
+        The base implementation only ``setattr``s raw fields, which would leave
+        ``_compiled_rule_targets`` / ``_compiled_rule_patterns`` (built in
+        ``__init__``) stale, so a guardrail updated without reinitialization would
+        keep enforcing the old ruleset. Recompile here so PUT /guardrails and the
+        immediate in-memory sync take effect, mirroring the PresidioGuardrail
+        override of this method.
+        """
+        # ``litellm_params`` may arrive as the raw DB dict (the proxy ``cast()``s
+        # it to ``LitellmParams`` without converting), so handle both shapes. The
+        # base ``setattr`` loop is model-only, so apply the dict case here.
+        previous_rules = self.rules
+        if isinstance(litellm_params, dict):
+            params = litellm_params
+            for key, value in params.items():
+                setattr(self, key, value)
+        else:
+            super().update_in_memory_litellm_params(litellm_params)
+            params = vars(litellm_params)
+
+        # The generic update above sets ``self.rules`` from the incoming value
+        # (None on a partial update that omits rules), but never rebuilds the
+        # compiled maps. Rebuild them when rules are provided; otherwise restore
+        # the previous ruleset so a partial update doesn't silently wipe it. An
+        # explicit empty list still clears the rules.
+        rules = params.get("rules")
+        if rules is not None:
+            try:
+                self._load_rules(rules)
+            except Exception:
+                # The generic update above may have overwritten self.rules with
+                # the raw payload; restore the prior consistent ruleset so a
+                # rejected update can't leave the live guardrail enforcing a
+                # broken policy.
+                self.rules = previous_rules
+                raise
+        else:
+            self.rules = previous_rules
+        default_action = params.get("default_action")
+        if isinstance(default_action, str):
+            self.default_action = default_action.lower()
+        on_disallowed_action = params.get("on_disallowed_action")
+        if isinstance(on_disallowed_action, str):
+            self.on_disallowed_action = on_disallowed_action.lower()
 
     @staticmethod
     def get_config_model():
@@ -799,6 +862,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
                 verbose_proxy_logger.debug(
                     "Tool Permission Guardrail: No tool uses found"
                 )
+                mock_response = MockResponseIterator(
+                    model_response=assembled_model_response
+                )
+                async for chunk in mock_response:
+                    yield chunk
                 return
 
             verbose_proxy_logger.debug(

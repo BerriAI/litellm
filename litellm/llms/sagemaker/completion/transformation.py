@@ -1,7 +1,7 @@
 """
 Translate from OpenAI's `/v1/chat/completions` to Sagemaker's `/invoke`
 
-In the Huggingface TGI format. 
+In the Huggingface TGI format.
 """
 
 import json

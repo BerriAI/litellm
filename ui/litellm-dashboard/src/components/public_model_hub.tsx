@@ -983,16 +983,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
         {/* Navigation - only show when not embedded */}
         {!isEmbedded && (
           <Navbar
-            userID={null}
-            userEmail={null}
-            userRole={null}
-            premiumUser={false}
             setProxySettings={setProxySettings}
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
-            isDarkMode={false}
-            toggleDarkMode={() => {}}
           />
         )}
 
@@ -1315,11 +1309,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
               {/* Skill Hub Tab */}
               <TabPane tab="Skill Hub" key="skills">
-                <SkillHubDashboard
-                  skills={skillHubData}
-                  isLoading={skillLoading}
-                  publicPage={true}
-                />
+                <SkillHubDashboard skills={skillHubData} isLoading={skillLoading} publicPage={true} />
               </TabPane>
             </Tabs>
           </Card>
