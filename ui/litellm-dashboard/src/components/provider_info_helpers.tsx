@@ -216,7 +216,7 @@ export const provider_map: Record<string, string> = {
   ZAI: "zai",
 };
 
-const asset_logos_folder = "../ui/assets/logos/";
+const asset_logos_folder = "/ui/assets/logos/";
 
 export const providerLogoMap: Record<string, string> = {
   [Providers.A2A_Agent]: `${asset_logos_folder}a2a_agent.png`,
