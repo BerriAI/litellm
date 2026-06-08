@@ -231,13 +231,23 @@ def _iter_openai_jsonl_lines(openai_file_content: FileTypes) -> Iterator[str]:
         return
 
     if hasattr(content, "read"):
-        # Rewind seekable handles (BytesIO, temp files) so the body can be
-        # replayed on a retry; a non-seekable stream cannot be re-read.
-        if hasattr(content, "seek"):
-            try:
-                content.seek(0)
-            except (OSError, ValueError):
-                pass
+        # The handle is read twice per upload (first-row probe for the GCS
+        # object name, then the body stream), so it must rewind to 0. A
+        # non-seekable handle would silently resume mid-stream and drop the
+        # already-consumed first row, so reject it loudly instead.
+        seek = getattr(content, "seek", None)
+        if seek is None:
+            raise ValueError(
+                "Batch upload file handle must be seekable; got a non-seekable "
+                "stream. Pass bytes, a path, or a seekable handle."
+            )
+        try:
+            seek(0)
+        except (OSError, ValueError) as e:
+            raise ValueError(
+                "Batch upload file handle must be seekable so it can be re-read "
+                "for the GCS object name and the upload body."
+            ) from e
         for raw in content:
             line = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             line = line.strip()
@@ -396,7 +406,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         )
 
     def _get_configured_bucket_name(self, litellm_params: Dict) -> str:
-        bucket_name = litellm_params.get("bucket_name") or os.getenv("GCS_BUCKET_NAME")
+        bucket_name = litellm_params.get("gcs_bucket_name") or os.getenv("GCS_BUCKET_NAME")
         if not bucket_name:
             raise ValueError("GCS bucket_name is required")
         return bucket_name

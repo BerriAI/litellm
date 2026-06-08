@@ -152,7 +152,7 @@ class TestFileLikeInputNotPartiallyConsumed:
             api_key=None,
             model="",
             optional_params={},
-            litellm_params={"bucket_name": "test-bucket"},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
             data=create_file_data,
         )
         out = cfg.transform_create_file_request(
@@ -205,6 +205,29 @@ class TestStreamingLineIterator:
     def test_unsupported_content_type_raises(self):
         with pytest.raises(ValueError, match="Unsupported file content type"):
             list(_iter_openai_jsonl_lines(12345))  # type: ignore[arg-type]
+
+    def test_non_seekable_handle_raises_instead_of_dropping_first_row(self):
+        # The handle is read twice (object-name probe, then body). A non-seekable
+        # handle can't rewind, so it must fail loudly rather than silently resume
+        # mid-stream and omit the opening batch request.
+        class _NonSeekable:
+            def __init__(self, raw: bytes):
+                self._buf = io.BytesIO(raw)
+
+            def read(self, *args):
+                return self._buf.read(*args)
+
+            def __iter__(self):
+                return iter(self._buf)
+
+            def seek(self, *args):
+                raise io.UnsupportedOperation("not seekable")
+
+        handle = _NonSeekable(
+            b'{"custom_id": "request-0"}\n{"custom_id": "request-1"}\n'
+        )
+        with pytest.raises(ValueError, match="seekable"):
+            list(_iter_openai_jsonl_lines(handle))
 
     def test_is_lazy_does_not_parse_past_first_entry(self):
         # Second row is invalid JSON; pulling only the first entry must not raise.
@@ -337,7 +360,7 @@ class TestPathSourcedStreaming:
             api_key=None,
             model="",
             optional_params={},
-            litellm_params={"bucket_name": "test-bucket"},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
             data=data,
         )
         assert "uploadType=resumable" in url
@@ -364,7 +387,7 @@ class TestPathSourcedStreaming:
                 api_key=None,
                 model="",
                 optional_params={},
-                litellm_params={"bucket_name": "test-bucket"},
+                litellm_params={"gcs_bucket_name": "test-bucket"},
                 data=data,
             )
             out = cfg.transform_create_file_request(
@@ -476,7 +499,7 @@ class TestResumableUploadUrl:
             api_key=None,
             model="",
             optional_params={},
-            litellm_params={"bucket_name": "test-bucket"},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
             data=request,
         )
         assert "uploadType=resumable" in url
@@ -493,7 +516,7 @@ class TestResumableUploadUrl:
             api_key=None,
             model="",
             optional_params={},
-            litellm_params={"bucket_name": "test-bucket"},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
             data=request,
         )
         assert "uploadType=media" in url
@@ -581,7 +604,7 @@ class TestResumableUploadProtocol:
             api_key=None,
             model="",
             optional_params={},
-            litellm_params={"bucket_name": "test-bucket"},
+            litellm_params={"gcs_bucket_name": "test-bucket"},
             data=request,
         )
         transformed = cfg.transform_create_file_request(
@@ -642,7 +665,6 @@ class TestResumableUploadProtocol:
     async def test_exact_multiple_finalizes_with_empty_chunk(self):
         # Build a body that is an exact multiple of the chunk size so the stream
         # ends on a chunk boundary; the upload must still finalize (bytes */TOTAL).
-        cfg = VertexAIFilesConfig()
         chunk_size = 256
         stream = _FixedBytesStream(b"a" * (chunk_size * 3))
         config = {"body_stream": stream, "chunk_size": chunk_size}

@@ -785,10 +785,10 @@ def extract_file_metadata(file_data: FileTypes) -> Tuple[Optional[str], Optional
     if filename is None:
         if isinstance(file_content, PathLike):
             filename = Path(file_content).name
-        elif isinstance(file_content, io.IOBase) and isinstance(
-            getattr(file_content, "name", None), str
-        ):
-            filename = Path(file_content.name).name
+        elif isinstance(file_content, io.IOBase):
+            name_attr = getattr(file_content, "name", None)
+            if isinstance(name_attr, str):
+                filename = Path(name_attr).name
 
     if not content_type:
         guessed = mimetypes.guess_type(filename)[0] if filename else None

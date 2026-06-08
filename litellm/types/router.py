@@ -174,7 +174,7 @@ class CredentialLiteLLMParams(BaseModel):
     region_name: Optional[str] = None
 
     ## OBJECT STORAGE (files / batches) ##
-    bucket_name: Optional[str] = None
+    gcs_bucket_name: Optional[str] = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: Optional[str] = None
