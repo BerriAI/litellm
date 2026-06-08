@@ -7,6 +7,7 @@ import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
+import { MIGRATED_PAGES } from "@/utils/migratedPages";
 
 /** ---- BASE URL HELPERS ---- */
 function normalizeBasePrefix(raw: string | undefined | null): string {
@@ -22,15 +23,6 @@ function withBase(path: string): string {
   return combined.startsWith("/") ? combined : `/${combined}`;
 }
 /** -------------------------------- */
-
-/**
- * Pages that have been migrated to path-based routing under (dashboard)/.
- * When the leftnav triggers one of these, navigate to the path route instead
- * of the legacy query-param root page.
- *
- * Key = legacy page id used in leftnav, Value = route segment under (dashboard)/
- */
-const MIGRATED_PAGES: Record<string, string> = {};
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
