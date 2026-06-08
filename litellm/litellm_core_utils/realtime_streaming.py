@@ -111,6 +111,7 @@ class RealTimeStreaming:
             "input_audio_buffer.append",
             "input_audio_buffer.commit",
             "input_audio_buffer.clear",
+            "input_audio_buffer.end",
         ]
     )
     _AUDIO_FORMAT_MAP: Dict[str, Dict[str, Any]] = {
