@@ -17,6 +17,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
     TOKEN_NO_CACHE_HEADERS,
     get_request_base_url,
+    relay_oauth_token_error,
     validate_trusted_redirect_uri,
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
@@ -456,11 +457,18 @@ async def exchange_token_with_server(
             token_data["code_verifier"] = code_verifier
 
     async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json"},
-        data=token_data,
-    )
+    try:
+        response = await async_client.post(
+            mcp_server.token_url,
+            headers={"Accept": "application/json"},
+            data=token_data,
+        )
+    except httpx.HTTPStatusError as e:
+        # The async HTTP handler raises on an upstream 4xx/5xx. Relay the OAuth
+        # error to the client (RFC 6749 §5.2) instead of letting it surface as a
+        # 500; otherwise the client can't see e.g. invalid_grant and start a new
+        # authorization flow, and a headless client loops on a dead refresh token.
+        return relay_oauth_token_error(e.response)
     if response is None:
         raise HTTPException(
             status_code=502,
