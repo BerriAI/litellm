@@ -642,3 +642,77 @@ class TestAnthropicMultiTurnToolMessages:
         )
         for msg in body["messages"]:
             assert msg["role"] != "tool"
+
+    def test_malformed_json_in_tool_arguments_handled_gracefully(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_bad",
+                        "type": "function",
+                        "function": {"name": "broken_tool", "arguments": "not valid json{{{"},
+                    }
+                ],
+            },
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assistant_msg = body["messages"][1]
+        tool_use_block = assistant_msg["content"][0]
+        assert tool_use_block["type"] == "tool_use"
+        assert tool_use_block["name"] == "broken_tool"
+        assert tool_use_block["input"] == {}
+
+    def test_non_string_tool_arguments_pass_through(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_dict",
+                        "type": "function",
+                        "function": {"name": "dict_tool", "arguments": {"already": "parsed"}},
+                    }
+                ],
+            },
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        tool_use_block = body["messages"][1]["content"][0]
+        assert tool_use_block["input"] == {"already": "parsed"}
+
+    def test_tool_result_with_non_string_content(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": {"result_key": "result_value"}},
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        tool_result = body["messages"][2]["content"][0]
+        assert tool_result["type"] == "tool_result"
+        assert json.loads(tool_result["content"]) == {"result_key": "result_value"}
