@@ -44,6 +44,8 @@ async def _fetch_from_db(
     from litellm.proxy.auth.auth_checks import (
         _fetch_key_object_from_db_with_reconnect,
         get_object_permission,
+        get_org_object,
+        get_team_object,
         get_user_object,
     )
 
@@ -87,6 +89,37 @@ async def _fetch_from_db(
             )
         except Exception:
             uak.user = None
+
+    # Warm the shared team/org caches during the cold load so the auth
+    # chain's later team/org refresh reads them from cache instead of
+    # issuing its own DB round-trip. The objects live under the
+    # `team_id:`/`org_id:` cache entries (not the identity entry), so the
+    # refresh block's `last_refreshed_at` freshness check still picks up a
+    # `/team/update` that lands after this load.
+    if uak.team_id:
+        try:
+            await get_team_object(
+                team_id=uak.team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+        except Exception:
+            pass
+
+    if uak.org_id:
+        try:
+            await get_org_object(
+                org_id=uak.org_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                include_budget_table=True,
+            )
+        except Exception:
+            pass
 
     return uak
 

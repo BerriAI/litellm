@@ -45,9 +45,7 @@ async def test_cache_hit_skips_db():
     prisma = _stub_prisma_client()
     from litellm.proxy._types import UserAPIKeyAuth
 
-    seed = UserAPIKeyAuth(
-        token="hash-cached", user_id="u-cache", team_id="t-cache"
-    )
+    seed = UserAPIKeyAuth(token="hash-cached", user_id="u-cache", team_id="t-cache")
     await identity_cache.set("hash-cached", seed)
 
     result = await load_identity(
@@ -71,9 +69,7 @@ async def test_cache_miss_hits_db_once_and_caches():
         token="hash-db", user_id="u-db", team_id="t-db"
     )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ):
+    with patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()):
         result = await load_identity(
             hashed_token="hash-db",
             prisma_client=prisma,
@@ -97,9 +93,7 @@ async def test_warm_load_after_cold_does_not_hit_db():
         token="hash-warm", user_id="u-warm", team_id="t-warm"
     )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ):
+    with patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()):
         await load_identity(
             hashed_token="hash-warm",
             prisma_client=prisma,
@@ -146,9 +140,7 @@ async def test_bundled_user_survives_cache_roundtrip_as_typed_model():
     uak = UserAPIKeyAuth(
         api_key="sk-bundle",
         user_id="u-bundle",
-        user=LiteLLM_UserTable(
-            user_id="u-bundle", user_email="x@y.com", tpm_limit=10
-        ),
+        user=LiteLLM_UserTable(user_id="u-bundle", user_email="x@y.com", tpm_limit=10),
     )
     await identity_cache.set(uak.token, uak)
     got = await identity_cache.get(uak.token)
@@ -177,11 +169,12 @@ async def test_cold_path_bundles_user_into_cache():
             user_id=user_id, user_email="bundle@litellm.io", tpm_limit=42
         )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ), patch(
-        "litellm.proxy.auth.auth_checks.get_user_object",
-        side_effect=_fake_get_user_object,
+    with (
+        patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            side_effect=_fake_get_user_object,
+        ),
     ):
         result = await load_identity(
             hashed_token="hash-user",
@@ -198,6 +191,111 @@ async def test_cold_path_bundles_user_into_cache():
 
 
 @pytest.mark.asyncio
+async def test_fetch_from_db_warms_shared_team_and_org_caches():
+    """The cold load must populate the shared `team_id:`/`org_id:` caches so
+    the auth chain's later team/org refresh is a cache hit, not a DB query."""
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationTable,
+        LiteLLM_TeamTable,
+        LiteLLM_TeamTableCachedObj,
+        LiteLLM_UserTable,
+    )
+    from litellm.proxy.auth.auth_checks import get_org_object, get_team_object
+
+    team_id = "t-warm-shared-cache"
+    org_id = "org-warm-shared-cache"
+
+    team_find_unique = AsyncMock(return_value=LiteLLM_TeamTable(team_id=team_id))
+    org_find_unique = AsyncMock(
+        return_value=LiteLLM_OrganizationTable(
+            organization_id=org_id,
+            budget_id="b-warm",
+            models=[],
+            created_by="u-warm",
+            updated_by="u-warm",
+        )
+    )
+
+    class _FakeDB:
+        def __init__(self):
+            self.litellm_teamtable = type("T", (), {"find_unique": team_find_unique})()
+            self.litellm_organizationtable = type(
+                "O", (), {"find_unique": org_find_unique}
+            )()
+
+    prisma = _stub_prisma_client()
+    prisma.db = _FakeDB()
+    prisma.get_data.return_value = _verification_token_view(
+        token="hash-warm-shared", user_id="u-warm", team_id=team_id, org_id=org_id
+    )
+
+    cache_backend = UserApiKeyCache()
+    identity_cache = IdentityCache(dual_cache=cache_backend)
+
+    async def _fake_get_user_object(*, user_id, **kwargs):
+        return LiteLLM_UserTable(user_id=user_id, tpm_limit=7)
+
+    with (
+        patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_user_object",
+            side_effect=_fake_get_user_object,
+        ),
+    ):
+        result = await load_identity(
+            hashed_token="hash-warm-shared",
+            prisma_client=prisma,
+            cache=identity_cache,
+            user_api_key_cache=cache_backend,
+        )
+
+    assert result.user_id == "u-warm"
+    assert result.team_id == team_id
+    assert result.org_id == org_id
+    assert result.user is not None
+
+    cached_team = await cache_backend.async_get_cache(
+        key=f"team_id:{team_id}", model_type=LiteLLM_TeamTableCachedObj
+    )
+    cached_org = await cache_backend.async_get_cache(
+        key=f"org_id:{org_id}:with_budget", model_type=LiteLLM_OrganizationTable
+    )
+    assert cached_team is not None
+    assert cached_org is not None
+
+    # Mirrors the ~1496 team refresh block (check_cache_only=True) and the
+    # ~1893 Check 6 block (no flag): both must now read the warmed cache
+    # without a DB round-trip.
+    db_team_queries_before = team_find_unique.await_count
+    refreshed_team_cache_only = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma,
+        user_api_key_cache=cache_backend,
+        check_cache_only=True,
+    )
+    refreshed_team = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma,
+        user_api_key_cache=cache_backend,
+    )
+    assert refreshed_team_cache_only is not None
+    assert refreshed_team is not None
+    assert team_find_unique.await_count == db_team_queries_before
+
+    # Mirrors _organization_max_budget_check, the per-request org consumer,
+    # which reads the org_id:<id>:with_budget cache entry.
+    db_org_queries_before = org_find_unique.await_count
+    refreshed_org = await get_org_object(
+        org_id=org_id,
+        prisma_client=prisma,
+        user_api_key_cache=cache_backend,
+        include_budget_table=True,
+    )
+    assert refreshed_org is not None
+    assert org_find_unique.await_count == db_org_queries_before
+
+
+@pytest.mark.asyncio
 async def test_hydrated_copy_is_request_scoped():
     cache_backend = UserApiKeyCache()
     identity_cache = IdentityCache(dual_cache=cache_backend)
@@ -206,9 +304,7 @@ async def test_hydrated_copy_is_request_scoped():
         token="hash-copy", user_id="u-copy", team_id="t-copy"
     )
 
-    with patch(
-        "litellm.identity.store._populate_legacy_cache", new=AsyncMock()
-    ):
+    with patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()):
         a = await load_identity(
             hashed_token="hash-copy",
             prisma_client=prisma,
