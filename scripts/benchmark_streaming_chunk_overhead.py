@@ -169,10 +169,12 @@ def _make_wrapper(
         custom_llm_provider=provider,
     )
 
+
 @dataclass
 class TimingSample:
     wall_s: float
     cpu_s: float
+
 
 def drive_sync(
     provider_key: str, chunks_per_stream: int, n_streams: int
