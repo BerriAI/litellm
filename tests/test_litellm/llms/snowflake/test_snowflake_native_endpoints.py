@@ -486,3 +486,159 @@ class TestIsClaudeModel:
         assert _is_claude_model("snowflake/mistral-large") is False
         assert _is_claude_model("snowflake/deepseek-r1") is False
         assert _is_claude_model("snowflake/snowflake-arctic") is False
+
+
+# ─── Anthropic Tool Transformation Tests ──────────────────────────────────
+
+class TestAnthropicToolTransformation:
+    def setup_method(self):
+        self.cfg = SnowflakeCortexAnthropicConfig()
+
+    def test_openai_tools_converted_to_anthropic_format(self):
+        messages = [{"role": "user", "content": "What's the weather?"}]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
+                },
+            }
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={"tools": tools},
+            litellm_params={},
+            headers={},
+        )
+        assert len(body["tools"]) == 1
+        tool = body["tools"][0]
+        assert tool["name"] == "get_weather"
+        assert tool["description"] == "Get current weather"
+        assert "input_schema" in tool
+        assert tool["input_schema"]["properties"]["city"]["type"] == "string"
+        assert "function" not in tool
+        assert "type" not in tool
+
+    def test_tools_already_in_anthropic_format_pass_through(self):
+        messages = [{"role": "user", "content": "hi"}]
+        tools = [{"name": "my_tool", "input_schema": {"type": "object", "properties": {}}}]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={"tools": tools},
+            litellm_params={},
+            headers={},
+        )
+        assert body["tools"] == tools
+
+
+class TestAnthropicMultiTurnToolMessages:
+    def setup_method(self):
+        self.cfg = SnowflakeCortexAnthropicConfig()
+
+    def test_assistant_tool_calls_converted_to_tool_use_blocks(self):
+        messages = [
+            {"role": "user", "content": "What's the weather in Paris?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "Paris"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_123",
+                "content": "Sunny, 22°C",
+            },
+            {"role": "user", "content": "Thanks!"},
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        msgs = body["messages"]
+        assert msgs[0] == {"role": "user", "content": "What's the weather in Paris?"}
+
+        assistant_msg = msgs[1]
+        assert assistant_msg["role"] == "assistant"
+        assert isinstance(assistant_msg["content"], list)
+        assert assistant_msg["content"][0]["type"] == "tool_use"
+        assert assistant_msg["content"][0]["id"] == "call_123"
+        assert assistant_msg["content"][0]["name"] == "get_weather"
+        assert assistant_msg["content"][0]["input"] == {"city": "Paris"}
+
+        tool_result_msg = msgs[2]
+        assert tool_result_msg["role"] == "user"
+        assert tool_result_msg["content"][0]["type"] == "tool_result"
+        assert tool_result_msg["content"][0]["tool_use_id"] == "call_123"
+        assert tool_result_msg["content"][0]["content"] == "Sunny, 22°C"
+
+        assert msgs[3] == {"role": "user", "content": "Thanks!"}
+
+    def test_assistant_with_text_and_tool_calls(self):
+        messages = [
+            {"role": "user", "content": "Check weather"},
+            {
+                "role": "assistant",
+                "content": "Let me check that for you.",
+                "tool_calls": [
+                    {
+                        "id": "call_456",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "London"}',
+                        },
+                    }
+                ],
+            },
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        assistant_msg = body["messages"][1]
+        assert assistant_msg["content"][0] == {"type": "text", "text": "Let me check that for you."}
+        assert assistant_msg["content"][1]["type"] == "tool_use"
+        assert assistant_msg["content"][1]["name"] == "get_weather"
+
+    def test_tool_role_never_in_output(self):
+        messages = [
+            {"role": "user", "content": "hi"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "f", "arguments": "{}"}}],
+            },
+            {"role": "tool", "tool_call_id": "c1", "content": "result"},
+        ]
+        body = self.cfg.transform_request(
+            model="snowflake/claude-sonnet-4-5",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+        for msg in body["messages"]:
+            assert msg["role"] != "tool"

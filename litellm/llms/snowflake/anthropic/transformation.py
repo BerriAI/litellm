@@ -124,6 +124,31 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
         headers["anthropic-version"] = ANTHROPIC_VERSION
         return headers
 
+    def _transform_tools_to_anthropic(self, tools: List[Dict]) -> List[Dict]:
+        """
+        Convert tools from OpenAI format to Anthropic format.
+
+        OpenAI: {"type": "function", "function": {"name": ..., "description": ..., "parameters": {...}}}
+        Anthropic: {"name": ..., "description": ..., "input_schema": {...}}
+        """
+        anthropic_tools = []
+        for tool in tools:
+            if tool.get("type") == "function" and "function" in tool:
+                func = tool["function"]
+                anthropic_tool: Dict[str, Any] = {
+                    "name": func.get("name", ""),
+                }
+                if "description" in func:
+                    anthropic_tool["description"] = func["description"]
+                if "parameters" in func:
+                    anthropic_tool["input_schema"] = func["parameters"]
+                else:
+                    anthropic_tool["input_schema"] = {"type": "object", "properties": {}}
+                anthropic_tools.append(anthropic_tool)
+            else:
+                anthropic_tools.append(tool)
+        return anthropic_tools
+
     def _extract_system_and_messages(
         self, messages: List[AllMessageValues]
     ) -> tuple[Optional[Union[str, List[Dict]]], List[Dict]]:
@@ -132,6 +157,10 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
 
         Anthropic's /messages endpoint takes system as a top-level param,
         not inside the messages array.
+
+        Handles tool-use messages:
+        - assistant messages with tool_calls → converted to Anthropic tool_use content blocks
+        - tool role messages → converted to user role with tool_result content blocks
         """
         system: Optional[Union[str, List[Dict]]] = None
         conversation: List[Dict] = []
@@ -146,6 +175,41 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
 
             if role == "system":
                 system = content
+            elif role == "assistant":
+                tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                if tool_calls:
+                    content_blocks: List[Dict[str, Any]] = []
+                    if content:
+                        content_blocks.append({"type": "text", "text": content})
+                    for tc in tool_calls:
+                        func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
+                        tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
+                        func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
+                        func_args = func.get("arguments", "{}") if isinstance(func, dict) else getattr(func, "arguments", "{}")
+                        try:
+                            input_data = json.loads(func_args) if isinstance(func_args, str) else func_args
+                        except (json.JSONDecodeError, TypeError):
+                            input_data = {}
+                        content_blocks.append({
+                            "type": "tool_use",
+                            "id": tc_id,
+                            "name": func_name,
+                            "input": input_data,
+                        })
+                    conversation.append({"role": "assistant", "content": content_blocks})
+                else:
+                    conversation.append({"role": "assistant", "content": content})
+            elif role == "tool":
+                tool_call_id = msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
+                tool_content = content if isinstance(content, str) else json.dumps(content)
+                conversation.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": tool_content,
+                    }],
+                })
             else:
                 conversation.append({"role": role, "content": content})
 
@@ -171,6 +235,9 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
         extra_body = optional_params.pop("extra_body", {})
 
         system, conversation = self._extract_system_and_messages(messages)
+
+        if "tools" in optional_params:
+            optional_params["tools"] = self._transform_tools_to_anthropic(optional_params["tools"])
 
         model_name = model.removeprefix("snowflake/")
 
