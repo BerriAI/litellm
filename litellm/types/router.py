@@ -398,6 +398,8 @@ SPECIAL_MODEL_INFO_PARAMS = [
     "output_cost_per_token",
     "input_cost_per_character",
     "output_cost_per_character",
+    "cache_read_input_token_cost",
+    "cache_creation_input_token_cost",
 ]
 
 

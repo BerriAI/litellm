@@ -187,7 +187,9 @@ describe("BlogDropdown", () => {
       it("should render formatted post dates", async () => {
         mockUseBlogPostsResult = {
           ...mockUseBlogPostsResult,
-          data: { posts: [{ title: "Date Post", date: "2026-02-15", description: "Desc", url: "https://example.com" }] },
+          data: {
+            posts: [{ title: "Date Post", date: "2026-02-15", description: "Desc", url: "https://example.com" }],
+          },
         };
         renderWithProviders(<BlogDropdown />);
 

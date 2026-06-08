@@ -1751,6 +1751,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             optional_params=optional_params,
             data=data,
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -1833,6 +1834,7 @@ class BaseLLMHTTPHandler:
             api_base=api_base,
             optional_params=optional_params,
             data=data,
+            api_key=api_key,
         )
 
         ## LOGGING
@@ -2026,6 +2028,7 @@ class BaseLLMHTTPHandler:
             litellm_params={
                 "preset_cache_key": None,
                 "stream_response": {},
+                "model_info": kwargs.get("model_info"),
                 **anthropic_messages_optional_request_params,
             },
             custom_llm_provider=custom_llm_provider,
@@ -2315,6 +2318,31 @@ class BaseLLMHTTPHandler:
         # but never included in the outbound provider payload.
         request_context["litellm_params"] = dict(litellm_params)
 
+        is_stream_request = bool(stream)
+        if is_stream_request and fake_stream is True:
+            stream, data = self._prepare_fake_stream_request(
+                stream=stream,
+                data=data,
+                fake_stream=fake_stream,
+            )
+
+        # Sign after the body is final (post-transform/normalize/extra_body and post
+        # fake-stream prep) so signed bytes match what we send. No-op for providers
+        # that inherit the default sign_request.
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=api_base,
+            api_key=litellm_params.api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2327,22 +2355,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            if stream:
-                # For streaming, use stream=True in the request
-                if fake_stream is True:
-                    stream, data = self._prepare_fake_stream_request(
-                        stream=stream,
-                        data=data,
-                        fake_stream=fake_stream,
-                    )
-
+            if is_stream_request:
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    **body_kwargs,
                 )
                 if fake_stream is True:
                     return MockResponsesAPIStreamingIterator(
@@ -2367,13 +2387,12 @@ class BaseLLMHTTPHandler:
                     call_type=CallTypes.responses.value,
                 )
             else:
-                # For non-streaming requests
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
+                    **body_kwargs,
                 )
         except Exception as e:
             raise self._handle_error(
@@ -2461,6 +2480,28 @@ class BaseLLMHTTPHandler:
         # but never included in the outbound provider payload.
         request_context["litellm_params"] = dict(litellm_params)
 
+        is_stream_request = bool(stream)
+        if is_stream_request and fake_stream is True:
+            stream, data = self._prepare_fake_stream_request(
+                stream=stream,
+                data=data,
+                fake_stream=fake_stream,
+            )
+
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=api_base,
+            api_key=litellm_params.api_key,
+            model=model,
+            stream=stream,
+            fake_stream=fake_stream,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -2473,22 +2514,14 @@ class BaseLLMHTTPHandler:
         )
 
         try:
-            if stream:
-                # For streaming, we need to use stream=True in the request
-                if fake_stream is True:
-                    stream, data = self._prepare_fake_stream_request(
-                        stream=stream,
-                        data=data,
-                        fake_stream=fake_stream,
-                    )
-
+            if is_stream_request:
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
+                    **body_kwargs,
                 )
 
                 if fake_stream is True:
@@ -2515,13 +2548,12 @@ class BaseLLMHTTPHandler:
                     call_type=CallTypes.responses.value,
                 )
             else:
-                # For non-streaming, proceed as before
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
+                    **body_kwargs,
                 )
 
         except Exception as e:
@@ -2584,6 +2616,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        headers.setdefault("Content-Type", "application/json")
 
         ## LOGGING
         logging_obj.pre_call(
@@ -2674,6 +2708,8 @@ class BaseLLMHTTPHandler:
             litellm_params=litellm_params,
             headers=headers,
         )
+
+        headers.setdefault("Content-Type", "application/json")
 
         ## LOGGING
         logging_obj.pre_call(
@@ -3998,6 +4034,18 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=url,
+            api_key=litellm_params.api_key,
+            model=model,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -4011,7 +4059,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = sync_httpx_client.post(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url, headers=headers, timeout=timeout, **body_kwargs
             )
 
         except Exception as e:
@@ -4081,6 +4129,18 @@ class BaseLLMHTTPHandler:
         )
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
+        headers, signed_body = responses_api_provider_config.sign_request(
+            headers=headers,
+            optional_params=dict(litellm_params),
+            request_data=data,
+            api_base=url,
+            api_key=litellm_params.api_key,
+            model=model,
+        )
+        body_kwargs: Dict[str, Any] = (
+            {"data": signed_body} if signed_body is not None else {"json": data}
+        )
+
         ## LOGGING
         logging_obj.pre_call(
             input=input,
@@ -4094,7 +4154,7 @@ class BaseLLMHTTPHandler:
 
         try:
             response = await async_httpx_client.post(
-                url=url, headers=headers, json=data, timeout=timeout
+                url=url, headers=headers, timeout=timeout, **body_kwargs
             )
 
         except Exception as e:
@@ -5316,6 +5376,28 @@ class BaseLLMHTTPHandler:
                 )
                 if _session_config:
                     realtime_streaming.session_configuration_request = _session_config
+
+                # For providers that defer setup until client session.update, optionally
+                # send synthetic session.created to unblock clients waiting on connect.
+                if not provider_config.requires_session_configuration():
+                    synthetic_session = provider_config.transform_session_created_event(
+                        model=model,
+                        logging_session_id=logging_obj.litellm_trace_id,
+                        session_configuration_request=None,
+                    )
+                    if synthetic_session is not None:
+                        synthetic_session_str = json.dumps(synthetic_session)
+                        # Record before sending so the synthetic session.created is
+                        # captured in the session log alongside provider-driven
+                        # events; without this it would be silently absent from
+                        # success_handler / async_success_handler payloads.
+                        realtime_streaming.store_message(synthetic_session_str)
+                        await websocket.send_text(synthetic_session_str)
+                        realtime_streaming._session_created_sent_to_client = True
+                        verbose_logger.debug(
+                            "Sent synthetic session.created to client to unblock connection"
+                        )
+
                 await realtime_streaming.bidirectional_forward()
 
         except websockets.exceptions.InvalidStatusCode as e:  # type: ignore
@@ -5505,6 +5587,7 @@ class BaseLLMHTTPHandler:
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[Dict[str, Any]] = None,
         custom_llm_provider: Optional[str] = None,
+        first_message: Optional[str] = None,
         **kwargs: Any,
     ):
         """
@@ -5536,6 +5619,7 @@ class BaseLLMHTTPHandler:
                 api_base=api_base,
                 timeout=timeout,
                 custom_llm_provider=custom_llm_provider,
+                first_message=first_message,
                 **kwargs,
             )
             await handler.run()
@@ -5601,6 +5685,7 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                     user_api_key_dict=user_api_key_dict,
                     request_data=_request_data,
+                    first_message=first_message,
                 )
                 await streaming.bidirectional_forward()
 
@@ -6538,6 +6623,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -6620,6 +6706,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:
@@ -6712,6 +6799,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6783,6 +6871,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6866,6 +6955,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6923,6 +7013,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -6999,6 +7090,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7009,27 +7101,49 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, data = video_provider_config.transform_video_edit_request(
-            prompt=prompt,
+        prefetched_source_data = None
+        prefetch_params = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
-            extra_body=extra_body,
         )
-
-        logging_obj.pre_call(
-            input=prompt,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-                "video_id": video_id,
-            },
-        )
+        if prefetch_params is not None:
+            prefetch_url, prefetch_body = prefetch_params
+            try:
+                prefetch_resp = sync_httpx_client.post(
+                    url=prefetch_url,
+                    headers=headers,
+                    json=prefetch_body,
+                    timeout=timeout,
+                )
+                prefetch_resp.raise_for_status()
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=video_provider_config)
+            prefetched_source_data = prefetch_resp.json()
 
         try:
+            url, data = video_provider_config.transform_video_edit_request(
+                prompt=prompt,
+                video_id=video_id,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                headers=headers,
+                extra_body=extra_body,
+                prefetched_source_data=prefetched_source_data,
+            )
+
+            logging_obj.pre_call(
+                input=prompt,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": url,
+                    "headers": headers,
+                    "video_id": video_id,
+                },
+            )
+
             response = sync_httpx_client.post(
                 url=url,
                 headers=headers,
@@ -7041,6 +7155,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                request_data=data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=video_provider_config)
@@ -7071,6 +7186,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7081,27 +7197,49 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
 
-        url, data = video_provider_config.transform_video_edit_request(
-            prompt=prompt,
+        prefetched_source_data = None
+        prefetch_params = video_provider_config.get_video_edit_prefetch_params(
             video_id=video_id,
             api_base=api_base,
             litellm_params=litellm_params,
             headers=headers,
-            extra_body=extra_body,
         )
-
-        logging_obj.pre_call(
-            input=prompt,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-                "video_id": video_id,
-            },
-        )
+        if prefetch_params is not None:
+            prefetch_url, prefetch_body = prefetch_params
+            try:
+                prefetch_resp = await async_httpx_client.post(
+                    url=prefetch_url,
+                    headers=headers,
+                    json=prefetch_body,
+                    timeout=timeout,
+                )
+                prefetch_resp.raise_for_status()
+            except Exception as e:
+                raise self._handle_error(e=e, provider_config=video_provider_config)
+            prefetched_source_data = prefetch_resp.json()
 
         try:
+            url, data = video_provider_config.transform_video_edit_request(
+                prompt=prompt,
+                video_id=video_id,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                headers=headers,
+                extra_body=extra_body,
+                prefetched_source_data=prefetched_source_data,
+            )
+
+            logging_obj.pre_call(
+                input=prompt,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": url,
+                    "headers": headers,
+                    "video_id": video_id,
+                },
+            )
+
             response = await async_httpx_client.post(
                 url=url,
                 headers=headers,
@@ -7113,6 +7251,7 @@ class BaseLLMHTTPHandler:
                 raw_response=response,
                 logging_obj=logging_obj,
                 custom_llm_provider=custom_llm_provider,
+                request_data=data,
             )
         except Exception as e:
             raise self._handle_error(e=e, provider_config=video_provider_config)
@@ -7160,6 +7299,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7234,6 +7374,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key or litellm_params.get("api_key", None),
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
         if extra_headers:
             headers.update(extra_headers)
@@ -7445,6 +7586,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=extra_headers or {},
             model="",
+            litellm_params=litellm_params,
         )
 
         if extra_headers:

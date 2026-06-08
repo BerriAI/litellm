@@ -8,11 +8,7 @@ interface UseDeletePolicyAttachmentProps {
   onError?: (error: any) => void;
 }
 
-export const useDeletePolicyAttachment = ({
-  accessToken,
-  onSuccess,
-  onError,
-}: UseDeletePolicyAttachmentProps) => {
+export const useDeletePolicyAttachment = ({ accessToken, onSuccess, onError }: UseDeletePolicyAttachmentProps) => {
   return useMutation({
     mutationFn: async (attachmentId: string) => {
       if (!accessToken) {
