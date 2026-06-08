@@ -4,7 +4,7 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.identity import build_user_api_key_auth_from_oauth2_response
-from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
 def test_default_field_names_extract_from_introspection_response():
@@ -37,12 +37,31 @@ def test_custom_field_names_override_defaults():
 
 
 def test_missing_fields_default_to_none():
-    uak = build_user_api_key_auth_from_oauth2_response(
-        token="t", response_data={}
-    )
+    uak = build_user_api_key_auth_from_oauth2_response(token="t", response_data={})
     assert uak.user_id is None
     assert uak.user_role is None
     assert uak.team_id is None
+
+
+def test_unknown_idp_role_defaults_to_internal_user():
+    uak = build_user_api_key_auth_from_oauth2_response(
+        token="t", response_data={"sub": "u", "role": "definitely-not-a-role"}
+    )
+    assert uak.user_role == LitellmUserRoles.INTERNAL_USER
+
+
+def test_known_idp_role_passes_through():
+    uak = build_user_api_key_auth_from_oauth2_response(
+        token="t", response_data={"sub": "u", "role": "proxy_admin"}
+    )
+    assert uak.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_missing_role_field_stays_none():
+    uak = build_user_api_key_auth_from_oauth2_response(
+        token="t", response_data={"sub": "u"}
+    )
+    assert uak.user_role is None
 
 
 def test_token_is_hashed_into_token_field():

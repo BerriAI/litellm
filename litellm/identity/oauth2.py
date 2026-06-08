@@ -10,7 +10,7 @@ OAuth2 paths converge on the same construction surface.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -38,12 +38,21 @@ def build_user_api_key_auth_from_oauth2_response(
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
     user_id: Optional[str] = response_data.get(user_id_field_name)
-    user_role: Optional[str] = response_data.get(user_role_field_name)
+    raw_role = response_data.get(user_role_field_name)
     user_team_id: Optional[str] = response_data.get(user_team_id_field_name)
+
+    user_role: Optional[LitellmUserRoles]
+    if raw_role is None:
+        user_role = None
+    else:
+        try:
+            user_role = LitellmUserRoles(raw_role)
+        except ValueError:
+            user_role = LitellmUserRoles.INTERNAL_USER
 
     return UserAPIKeyAuth(
         api_key=token,
         team_id=user_team_id,
         user_id=user_id,
-        user_role=cast("LitellmUserRoles", user_role),
+        user_role=user_role,
     )
