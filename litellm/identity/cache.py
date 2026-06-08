@@ -151,3 +151,26 @@ class IdentityCache:
 
     async def bump_generation(self, scope_key: str) -> None:
         await self._cache.async_increment_cache(key=scope_key, value=1)
+
+
+_identity_cache: Optional[IdentityCache] = None
+
+
+def get_identity_cache(dual_cache: Optional["DualCache"] = None) -> IdentityCache:
+    """Return the process-wide ``IdentityCache``, building it on first call.
+
+    When ``dual_cache`` is omitted, the proxy's module-level cache is used.
+    The first call wins; later calls ignore the argument so every consumer
+    in a process shares one instance.
+    """
+    global _identity_cache
+    if _identity_cache is not None:
+        return _identity_cache
+
+    if dual_cache is None:
+        from litellm.proxy.proxy_server import user_api_key_cache as _proxy_cache
+
+        dual_cache = _proxy_cache
+
+    _identity_cache = IdentityCache(dual_cache=dual_cache)
+    return _identity_cache

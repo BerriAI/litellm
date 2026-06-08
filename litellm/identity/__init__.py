@@ -10,10 +10,9 @@ The public surface is small on purpose; downstream code should depend on
 internals.
 """
 
-from litellm.identity.cache import IdentityCache
+from litellm.identity.cache import IdentityCache, get_identity_cache
 from litellm.identity.jwt import build_user_api_key_auth_from_jwt_result
 from litellm.identity.oauth2 import build_user_api_key_auth_from_oauth2_response
-from litellm.identity.runtime import get_identity_cache
 from litellm.identity.context import (
     AuditInfo,
     ClientInfo,

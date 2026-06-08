@@ -106,6 +106,21 @@ async def test_snapshot_generations_uses_single_batch_read():
     assert snapshot == {"team": 0, "user": 0, "org": 0}
 
 
+def test_get_identity_cache_is_a_process_singleton():
+    import litellm.identity.cache as cache_module
+
+    saved = cache_module._identity_cache
+    cache_module._identity_cache = None
+    try:
+        first_backend = _user_api_key_cache()
+        first = cache_module.get_identity_cache(first_backend)
+        second = cache_module.get_identity_cache(_user_api_key_cache())
+        assert first is second
+        assert first._cache is first_backend
+    finally:
+        cache_module._identity_cache = saved
+
+
 @pytest.mark.asyncio
 async def test_snapshot_generations_maps_returned_values_by_scope():
     fake = _CountingCache()
