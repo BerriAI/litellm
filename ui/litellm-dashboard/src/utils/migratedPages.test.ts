@@ -67,3 +67,18 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
 });
+
+describe("MIGRATED_PAGES access-groups", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("routes access-groups to the access-groups path and back", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["access-groups"]).toBe("access-groups");
+    expect(legacyKeyForPathname("/ui/access-groups")).toBe("access-groups");
+    expect(legacyKeyForPathname("/ui/access-groups/")).toBe("access-groups");
+  });
+});
