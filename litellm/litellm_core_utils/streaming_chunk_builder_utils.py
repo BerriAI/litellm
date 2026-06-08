@@ -20,6 +20,7 @@ from litellm.types.utils import (
     ServerToolUse,
     Usage,
 )
+from litellm._logging import verbose_logger
 from litellm.utils import print_verbose, token_counter
 
 if TYPE_CHECKING:
@@ -120,8 +121,12 @@ class ChunkProcessor:
                     response=response,
                     chunks=chunks,
                 )
-        except Exception:
-            return
+        except Exception as e:
+            verbose_logger.debug(
+                "apply_provider_assembled_streaming_metadata failed for model=%s: %s",
+                model,
+                e,
+            )
 
     @staticmethod
     def _get_chunk_id(chunks: List[Dict[str, Any]]) -> str:
