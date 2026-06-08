@@ -3,7 +3,7 @@
 A ``Principal`` answers "who is making this request" using only the fields
 that uniquely identify the caller. Per-row enrichment (budgets, team rows,
 object permissions) is intentionally not modeled here; that data continues
-to ride on ``UserAPIKeyAuth`` in Phase 1.
+to ride on ``UserAPIKeyAuth``.
 
 Each subtype is a frozen dataclass with a ``kind`` discriminator suitable
 for ``match``-style dispatch.

@@ -3,6 +3,7 @@
 .venv_policy_test
 .env
 .claude
+.claude-team-notes/
 .newenv
 newenv/*
 litellm/proxy/myenv/*

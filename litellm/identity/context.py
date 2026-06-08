@@ -1,9 +1,9 @@
 """The per-request identity bundle.
 
 ``IdentityContext`` is what downstream consumers (auth, spend, guardrails,
-logging, audit) should read identity from once Phase 2 migration is done.
-In Phase 1 it travels alongside the legacy ``UserAPIKeyAuth`` via the
-adapter functions in ``litellm.identity.adapter``.
+logging, audit) should read identity from. Today it travels alongside the
+legacy ``UserAPIKeyAuth`` via the adapter functions in
+``litellm.identity.adapter``.
 
 The bundle is mutable on purpose: identity fields like ``end_user_id`` are
 sometimes resolved or overridden after initial extraction, and the

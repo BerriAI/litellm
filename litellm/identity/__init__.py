@@ -1,13 +1,13 @@
 """Caller-identity module.
 
-Phase 1: domain types + extractors + bidirectional adapter to
+Domain types, the identity cache/store, and a bidirectional adapter to
 ``UserAPIKeyAuth``. The proxy still drives identity through
 ``litellm/proxy/auth/`` today; this module is the new home those flows
-will migrate to.
+migrate to.
 
 The public surface is small on purpose; downstream code should depend on
 ``IdentityContext`` and the ``Principal`` union, not on individual
-extractor internals.
+internals.
 """
 
 from litellm.identity.cache import IdentityCache

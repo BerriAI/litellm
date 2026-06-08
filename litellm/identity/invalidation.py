@@ -12,9 +12,9 @@ Two flavors:
   a mismatch as a miss.
 
 The legacy ``_delete_cache_key_object`` and the per-table cache deletes
-in ``auth_checks.py`` are left in place by Phase 2. These hooks run
-side-by-side so we don't strand a partially-deployed fleet that's still
-reading from the legacy cache keys.
+in ``auth_checks.py`` stay in place. These hooks run side-by-side so we
+don't strand a partially-deployed fleet that's still reading from the
+legacy cache keys.
 """
 
 from __future__ import annotations
