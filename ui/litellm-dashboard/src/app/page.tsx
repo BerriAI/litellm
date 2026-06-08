@@ -1,6 +1,5 @@
 "use client";
 
-import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
@@ -54,7 +53,7 @@ import {
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
 import { isAdminRole } from "@/utils/roles";
-import { MIGRATED_PAGES } from "@/utils/migratedPages";
+import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -156,15 +155,16 @@ function CreateKeyPageContent() {
     return searchParams.get("page") || "api-keys";
   });
 
-  // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {
-    // Update URL without full page reload
+    const migratedRoute = MIGRATED_PAGES[newPage];
+    if (migratedRoute) {
+      router.push(migratedHref(migratedRoute));
+      setPage(newPage);
+      return;
+    }
     const newSearchParams = new URLSearchParams(searchParams);
     newSearchParams.set("page", newPage);
-
-    // Use Next.js router to update URL
     window.history.pushState(null, "", `?${newSearchParams.toString()}`);
-
     setPage(newPage);
   };
 
@@ -199,8 +199,7 @@ function CreateKeyPageContent() {
   const isLegacyRedirect = page in MIGRATED_PAGES;
   useEffect(() => {
     if (!authLoading && isLegacyRedirect) {
-      const base = (proxyBaseUrl || "") + "/ui";
-      router.replace(`${base}/${MIGRATED_PAGES[page]}`);
+      router.replace(migratedHref(MIGRATED_PAGES[page]));
     }
   }, [authLoading, isLegacyRedirect, page, router]);
 
@@ -441,8 +440,6 @@ function CreateKeyPageContent() {
                   />
                 ) : page == "admin-panel" ? (
                   <AdminPanel proxySettings={proxySettings} />
-                ) : page == "api_ref" || page == "api-reference" ? (
-                  <APIReferenceView proxySettings={proxySettings} />
                 ) : page == "logging-and-alerts" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                 ) : page == "budgets" ? (

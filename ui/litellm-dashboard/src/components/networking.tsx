@@ -404,6 +404,7 @@ export const getUiConfig = async () => {
    * Update the proxy base url and server root path
    */
   console.log("jsonData in getUiConfig:", jsonData);
+  updateServerRootPath(jsonData.server_root_path);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
   return jsonData;
 };
