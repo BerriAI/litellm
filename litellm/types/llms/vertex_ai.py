@@ -232,6 +232,7 @@ class VoiceConfig(TypedDict):
 
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    languageCode: str
 
 
 class GenerationConfig(TypedDict, total=False):
