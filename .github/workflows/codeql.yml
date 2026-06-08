@@ -9,6 +9,10 @@ on:
     # Run daily at 04:00 UTC
     - cron: "0 4 * * *"
 
+# Least-privilege default token; the analyze job elevates to security-events: write.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
