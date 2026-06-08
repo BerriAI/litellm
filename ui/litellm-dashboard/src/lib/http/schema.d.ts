@@ -18441,7 +18441,49 @@ export interface paths {
         };
         /**
          * Model Info V2
-         * @description v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true
+         * @description Paginated model metadata for proxy deployments (pricing, provider, team access).
+         *
+         *     Returns configured router deployments with enriched `model_info` (costs, provider,
+         *     context window, etc.). Sensitive fields such as API keys and api_base are omitted.
+         *
+         *     Query parameters:
+         *         model: Filter to a single public `model_name`.
+         *         user_models_only: When true, only return models created by the calling user.
+         *         include_team_models: When true, populate `access_via_team_ids` and `direct_access`
+         *             on each model and filter to deployments the caller can use.
+         *         page / size: Pagination controls (defaults: page=1, size=50).
+         *         search: Case-insensitive partial match on model name or team public name.
+         *         modelId: Return a single deployment by LiteLLM model id.
+         *         teamId: Filter to models with direct access or team membership for this team id.
+         *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *
+         *     Example request:
+         *     ```
+         *     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \
+         *     --header 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Example response:
+         *     ```json
+         *     {
+         *         "data": [
+         *             {
+         *                 "model_name": "gpt-4",
+         *                 "litellm_params": {"model": "openai/gpt-4.1"},
+         *                 "model_info": {
+         *                     "id": "abc123",
+         *                     "litellm_provider": "openai",
+         *                     "access_via_team_ids": ["team-1"],
+         *                     "direct_access": true
+         *                 }
+         *             }
+         *         ],
+         *         "total_count": 1,
+         *         "current_page": 1,
+         *         "total_pages": 1,
+         *         "size": 50
+         *     }
+         *     ```
          */
         get: operations["model_info_v2_v2_model_info_get"];
         put?: never;
@@ -43119,13 +43161,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *     Every rate-limit condition surfaced by litellm — whether it originated from
-             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *     max-iterations, etc.) — is raised as an instance of this class.
+             *         Every rate-limit condition surfaced by litellm — whether it originated from
+             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *         max-iterations, etc.) — is raised as an instance of this class.
              *
-             *     The :attr:`category` attribute lets callers distinguish the source. See
-             *     :class:`RateLimitErrorCategory` for the available values.
+             *         The :attr:`category` attribute lets callers distinguish the source. See
+             *         :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
