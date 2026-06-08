@@ -1,47 +1,115 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { MIGRATED_E2E_SEGMENTS } from "../../fixtures/migratedPages";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { dismissFeedbackPopup } from "../../helpers/navigation";
 
 /**
- * App Router migration smoke. For each migrated page we deep-link to its path
- * route and then navigate away, asserting no failure in either situation. Driven
- * by MIGRATED_E2E_SEGMENTS, so it grows as pages are migrated.
+ * App Router migration smoke as a user journey: start where the proxy lands you,
+ * click a migrated page in the sidebar, confirm it routed and rendered, reload it
+ * (the check a wrong server_root_path breaks), bounce to a legacy page and back,
+ * and — once two pages are migrated — navigate directly between two migrated pages.
  *
- * SERVER_ROOT_PATH (e.g. "/litellm") exercises the non-root mount; leave it unset
- * for the default mount. Boot the proxy with the matching value before running.
+ * Driven by MIGRATED_E2E_SEGMENTS, so it grows as pages are migrated. Set
+ * SERVER_ROOT_PATH (e.g. "/litellm") to exercise the non-root mount; leave it
+ * unset for the default mount. Boot the proxy with the matching value first.
  */
 const ROOT = process.env.SERVER_ROOT_PATH ?? "";
 // Optional: linger on each state so a human can watch a headed run. No-op (0) by default.
 const WATCH_MS = Number(process.env.E2E_WATCH_MS ?? 0);
-const watch = (page: import("@playwright/test").Page) => (WATCH_MS ? page.waitForTimeout(WATCH_MS) : Promise.resolve());
+const watch = (page: Page) => (WATCH_MS ? page.waitForTimeout(WATCH_MS) : Promise.resolve());
+
+const pathRe = (segment: string) => new RegExp(`${ROOT}/ui/${segment}/?($|\\?)`);
+const legacyAnchor = (page: Page) => page.locator("a", { hasText: "Virtual Keys" });
+
+/** The dashboard shell is present (sidebar rendered) — page didn't 404 / crash. */
+async function expectRendered(page: Page) {
+  await expect(legacyAnchor(page)).toBeVisible({ timeout: 20_000 });
+}
+
+/**
+ * Click a migrated page's sidebar link. Migrated items render as <a href=".../ui/<segment>">;
+ * nested ones live under collapsible submenus, so expand submenus until the link is clickable.
+ */
+async function clickSidebar(page: Page, segment: string) {
+  const link = page.locator(`a[href$="/ui/${segment}"]`).first();
+  for (let i = 0; i < 8 && !(await link.isVisible().catch(() => false)); i++) {
+    const collapsedSubmenu = page
+      .locator(".ant-menu-submenu:not(.ant-menu-submenu-open) > .ant-menu-submenu-title")
+      .first();
+    if (!(await collapsedSubmenu.isVisible().catch(() => false))) break;
+    await collapsedSubmenu.click();
+    await page.waitForTimeout(250);
+  }
+  await link.click();
+}
 
 test.use({ storageState: ADMIN_STORAGE_PATH });
 
 test.describe("App Router migrated pages", () => {
   for (const segment of MIGRATED_E2E_SEGMENTS) {
-    test(`${segment}: deep-links to its path route and navigates away cleanly`, async ({ page }) => {
+    test(`${segment}: sidebar nav, reload, and round-trip with a legacy page`, async ({ page }) => {
       const pageErrors: string[] = [];
       page.on("pageerror", (e) => pageErrors.push(String(e)));
 
-      // 1. The migrated page is served at its own path (this is what a wrong
-      //    server_root_path breaks: the static export must serve <root>/ui/<segment>).
-      await page.goto(`${ROOT}/ui/${segment}`);
+      // 1. Start where the proxy lands us.
+      await page.goto(`${ROOT}/ui/`);
       await dismissFeedbackPopup(page);
+      await expectRendered(page);
 
-      await expect(page).toHaveURL(new RegExp(`${ROOT}/ui/${segment}/?($|\\?)`));
-      // The dashboard shell rendered and the route did not 404 / crash.
-      await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 20_000 });
-      expect(pageErrors, `page errors on ${ROOT}/ui/${segment}`).toEqual([]);
+      // 2. Click the migrated page in the sidebar -> path route + rendered.
+      await clickSidebar(page, segment);
+      await expect(page).toHaveURL(pathRe(segment));
+      await expectRendered(page);
       await watch(page);
 
-      // 2. Clicking off to a not-yet-migrated page returns to the legacy switch
-      //    (the migrated -> ?page= transition that used to double-navigate).
-      await page.locator("a", { hasText: "Virtual Keys" }).click();
+      // 3. Reload the path route directly — a wrong server_root_path 404s here.
+      await page.reload();
+      await dismissFeedbackPopup(page);
+      await expect(page).toHaveURL(pathRe(segment));
+      await expectRendered(page);
+      await watch(page);
+
+      // 4. Click off to a legacy (not-yet-migrated) page.
+      await legacyAnchor(page).click();
       await expect(page).toHaveURL(new RegExp(`${ROOT}/ui/\\?page=api-keys`));
       await dismissFeedbackPopup(page);
-      expect(pageErrors, `page errors after leaving ${ROOT}/ui/${segment}`).toEqual([]);
+      await expectRendered(page);
       await watch(page);
+
+      // 5. Click back to the migrated page.
+      await clickSidebar(page, segment);
+      await expect(page).toHaveURL(pathRe(segment));
+      await expectRendered(page);
+      await watch(page);
+
+      expect(pageErrors, `page errors during ${segment} journey`).toEqual([]);
     });
   }
+
+  test("navigates directly between two migrated pages", async ({ page }) => {
+    test.skip(MIGRATED_E2E_SEGMENTS.length < 2, "needs >= 2 migrated pages");
+    const [first, second] = MIGRATED_E2E_SEGMENTS;
+    const pageErrors: string[] = [];
+    page.on("pageerror", (e) => pageErrors.push(String(e)));
+
+    await page.goto(`${ROOT}/ui/`);
+    await dismissFeedbackPopup(page);
+
+    await clickSidebar(page, first);
+    await expect(page).toHaveURL(pathRe(first));
+    await expectRendered(page);
+    await watch(page);
+
+    await clickSidebar(page, second);
+    await expect(page).toHaveURL(pathRe(second));
+    await expectRendered(page);
+    await watch(page);
+
+    // Back to the first migrated page.
+    await clickSidebar(page, first);
+    await expect(page).toHaveURL(pathRe(first));
+    await expectRendered(page);
+
+    expect(pageErrors, "page errors during migrated -> migrated nav").toEqual([]);
+  });
 });
