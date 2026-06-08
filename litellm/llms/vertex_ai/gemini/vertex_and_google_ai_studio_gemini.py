@@ -1111,6 +1111,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         {
             "voice": "alloy",
             "format": "mp3",
+            "language_code": "en-US",
         }
 
         Expected output:
@@ -1119,7 +1120,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 prebuiltVoiceConfig: {
                     voiceName: "alloy",
                 }
-            }
+            },
+            languageCode: "en-US",
         }
         """
         from litellm.types.llms.vertex_ai import (
@@ -1144,6 +1146,9 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             prebuilt_voice_config: PrebuiltVoiceConfig = {"voiceName": value["voice"]}
             voice_config: VoiceConfig = {"prebuiltVoiceConfig": prebuilt_voice_config}
             speech_config["voiceConfig"] = voice_config
+
+        if "language_code" in value:
+            speech_config["languageCode"] = value["language_code"]
 
         return cast(dict, speech_config)
 
