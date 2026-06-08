@@ -9,3 +9,6 @@
 backend/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
 gateway/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
 migrations/Dockerfile | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
+
+# Sync log
+# 2026-06-08: security sweep — all 3 Dockerfile digest pins intact; CodeQL cancelled (pre-existing on litellm_internal_staging).
