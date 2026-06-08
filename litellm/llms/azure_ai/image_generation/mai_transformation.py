@@ -5,6 +5,7 @@ import httpx
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
+from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageResponse
 from litellm.utils import convert_to_model_response_object
@@ -199,7 +200,12 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
     ) -> ImageResponse:
-        response = raw_response.json()
+        try:
+            response = raw_response.json()
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
 
         if "usage" in response:
             response["usage"] = self.normalize_mai_image_usage(response.get("usage"))

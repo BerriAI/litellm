@@ -246,6 +246,30 @@ class TestAzureMAIImageGeneration:
         assert image_response.usage.input_tokens == 22
         assert image_response.usage.total_tokens == 1046
 
+    def test_transform_image_generation_response_non_json_raises_openai_error(self):
+        from litellm.llms.openai.common_utils import OpenAIError
+
+        config = AzureFoundryMAIImageGenerationConfig()
+        raw_response = MagicMock(spec=httpx.Response)
+        raw_response.json.side_effect = ValueError("not json")
+        raw_response.text = "upstream gateway error"
+        raw_response.status_code = 502
+
+        with pytest.raises(OpenAIError) as exc_info:
+            config.transform_image_generation_response(
+                model="MAI-Image-2.5",
+                raw_response=raw_response,
+                model_response=ImageResponse(),
+                logging_obj=MagicMock(),
+                request_data={"prompt": "A red fox"},
+                optional_params={"width": 1024, "height": 1024},
+                litellm_params={},
+                encoding=None,
+            )
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.message == "upstream gateway error"
+
     def test_normalize_mai_usage_preserves_zero_output_tokens(self):
         config = AzureFoundryMAIImageGenerationConfig()
         normalized = config.normalize_mai_image_usage(
