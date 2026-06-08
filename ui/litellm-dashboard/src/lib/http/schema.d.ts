@@ -40375,7 +40375,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -43119,13 +43119,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *     Every rate-limit condition surfaced by litellm — whether it originated from
-             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *     max-iterations, etc.) — is raised as an instance of this class.
+             *         Every rate-limit condition surfaced by litellm — whether it originated from
+             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *         max-iterations, etc.) — is raised as an instance of this class.
              *
-             *     The :attr:`category` attribute lets callers distinguish the source. See
-             *     :class:`RateLimitErrorCategory` for the available values.
+             *         The :attr:`category` attribute lets callers distinguish the source. See
+             *         :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {
