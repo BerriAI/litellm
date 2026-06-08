@@ -7,22 +7,19 @@ import { dismissFeedbackPopup } from "../../helpers/navigation";
  * App Router migration smoke as a user journey: start where the proxy lands you,
  * click a migrated page in the sidebar, confirm it routed and rendered, reload it
  * (the check a wrong server_root_path breaks), bounce to a legacy page and back,
- * and — once two pages are migrated — navigate directly between two migrated pages.
+ * and, once two pages are migrated, navigate directly between two migrated pages.
  *
  * Driven by MIGRATED_E2E_SEGMENTS, so it grows as pages are migrated. Set
  * SERVER_ROOT_PATH (e.g. "/litellm") to exercise the non-root mount; leave it
  * unset for the default mount. Boot the proxy with the matching value first.
  */
 const ROOT = process.env.SERVER_ROOT_PATH ?? "";
-// Optional: linger on each state so a human can watch a headed run. No-op (0) by default.
-const WATCH_MS = Number(process.env.E2E_WATCH_MS ?? 0);
-const watch = (page: Page) => (WATCH_MS ? page.waitForTimeout(WATCH_MS) : Promise.resolve());
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const pathRe = (segment: string) => new RegExp(`${esc(ROOT)}/ui/${esc(segment)}/?($|\\?)`);
 const legacyAnchor = (page: Page) => page.locator("a", { hasText: "Virtual Keys" });
 
-/** The dashboard shell is present (sidebar rendered) — page didn't 404 / crash. */
+/** The dashboard shell is present (sidebar rendered); page didn't 404 / crash. */
 async function expectRendered(page: Page) {
   await expect(legacyAnchor(page)).toBeVisible({ timeout: 20_000 });
 }
@@ -61,28 +58,20 @@ test.describe("App Router migrated pages", () => {
       await clickSidebar(page, segment);
       await expect(page).toHaveURL(pathRe(segment));
       await expectRendered(page);
-      await watch(page);
-
-      // 3. Reload the path route directly — a wrong server_root_path 404s here.
+      // 3. Reload the path route directly; a wrong server_root_path 404s here.
       await page.reload();
       await dismissFeedbackPopup(page);
       await expect(page).toHaveURL(pathRe(segment));
       await expectRendered(page);
-      await watch(page);
-
       // 4. Click off to a legacy (not-yet-migrated) page.
       await legacyAnchor(page).click();
       await expect(page).toHaveURL(new RegExp(`${esc(ROOT)}/ui/\\?page=api-keys`));
       await dismissFeedbackPopup(page);
       await expectRendered(page);
-      await watch(page);
-
       // 5. Click back to the migrated page.
       await clickSidebar(page, segment);
       await expect(page).toHaveURL(pathRe(segment));
       await expectRendered(page);
-      await watch(page);
-
       expect(pageErrors, `page errors during ${segment} journey`).toEqual([]);
     });
   }
@@ -99,13 +88,9 @@ test.describe("App Router migrated pages", () => {
     await clickSidebar(page, first);
     await expect(page).toHaveURL(pathRe(first));
     await expectRendered(page);
-    await watch(page);
-
     await clickSidebar(page, second);
     await expect(page).toHaveURL(pathRe(second));
     await expectRendered(page);
-    await watch(page);
-
     // Back to the first migrated page.
     await clickSidebar(page, first);
     await expect(page).toHaveURL(pathRe(first));

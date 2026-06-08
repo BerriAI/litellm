@@ -1,10 +1,10 @@
 # App Router migration smoke
 
 A growing E2E smoke for pages migrated from the legacy `?page=` switch to App
-Router path routes. For each migrated page it deep-links to the path route, checks
-the URL and that the page renders, then clicks off to a legacy page and checks
-that navigation still works. It runs in two situations: the default mount and a
-non-root `SERVER_ROOT_PATH` mount.
+Router path routes. For each migrated page it clicks the page's sidebar link, checks
+the URL is the path route and the page renders, reloads it, then clicks off to a
+legacy page and back to confirm navigation still works. It runs in two situations:
+the default mount and a non-root `SERVER_ROOT_PATH` mount.
 
 ## Adding a page
 
