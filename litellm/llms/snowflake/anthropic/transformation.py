@@ -143,7 +143,10 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
                 if "parameters" in func:
                     anthropic_tool["input_schema"] = func["parameters"]
                 else:
-                    anthropic_tool["input_schema"] = {"type": "object", "properties": {}}
+                    anthropic_tool["input_schema"] = {
+                        "type": "object",
+                        "properties": {},
+                    }
                 anthropic_tools.append(anthropic_tool)
             else:
                 anthropic_tools.append(tool)
@@ -176,40 +179,78 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
             if role == "system":
                 system = content
             elif role == "assistant":
-                tool_calls = msg.get("tool_calls") if isinstance(msg, dict) else getattr(msg, "tool_calls", None)
+                tool_calls = (
+                    msg.get("tool_calls")
+                    if isinstance(msg, dict)
+                    else getattr(msg, "tool_calls", None)
+                )
                 if tool_calls:
                     content_blocks: List[Dict[str, Any]] = []
                     if content:
                         content_blocks.append({"type": "text", "text": content})
                     for tc in tool_calls:
-                        func = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", {})
-                        tc_id = tc.get("id", "") if isinstance(tc, dict) else getattr(tc, "id", "")
-                        func_name = func.get("name", "") if isinstance(func, dict) else getattr(func, "name", "")
-                        func_args = func.get("arguments", "{}") if isinstance(func, dict) else getattr(func, "arguments", "{}")
+                        func = (
+                            tc.get("function", {})
+                            if isinstance(tc, dict)
+                            else getattr(tc, "function", {})
+                        )
+                        tc_id = (
+                            tc.get("id", "")
+                            if isinstance(tc, dict)
+                            else getattr(tc, "id", "")
+                        )
+                        func_name = (
+                            func.get("name", "")
+                            if isinstance(func, dict)
+                            else getattr(func, "name", "")
+                        )
+                        func_args = (
+                            func.get("arguments", "{}")
+                            if isinstance(func, dict)
+                            else getattr(func, "arguments", "{}")
+                        )
                         try:
-                            input_data = json.loads(func_args) if isinstance(func_args, str) else func_args
+                            input_data = (
+                                json.loads(func_args)
+                                if isinstance(func_args, str)
+                                else func_args
+                            )
                         except (json.JSONDecodeError, TypeError):
                             input_data = {}
-                        content_blocks.append({
-                            "type": "tool_use",
-                            "id": tc_id,
-                            "name": func_name,
-                            "input": input_data,
-                        })
-                    conversation.append({"role": "assistant", "content": content_blocks})
+                        content_blocks.append(
+                            {
+                                "type": "tool_use",
+                                "id": tc_id,
+                                "name": func_name,
+                                "input": input_data,
+                            }
+                        )
+                    conversation.append(
+                        {"role": "assistant", "content": content_blocks}
+                    )
                 else:
                     conversation.append({"role": "assistant", "content": content})
             elif role == "tool":
-                tool_call_id = msg.get("tool_call_id", "") if isinstance(msg, dict) else getattr(msg, "tool_call_id", "")
-                tool_content = content if isinstance(content, str) else json.dumps(content)
-                conversation.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_call_id,
-                        "content": tool_content,
-                    }],
-                })
+                tool_call_id = (
+                    msg.get("tool_call_id", "")
+                    if isinstance(msg, dict)
+                    else getattr(msg, "tool_call_id", "")
+                )
+                tool_content = (
+                    content if isinstance(content, str) else json.dumps(content)
+                )
+                conversation.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_call_id,
+                                "content": tool_content,
+                            }
+                        ],
+                    }
+                )
             else:
                 conversation.append({"role": role, "content": content})
 
@@ -237,7 +278,9 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
         system, conversation = self._extract_system_and_messages(messages)
 
         if "tools" in optional_params:
-            optional_params["tools"] = self._transform_tools_to_anthropic(optional_params["tools"])
+            optional_params["tools"] = self._transform_tools_to_anthropic(
+                optional_params["tools"]
+            )
 
         model_name = model.removeprefix("snowflake/")
 
@@ -337,7 +380,8 @@ class SnowflakeCortexAnthropicConfig(SnowflakeBaseConfig):
         usage = Usage(
             prompt_tokens=usage_data.get("input_tokens", 0),
             completion_tokens=usage_data.get("output_tokens", 0),
-            total_tokens=usage_data.get("input_tokens", 0) + usage_data.get("output_tokens", 0),
+            total_tokens=usage_data.get("input_tokens", 0)
+            + usage_data.get("output_tokens", 0),
         )
 
         model_response.choices = [choice]
