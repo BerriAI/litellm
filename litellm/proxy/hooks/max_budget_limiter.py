@@ -66,8 +66,9 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
 
             # CHECK IF REQUEST ALLOWED
             if curr_spend >= max_budget:
+                raw_model = data.get("model") if data else None
                 resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
-                    data.get("model") if data else None
+                    raw_model
                 )
 
                 # Zero-cost models (self-hosted / on-prem) add nothing to
@@ -79,10 +80,17 @@ class _PROXY_MaxBudgetLimiter(CustomLogger):
                     from litellm.proxy.auth.auth_checks import _is_model_cost_zero
                     from litellm.proxy.proxy_server import llm_router
 
-                    if _is_model_cost_zero(resolved_model, llm_router):
+                    # Use raw_model (the request-level model string) for the
+                    # cost lookup, not resolved_model.  _is_model_cost_zero
+                    # calls llm_router.get_model_group_info(model_group=...)
+                    # which matches on the configured model_group alias.
+                    # resolve_llm_provider_for_rate_limit returns the
+                    # underlying provider model, which may not match the
+                    # router group name when aliases are in use.
+                    if _is_model_cost_zero(raw_model, llm_router):
                         verbose_proxy_logger.debug(
                             "MaxBudgetLimiter: Skipping budget check for zero-cost model: %s",
-                            resolved_model,
+                            raw_model,
                         )
                         return
                 except ImportError:
