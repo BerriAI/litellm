@@ -1,8 +1,9 @@
-import base64
 import os
 from typing import Dict, Optional, Tuple
+from urllib.parse import urlencode
 
 import httpx
+from authlib.oauth2.auth import ClientAuth
 
 from litellm._logging import verbose_proxy_logger
 from litellm.identity import build_user_api_key_auth_from_oauth2_response
@@ -46,33 +47,28 @@ class Oauth2Handler:
         token: str,
         oauth_client_id: Optional[str],
         oauth_client_secret: Optional[str],
-    ) -> Tuple[Dict[str, str], Dict[str, str]]:
+    ) -> Tuple[Dict[str, str], str]:
         """
-        Prepare headers and data for OAuth2 introspection endpoint (RFC 7662).
+        Prepare headers and form body for OAuth2 introspection (RFC 7662).
 
-        Args:
-            token: The OAuth2 token to validate
-            oauth_client_id: OAuth2 client ID
-            oauth_client_secret: OAuth2 client secret
+        Confidential clients (id + secret) authenticate via HTTP Basic;
+        public clients (id only) carry ``client_id`` in the body. Both are
+        delegated to Authlib's RFC 6749 client-auth encoders.
 
         Returns:
-            Tuple of (headers, data) for the introspection request
+            Tuple of (headers, form-encoded body string).
         """
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        data = {"token": token}
+        body = urlencode({"token": token})
 
-        # Add client authentication if credentials are provided
-        if oauth_client_id and oauth_client_secret:
-            # Use HTTP Basic authentication for client credentials
-            credentials = base64.b64encode(
-                f"{oauth_client_id}:{oauth_client_secret}".encode()
-            ).decode()
-            headers["Authorization"] = f"Basic {credentials}"
-        elif oauth_client_id:
-            # For public clients, include client_id in the request body
-            data["client_id"] = oauth_client_id
+        if not oauth_client_id:
+            return headers, body
 
-        return headers, data
+        auth_method = "client_secret_basic" if oauth_client_secret else "none"
+        _, headers, body = ClientAuth(
+            oauth_client_id, oauth_client_secret, auth_method
+        ).prepare("POST", "", headers, body)
+        return headers, body
 
     @staticmethod
     def _prepare_token_info_request(token: str) -> Dict[str, str]:
