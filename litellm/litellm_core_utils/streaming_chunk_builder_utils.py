@@ -88,12 +88,7 @@ class ChunkProcessor:
         if not chunks:
             return
 
-        first_chunk = chunks[0]
-        model = (
-            first_chunk.get("model")
-            if isinstance(first_chunk, dict)
-            else getattr(first_chunk, "model", None)
-        )
+        model = getattr(response, "model", None)
         if not model:
             return
 

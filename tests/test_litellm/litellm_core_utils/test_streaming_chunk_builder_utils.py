@@ -667,6 +667,44 @@ def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
     assert dumped["vertex_ai_url_context_metadata"] == url_context_metadata
 
 
+def test_stream_chunk_builder_uses_assembled_model_for_provider_metadata():
+    grounding_metadata = [{"webSearchQueries": ["weather in SF"]}]
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-vertex-router",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="The weather", role="assistant"),
+            )
+        ],
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-vertex-router",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=" is sunny.", role=None),
+            )
+        ],
+    )
+    setattr(chunk2, "vertex_ai_grounding_metadata", grounding_metadata)
+    chunk2._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+
+    response = stream_chunk_builder(chunks=[chunk1, chunk2])
+    assert response is not None
+    assert response.model == "gemini-2.5-flash"
+    assert getattr(response, "vertex_ai_grounding_metadata") == grounding_metadata
+
+
 def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
     """Dict snapshot chunks (model_dump) should also propagate Vertex AI metadata."""
     chunk_dict = ModelResponseStream(
