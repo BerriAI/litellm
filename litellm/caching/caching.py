@@ -63,6 +63,7 @@ class Cache:
         port: Optional[str] = None,
         password: Optional[str] = None,
         namespace: Optional[str] = None,
+        add_team_id_to_cache_key: bool = False,
         ttl: Optional[float] = None,
         default_in_memory_ttl: Optional[float] = None,
         default_in_redis_ttl: Optional[float] = None,
@@ -257,6 +258,7 @@ class Cache:
         self.supported_call_types = supported_call_types  # default to ["completion", "acompletion", "embedding", "aembedding"]
         self.type = type
         self.namespace = namespace
+        self.add_team_id_to_cache_key = add_team_id_to_cache_key
         self.redis_flush_size = redis_flush_size
         self.ttl = ttl
         self.mode: CacheMode = mode or CacheMode.default_on
@@ -308,6 +310,8 @@ class Cache:
                         continue  # ignore None params
                     param_value = kwargs[param]
                     cache_key += f"{str(param)}: {str(param_value)}"
+
+        cache_key += self._get_team_scope_for_cache_key(**kwargs)
 
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
@@ -419,6 +423,36 @@ class Cache:
         hash_hex = hash_object.hexdigest()
         verbose_logger.debug("Hashed cache key (SHA-256): %s", hash_hex)
         return hash_hex
+
+    def _get_team_scope_for_cache_key(self, **kwargs) -> str:
+        """Optionally scope the cache key by the requesting team.
+
+        On a multi-tenant proxy the cache key is otherwise derived only from the
+        request parameters, so two different teams (tenants) sending the same
+        request share cache entries - one team can be served another's cached
+        response. When ``add_team_id_to_cache_key`` is enabled (via
+        ``cache_params``), the requesting team id is folded into the cache key so
+        cache entries are not reused across teams; same-team requests still share
+        the cache. A request with no team falls back to the (hashed) api key, so
+        it is still isolated rather than silently sharing the global entry.
+        Opt-in - the default preserves the existing behavior.
+        """
+        if not self.add_team_id_to_cache_key:
+            return ""
+        metadata = kwargs.get("metadata") or {}
+        litellm_params = kwargs.get("litellm_params") or {}
+        metadata_in_litellm_params = litellm_params.get("metadata") or {}
+        team_id = metadata.get(
+            "user_api_key_team_id"
+        ) or metadata_in_litellm_params.get("user_api_key_team_id")
+        if team_id:
+            return f"user_api_key_team_id: {team_id}"
+        api_key = metadata.get("user_api_key") or metadata_in_litellm_params.get(
+            "user_api_key"
+        )
+        if api_key:
+            return f"user_api_key: {api_key}"
+        return ""
 
     def _add_namespace_to_cache_key(self, hash_hex: str, **kwargs) -> str:
         """
