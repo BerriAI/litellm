@@ -613,3 +613,81 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     assert (
         response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
     )
+
+
+def test_stream_chunk_builder_merges_gemini_server_side_tool_invocations():
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-gemini-server-tools",
+        created=1,
+        model="gemini-3-flash-preview",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(
+                    content="",
+                    role="assistant",
+                    provider_specific_fields={
+                        "server_side_tool_invocations": [
+                            {
+                                "id": "srvtoolu_1",
+                                "type": "toolCall",
+                                "name": "googleSearch",
+                                "args": {"query": "Brisbane population"},
+                                "thought_signature": "call-signature",
+                            }
+                        ],
+                        "thought_signatures": ["signature-1"],
+                        "web_search_results": [{"title": "older results"}],
+                    },
+                ),
+            )
+        ],
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-gemini-server-tools",
+        created=2,
+        model="gemini-3-flash-preview",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(
+                    content=None,
+                    role=None,
+                    provider_specific_fields={
+                        "server_side_tool_invocations": [
+                            {
+                                "id": "srvtoolu_1",
+                                "type": "toolResponse",
+                                "response": {"results": [{"title": "Brisbane"}]},
+                                "thought_signature": "response-signature",
+                            }
+                        ],
+                        "thought_signatures": ["signature-2"],
+                        "web_search_results": [{"title": "newer results"}],
+                    },
+                ),
+            )
+        ],
+    )
+
+    response = stream_chunk_builder(chunks=[chunk1, chunk2])
+
+    assert response is not None
+    provider_fields = response.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert provider_fields["thought_signatures"] == ["signature-1", "signature-2"]
+    assert provider_fields["web_search_results"] == [{"title": "newer results"}]
+    assert provider_fields["server_side_tool_invocations"] == [
+        {
+            "id": "srvtoolu_1",
+            "type": "toolCall",
+            "name": "googleSearch",
+            "args": {"query": "Brisbane population"},
+            "thought_signature": "call-signature",
+            "response": {"results": [{"title": "Brisbane"}]},
+        }
+    ]
