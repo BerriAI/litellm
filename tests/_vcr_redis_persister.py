@@ -146,8 +146,9 @@ def make_redis_persister(
     class _RedisPersister:
         @staticmethod
         def load_cassette(cassette_path, serializer):
+            key = redis_key_for(cassette_path)
             try:
-                data = redis_client.get(redis_key_for(cassette_path))
+                data = redis_client.get(key)
             except RedisError as exc:
                 _record_cache_failure("load", exc)
                 msg = (
@@ -162,7 +163,7 @@ def make_redis_persister(
             try:
                 if isinstance(data, bytes):
                     data = data.decode("utf-8")
-                return deserialize(data, serializer)
+                result = deserialize(data, serializer)
             except Exception as exc:
                 _record_cache_failure("load", exc)
                 msg = (
@@ -173,6 +174,14 @@ def make_redis_persister(
                 _log.warning(msg)
                 warnings.warn(msg, VCRCassetteCacheWarning, stacklevel=2)
                 raise CassetteNotFoundError() from exc
+            # TTL is intentionally not refreshed on read. The cassette must
+            # lapse ``ttl_seconds`` after its last *write*, so the next run
+            # past that point re-records live and catches provider request or
+            # response contract drift instead of replaying a frozen response
+            # forever. Sliding the expiry forward on read would keep an
+            # actively-used cassette alive indefinitely and that drift check
+            # would never run.
+            return result
 
         @staticmethod
         def save_cassette(cassette_path, cassette_dict, serializer):

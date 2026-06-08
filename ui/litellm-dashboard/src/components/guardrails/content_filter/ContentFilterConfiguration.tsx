@@ -9,9 +9,7 @@ import KeywordModal from "./KeywordModal";
 import PatternTable from "./PatternTable";
 import KeywordTable from "./KeywordTable";
 import ContentCategoryConfiguration from "./ContentCategoryConfiguration";
-import CompetitorIntentConfiguration, {
-  CompetitorIntentConfig,
-} from "./CompetitorIntentConfiguration";
+import CompetitorIntentConfiguration, { CompetitorIntentConfig } from "./CompetitorIntentConfiguration";
 
 const { Title, Text } = Typography;
 
@@ -76,10 +74,7 @@ interface ContentFilterConfigurationProps {
   onPendingCategorySelectionChange?: (value: string) => void;
   competitorIntentEnabled?: boolean;
   competitorIntentConfig?: CompetitorIntentConfig | null;
-  onCompetitorIntentChange?: (
-    enabled: boolean,
-    config: CompetitorIntentConfig | null
-  ) => void;
+  onCompetitorIntentChange?: (enabled: boolean, config: CompetitorIntentConfig | null) => void;
 }
 
 const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
@@ -185,7 +180,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
     setUploadValidating(true);
     try {
       const content = await file.text();
-      
+
       if (accessToken) {
         const result = await validateBlockedWordsFile(accessToken, content);
         if (result.valid) {
@@ -209,15 +204,15 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
   const showPatterns = !showStep || showStep === "patterns";
   const showKeywords = !showStep || showStep === "keywords";
   const showCategories = !showStep || showStep === "categories";
-  const showCompetitorIntent =
-    !showStep || showStep === "competitor_intent" || showStep === "categories";
+  const showCompetitorIntent = !showStep || showStep === "competitor_intent" || showStep === "categories";
 
   return (
     <div className="space-y-6">
       {!showStep && (
         <div>
           <Text type="secondary">
-            Configure patterns, keywords, and content categories to detect and filter sensitive information in requests and responses.
+            Configure patterns, keywords, and content categories to detect and filter sensitive information in requests
+            and responses.
           </Text>
         </div>
       )}
@@ -246,11 +241,7 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
               </Button>
             </Space>
           </div>
-          <PatternTable
-            patterns={selectedPatterns}
-            onActionChange={onPatternActionChange}
-            onRemove={onPatternRemove}
-          />
+          <PatternTable patterns={selectedPatterns} onActionChange={onPatternActionChange} onRemove={onPatternRemove} />
         </Card>
       )}
 
@@ -280,36 +271,35 @@ const ContentFilterConfiguration: React.FC<ContentFilterConfigurationProps> = ({
               </Upload>
             </Space>
           </div>
-          <KeywordTable
-            keywords={blockedWords}
-            onActionChange={onBlockedWordUpdate}
-            onRemove={onBlockedWordRemove}
-          />
+          <KeywordTable keywords={blockedWords} onActionChange={onBlockedWordUpdate} onRemove={onBlockedWordRemove} />
         </Card>
       )}
 
-      {showCompetitorIntent &&
-        onCompetitorIntentChange && (
-          <CompetitorIntentConfiguration
-            enabled={competitorIntentEnabled}
-            config={competitorIntentConfig}
-            onChange={onCompetitorIntentChange}
-            accessToken={accessToken}
-          />
-        )}
-
-      {showCategories && contentCategories.length > 0 && onContentCategoryAdd && onContentCategoryRemove && onContentCategoryUpdate && (
-        <ContentCategoryConfiguration
-          availableCategories={contentCategories}
-          selectedCategories={selectedContentCategories}
-          onCategoryAdd={onContentCategoryAdd}
-          onCategoryRemove={onContentCategoryRemove}
-          onCategoryUpdate={onContentCategoryUpdate}
+      {showCompetitorIntent && onCompetitorIntentChange && (
+        <CompetitorIntentConfiguration
+          enabled={competitorIntentEnabled}
+          config={competitorIntentConfig}
+          onChange={onCompetitorIntentChange}
           accessToken={accessToken}
-          pendingSelection={pendingCategorySelection}
-          onPendingSelectionChange={onPendingCategorySelectionChange}
         />
       )}
+
+      {showCategories &&
+        contentCategories.length > 0 &&
+        onContentCategoryAdd &&
+        onContentCategoryRemove &&
+        onContentCategoryUpdate && (
+          <ContentCategoryConfiguration
+            availableCategories={contentCategories}
+            selectedCategories={selectedContentCategories}
+            onCategoryAdd={onContentCategoryAdd}
+            onCategoryRemove={onContentCategoryRemove}
+            onCategoryUpdate={onContentCategoryUpdate}
+            accessToken={accessToken}
+            pendingSelection={pendingCategorySelection}
+            onPendingSelectionChange={onPendingCategorySelectionChange}
+          />
+        )}
 
       <PatternModal
         visible={patternModalVisible}

@@ -142,6 +142,10 @@ async def create_scratch_team(
     member_user_ids: Optional[list] = None,
     team_member_permissions: Optional[list] = None,
     models: Optional[list] = None,
+    max_budget: Optional[float] = None,
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
+    metadata: Optional[dict] = None,
 ) -> str:
     """Raw-seed a scratch-tagged team row; returns its team_id.
 
@@ -155,6 +159,10 @@ async def create_scratch_team(
 
     team_member_permissions / models seed the matching raw columns — needed
     by the team-key-permission and team-model matrices.
+
+    max_budget / tpm_limit / rpm_limit / metadata seed the team's own limit
+    columns (Phase 4 F1+F3) — they live directly on LiteLLM_TeamTable, no
+    budget-table relation needed.
     """
     admin_user_ids = list(admin_user_ids or [])
     member_user_ids = list(member_user_ids or [])
@@ -174,8 +182,71 @@ async def create_scratch_team(
         data["team_member_permissions"] = team_member_permissions
     if models is not None:
         data["models"] = models
+    if max_budget is not None:
+        data["max_budget"] = max_budget
+    if tpm_limit is not None:
+        data["tpm_limit"] = tpm_limit
+    if rpm_limit is not None:
+        data["rpm_limit"] = rpm_limit
+    if metadata is not None:
+        data["metadata"] = Json(metadata)
     await prisma.db.litellm_teamtable.create(data=data)
     return team_id
+
+
+async def create_scratch_org(
+    prisma,
+    scratch_prefix: str,
+    *,
+    max_budget: Optional[float] = None,
+    tpm_limit: Optional[int] = None,
+    rpm_limit: Optional[int] = None,
+    models: Optional[list] = None,
+    metadata: Optional[dict] = None,
+    suffix: str = "org",
+) -> str:
+    """Seed a scratch-tagged org + its own budget row; returns organization_id.
+
+    The org's `budget_id` points at a fresh `litellm_budgettable` row that
+    carries the per-org limits (`_check_org_key_limits` and the team budget
+    helpers read `org_table.litellm_budget_table.<limit>`, not columns on the
+    org row itself). Both rows share the scratch prefix so the teardown
+    reclaims them — budget by `budget_id` prefix (already swept), org by
+    `organization_id` prefix (added in this PR to the `scratch` fixture).
+
+    models / metadata seed the matching org columns; `_check_org_team_limits`
+    (F3) reads `org_table.models`, and the org metadata mirror of
+    model_rpm_limit / model_tpm_limit is what F1's model-specific org guard
+    consults.
+    """
+    org_id = f"{scratch_prefix}-{suffix}"
+    budget_id = f"{scratch_prefix}-{suffix}-budget"
+    budget_data: Dict[str, Any] = {
+        "budget_id": budget_id,
+        "created_by": "phase4-scratch",
+        "updated_by": "phase4-scratch",
+    }
+    if max_budget is not None:
+        budget_data["max_budget"] = max_budget
+    if tpm_limit is not None:
+        budget_data["tpm_limit"] = tpm_limit
+    if rpm_limit is not None:
+        budget_data["rpm_limit"] = rpm_limit
+    await prisma.db.litellm_budgettable.create(data=budget_data)
+
+    org_data: Dict[str, Any] = {
+        "organization_id": org_id,
+        "organization_alias": org_id,
+        "budget_id": budget_id,
+        "created_by": "phase4-scratch",
+        "updated_by": "phase4-scratch",
+    }
+    if models is not None:
+        org_data["models"] = models
+    if metadata is not None:
+        org_data["metadata"] = Json(metadata)
+    await prisma.db.litellm_organizationtable.create(data=org_data)
+    return org_id
 
 
 @dataclass(frozen=True)
@@ -262,6 +333,15 @@ async def scratch(prisma):
         )
         await prisma.db.litellm_usertable.delete_many(
             where={"user_id": {"startswith": handle.prefix}}
+        )
+        # F1+F3 seed scratch orgs via create_scratch_org; the world seeder is
+        # the only other writer of LiteLLM_OrganizationTable and uses the
+        # behavior-pin- prefix, so a scratch-prefixed sweep here cannot
+        # collide with the read-world. Org must be reclaimed BEFORE its
+        # budget — org.budget_id → budget.budget_id, so deleting the parent
+        # first would FK-violate on any still-attached scratch org.
+        await prisma.db.litellm_organizationtable.delete_many(
+            where={"organization_id": {"startswith": handle.prefix}}
         )
         await prisma.db.litellm_budgettable.delete_many(
             where={"budget_id": {"startswith": handle.prefix}}

@@ -70,9 +70,7 @@ describe("useDiscountConfig", () => {
         await result.current.fetchDiscountConfig();
       });
 
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        expect.stringMatching(/failed to fetch/i)
-      );
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/failed to fetch/i));
     });
   });
 
@@ -110,9 +108,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        expect.stringMatching(/0%.*100%/i)
-      );
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/0%.*100%/i));
     });
 
     it("should return false and notify when the provider already exists in the config", async () => {
@@ -135,9 +131,7 @@ describe("useDiscountConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        expect.stringMatching(/already exists/i)
-      );
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
     });
 
     it("should save the config and return true on a valid new provider", async () => {

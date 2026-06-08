@@ -87,9 +87,7 @@ describe("runSemanticFilterTest", () => {
       selectedTools: 3,
       tools: ["wiki", "github", "slack"],
     });
-    expect(NotificationManager.success).toHaveBeenCalledWith(
-      "Semantic filter test completed successfully"
-    );
+    expect(NotificationManager.success).toHaveBeenCalledWith("Semantic filter test completed successfully");
   });
 
   it("should show a warning when the filter header is missing", async () => {
@@ -101,7 +99,7 @@ describe("runSemanticFilterTest", () => {
     await runSemanticFilterTest(baseArgs);
 
     expect(NotificationManager.warning).toHaveBeenCalledWith(
-      "Semantic filter is not enabled or no tools were filtered"
+      "Semantic filter is not enabled or no tools were filtered",
     );
     expect(mockSetTestResult).not.toHaveBeenCalledWith(expect.objectContaining({ totalTools: expect.any(Number) }));
   });

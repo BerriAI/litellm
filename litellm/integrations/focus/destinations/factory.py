@@ -6,6 +6,7 @@ import os
 from typing import Any, Dict, Optional
 
 from .base import FocusDestination
+from .gcs_destination import FocusGCSDestination
 from .s3_destination import FocusS3Destination
 from .vantage_destination import FocusVantageDestination
 
@@ -29,6 +30,8 @@ class FocusDestinationFactory:
             return FocusS3Destination(prefix=prefix, config=normalized_config)
         if provider_lower == "vantage":
             return FocusVantageDestination(prefix=prefix, config=normalized_config)
+        if provider_lower == "gcs":
+            return FocusGCSDestination(prefix=prefix, config=normalized_config)
         raise NotImplementedError(
             f"Provider '{provider}' not supported for Focus export"
         )
@@ -70,6 +73,18 @@ class FocusDestinationFactory:
             if not resolved.get("integration_token"):
                 raise ValueError(
                     "VANTAGE_INTEGRATION_TOKEN must be provided for Vantage exports"
+                )
+            return {k: v for k, v in resolved.items() if v is not None}
+        if provider == "gcs":
+            resolved = {
+                "bucket_name": overrides.get("bucket_name")
+                or os.getenv("FOCUS_GCS_BUCKET_NAME"),
+                "service_account_json": overrides.get("service_account_json")
+                or os.getenv("FOCUS_GCS_PATH_SERVICE_ACCOUNT"),
+            }
+            if not resolved.get("bucket_name"):
+                raise ValueError(
+                    "FOCUS_GCS_BUCKET_NAME must be provided for GCS exports"
                 )
             return {k: v for k, v in resolved.items() if v is not None}
         raise NotImplementedError(

@@ -178,9 +178,12 @@ def test_should_distinguish_different_aws_access_keys():
     [
         ("api.openai.com", True),
         ("api.anthropic.com", True),
+        ("bedrock.us-east-1.amazonaws.com", True),
         ("bedrock-runtime.us-east-1.amazonaws.com", True),
         ("bedrock-runtime-fips.us-east-1.amazonaws.com", True),
         ("api.us-east-1.bedrock-runtime.amazonaws.com", False),
+        ("s3.us-west-2.amazonaws.com", True),
+        ("litellm-proxy-test.s3.us-west-2.amazonaws.com", True),
         ("foo.bar.openai.com", True),
         ("127.0.0.1", False),
         ("localhost", False),

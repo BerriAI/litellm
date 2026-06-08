@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
     strip_name_from_messages,
 )
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import (
@@ -35,7 +36,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         self, api_base: Optional[str], api_key: Optional[str]
     ) -> Tuple[Optional[str], Optional[str]]:
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("XAI_API_KEY")
+        dynamic_api_key = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
 
     def get_supported_openai_params(self, model: str) -> list:

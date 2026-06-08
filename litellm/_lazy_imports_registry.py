@@ -237,6 +237,7 @@ LLM_CONFIG_NAMES = (
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -267,12 +268,14 @@ LLM_CONFIG_NAMES = (
     "AIMLChatConfig",
     "VolcEngineChatConfig",
     "CodestralTextCompletionConfig",
+    "InceptionTextCompletionConfig",
     "AzureOpenAIAssistantsAPIConfig",
     "HerokuChatConfig",
     "CometAPIConfig",
     "AzureOpenAIConfig",
     "AzureOpenAIGPT5Config",
     "AzureOpenAITextConfig",
+    "AzureSpeechAudioTranscriptionConfig",
     "HostedVLLMChatConfig",
     "HostedVLLMEmbeddingConfig",
     # Alias for backwards compatibility
@@ -309,6 +312,7 @@ LLM_CONFIG_NAMES = (
     "MorphChatConfig",
     "RAGFlowConfig",
     "LambdaAIChatConfig",
+    "InceptionChatConfig",
     "HyperbolicChatConfig",
     "VercelAIGatewayConfig",
     "OVHCloudChatConfig",
@@ -317,6 +321,7 @@ LLM_CONFIG_NAMES = (
     "LemonadeChatConfig",
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
+    "SonioxAudioTranscriptionConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -955,6 +960,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.openrouter.responses.transformation",
         "OpenRouterResponsesAPIConfig",
     ),
+    "BedrockMantleResponsesAPIConfig": (
+        ".llms.bedrock_mantle.responses.transformation",
+        "BedrockMantleResponsesAPIConfig",
+    ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
         "GoogleAIStudioInteractionsConfig",
@@ -1039,6 +1048,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.codestral.completion.transformation",
         "CodestralTextCompletionConfig",
     ),
+    "InceptionTextCompletionConfig": (
+        ".llms.inception.completion.transformation",
+        "InceptionTextCompletionConfig",
+    ),
     "AzureOpenAIAssistantsAPIConfig": (
         ".llms.azure.azure",
         "AzureOpenAIAssistantsAPIConfig",
@@ -1053,6 +1066,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AzureOpenAITextConfig": (
         ".llms.azure.completion.transformation",
         "AzureOpenAITextConfig",
+    ),
+    "AzureSpeechAudioTranscriptionConfig": (
+        ".llms.azure.audio_transcription.transformation",
+        "AzureSpeechAudioTranscriptionConfig",
     ),
     "HostedVLLMChatConfig": (
         ".llms.hosted_vllm.chat.transformation",
@@ -1149,6 +1166,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "MorphChatConfig": (".llms.morph.chat.transformation", "MorphChatConfig"),
     "RAGFlowConfig": (".llms.ragflow.chat.transformation", "RAGFlowConfig"),
     "LambdaAIChatConfig": (".llms.lambda_ai.chat.transformation", "LambdaAIChatConfig"),
+    "InceptionChatConfig": (
+        ".llms.inception.chat.transformation",
+        "InceptionChatConfig",
+    ),
     "HyperbolicChatConfig": (
         ".llms.hyperbolic.chat.transformation",
         "HyperbolicChatConfig",
@@ -1174,6 +1195,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AmazonNovaChatConfig": (
         ".llms.amazon_nova.chat.transformation",
         "AmazonNovaChatConfig",
+    ),
+    "SonioxAudioTranscriptionConfig": (
+        ".llms.soniox.audio_transcription.transformation",
+        "SonioxAudioTranscriptionConfig",
     ),
 }
 

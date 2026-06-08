@@ -604,6 +604,46 @@ def test_ui_extensionless_route_requires_restructure(tmp_path):
     assert "login" in response.text
 
 
+def test_admin_ui_export_serves_nested_extensionless_routes():
+    out_dir = Path(litellm.__file__).parent / "proxy" / "_experimental" / "out"
+    assert out_dir.is_dir(), f"missing UI export at {out_dir}"
+
+    nested_html_offenders = [
+        path.relative_to(out_dir).as_posix()
+        for path in out_dir.rglob("*.html")
+        if path.parent != out_dir
+        and path.name != "index.html"
+        and "_next" not in path.parts
+        and "litellm-asset-prefix" not in path.parts
+    ]
+    assert not nested_html_offenders, (
+        "Nested routes must be named index.html. Offenders: " f"{nested_html_offenders}"
+    )
+
+    callback_index = out_dir / "mcp" / "oauth" / "callback" / "index.html"
+    assert callback_index.is_file(), (
+        f"MCP OAuth callback page must exist at {callback_index}; "
+        "without it /ui/mcp/oauth/callback 404s after Linear redirects back."
+    )
+
+    fastapi_app = FastAPI()
+    fastapi_app.mount("/ui", StaticFiles(directory=str(out_dir), html=True), name="ui")
+    client = TestClient(fastapi_app)
+
+    redirect = client.get(
+        "/ui/mcp/oauth/callback?code=abc&state=xyz",
+        follow_redirects=False,
+    )
+    assert redirect.status_code == 307
+    assert redirect.headers["location"].endswith(
+        "/ui/mcp/oauth/callback/?code=abc&state=xyz"
+    )
+
+    landed = client.get("/ui/mcp/oauth/callback?code=abc&state=xyz")
+    assert landed.status_code == 200
+    assert "<html" in landed.text.lower()
+
+
 def test_restructure_always_happens(monkeypatch):
     """
     Test that restructuring logic always executes regardless of LITELLM_NON_ROOT setting.
@@ -5126,6 +5166,110 @@ async def test_async_data_generator_passes_through_google_native_sse_bytes():
 
 
 @pytest.mark.asyncio
+async def test_async_data_generator_google_genai_stream_omits_openai_done():
+    """
+    google-genai SDK streamGenerateContent?alt=sse must not receive data: [DONE].
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "_litellm_skip_openai_stream_done": True,
+    }
+    gemini_event = (
+        b'data: {"candidates": [{"content": {"parts": [{"text": "Hi"}]}}]}\n\n'
+    )
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield gemini_event
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text == [gemini_event.decode("utf-8")]
+    assert "[DONE]" not in "".join(yielded_text)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_google_genai_stream_forwards_error_without_done():
+    """Stream errors must still reach the client when OpenAI [DONE] is skipped."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import async_data_generator
+    from litellm.proxy.utils import ProxyLogging
+
+    error_sse = 'data: {"error": {"message": "stream failed"}}\n\n'
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_request_data = {
+        "model": "gemini-2.0-flash",
+        "_litellm_skip_openai_stream_done": True,
+    }
+
+    class MockStream:
+        def __aiter__(self):
+            return self._stream()
+
+        async def _stream(self):
+            yield error_sse
+
+        async def aclose(self):
+            pass
+
+    mock_response = MockStream()
+    mock_response.aclose = AsyncMock()
+    mock_proxy_logging_obj = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging_obj.has_streaming_callbacks.return_value = False
+    mock_proxy_logging_obj.needs_iterator_wrap.return_value = False
+    mock_proxy_logging_obj.needs_per_chunk_streaming_hook.return_value = False
+    mock_proxy_logging_obj.async_post_call_streaming_iterator_hook = MagicMock()
+    mock_proxy_logging_obj.async_post_call_streaming_hook = AsyncMock()
+    mock_proxy_logging_obj.post_call_failure_hook = AsyncMock()
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
+        with patch.object(ProxyLogging, "_fire_deferred_stream_logging"):
+            yielded_data = []
+            async for data in async_data_generator(
+                mock_response, mock_user_api_key_dict, mock_request_data
+            ):
+                yielded_data.append(data)
+
+    yielded_text = [
+        chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        for chunk in yielded_data
+    ]
+    assert yielded_text == [error_sse]
+    assert "[DONE]" not in "".join(yielded_text)
+
+
+@pytest.mark.asyncio
 async def test_async_data_generator_cleanup_on_normal_completion():
     """
     Test that async_data_generator calls response.aclose() even on normal completion.
@@ -5859,15 +6003,16 @@ async def test_primary_spend_counter_redis_concurrent_seed_does_not_double_seed(
         if call.kwargs.get("nx") is True
     ]
     assert len(nx_writes) == 2
-    assert sorted(set_results) == [False, True], (
-        f"expected exactly one SET NX winner and one loser, got {set_results}"
-    )
+    assert sorted(set_results) == [
+        False,
+        True,
+    ], f"expected exactly one SET NX winner and one loser, got {set_results}"
     # Loser path executed: after the winner's SET NX returned True, the
     # losing coalesced() call falls back to async_get_cache to read the
     # winner's value rather than re-seeding.
-    assert get_after_set_count >= 1, (
-        "loser branch (else: read back winner's value) was never exercised"
-    )
+    assert (
+        get_after_set_count >= 1
+    ), "loser branch (else: read back winner's value) was never exercised"
 
 
 @pytest.mark.asyncio
@@ -7093,6 +7238,25 @@ class TestLazyFeatureRegistry:
 
         names = [f.name for f in LAZY_FEATURES]
         assert len(names) == len(set(names)), "duplicate feature names"
+
+    def test_matches_covers_prefix_and_suffix(self):
+        """``matches`` is the single matcher shared by the middleware (request
+        paths) and the warm endpoint (registered route paths), so a route that
+        only matches via suffix — e.g. ``/v1/a2a/{id}/message/send`` against the
+        ``/a2a`` prefix — must still be claimed by the feature."""
+        from litellm.proxy._lazy_features import LazyFeature
+
+        feat = LazyFeature(
+            name="a2a",
+            module_path="json",
+            path_prefixes=("/a2a",),
+            path_suffixes=("/message/send",),
+        )
+        assert feat.matches("/a2a/abc/message/send")
+        assert feat.matches("/v1/a2a/abc/message/send")
+        assert feat.matches("/a2a/abc/.well-known/agent-card.json")
+        assert not feat.matches("/v1/a2a/discover")
+        assert not feat.matches("/unrelated")
 
 
 class TestLazyFeaturesNotImportedAtStartup:

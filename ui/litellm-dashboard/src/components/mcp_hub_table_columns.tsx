@@ -72,11 +72,7 @@ export const mcpHubColumns = (
       cell: ({ row }) => {
         const server = row.original;
 
-        return (
-          <Text className="text-xs line-clamp-2">
-            {server.description || "-"}
-          </Text>
-        );
+        return <Text className="text-xs line-clamp-2">{server.description || "-"}</Text>;
       },
       meta: {
         className: "hidden md:table-cell",
@@ -189,9 +185,7 @@ export const mcpHubColumns = (
                     {tool}
                   </Tag>
                 ))}
-                {tools.length > 2 && (
-                  <Text className="text-xs text-gray-500">+{tools.length - 2}</Text>
-                )}
+                {tools.length > 2 && <Text className="text-xs text-gray-500">+{tools.length - 2}</Text>}
               </div>
             )}
           </div>
@@ -209,11 +203,7 @@ export const mcpHubColumns = (
       cell: ({ row }) => {
         const server = row.original;
 
-        return (
-          <Text className="text-xs">
-            {server.created_by || "-"}
-          </Text>
-        );
+        return <Text className="text-xs">{server.created_by || "-"}</Text>;
       },
       meta: {
         className: "hidden xl:table-cell",
@@ -264,4 +254,3 @@ export const mcpHubColumns = (
 
   return allColumns;
 };
-
