@@ -2,12 +2,13 @@ import { render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import MCPToolsViewer from "./mcp_tools";
-import { listMCPTools } from "../networking";
+import { listMCPTools, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken } from "@/utils/mcpTokenStore";
 
 vi.mock("../networking", () => ({
   listMCPTools: vi.fn(),
   callMCPTool: vi.fn(),
+  getMCPOAuthUserCredentialStatus: vi.fn(),
 }));
 
 vi.mock("@/utils/mcpTokenStore", () => ({
@@ -18,6 +19,10 @@ vi.mock("@/utils/mcpTokenStore", () => ({
 
 vi.mock("@/hooks/useToolsOAuthFlow", () => ({
   useToolsOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle", error: null }),
+}));
+
+vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
+  useUserMcpOAuthFlow: () => ({ startOAuthFlow: vi.fn(), status: "idle", error: null }),
 }));
 
 const GATE_TEXT = "Authentication required";
@@ -42,6 +47,13 @@ const renderViewer = (props: Record<string, unknown>) =>
     </QueryClientProvider>,
   );
 
+const credStatus = (overrides: Record<string, unknown> = {}) => ({
+  server_id: "srv-1",
+  has_credential: true,
+  is_expired: false,
+  ...overrides,
+});
+
 describe("MCPToolsViewer auth gate routing", () => {
   beforeEach(() => {
     vi.mocked(listMCPTools).mockReset().mockResolvedValue({ tools: [], error: null });
@@ -49,6 +61,8 @@ describe("MCPToolsViewer auth gate routing", () => {
     vi.mocked(getToken)
       .mockReset()
       .mockReturnValue(undefined as any);
+    // Default: the OBO credential exists and is valid, so OBO servers list tools.
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockReset().mockResolvedValue(credStatus());
   });
 
   it("shows the Authorize gate for a passthrough server with a token endpoint and does not list tools", async () => {
@@ -57,6 +71,8 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
     expect(vi.mocked(listMCPTools)).not.toHaveBeenCalled();
+    // Passthrough must not consult the per-user DB credential.
+    expect(vi.mocked(getMCPOAuthUserCredentialStatus)).not.toHaveBeenCalled();
   });
 
   it("forwards the session token via the x-mcp header for a passthrough server that has one", async () => {
@@ -75,7 +91,40 @@ describe("MCPToolsViewer auth gate routing", () => {
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
   });
 
-  it("does not gate an OBO server with a token endpoint; lists with the LiteLLM key and no x-mcp header", async () => {
+  it("lists tools for an OBO server when the user has a DB credential, with no x-mcp header", async () => {
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    await waitFor(() => expect(vi.mocked(listMCPTools)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined));
+    expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
+  });
+
+  it("shows the Authorize gate for an OBO server when the user has no DB credential and does not list tools", async () => {
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue(credStatus({ has_credential: false }));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
+    expect(vi.mocked(listMCPTools)).not.toHaveBeenCalled();
+  });
+
+  it("shows the Authorize gate for an OBO server when the credential-status check fails", async () => {
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockRejectedValue(new Error("network down"));
+
+    renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
+
+    expect(await screen.findByText(GATE_TEXT)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Authorize" })).toBeInTheDocument();
+    expect(vi.mocked(listMCPTools)).not.toHaveBeenCalled();
+  });
+
+  it("does not gate an OBO server whose stored token is expired; the list call refreshes it server-side", async () => {
+    // has_credential=true with is_expired=true must NOT gate: resolve_valid_user_oauth_token
+    // refreshes from the stored refresh_token on the list call, so the user never reauthorizes.
+    vi.mocked(getMCPOAuthUserCredentialStatus).mockResolvedValue(
+      credStatus({ has_credential: true, is_expired: true }),
+    );
+
     renderViewer({ oauth2_flow: null, delegate_auth_to_upstream: false });
 
     await waitFor(() => expect(vi.mocked(listMCPTools)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined));
@@ -87,5 +136,7 @@ describe("MCPToolsViewer auth gate routing", () => {
 
     await waitFor(() => expect(vi.mocked(listMCPTools)).toHaveBeenCalledWith("litellm-key", "srv-1", undefined));
     expect(screen.queryByText(GATE_TEXT)).not.toBeInTheDocument();
+    // M2M uses the backend service token, not a per-user DB credential.
+    expect(vi.mocked(getMCPOAuthUserCredentialStatus)).not.toHaveBeenCalled();
   });
 });
