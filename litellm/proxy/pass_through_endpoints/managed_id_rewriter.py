@@ -547,6 +547,20 @@ async def _mint_or_reuse_file(
     return managed_id
 
 
+def _object_status_from_snapshot(file_purpose: str, body_snapshot: dict) -> Optional[str]:
+    """Extract pollable status for managed object rows.
+
+    CheckBatchCost filters on ``status NOT IN (terminal...)``; NULL status is
+    excluded by SQL, so passthrough batch creates must persist a non-null value.
+    """
+    status = body_snapshot.get("status")
+    if isinstance(status, str) and status:
+        return status
+    if file_purpose == "batch":
+        return "validating"
+    return None
+
+
 async def _mint_or_reuse_object(
     raw_id: str,
     provider: str,
@@ -597,13 +611,17 @@ async def _mint_or_reuse_object(
             # Refresh the stored snapshot so DB-served list responses reflect
             # the batch's latest state (e.g. output_file_id / error_file_id that
             # were null at creation but populated once the batch completed).
+            update_data: dict = {
+                "file_object": json.dumps(body_snapshot),
+                "updated_by": user_api_key_dict.user_id,
+            }
+            status = _object_status_from_snapshot(file_purpose, body_snapshot)
+            if status is not None:
+                update_data["status"] = status
             try:
                 await ManagedObjectRepository(prisma_client).table.update(
                     where={"unified_object_id": existing.unified_object_id},
-                    data={
-                        "file_object": json.dumps(body_snapshot),
-                        "updated_by": user_api_key_dict.user_id,
-                    },
+                    data=update_data,
                 )
             except Exception:
                 verbose_proxy_logger.debug(
@@ -634,19 +652,24 @@ async def _mint_or_reuse_object(
         "managed_id_rewriter: minted new managed object id for raw prefix=%s",
         raw_id.split("_", 1)[0],
     )
+    create_data: dict = {
+        "unified_object_id": managed_id,
+        "file_object": json.dumps(body_snapshot),
+        "model_object_id": namespaced_model_object_id,
+        "file_purpose": file_purpose,
+        "created_by": user_api_key_dict.user_id,
+        "team_id": user_api_key_dict.team_id,
+        "updated_by": user_api_key_dict.user_id,
+    }
+    status = _object_status_from_snapshot(file_purpose, body_snapshot)
+    if status is not None:
+        create_data["status"] = status
+
     try:
         await ManagedObjectRepository(prisma_client).table.upsert(
             where={"unified_object_id": managed_id},
             data={
-                "create": {
-                    "unified_object_id": managed_id,
-                    "file_object": json.dumps(body_snapshot),
-                    "model_object_id": namespaced_model_object_id,
-                    "file_purpose": file_purpose,
-                    "created_by": user_api_key_dict.user_id,
-                    "team_id": user_api_key_dict.team_id,
-                    "updated_by": user_api_key_dict.user_id,
-                },
+                "create": create_data,
                 "update": {
                     "updated_by": user_api_key_dict.user_id,
                 },

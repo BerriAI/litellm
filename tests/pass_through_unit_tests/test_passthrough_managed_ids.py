@@ -412,6 +412,8 @@ class TestRewriteResponseIds:
         # Null fields skipped
         assert result["output_file_id"] is None
         assert result["error_file_id"] is None
+        upsert_kwargs = pc.db.litellm_managedobjecttable.upsert.call_args.kwargs
+        assert upsert_kwargs["data"]["create"]["status"] == "validating"
 
     @pytest.mark.asyncio
     async def test_response_create_mints_id(self):
@@ -747,6 +749,7 @@ class TestRewriteResponseIds:
         pc.db.litellm_managedobjecttable.update.assert_awaited_once()
         update_kwargs = pc.db.litellm_managedobjecttable.update.call_args.kwargs
         assert update_kwargs["where"] == {"unified_object_id": existing_managed_id}
+        assert update_kwargs["data"]["status"] == "completed"
         stored = json.loads(update_kwargs["data"]["file_object"])
         assert stored["status"] == "completed"
         # output_file_id is itself rewritten to a managed id wrapping the raw id
