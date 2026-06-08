@@ -231,6 +231,45 @@ def test_get_metadata_returns_empty_when_both_absent():
     assert get_metadata({}) == {}
 
 
+def test_get_metadata_ignores_non_dict_caller_metadata():
+    """A caller can send ``metadata`` as a non-object value. It must be coerced
+    away rather than returned verbatim, so the proxy-injected ``litellm_metadata``
+    (carrying the admin pins) is preserved."""
+    data = {
+        "metadata": "not-a-dict",
+        "litellm_metadata": {
+            "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}
+        },
+    }
+    assert get_metadata(data) == {
+        "user_api_key_metadata": {"alice_wonderfence_app_id": "admin-pinned"}
+    }
+
+
+def test_non_dict_caller_metadata_does_not_bypass_resolution():
+    """Regression: a non-dict ``metadata`` once propagated to ``resolve_*`` and
+    raised on ``.get()``, which ``fail_open=True`` would swallow into a skipped
+    scan. Resolution must instead succeed from the admin pin in
+    ``litellm_metadata``."""
+    data = {
+        "model": "gpt-4",
+        "metadata": ["unexpected", "list"],
+        "litellm_metadata": {
+            "user_api_key_metadata": {
+                "alice_wonderfence_app_id": "admin-pinned",
+                "alice_wonderfence_api_key": "admin-key",
+            }
+        },
+    }
+    assert resolve_app_id(data, allow_request_metadata_override=True) == "admin-pinned"
+    assert (
+        resolve_api_key(
+            data, default_api_key=None, allow_request_metadata_override=True
+        )
+        == "admin-key"
+    )
+
+
 def test_responses_route_admin_pin_beats_caller_metadata():
     """Mirror the /v1/responses shape: caller `metadata` carries a
     request-override app_id while the admin pin lives in

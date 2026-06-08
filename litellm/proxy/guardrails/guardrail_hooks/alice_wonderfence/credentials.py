@@ -49,9 +49,9 @@ def get_metadata(request_data: dict) -> dict:
     """
     caller = request_data.get("metadata")
     litellm_md = request_data.get("litellm_metadata")
-    if isinstance(caller, dict) and isinstance(litellm_md, dict):
-        return {**caller, **litellm_md}
-    return caller or litellm_md or {}
+    caller = caller if isinstance(caller, dict) else {}
+    litellm_md = litellm_md if isinstance(litellm_md, dict) else {}
+    return {**caller, **litellm_md}
 
 
 def resolve_api_key(
