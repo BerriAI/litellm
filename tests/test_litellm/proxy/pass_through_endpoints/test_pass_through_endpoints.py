@@ -1,18 +1,13 @@
 import asyncio
-import contextlib
 import json
 import os
-import socket
 import sys
-import threading
-import time
 from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import uvicorn
 from fastapi import FastAPI, Request, Response, UploadFile
 from starlette.datastructures import Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -3111,36 +3106,6 @@ def test_get_response_headers_sanitizes_custom_headers():
     assert lowered["x-litellm-version"] == "1.2.3"
 
 
-@contextlib.contextmanager
-def _serve_app(app: FastAPI):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    sock.bind(("127.0.0.1", 0))
-    host, port = sock.getsockname()
-    server = uvicorn.Server(uvicorn.Config(app, log_level="warning"))
-
-    def _run() -> None:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(server.serve(sockets=[sock]))
-
-    thread = threading.Thread(target=_run, daemon=True)
-    thread.start()
-    try:
-        deadline = time.time() + 30
-        while not server.started:
-            if not thread.is_alive():
-                raise RuntimeError("passthrough test server failed to start")
-            if time.time() > deadline:
-                raise TimeoutError("passthrough test server did not start in time")
-            time.sleep(0.05)
-        yield f"http://{host}:{port}"
-    finally:
-        server.should_exit = True
-        thread.join(timeout=10)
-        sock.close()
-
-
 class _FakeUpstreamResponse:
     """Stands in for the httpx upstream response the passthrough finalizer
     reads. Only the attributes the finalizer touches are implemented."""
@@ -3166,18 +3131,19 @@ class _StubPassthroughProcessing(ProxyBaseLLMRequestProcessing):
         return self._upstream
 
 
-def test_bedrock_passthrough_nonempty_body_survives_real_http_serialization():
+def test_bedrock_passthrough_nonempty_body_survives_http_serialization():
     """Regression for the v1.85.0 Bedrock passthrough Content-Length bug.
 
     Drives the real ``base_passthrough_process_llm_request`` finalizer, which
     merges ``dict(fastapi_response.headers)`` into the response. The placeholder
     FastAPI Response carries a default content-length: 0; if that leaks past
-    ``get_response_headers`` it overrides the real upstream length and uvicorn/h11
-    aborts any non-empty body, so the client sees a 200 with an empty/truncated
-    body. The symptom only surfaces once the ASGI server serializes over a
-    socket, so the finalizer's output is served through a real server. Asserting
-    on the finalizer output in-process would miss it, which is how the bug
-    shipped; reproducing it requires both the real finalizer and a real socket."""
+    ``get_response_headers`` it overrides the real upstream length, so a
+    non-empty Bedrock body is served with a Content-Length that no longer matches
+    it. The finalizer's output is serialized through an in-process ASGI server
+    (httpx.ASGITransport) and the Content-Length the client receives is asserted
+    against the served body, the mismatch the object-level assertion in #27412
+    didn't check. This folder is mock-only (see tests/test_litellm/readme.md), so
+    the test stays in-process instead of binding a real socket."""
     upstream_body = json.dumps(
         {
             "output": {
@@ -3203,8 +3169,10 @@ def test_bedrock_passthrough_nonempty_body_survives_real_http_serialization():
     fastapi_response = Response()
     fastapi_response.headers["x-litellm-call-id"] = "test-call-id"
 
-    final_response = asyncio.run(
-        _StubPassthroughProcessing(upstream).base_passthrough_process_llm_request(
+    async def _drive_and_serve() -> httpx.Response:
+        final_response = await _StubPassthroughProcessing(
+            upstream
+        ).base_passthrough_process_llm_request(
             request=MagicMock(),
             fastapi_response=fastapi_response,
             user_api_key_dict=MagicMock(),
@@ -3213,16 +3181,20 @@ def test_bedrock_passthrough_nonempty_body_survives_real_http_serialization():
             proxy_config=MagicMock(),
             select_data_generator=MagicMock(),
         )
-    )
 
-    app = FastAPI()
+        app = FastAPI()
 
-    @app.get("/bedrock/passthrough")
-    async def _bedrock_passthrough() -> Response:
-        return final_response
+        @app.get("/bedrock/passthrough")
+        async def _bedrock_passthrough() -> Response:
+            return final_response
 
-    with _serve_app(app) as base_url:
-        response = httpx.get(f"{base_url}/bedrock/passthrough", timeout=10)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://bedrock-passthrough"
+        ) as client:
+            return await client.get("/bedrock/passthrough")
+
+    response = asyncio.run(_drive_and_serve())
 
     assert response.status_code == 200
     assert response.content == upstream_body
