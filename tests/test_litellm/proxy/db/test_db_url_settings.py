@@ -24,29 +24,47 @@ def _apply() -> bool:
     return DatabaseURLSettings.from_env().apply_to_env()
 
 
+_MANAGED_DB_ENV_VARS = (
+    "IAM_TOKEN_DB_AUTH",
+    "DATABASE_URL",
+    "DATABASE_URL_READ_REPLICA",
+    "DATABASE_HOST",
+    "DATABASE_PORT",
+    "DATABASE_USER",
+    "DATABASE_USERNAME",
+    "DATABASE_NAME",
+    "DATABASE_SCHEMA",
+    "DATABASE_PASSWORD",
+    "DATABASE_HOST_READ_REPLICA",
+    "DATABASE_PORT_READ_REPLICA",
+    "DATABASE_USER_READ_REPLICA",
+    "DATABASE_USERNAME_READ_REPLICA",
+    "DATABASE_NAME_READ_REPLICA",
+    "DATABASE_SCHEMA_READ_REPLICA",
+    "DATABASE_PASSWORD_READ_REPLICA",
+)
+
+
 @pytest.fixture(autouse=True)
-def _scrub_db_env(monkeypatch):
-    """Remove every env var the model reads so tests start from a clean slate."""
-    for var in (
-        "IAM_TOKEN_DB_AUTH",
-        "DATABASE_URL",
-        "DATABASE_URL_READ_REPLICA",
-        "DATABASE_HOST",
-        "DATABASE_PORT",
-        "DATABASE_USER",
-        "DATABASE_USERNAME",
-        "DATABASE_NAME",
-        "DATABASE_SCHEMA",
-        "DATABASE_PASSWORD",
-        "DATABASE_HOST_READ_REPLICA",
-        "DATABASE_PORT_READ_REPLICA",
-        "DATABASE_USER_READ_REPLICA",
-        "DATABASE_USERNAME_READ_REPLICA",
-        "DATABASE_NAME_READ_REPLICA",
-        "DATABASE_SCHEMA_READ_REPLICA",
-        "DATABASE_PASSWORD_READ_REPLICA",
-    ):
-        monkeypatch.delenv(var, raising=False)
+def _scrub_db_env():
+    """Start each test from a clean slate and restore the original env afterward.
+
+    ``apply_to_env`` writes ``DATABASE_URL`` straight into ``os.environ``, which
+    ``monkeypatch`` cannot undo. Snapshotting and restoring here keeps a
+    synthesized URL (e.g. ``writer.example.com``) from leaking into later tests
+    that read ``DATABASE_URL`` to decide whether to hit a real database.
+    """
+    saved = {var: os.environ.get(var) for var in _MANAGED_DB_ENV_VARS}
+    for var in _MANAGED_DB_ENV_VARS:
+        os.environ.pop(var, None)
+    try:
+        yield
+    finally:
+        for var, value in saved.items():
+            if value is None:
+                os.environ.pop(var, None)
+            else:
+                os.environ[var] = value
 
 
 def _stub_iam_token(token: str = "FAKE_TOKEN"):

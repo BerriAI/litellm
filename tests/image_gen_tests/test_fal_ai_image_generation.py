@@ -19,6 +19,11 @@ from litellm import aimage_generation
             "fal_ai/fal-ai/stable-diffusion-v35-medium",
             "fal-ai/stable-diffusion-v35-medium",
         ),
+        ("fal_ai/fal-ai/nano-banana", "fal-ai/nano-banana"),
+        (
+            "fal_ai/fal-ai/gemini-25-flash-image",
+            "fal-ai/gemini-25-flash-image",
+        ),
     ],
 )
 @pytest.mark.asyncio

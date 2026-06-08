@@ -265,7 +265,11 @@ class GeminiVideoConfig(BaseVideoConfig):
         {
             "instances": [
                 {
-                    "prompt": "A cat playing with a ball of yarn"
+                    "prompt": "A cat playing with a ball of yarn",
+                    "image": {
+                        "bytesBase64Encoded": "...",
+                        "mimeType": "image/jpeg"
+                    }
                 }
             ],
             "parameters": {
@@ -275,13 +279,18 @@ class GeminiVideoConfig(BaseVideoConfig):
             }
         }
         """
-        instance = GeminiVideoGenerationInstance(prompt=prompt)
+        instance: GeminiVideoGenerationInstance = {"prompt": prompt}
 
         params_copy = video_create_optional_request_params.copy()
 
-        if "image" in params_copy and params_copy["image"] is not None:
-            image_data = _convert_image_to_gemini_format(params_copy["image"])
-            params_copy["image"] = image_data
+        if "image" in params_copy:
+            image = params_copy.pop("image")
+            if image is not None:
+                if isinstance(image, dict):
+                    image_data = image
+                else:
+                    image_data = _convert_image_to_gemini_format(image)
+                instance["image"] = image_data
 
         parameters = GeminiVideoGenerationParameters(**params_copy)
 

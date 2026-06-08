@@ -84,6 +84,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     if isinstance(content, list):
                         _process_content_list(content)
 
+    def should_strip_billing_metadata(self) -> bool:
+        """
+        Whether to drop x-anthropic-billing-header system blocks before sending upstream.
+
+        The first-party Anthropic API uses these blocks for Claude Code attribution, so the
+        base config keeps them. Providers that reject them override this to True.
+        """
+        return False
+
     @staticmethod
     def _filter_billing_headers_from_system(system_param):
         """
@@ -230,6 +239,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         """Translate legacy ``thinking.type=enabled`` to adaptive for 4.6/4.7.
         Caller-provided ``output_config.effort`` is never overridden.
         """
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
         if not AnthropicModelInfo._is_adaptive_thinking_model(model):
             return
         thinking = optional_params.get("thinking")
@@ -237,7 +248,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             return
 
         budget = int(thinking.get("budget_tokens") or 0)
-        if budget >= 24000:
+        if budget >= 24000 and AnthropicConfig._supports_effort_level(model, "xhigh"):
             effort = "xhigh"
         elif budget >= 10000:
             effort = "high"
@@ -284,14 +295,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=anthropic_messages_optional_request_params,
         )
 
-        # Filter out x-anthropic-billing-header from system messages
         system_param = anthropic_messages_optional_request_params.get("system")
-        if system_param is not None:
+        if self.should_strip_billing_metadata() and system_param is not None:
             filtered_system = self._filter_billing_headers_from_system(system_param)
             if filtered_system is not None and len(filtered_system) > 0:
                 anthropic_messages_optional_request_params["system"] = filtered_system
             else:
-                # Remove system parameter if all content was filtered out
                 anthropic_messages_optional_request_params.pop("system", None)
 
         # Transform context_management from OpenAI format to Anthropic format if needed

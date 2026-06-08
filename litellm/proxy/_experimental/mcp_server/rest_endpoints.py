@@ -1,3 +1,4 @@
+import asyncio
 import importlib
 from datetime import datetime
 from typing import (
@@ -13,13 +14,18 @@ from typing import (
     Union,
 )
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from litellm._logging import verbose_logger
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
-from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
+from litellm.proxy._experimental.mcp_server.utils import (
+    MCPMissingUserEnvVarsError,
+    merge_mcp_headers,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -40,11 +46,36 @@ router = APIRouter(
     tags=["mcp"],
 )
 
+
+def _connection_error_message(exc: BaseException) -> str:
+    if isinstance(exc, httpx.LocalProtocolError):
+        return (
+            "Failed to connect to MCP server: a request header is malformed. "
+            "Check static headers for leading/trailing spaces or illegal characters."
+        )
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return (
+            "Failed to connect to MCP server: the server is unreachable. "
+            "Check the URL and that the server is running."
+        )
+    if isinstance(exc, httpx.TimeoutException):
+        return "Failed to connect to MCP server: the connection timed out."
+    if isinstance(exc, httpx.HTTPStatusError):
+        return (
+            f"Failed to connect to MCP server: it returned HTTP "
+            f"{exc.response.status_code}."
+        )
+    return "Failed to connect to MCP server. Check proxy logs for details."
+
+
 if MCP_AVAILABLE:
     from mcp.types import Tool as MCPTool
 
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
+    )
+    from litellm.proxy._experimental.mcp_server.oauth_utils import (
+        get_request_base_url,
     )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
@@ -115,9 +146,10 @@ if MCP_AVAILABLE:
         try:
             from litellm.proxy._experimental.mcp_server.db import (
                 get_user_oauth_credential,
-                is_oauth_credential_expired,
+                resolve_valid_user_oauth_token,
             )
 
+            prisma_client = None
             if prefetched_creds is not None:
                 cred = prefetched_creds.get(server_id)
             else:
@@ -129,13 +161,13 @@ if MCP_AVAILABLE:
                 cred = await get_user_oauth_credential(
                     prisma_client, user_id, server_id
                 )
+            cred = await resolve_valid_user_oauth_token(
+                user_id=user_id,
+                server=server,
+                cred=cred,
+                prisma_client=prisma_client,
+            )
             if cred and cred.get("access_token"):
-                if is_oauth_credential_expired(cred):
-                    verbose_logger.debug(
-                        f"_get_user_oauth_extra_headers: token expired for "
-                        f"user={user_id} server={server_id}"
-                    )
-                    return None
                 return {"Authorization": f"Bearer {cred['access_token']}"}
         except Exception as e:
             verbose_logger.warning(
@@ -365,10 +397,9 @@ if MCP_AVAILABLE:
             user_api_key_auth=user_api_key_auth,
         )
 
-        # Filter tools based on allowed_tools configuration
-        # Only filter if allowed_tools is explicitly configured (not None and not empty)
-        if server.allowed_tools is not None and len(server.allowed_tools) > 0:
-            tools = filter_tools_by_allowed_tools(tools, server)
+        # Always apply allowed_tools/disallowed_tools so the blacklist is
+        # enforced even when no allowlist is set (matches the SSE/HTTP path).
+        tools = filter_tools_by_allowed_tools(tools, server)
 
         # Filter tools based on user_api_key_auth.object_permission.mcp_tool_permissions
         # This provides per-key/team/org control over which tools can be accessed
@@ -423,101 +454,6 @@ if MCP_AVAILABLE:
             if server is not None:
                 allowed_mcp_servers.append(server)
         return allowed_mcp_servers
-
-    async def _list_tools_for_single_server(
-        server_id: str,
-        allowed_server_ids: List[str],
-        rest_client_ip: Optional[str],
-        mcp_server_auth_headers: dict,
-        mcp_auth_header: Optional[str],
-        raw_headers_from_request: dict,
-        user_api_key_dict: "UserAPIKeyAuth",
-    ) -> dict:
-        """
-        Resolve and fetch tools for a single specified MCP server.
-
-        Returns the full REST response dict (tools / error / message).
-        Raises HTTPException on access / IP-filter errors.
-        """
-        # Resolve a server name to its UUID if needed
-        _name_resolved = None
-        if server_id not in allowed_server_ids:
-            _name_resolved = global_mcp_server_manager.get_mcp_server_by_name(server_id)
-            if _name_resolved is not None and _name_resolved.server_id in set(
-                allowed_server_ids
-            ):
-                server_id = _name_resolved.server_id
-
-        if server_id not in allowed_server_ids:
-            _server = (
-                global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                or _name_resolved
-            )
-            if (
-                _server is not None
-                and rest_client_ip is not None
-                and not global_mcp_server_manager._is_server_accessible_from_ip(
-                    _server, rest_client_ip
-                )
-            ):
-                raise HTTPException(
-                    status_code=403,
-                    detail={
-                        "error": "ip_filtering",
-                        "message": (
-                            f"MCP server '{server_id}' is not accessible from your IP address "
-                            f"({rest_client_ip}). This server is restricted to internal "
-                            "networks only. To make it externally accessible, set "
-                            "'available_on_public_internet: true' in the server configuration."
-                        ),
-                    },
-                )
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "error": "access_denied",
-                    "message": f"The key is not allowed to access server {server_id}",
-                },
-            )
-
-        server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-        if server is None:
-            return {
-                "tools": [],
-                "error": "server_not_found",
-                "message": f"Server with id {server_id} not found",
-            }
-
-        server_auth_header = _get_server_auth_header(
-            server, mcp_server_auth_headers, mcp_auth_header
-        )
-        user_oauth_extra_headers = await _get_user_oauth_extra_headers(
-            server, user_api_key_dict
-        )
-
-        try:
-            tools = await _get_tools_for_single_server(
-                server,
-                server_auth_header,
-                raw_headers_from_request,
-                user_api_key_dict,
-                extra_headers=user_oauth_extra_headers,
-            )
-        except Exception as e:
-            verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
-            return {
-                "tools": [],
-                "error": "server_error",
-                "message": f"Failed to get tools from server {server.name}: {str(e)}",
-            }
-
-        return {
-            "tools": tools,
-            "error": None,
-            "message": "Successfully retrieved tools",
-        }
-
-    ########################################################
 
     async def _list_tools_for_single_server(
         server_id: str,
@@ -592,6 +528,11 @@ if MCP_AVAILABLE:
                 user_api_key_dict,
                 extra_headers=user_oauth_extra_headers,
             )
+        except MCPUpstreamAuthError:
+            # Surface the upstream 401/403 to the caller so it can emit the
+            # matching status code and WWW-Authenticate challenge; that is what
+            # lets standards-compliant MCP clients run the upstream OAuth flow.
+            raise
         except Exception as e:
             verbose_logger.exception(f"Error getting tools from {server.name}: {e}")
             return {
@@ -758,6 +699,24 @@ if MCP_AVAILABLE:
                 ),
             }
 
+        except MCPUpstreamAuthError as e:
+            # Surface upstream pass-through 401/403 challenges to the client so
+            # standards-compliant MCP clients can run the upstream OAuth flow.
+            raise e.to_http_exception(
+                base_url=get_request_base_url(request),
+                request_path=request.scope.get("_original_path") or request.url.path,
+            )
+        except HTTPException as http_exc:
+            # Internal access/IP 403s keep the legacy error-dict response shape
+            # so the existing contract stays intact.
+            verbose_logger.exception(
+                "HTTPException in list_tool_rest_api: %s", str(http_exc)
+            )
+            return {
+                "tools": [],
+                "error": "unexpected_error",
+                "message": (f"An unexpected error occurred: {http_exc.detail}"),
+            }
         except Exception as e:
             verbose_logger.exception(
                 "Unexpected error in list_tool_rest_api: %s", str(e)
@@ -881,6 +840,23 @@ if MCP_AVAILABLE:
                 requested_server_id=canonical_server_id,
             )
             return result
+        except MCPMissingUserEnvVarsError as e:
+            verbose_logger.info(
+                "MCP tool call missing per-user env vars: server_id=%s missing=%s",
+                e.server_id,
+                e.missing,
+            )
+            raise HTTPException(
+                status_code=412,
+                detail={
+                    "error": "missing_user_env_vars",
+                    "message": str(e),
+                    "server_id": e.server_id,
+                    "server_name": e.server_name,
+                    "missing": e.missing,
+                    "setup_url": e.setup_url,
+                },
+            )
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
             raise HTTPException(
@@ -1030,14 +1006,14 @@ if MCP_AVAILABLE:
 
             return await operation(client)
 
-        except (KeyboardInterrupt, SystemExit):
+        except (KeyboardInterrupt, SystemExit, asyncio.CancelledError):
             raise
         except BaseException as e:
             verbose_logger.error("Error in MCP operation: %s", e, exc_info=True)
             return {
                 "status": "error",
                 "error": True,
-                "message": "Failed to connect to MCP server. Check proxy logs for details.",
+                "message": _connection_error_message(e),
             }
 
     async def _preview_openapi_tools(spec_path: str) -> dict:

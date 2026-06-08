@@ -37,7 +37,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
     try {
       const data = await getPolicy(accessToken, policyId);
       setPolicy(data);
-      
+
       // Also fetch resolved guardrails
       setIsLoadingResolved(true);
       try {
@@ -83,18 +83,11 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
     <Card>
       <div className="space-y-6">
         <div className="flex justify-between items-center">
-          <Button
-            variant="secondary"
-            icon={ArrowLeftIcon}
-            onClick={onClose}
-          >
+          <Button variant="secondary" icon={ArrowLeftIcon} onClick={onClose}>
             Back to Policies
           </Button>
           {isAdmin && (
-            <Button
-              icon={PencilIcon}
-              onClick={() => onEdit(policy)}
-            >
+            <Button icon={PencilIcon} onClick={() => onEdit(policy)}>
               Edit Policy
             </Button>
           )}
@@ -111,20 +104,18 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
           </Descriptions.Item>
           <Descriptions.Item label="Inherits From">
             {policy.inherit ? (
-              <Badge color="blue" size="sm">{policy.inherit}</Badge>
+              <Badge color="blue" size="sm">
+                {policy.inherit}
+              </Badge>
             ) : (
               <Text type="secondary">None</Text>
             )}
           </Descriptions.Item>
           <Descriptions.Item label="Created At">
-            {policy.created_at
-              ? new Date(policy.created_at).toLocaleString()
-              : "-"}
+            {policy.created_at ? new Date(policy.created_at).toLocaleString() : "-"}
           </Descriptions.Item>
           <Descriptions.Item label="Updated At">
-            {policy.updated_at
-              ? new Date(policy.updated_at).toLocaleString()
-              : "-"}
+            {policy.updated_at ? new Date(policy.updated_at).toLocaleString() : "-"}
           </Descriptions.Item>
         </Descriptions>
 

@@ -151,4 +151,19 @@ describe("ToolTestPanel defaults", () => {
     expect(screen.getByPlaceholderText("Enter input for this tool")).toBeInTheDocument();
     expect(screen.queryByText("No parameters required")).not.toBeInTheDocument();
   });
+
+  it("renders the call button as type=button so a click never also triggers native form submission", () => {
+    const schema: InputSchema = {
+      type: "object",
+      properties: {
+        message: { type: "string", description: "Prompt text" },
+      },
+    };
+
+    renderPanel(schema);
+
+    const callButton = screen.getByRole("button", { name: "Call Tool" });
+    expect(callButton.closest("form")).not.toBeNull();
+    expect(callButton).toHaveAttribute("type", "button");
+  });
 });

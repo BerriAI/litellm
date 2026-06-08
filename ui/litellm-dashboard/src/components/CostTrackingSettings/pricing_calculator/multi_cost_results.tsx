@@ -70,7 +70,9 @@ const SingleModelBreakdown: React.FC<{
       {periodCost !== null && (
         <div className="grid grid-cols-4 gap-4 pt-2 border-t border-gray-200">
           <div>
-            <Text className="text-xs text-gray-500 block">{periodLabel} Total ({formatRequests(periodRequests)} req)</Text>
+            <Text className="text-xs text-gray-500 block">
+              {periodLabel} Total ({formatRequests(periodRequests)} req)
+            </Text>
             <Text className={`text-base font-semibold ${timePeriod === "day" ? "text-green-600" : "text-purple-600"}`}>
               {formatCost(periodCost)}
             </Text>
@@ -94,7 +96,7 @@ const SingleModelBreakdown: React.FC<{
 
       {(result.input_cost_per_token || result.output_cost_per_token) && (
         <div className="text-xs text-gray-400 pt-2 border-t border-gray-200">
-          Token Pricing: {" "}
+          Token Pricing:{" "}
           {result.input_cost_per_token && (
             <span>Input ${formatNumberWithCommas(result.input_cost_per_token * 1_000_000, 2)}/1M</span>
           )}
@@ -122,9 +124,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
   if (!hasAnyResult && !isAnyLoading && !hasAnyError) {
     return (
       <div className="py-6 text-center border border-dashed border-gray-300 rounded-lg bg-gray-50">
-        <Text className="text-gray-500">
-          Select models above to see cost estimates
-        </Text>
+        <Text className="text-gray-500">Select models above to see cost estimates</Text>
       </div>
     );
   }
@@ -181,7 +181,16 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       title: "Model",
       dataIndex: "model",
       key: "model",
-      render: (text: string, record: { id: string; provider?: string | null; error?: string | null; loading?: boolean; hasZeroCost?: boolean | null }) => (
+      render: (
+        text: string,
+        record: {
+          id: string;
+          provider?: string | null;
+          error?: string | null;
+          loading?: boolean;
+          hasZeroCost?: boolean | null;
+        },
+      ) => (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{text}</span>
@@ -190,15 +199,9 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
                 {record.provider}
               </Tag>
             )}
-            {record.loading && (
-              <Spin indicator={<LoadingOutlined spin />} size="small" />
-            )}
+            {record.loading && <Spin indicator={<LoadingOutlined spin />} size="small" />}
           </div>
-          {record.error && (
-            <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
-              ⚠️ {record.error}
-            </div>
-          )}
+          {record.error && <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">⚠️ {record.error}</div>}
           {record.hasZeroCost && !record.error && (
             <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
               ⚠️ No pricing data found for this model. Set base_model in config.
@@ -212,37 +215,44 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       dataIndex: "cost_per_request",
       key: "cost_per_request",
       align: "right" as const,
-      render: (value: number | null, record: { error?: string | null }) => (
-        record.error ? <span className="text-gray-400">-</span> : <span className="font-mono text-sm">{formatCost(value)}</span>
-      ),
+      render: (value: number | null, record: { error?: string | null }) =>
+        record.error ? (
+          <span className="text-gray-400">-</span>
+        ) : (
+          <span className="font-mono text-sm">{formatCost(value)}</span>
+        ),
     },
     {
       title: "Margin Fee",
       dataIndex: "margin_cost_per_request",
       key: "margin_cost_per_request",
       align: "right" as const,
-      render: (value: number | null, record: { error?: string | null }) => (
-        record.error ? <span className="text-gray-400">-</span> : (
+      render: (value: number | null, record: { error?: string | null }) =>
+        record.error ? (
+          <span className="text-gray-400">-</span>
+        ) : (
           <span className={`font-mono text-sm ${(value ?? 0) > 0 ? "text-amber-600" : "text-gray-400"}`}>
             {formatCost(value)}
           </span>
-        )
-      ),
+        ),
     },
     {
       title: periodLabel,
       dataIndex: periodCostKey,
       key: "period_cost",
       align: "right" as const,
-      render: (value: number | null, record: { error?: string | null }) => (
-        record.error ? <span className="text-gray-400">-</span> : <span className="font-mono text-sm">{formatCost(value)}</span>
-      ),
+      render: (value: number | null, record: { error?: string | null }) =>
+        record.error ? (
+          <span className="text-gray-400">-</span>
+        ) : (
+          <span className="font-mono text-sm">{formatCost(value)}</span>
+        ),
     },
     {
       title: "",
       key: "expand",
       width: 40,
-      render: (_: unknown, record: { id: string; error?: string | null }) => (
+      render: (_: unknown, record: { id: string; error?: string | null }) =>
         record.error ? null : (
           <Button
             size="xs"
@@ -252,8 +262,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
           >
             {expandedModels.has(record.id) ? <DownOutlined /> : <RightOutlined />}
           </Button>
-        )
-      ),
+        ),
     },
   ];
 
@@ -299,7 +308,11 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
             <Statistic
               title={<span className="text-xs">Total {periodLabel}</span>}
               value={formatCost(timePeriod === "day" ? multiResult.totals.daily_cost : multiResult.totals.monthly_cost)}
-              valueStyle={{ color: timePeriod === "day" ? "#52c41a" : "#722ed1", fontSize: "18px", fontFamily: "monospace" }}
+              valueStyle={{
+                color: timePeriod === "day" ? "#52c41a" : "#722ed1",
+                fontSize: "18px",
+                fontFamily: "monospace",
+              }}
             />
           </Col>
         </Row>
@@ -307,7 +320,9 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
           <Row gutter={[16, 8]} className="mt-3 pt-3 border-t border-slate-200">
             <Col xs={24} sm={12}>
               <div className="text-xs text-gray-500">Margin Fee/Request</div>
-              <div className="text-sm font-mono text-amber-600">{formatCost(multiResult.totals.margin_per_request)}</div>
+              <div className="text-sm font-mono text-amber-600">
+                {formatCost(multiResult.totals.margin_per_request)}
+              </div>
             </Col>
             <Col xs={24} sm={12}>
               <div className="text-xs text-gray-500">{periodLabel} Margin Fee</div>

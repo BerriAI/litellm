@@ -18,7 +18,9 @@ from litellm.proxy.proxy_server import (
     otel_unhandled_exception_handler,
 )
 
-from ._helpers import assert_server_span_attrs
+from litellm.integrations._types.open_inference import ErrorAttributes
+
+from ._helpers import assert_server_span_attrs, get_server_span
 
 
 def _fake_request(parent_otel_span=None):
@@ -90,6 +92,33 @@ def test_exception_handler_closes_span(
         expected_url_path=path,
         where=f"{handler.__name__} ({type(exc).__name__})",
     )
+
+
+@pytest.mark.parametrize("path", ["/team/list", "/organization/list"])
+def test_openai_exception_handler_stamps_structured_error_on_span(
+    wired_otel, server_span_factory, path
+):
+    """A ProxyException 401 (invalid/expired key on a management endpoint) must
+    leave error.type, error.code AND error.message on the SERVER span. Pre-fix,
+    ProxyException stringified to "" so error.message was dropped — the span
+    showed an error with no message."""
+    msg = "Authentication Error, Invalid proxy server token passed."
+    request = _fake_request(parent_otel_span=server_span_factory(path))
+    exc = ProxyException(message=msg, type="auth_error", param="key", code=401)
+
+    response = asyncio.run(openai_exception_handler(request, exc))
+    assert response.status_code == 401
+
+    assert_server_span_attrs(
+        wired_otel,
+        expected_status=401,
+        expected_url_path=path,
+        where=f"openai_exception_handler ({path})",
+    )
+    attrs = get_server_span(wired_otel).attributes
+    assert attrs.get(ErrorAttributes.ERROR_MESSAGE) == msg
+    assert attrs.get(ErrorAttributes.ERROR_TYPE) == "ProxyException"
+    assert attrs.get(ErrorAttributes.ERROR_CODE) == "401"
 
 
 def test_unhandled_handler_reraises_known_exceptions(wired_otel, server_span_factory):
