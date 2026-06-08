@@ -5,6 +5,7 @@ from types import SimpleNamespace
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.identity import build_user_api_key_auth_from_jwt_result
+from litellm.identity.jwt import parse_jwt_scopes
 from litellm.identity.principal import JWTPrincipal
 from litellm.proxy._types import (
     LiteLLM_TeamTableCachedObj,
@@ -62,6 +63,17 @@ def _auth_builder_result(
         "jwt_claims": jwt_claims
         or {"sub": "u-jwt", "iss": "https://idp", "scope": "read write"},
     }
+
+
+def test_parse_jwt_scopes_handles_str_list_garbage_empty():
+    assert parse_jwt_scopes({"scope": "read write"}) == ("read", "write")
+    assert parse_jwt_scopes({"scope": ["read", "", "write"]}) == ("read", "write")
+    assert parse_jwt_scopes({"scp": "admin"}) == ("admin",)
+    assert parse_jwt_scopes({"scope": 123}) == ()
+    assert parse_jwt_scopes({"scope": {"nested": "obj"}}) == ()
+    assert parse_jwt_scopes({}) == ()
+    assert parse_jwt_scopes({"scope": ""}) == ()
+    assert parse_jwt_scopes({"scope": "   "}) == ()
 
 
 def test_proxy_admin_path_marks_role_and_drops_membership_fields():

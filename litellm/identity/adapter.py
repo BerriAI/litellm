@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 from litellm.identity.context import AuditInfo, ClientInfo, IdentityContext, RequestIds
+from litellm.identity.jwt import parse_jwt_scopes
 from litellm.identity.principal import (
     AnonymousPrincipal,
     ApiKeyPrincipal,
@@ -38,19 +39,12 @@ def _principal_from_uak(uak: "UserAPIKeyAuth") -> Principal:
 
     if kind == "jwt":
         claims = uak.jwt_claims
-        scope_claim = claims.get("scope") or claims.get("scp") or ""
-        if isinstance(scope_claim, list):
-            scopes = tuple(str(s) for s in scope_claim if s)
-        elif isinstance(scope_claim, str):
-            scopes = tuple(s for s in scope_claim.split(" ") if s)
-        else:
-            scopes = ()
         aud = claims.get("aud")
         return JWTPrincipal(
             sub=claims.get("sub"),
             iss=claims.get("iss"),
             aud=tuple(aud) if isinstance(aud, list) else aud,
-            scopes=scopes,
+            scopes=parse_jwt_scopes(claims),
             claims=dict(claims),
             mapped_user_id=uak.user_id,
             mapped_team_id=uak.team_id,

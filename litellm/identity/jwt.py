@@ -19,10 +19,24 @@ upstream. Here we just build the carrier.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Tuple
 
 if TYPE_CHECKING:
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+
+def parse_jwt_scopes(claims: dict) -> Tuple[str, ...]:
+    """Normalize the ``scope``/``scp`` claim into a tuple of scope strings.
+
+    Accepts the space-delimited string form (``"read write"``) and the JSON
+    array form (``["read", "write"]``); anything else yields ``()``.
+    """
+    scope_claim = claims.get("scope") or claims.get("scp") or ""
+    if isinstance(scope_claim, list):
+        return tuple(str(s) for s in scope_claim if s)
+    if isinstance(scope_claim, str):
+        return tuple(s for s in scope_claim.split(" ") if s)
+    return ()
 
 
 def build_user_api_key_auth_from_jwt_result(

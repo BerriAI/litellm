@@ -40,21 +40,21 @@ def test_string_scope_is_split():
     token = _build_unverified_jwt({"sub": "u", "scope": "read write admin"})
     p = extract_jwt_principal(token)
     assert p is not None
-    assert p.scopes == ["read", "write", "admin"]
+    assert p.scopes == ("read", "write", "admin")
 
 
 def test_list_scope_is_preserved():
     token = _build_unverified_jwt({"sub": "u", "scope": ["a", "b"]})
     p = extract_jwt_principal(token)
     assert p is not None
-    assert p.scopes == ["a", "b"]
+    assert p.scopes == ("a", "b")
 
 
 def test_scp_claim_supported():
     token = _build_unverified_jwt({"sub": "u", "scp": "read"})
     p = extract_jwt_principal(token)
     assert p is not None
-    assert p.scopes == ["read"]
+    assert p.scopes == ("read",)
 
 
 def test_raw_claims_preserved():

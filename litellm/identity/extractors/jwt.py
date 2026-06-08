@@ -8,6 +8,7 @@ that path runs from the resolver when DB access is available.
 
 from typing import Optional
 
+from litellm.identity.jwt import parse_jwt_scopes
 from litellm.identity.principal import JWTPrincipal
 
 
@@ -29,18 +30,11 @@ def extract_jwt_principal(token: Optional[str]) -> Optional[JWTPrincipal]:
     claims = JWTHandler.get_unverified_claims(token=token) or {}
 
     aud = claims.get("aud")
-    scope_claim = claims.get("scope") or claims.get("scp") or ""
-    if isinstance(scope_claim, list):
-        scopes = [str(s) for s in scope_claim if s]
-    elif isinstance(scope_claim, str):
-        scopes = [s for s in scope_claim.split(" ") if s]
-    else:
-        scopes = []
 
     return JWTPrincipal(
         sub=claims.get("sub"),
         iss=claims.get("iss"),
-        aud=aud,
-        scopes=scopes,
+        aud=tuple(aud) if isinstance(aud, list) else aud,
+        scopes=parse_jwt_scopes(claims),
         claims=claims,
     )
