@@ -32,6 +32,14 @@ if TYPE_CHECKING:
     )
 
 
+VERTEX_AI_STREAM_METADATA_FIELDS = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_citation_metadata",
+)
+
+
 class ChunkProcessor:
     def __init__(self, chunks: List, messages: Optional[list] = None):
         self.chunks = self._sort_chunks(chunks)
@@ -78,6 +86,42 @@ class ChunkProcessor:
         if model_response is not None and hasattr(model_response, "_hidden_params"):
             model_response._hidden_params = chunk.get("_hidden_params", {})
         return model_response
+
+    @staticmethod
+    def _get_chunk_attr(chunk: Any, field_name: str) -> Any:
+        if isinstance(chunk, dict):
+            value = chunk.get(field_name)
+            if value is not None:
+                return value
+            model_extra = chunk.get("model_extra")
+            if isinstance(model_extra, dict):
+                return model_extra.get(field_name)
+            return None
+        return getattr(chunk, field_name, None)
+
+    @staticmethod
+    def propagate_vertex_ai_metadata_from_chunks(
+        response: ModelResponse, chunks: List[Any]
+    ) -> None:
+        """
+        Merge Vertex AI metadata from streaming chunks into the assembled response.
+
+        Gemini/Vertex streaming sets these fields on individual chunks but
+        stream_chunk_builder must propagate them for logging callbacks.
+        """
+        for field_name in VERTEX_AI_STREAM_METADATA_FIELDS:
+            merged: List[Any] = []
+            for chunk in chunks:
+                value = ChunkProcessor._get_chunk_attr(chunk, field_name)
+                if not value:
+                    continue
+                if isinstance(value, list):
+                    merged.extend(value)
+                else:
+                    merged.append(value)
+            if merged:
+                setattr(response, field_name, merged)
+                response._hidden_params[field_name] = merged
 
     @staticmethod
     def _get_chunk_id(chunks: List[Dict[str, Any]]) -> str:

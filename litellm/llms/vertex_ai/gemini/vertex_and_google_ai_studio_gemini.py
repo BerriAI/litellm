@@ -3386,9 +3386,17 @@ class ModelResponseIterator:
                     choice.finish_reason = "tool_calls"
 
         setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)  # type: ignore
+        model_response._hidden_params["vertex_ai_grounding_metadata"] = (
+            grounding_metadata
+        )
         setattr(model_response, "vertex_ai_url_context_metadata", url_context_metadata)  # type: ignore
+        model_response._hidden_params["vertex_ai_url_context_metadata"] = (
+            url_context_metadata
+        )
         setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
+        model_response._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
         setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
+        model_response._hidden_params["vertex_ai_citation_metadata"] = citation_metadata
 
         return (
             grounding_metadata,
