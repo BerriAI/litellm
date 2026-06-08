@@ -67,3 +67,18 @@ describe("legacyKeyForPathname", () => {
     expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
 });
+
+describe("MIGRATED_PAGES memory", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("routes memory to the memory path and back", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES, legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["memory"]).toBe("memory");
+    expect(legacyKeyForPathname("/ui/memory")).toBe("memory");
+    expect(legacyKeyForPathname("/ui/memory/")).toBe("memory");
+  });
+});
