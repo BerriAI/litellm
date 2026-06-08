@@ -49,15 +49,16 @@ def _principal_from_uak(uak: "UserAPIKeyAuth") -> Principal:
         claims = uak.jwt_claims
         scope_claim = claims.get("scope") or claims.get("scp") or ""
         if isinstance(scope_claim, list):
-            scopes = [str(s) for s in scope_claim if s]
+            scopes = tuple(str(s) for s in scope_claim if s)
         elif isinstance(scope_claim, str):
-            scopes = [s for s in scope_claim.split(" ") if s]
+            scopes = tuple(s for s in scope_claim.split(" ") if s)
         else:
-            scopes = []
+            scopes = ()
+        aud = claims.get("aud")
         return JWTPrincipal(
             sub=claims.get("sub"),
             iss=claims.get("iss"),
-            aud=claims.get("aud"),
+            aud=tuple(aud) if isinstance(aud, list) else aud,
             scopes=scopes,
             claims=dict(claims),
             mapped_user_id=uak.user_id,
@@ -102,7 +103,9 @@ def identity_context_to_user_api_key_auth(
     principal = ctx.principal
     kwargs: dict = {
         "end_user_id": ctx.end_user_id,
-        "access_group_ids": list(ctx.access_group_ids) if ctx.access_group_ids else None,
+        "access_group_ids": (
+            list(ctx.access_group_ids) if ctx.access_group_ids else None
+        ),
     }
 
     if isinstance(principal, ApiKeyPrincipal):

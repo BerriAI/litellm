@@ -127,7 +127,7 @@ def test_adapter_roundtrip_produces_jwt_principal():
     assert isinstance(ctx.principal, JWTPrincipal)
     assert ctx.principal.sub == "u-jwt"
     assert ctx.principal.iss == "https://idp"
-    assert ctx.principal.scopes == ["read", "write"]
+    assert ctx.principal.scopes == ("read", "write")
     assert ctx.principal.mapped_user_id == "u-jwt"
     assert ctx.principal.mapped_team_id == "t-jwt"
     assert ctx.principal.mapped_org_id == "org-jwt"

@@ -75,7 +75,7 @@ def test_jwt_principal_roundtrip():
     assert isinstance(ctx.principal, JWTPrincipal)
     assert ctx.principal.sub == "jwt-user"
     assert ctx.principal.iss == "idp"
-    assert ctx.principal.scopes == ["read", "write"]
+    assert ctx.principal.scopes == ("read", "write")
     assert ctx.principal.mapped_user_id == "jwt-user"
     assert ctx.principal.mapped_team_id == "jwt-team"
     assert ctx.principal.mapped_org_id == "jwt-org"

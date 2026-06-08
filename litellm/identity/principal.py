@@ -10,7 +10,7 @@ for ``match``-style dispatch.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -30,9 +30,9 @@ class JWTPrincipal:
     kind: Literal["jwt"] = field(default="jwt", init=False)
     sub: Optional[str] = None
     iss: Optional[str] = None
-    aud: Optional[Union[str, List[str]]] = None
-    scopes: List[str] = field(default_factory=list)
-    claims: Dict[str, Any] = field(default_factory=dict)
+    aud: Optional[Union[str, Tuple[str, ...]]] = None
+    scopes: Tuple[str, ...] = field(default_factory=tuple)
+    claims: Dict[str, Any] = field(default_factory=dict, compare=False)
     mapped_user_id: Optional[str] = None
     mapped_team_id: Optional[str] = None
     mapped_org_id: Optional[str] = None
