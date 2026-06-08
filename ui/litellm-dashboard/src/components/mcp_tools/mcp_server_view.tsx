@@ -22,6 +22,7 @@ interface MCPServerViewProps {
   userRole: string | null;
   userID: string | null;
   availableAccessGroups: string[];
+  initialTabIndex?: number;
 }
 
 // True when this render is the return from the edit-settings OAuth redirect for this
@@ -51,6 +52,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
   availableAccessGroups,
+  initialTabIndex = 0,
 }) => {
   // Open the editing Settings tab on first render when returning from the edit OAuth
   // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
@@ -58,7 +60,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : 0);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);

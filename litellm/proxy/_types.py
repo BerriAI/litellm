@@ -2312,6 +2312,24 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).",
     )
+    disable_budget_reservation: Optional[bool] = Field(
+        None,
+        description=(
+            "If True, disables the optimistic per-request budget reservation "
+            "introduced in v1.84.0. "
+            "WARNING: This weakens hard budget enforcement. Without the reservation, "
+            "a burst of concurrent requests from a single key can each pass the "
+            "read-time spend check before any of them is charged, allowing a "
+            "configured budget to be exceeded under high concurrency. "
+            "Budgets are still evaluated on every request at read time, so "
+            "an already-exhausted budget is still rejected. "
+            "Enable only if your deployment is experiencing phantom "
+            "BudgetExceededError responses caused by leaked reservations "
+            "(see GitHub issue #27639). "
+            "A proxy-level WARNING is logged on every request while this flag "
+            "is active as a reminder that hard enforcement is relaxed."
+        ),
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -4176,6 +4194,16 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
     routing_overrides: Optional[List[JWTRoutingOverride]] = Field(
         default=None,
         description="Optional claim-based routing overrides for JWT-shaped tokens. Matching rules route requests to oauth2 before default JWT flow.",
+    )
+    team_claim_fallback: bool = Field(
+        default=False,
+        description=(
+            "If True, when a configured team_id_jwt_field / team_ids_jwt_field "
+            "claim is present but does not resolve to any known team, defer to "
+            "the single-team DB fallback (caller's only team membership) "
+            "instead of raising. Default False preserves strict claim-based "
+            "authorization."
+        ),
     )
     issuers: Optional[List[JWTIssuerConfig]] = Field(
         default=None,
