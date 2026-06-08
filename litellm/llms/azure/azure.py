@@ -1100,7 +1100,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         )
 
     def create_azure_base_url(
-        self, azure_client_params: dict, model: Optional[str]
+        self,
+        azure_client_params: dict,
+        model: Optional[str],
+        base_model: Optional[str] = None,
     ) -> str:
         from litellm.llms.azure_ai.image_generation import (
             AzureFoundryFluxImageGenerationConfig,
@@ -1116,8 +1119,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         if model is None:
             model = ""
 
-        # MAI image models: /mai/v1/images/generations (serverless Azure AI)
-        if AzureFoundryMAIImageGenerationConfig.is_mai_model(model):
+        if AzureFoundryMAIImageGenerationConfig.is_mai_model(base_model or model):
             return AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
                 api_base=api_base,
                 api_version=api_version,
@@ -1164,10 +1166,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if api_base.endswith("/"):
                 api_base = api_base.rstrip("/")
             api_version: str = azure_client_params.get("api_version", "")
-            # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
                 azure_client_params=azure_client_params,
                 model=model or data.get("model", ""),
+                base_model=data.get("model", ""),
             )
 
             ## LOGGING
@@ -1296,9 +1298,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if aimg_generation is True:
                 return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers, model=model)  # type: ignore
 
-            # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
-                azure_client_params=azure_client_params, model=model
+                azure_client_params=azure_client_params,
+                model=model,
+                base_model=base_model,
             )
 
             ## LOGGING
