@@ -1,9 +1,7 @@
 """Client/network identity extraction.
 
-Builds a ``ClientInfo`` from a FastAPI request. ``X-Forwarded-For`` is
-only honored when the direct peer is in a configured trusted-proxy CIDR.
-The trust logic is delegated to ``IPAddressUtils.is_request_from_trusted_proxy``
-so we stay in sync with the rest of the proxy.
+``X-Forwarded-For`` is honored only when the direct peer is a configured
+trusted proxy (delegated to ``IPAddressUtils.is_request_from_trusted_proxy``).
 """
 
 from typing import Any, Dict, List, Mapping, Optional

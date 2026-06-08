@@ -1,15 +1,7 @@
-"""Compose extractors + DB load into a single ``IdentityContext`` per request.
+"""Compose extractors into an ``IdentityContext`` for a request.
 
-Two call shapes:
-
-- ``resolve_identity_for_principal`` — given pre-extracted credentials, decide
-  the principal kind and resolve it. Used by the proxy auth chain after it
-  already pulled the api-key out of the request.
-
-- ``resolve_identity`` — request-scoped composition for new entrypoints. Not
-  yet wired into ``user_api_key_auth.py``; lives here so callers without a
-  hashed-token-in-hand (CLI, MCP, background jobs) can still build a
-  ``IdentityContext``.
+``resolve_identity`` builds the context from request-side signals (no DB);
+the hydrated-row variant is ``store.load_identity``.
 """
 
 from __future__ import annotations

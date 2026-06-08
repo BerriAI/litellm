@@ -1,20 +1,8 @@
-"""JWT identity construction.
+"""JWT identity construction: ``auth_builder`` result -> ``UserAPIKeyAuth``.
 
-Owns the translation from a ``JWTAuthManager.auth_builder`` result (or
-any equivalent JWT-validated payload) into the proxy's carrier model
-``UserAPIKeyAuth``. The JWT branch of ``_user_api_key_auth_builder``
-used to inline this construction; centralizing it here means:
-
-- Every JWT-derived ``UserAPIKeyAuth`` carries the same team / user /
-  membership fields, so downstream auth checks see one shape.
-- The mapping from ``jwt_claims`` to a ``JWTPrincipal`` happens at the
-  same boundary, so callers that want the typed principal can read it
-  off ``UserAPIKeyAuth.to_identity_context()``.
-
-This module does NOT perform JWT validation or policy checks. Signature
-verification, RBAC, scope, email-domain enforcement, and
-``custom_validate`` are all done by ``JWTAuthManager.auth_builder``
-upstream. Here we just build the carrier.
+Validation (signature, RBAC, scope, email-domain, ``custom_validate``) is
+done upstream by ``JWTAuthManager.auth_builder``; this module only builds
+the carrier.
 """
 
 from __future__ import annotations

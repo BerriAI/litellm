@@ -1,11 +1,6 @@
-"""Header-driven identity extractors.
-
-These pull non-credential identity fields out of request headers. They
-do not perform authorization decisions; that stays in the auth chain.
-"""
+"""Header-driven extraction of non-credential identity fields."""
 
 from typing import Optional
-
 
 AUDIT_CHANGED_BY_HEADER = "litellm-changed-by"
 

@@ -1,10 +1,7 @@
-"""End-user extraction.
+"""End-user id extraction.
 
-Thin wrapper over the existing six-check chain in
-``litellm.proxy.auth.auth_utils.get_end_user_id_from_request_body``.
-Validation against the DB stays in ``resolve_and_validate_end_user_id``
-and runs from the legacy auth path; this extractor returns the raw
-identifier only.
+Wraps ``auth_utils.get_end_user_id_from_request_body``; returns the raw
+identifier only. DB validation stays in ``resolve_and_validate_end_user_id``.
 """
 
 from typing import Optional
@@ -19,6 +16,4 @@ def extract_end_user_id(
 
     from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
 
-    return get_end_user_id_from_request_body(
-        request_body=body, request_headers=headers
-    )
+    return get_end_user_id_from_request_body(request_body=body, request_headers=headers)

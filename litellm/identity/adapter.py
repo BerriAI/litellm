@@ -1,9 +1,5 @@
 """Bidirectional bridge between ``IdentityContext`` and ``UserAPIKeyAuth``.
 
-The legacy Pydantic model stays the universal carrier. These two pure
-functions let new code work in terms of ``IdentityContext`` without
-forcing call sites to migrate today.
-
 Invariants:
 - ``identity_context_to_user_api_key_auth(uak.to_identity_context())``
   preserves every identity-relevant field on ``uak``.

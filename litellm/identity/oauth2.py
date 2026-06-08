@@ -1,11 +1,7 @@
-"""OAuth2 identity construction.
+"""OAuth2 identity construction: introspection response -> ``UserAPIKeyAuth``.
 
-Owns the translation from an OAuth2 introspection / userinfo response
-into the proxy's carrier model ``UserAPIKeyAuth``. The HTTP plumbing —
-introspection endpoint detection, request signing, error handling —
-stays in ``litellm.proxy.auth.oauth2_check.Oauth2Handler``; this module
-just maps a validated response payload into the carrier so the JWT and
-OAuth2 paths converge on the same construction surface.
+The HTTP plumbing stays in ``oauth2_check.Oauth2Handler``; this module maps
+an already-validated response payload into the carrier.
 """
 
 from __future__ import annotations

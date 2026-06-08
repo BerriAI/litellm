@@ -1,13 +1,7 @@
-"""The per-request identity bundle.
+"""The per-request identity bundle consumed downstream of auth.
 
-``IdentityContext`` is what downstream consumers (auth, spend, guardrails,
-logging, audit) should read identity from. Today it travels alongside the
-legacy ``UserAPIKeyAuth`` via the adapter functions in
-``litellm.identity.adapter``.
-
-The bundle is mutable on purpose: identity fields like ``end_user_id`` are
-sometimes resolved or overridden after initial extraction, and the
-existing ``UserAPIKeyAuth`` mutation patterns must keep working.
+Mutable on purpose: fields like ``end_user_id`` are resolved or overridden
+after initial extraction.
 """
 
 from dataclasses import dataclass, field

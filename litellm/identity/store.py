@@ -1,14 +1,8 @@
-"""Cold-path identity loader.
+"""Cold-path identity loader: cache-or-one-DB-query for a hashed token.
 
-One async function, one I/O round trip on cache miss. The actual SQL
-JOIN lives in ``litellm.proxy.utils.PrismaClient.get_data`` (the
-``combined_view`` query) and is reused as-is so we don't duplicate the
-schema-coupled SQL. Object-permission rows that are referenced but not
-joined are lazily filled exactly as the legacy ``get_key_object`` did.
-
-The cached payload is ``UserAPIKeyAuth`` — the proxy's existing carrier.
-Callers that want an ``IdentityContext`` view should call
-``uak.to_identity_context()`` at the consumption site.
+The combined-view SQL is reused from ``PrismaClient.get_data`` rather than
+duplicated. The cached payload is ``UserAPIKeyAuth``, the proxy's existing
+carrier.
 """
 
 from __future__ import annotations

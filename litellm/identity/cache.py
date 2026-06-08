@@ -1,14 +1,7 @@
-"""Three-layer identity cache.
+"""Three-layer identity cache (process memory -> Redis -> Prisma).
 
-Layer 1 (per-process, ~5s TTL): bounded ``InMemoryCache`` inside the
-``DualCache`` we wrap. Bounds revocation staleness without round-tripping
-to Redis on every request.
-
-Layer 2 (Redis, cross-replica): the ``redis_cache`` on the same
-``DualCache``. Writes go to both layers; reads fall through.
-
-Layer 3 (Prisma): not owned here. ``store.load_identity`` calls the DB
-when both cache layers miss.
+Layers 1 and 2 are the in-memory and Redis halves of the wrapped
+``DualCache``; layer 3 is the DB, owned by ``store.load_identity`` on miss.
 
 Cross-table fan-out is handled via *generation counters*: when a team or
 user changes, the counter for that team/user is bumped. Cached
