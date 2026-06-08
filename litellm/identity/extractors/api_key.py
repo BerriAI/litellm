@@ -25,11 +25,8 @@ def hash_principal_token(api_key: str) -> str:
 def extract_api_key_principal(api_key: Optional[str]) -> Optional[ApiKeyPrincipal]:
     """Build an ``ApiKeyPrincipal`` from a raw API key string.
 
-    Returns ``None`` when no key is supplied. Callers that need to pull
-    the key out of a FastAPI request should call ``get_api_key`` from
-    ``litellm.proxy.auth.user_api_key_auth`` first; this extractor stays
-    framework-agnostic on purpose so it can be reused by non-FastAPI
-    entrypoints (CLI, MCP, background jobs).
+    Returns ``None`` when no key is supplied. Callers that need to pull the
+    key out of a request should call ``get_api_key`` first.
     """
     if not api_key:
         return None
