@@ -589,6 +589,13 @@ async def update_organization(
         include={"members": True, "teams": True, "litellm_budget_table": True},
     )
 
+    from litellm.identity.invalidation import invalidate_identity_for_org
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    await invalidate_identity_for_org(
+        org_id=data.organization_id, dual_cache=user_api_key_cache
+    )
+
     return response
 
 
@@ -675,6 +682,14 @@ async def delete_organization(
                 detail={"error": f"Organization={organization_id} not found"},
             )
         deleted_orgs.append(deleted_org)
+
+    from litellm.identity.invalidation import invalidate_identity_for_org
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for organization_id in data.organization_ids:
+        await invalidate_identity_for_org(
+            org_id=organization_id, dual_cache=user_api_key_cache
+        )
 
     return deleted_orgs
 

@@ -1,11 +1,20 @@
-"""Compose extractors into a single ``IdentityContext`` per request.
+"""Compose extractors + DB load into a single ``IdentityContext`` per request.
 
-This entrypoint is intentionally not yet wired into the proxy auth chain;
-it exists so Phase 2 can switch over and so unit tests can exercise the
-full path end-to-end.
+Two call shapes:
+
+- ``resolve_identity_for_principal`` — given pre-extracted credentials, decide
+  the principal kind and resolve it. Used by the proxy auth chain after it
+  already pulled the api-key out of the request.
+
+- ``resolve_identity`` — request-scoped composition for new entrypoints. Not
+  yet wired into ``user_api_key_auth.py``; lives here so callers without a
+  hashed-token-in-hand (CLI, MCP, background jobs) can still build a
+  ``IdentityContext``.
 """
 
-from typing import Any, Dict, Optional
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from litellm.constants import (
     LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
@@ -13,7 +22,10 @@ from litellm.constants import (
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
 )
 from litellm.identity.context import AuditInfo, ClientInfo, IdentityContext
-from litellm.identity.extractors.api_key import extract_api_key_principal
+from litellm.identity.extractors.api_key import (
+    extract_api_key_principal,
+    hash_principal_token,
+)
 from litellm.identity.extractors.client import extract_client_info
 from litellm.identity.extractors.end_user import extract_end_user_id
 from litellm.identity.extractors.header import extract_audit_changed_by
@@ -23,6 +35,15 @@ from litellm.identity.principal import (
     Principal,
     ServiceAccountPrincipal,
 )
+from litellm.integrations.otel.model.spans import SpanRole
+from litellm.integrations.otel.runtime import traced
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+    from litellm.identity.cache import IdentityCache
 
 _SERVICE_ACCOUNT_API_KEYS = frozenset(
     {
@@ -33,7 +54,7 @@ _SERVICE_ACCOUNT_API_KEYS = frozenset(
 )
 
 
-def _resolve_principal(api_key: Optional[str]) -> Principal:
+def _principal_from_raw_key(api_key: Optional[str]) -> Principal:
     if api_key and api_key in _SERVICE_ACCOUNT_API_KEYS:
         return ServiceAccountPrincipal(name=api_key)
 
@@ -48,7 +69,15 @@ def _resolve_principal(api_key: Optional[str]) -> Principal:
     return AnonymousPrincipal()
 
 
-def resolve_identity(
+@traced(
+    "identity.resolve",
+    role=SpanRole.SERVICE,
+    attrs=lambda result: {
+        "identity.principal.kind": result.principal.kind,
+        "identity.end_user.present": result.end_user_id is not None,
+    },
+)
+async def resolve_identity(
     *,
     api_key: Optional[str] = None,
     request: Any = None,
@@ -56,7 +85,13 @@ def resolve_identity(
     headers: Optional[Dict[str, Any]] = None,
     general_settings: Optional[Dict[str, Any]] = None,
 ) -> IdentityContext:
-    principal = _resolve_principal(api_key)
+    """Build an ``IdentityContext`` purely from request-side signals.
+
+    Does not touch the database. The hydrated-row variant lives in
+    ``store.load_identity`` and is composed by callers that have a
+    ``PrismaClient`` + ``IdentityCache`` in hand.
+    """
+    principal = _principal_from_raw_key(api_key)
     end_user_id = extract_end_user_id(body=body, headers=headers)
     audit = AuditInfo(changed_by=extract_audit_changed_by(headers))
     client: ClientInfo
@@ -72,4 +107,33 @@ def resolve_identity(
         end_user_id=end_user_id,
         audit=audit,
         client=client,
+    )
+
+
+async def resolve_user_api_key_auth(
+    *,
+    api_key: str,
+    prisma_client: "PrismaClient",
+    identity_cache: "IdentityCache",
+    user_api_key_cache: "UserApiKeyCache",
+    parent_otel_span=None,
+    proxy_logging_obj: Optional["ProxyLogging"] = None,
+) -> "UserAPIKeyAuth":
+    """Cache-or-DB resolve a hashed virtual key into ``UserAPIKeyAuth``.
+
+    This is the surface ``_user_api_key_auth_builder`` calls in place of
+    the legacy ``get_key_object``. The hashed-token computation is
+    centralized via ``hash_principal_token`` so the auth chain doesn't
+    re-implement the JWT-vs-key hashing rules.
+    """
+    from litellm.identity.store import load_identity
+
+    hashed_token = hash_principal_token(api_key)
+    return await load_identity(
+        hashed_token=hashed_token,
+        prisma_client=prisma_client,
+        cache=identity_cache,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=parent_otel_span,
+        proxy_logging_obj=proxy_logging_obj,
     )

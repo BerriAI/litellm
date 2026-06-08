@@ -1373,6 +1373,16 @@ async def _update_single_user_helper(
             detail={"error": "Failed to update user"},
         )
     _strip_password_from_response(response)
+
+    updated_user_id = response.get("user_id") if isinstance(response, dict) else None
+    if updated_user_id:
+        from litellm.identity.invalidation import invalidate_identity_for_user
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await invalidate_identity_for_user(
+            user_id=updated_user_id, dual_cache=user_api_key_cache
+        )
+
     return response
 
 
@@ -2324,6 +2334,14 @@ async def delete_user(
     deleted_users = await UserRepository(prisma_client).table.delete_many(
         where={"user_id": {"in": data.user_ids}}
     )
+
+    from litellm.identity.invalidation import invalidate_identity_for_user
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for user_id in data.user_ids:
+        await invalidate_identity_for_user(
+            user_id=user_id, dual_cache=user_api_key_cache
+        )
 
     return deleted_users
 

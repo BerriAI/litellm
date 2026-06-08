@@ -171,6 +171,12 @@ async def _refresh_cached_team(
         proxy_logging_obj=proxy_logging_obj,
     )
 
+    from litellm.identity.invalidation import invalidate_identity_for_team
+
+    await invalidate_identity_for_team(
+        team_id=team_row.team_id, dual_cache=user_api_key_cache
+    )
+
 
 async def _verify_team_access(
     team_obj: LiteLLM_TeamTable,
@@ -3294,6 +3300,15 @@ async def delete_team(
     deleted_teams = await prisma_client.delete_data(
         team_id_list=data.team_ids, table_name="team"
     )
+
+    from litellm.identity.invalidation import invalidate_identity_for_team
+    from litellm.proxy.proxy_server import user_api_key_cache
+
+    for team_id in data.team_ids:
+        await invalidate_identity_for_team(
+            team_id=team_id, dual_cache=user_api_key_cache
+        )
+
     return deleted_teams
 
 

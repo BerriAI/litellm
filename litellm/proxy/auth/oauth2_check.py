@@ -1,15 +1,16 @@
 import base64
 import os
-from typing import Dict, Optional, Tuple, cast
+from typing import Dict, Optional, Tuple
 
 import httpx
 
 from litellm._logging import verbose_proxy_logger
+from litellm.identity import build_user_api_key_auth_from_oauth2_response
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 
 
 class Oauth2Handler:
@@ -85,31 +86,6 @@ class Oauth2Handler:
             Dict of headers for the token info request
         """
         return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-
-    @staticmethod
-    def _extract_user_info(
-        response_data: Dict,
-        user_id_field_name: str,
-        user_role_field_name: str,
-        user_team_id_field_name: str,
-    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
-        """
-        Extract user information from OAuth2 response.
-
-        Args:
-            response_data: The response data from OAuth2 endpoint
-            user_id_field_name: Field name for user ID
-            user_role_field_name: Field name for user role
-            user_team_id_field_name: Field name for team ID
-
-        Returns:
-            Tuple of (user_id, user_role, user_team_id)
-        """
-        user_id = response_data.get(user_id_field_name)
-        user_team_id = response_data.get(user_team_id_field_name)
-        user_role = response_data.get(user_role_field_name)
-
-        return user_id, user_role, user_team_id
 
     @staticmethod
     async def check_oauth2_token(token: str) -> UserAPIKeyAuth:
@@ -202,19 +178,12 @@ class Oauth2Handler:
             if is_introspection_endpoint and not data.get("active", True):
                 raise ValueError("Token is not active")
 
-            # Extract user information from response
-            user_id, user_role, user_team_id = Oauth2Handler._extract_user_info(
+            return build_user_api_key_auth_from_oauth2_response(
+                token=token,
                 response_data=data,
                 user_id_field_name=user_id_field_name,
                 user_role_field_name=user_role_field_name,
                 user_team_id_field_name=user_team_id_field_name,
-            )
-
-            return UserAPIKeyAuth(
-                api_key=token,
-                team_id=user_team_id,
-                user_id=user_id,
-                user_role=cast(LitellmUserRoles, user_role),
             )
         except httpx.HTTPStatusError as e:
             # This will catch any 4xx or 5xx errors

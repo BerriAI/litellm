@@ -10,6 +10,10 @@ The public surface is small on purpose; downstream code should depend on
 extractor internals.
 """
 
+from litellm.identity.cache import IdentityCache
+from litellm.identity.jwt import build_user_api_key_auth_from_jwt_result
+from litellm.identity.oauth2 import build_user_api_key_auth_from_oauth2_response
+from litellm.identity.runtime import get_identity_cache
 from litellm.identity.context import (
     AuditInfo,
     ClientInfo,
@@ -24,16 +28,25 @@ from litellm.identity.principal import (
     SSOPrincipal,
     ServiceAccountPrincipal,
 )
+from litellm.identity.resolver import resolve_identity, resolve_user_api_key_auth
+from litellm.identity.store import load_identity
 
 __all__ = [
     "AnonymousPrincipal",
     "ApiKeyPrincipal",
     "AuditInfo",
     "ClientInfo",
+    "IdentityCache",
     "IdentityContext",
     "JWTPrincipal",
     "Principal",
     "RequestIds",
     "SSOPrincipal",
     "ServiceAccountPrincipal",
+    "build_user_api_key_auth_from_jwt_result",
+    "build_user_api_key_auth_from_oauth2_response",
+    "get_identity_cache",
+    "load_identity",
+    "resolve_identity",
+    "resolve_user_api_key_auth",
 ]

@@ -1869,6 +1869,12 @@ async def _delete_cache_key_object(
             key=key
         )
 
+    from litellm.identity.invalidation import invalidate_identity_for_token
+
+    await invalidate_identity_for_token(
+        token_hash=hashed_token, dual_cache=user_api_key_cache
+    )
+
 
 @log_db_metrics
 async def _get_team_db_check(

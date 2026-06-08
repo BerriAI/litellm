@@ -22,6 +22,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
+from litellm.identity import build_user_api_key_auth_from_jwt_result
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -1141,10 +1142,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     + CommonProxyErrors.not_premium_user.value
                 )
 
-            return await Oauth2Handler.check_oauth2_token(token=api_key)
+            with phase_span("identity.oauth2"):
+                return await Oauth2Handler.check_oauth2_token(token=api_key)
 
         if general_settings.get("enable_oauth2_proxy_auth", False) is True:
-            return await handle_oauth2_proxy_request(request=request)
+            with phase_span("identity.oauth2_proxy"):
+                return await handle_oauth2_proxy_request(request=request)
 
         if general_settings.get("enable_jwt_auth", False) is True:
             from litellm.proxy.proxy_server import premium_user
@@ -1191,7 +1194,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     # standard JWT auth_builder below
 
                 if do_standard_jwt_auth:
-                    with tracer.trace("litellm.proxy.auth.jwt_auth_builder"):
+                    with phase_span("identity.jwt"):
                         result = await JWTAuthManager.auth_builder(
                             request_data=request_data,
                             general_settings=general_settings,
@@ -1210,14 +1213,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
                     is_proxy_admin = result["is_proxy_admin"]
                     team_id = result["team_id"]
-                    team_object = result["team_object"]
                     user_id = result["user_id"]
-                    user_object = result["user_object"]
                     end_user_id = result["end_user_id"]
                     org_id = result["org_id"]
-                    team_membership: Optional[LiteLLM_TeamMembership] = result.get(
-                        "team_membership", None
-                    )
                     jwt_claims = result.get("jwt_claims", None)
 
                     if is_proxy_admin:
@@ -1234,90 +1232,16 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                                 value=_JWT_PROXY_ADMIN_SENTINEL,
                                 ttl=jwt_handler.litellm_jwtauth.virtual_key_mapping_cache_ttl,
                             )
-                        return UserAPIKeyAuth(
-                            api_key=None,
-                            user_role=LitellmUserRoles.PROXY_ADMIN,
-                            user_id=user_id,
-                            team_id=team_id,
-                            team_alias=(
-                                team_object.team_alias
-                                if team_object is not None
-                                else None
-                            ),
-                            team_tpm_limit=(
-                                team_object.tpm_limit
-                                if team_object is not None
-                                else None
-                            ),
-                            team_rpm_limit=(
-                                team_object.rpm_limit
-                                if team_object is not None
-                                else None
-                            ),
-                            team_models=(
-                                team_object.models if team_object is not None else []
-                            ),
-                            team_metadata=(
-                                team_object.metadata
-                                if team_object is not None
-                                else None
-                            ),
-                            org_id=org_id,
-                            end_user_id=end_user_id,
+                        return build_user_api_key_auth_from_jwt_result(
+                            result=result,
                             parent_otel_span=parent_otel_span,
-                            jwt_claims=jwt_claims,
+                            is_proxy_admin=True,
                         )
 
-                    valid_token = UserAPIKeyAuth(
-                        api_key=None,
-                        team_id=team_id,
-                        team_alias=(
-                            team_object.team_alias if team_object is not None else None
-                        ),
-                        team_tpm_limit=(
-                            team_object.tpm_limit if team_object is not None else None
-                        ),
-                        team_rpm_limit=(
-                            team_object.rpm_limit if team_object is not None else None
-                        ),
-                        team_models=(
-                            team_object.models if team_object is not None else []
-                        ),
-                        user_role=(
-                            LitellmUserRoles(user_object.user_role)
-                            if user_object is not None
-                            and user_object.user_role is not None
-                            else LitellmUserRoles.INTERNAL_USER
-                        ),
-                        user_id=user_id,
-                        org_id=org_id,
+                    valid_token = build_user_api_key_auth_from_jwt_result(
+                        result=result,
                         parent_otel_span=parent_otel_span,
-                        end_user_id=end_user_id,
-                        user_tpm_limit=(
-                            user_object.tpm_limit if user_object is not None else None
-                        ),
-                        user_rpm_limit=(
-                            user_object.rpm_limit if user_object is not None else None
-                        ),
-                        team_member_rpm_limit=(
-                            team_membership.safe_get_team_member_rpm_limit()
-                            if team_membership is not None
-                            else None
-                        ),
-                        team_member_tpm_limit=(
-                            team_membership.safe_get_team_member_tpm_limit()
-                            if team_membership is not None
-                            else None
-                        ),
-                        team_metadata=(
-                            team_object.metadata if team_object is not None else None
-                        ),
-                        jwt_claims=jwt_claims,
-                    )
-                    valid_token.team_object_permission = (
-                        team_object.object_permission
-                        if team_object is not None
-                        else None
+                        is_proxy_admin=False,
                     )
 
                     # AUTO_REGISTER deferred from _resolve_jwt_to_virtual_key.
@@ -1679,9 +1603,15 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             try:
                 with tracer.trace("litellm.proxy.auth.get_key_object_from_db"):
-                    valid_token = await get_key_object(
+                    from litellm.identity import (
+                        get_identity_cache,
+                        load_identity,
+                    )
+
+                    valid_token = await load_identity(
                         hashed_token=api_key,
                         prisma_client=prisma_client,
+                        cache=get_identity_cache(user_api_key_cache),
                         user_api_key_cache=user_api_key_cache,
                         parent_otel_span=parent_otel_span,
                         proxy_logging_obj=proxy_logging_obj,
@@ -1737,23 +1667,27 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Check 2. If user_id for this token is in budget - done in common_checks()
             if valid_token.user_id is not None:
-                try:
-                    with tracer.trace("litellm.proxy.auth.get_user_object"):
-                        user_obj = await get_user_object(
-                            user_id=valid_token.user_id,
-                            prisma_client=prisma_client,
-                            user_api_key_cache=user_api_key_cache,
-                            user_id_upsert=False,
-                            parent_otel_span=parent_otel_span,
-                            proxy_logging_obj=proxy_logging_obj,
+                bundled_user = getattr(valid_token, "user", None)
+                if isinstance(bundled_user, LiteLLM_UserTable):
+                    user_obj = bundled_user
+                else:
+                    try:
+                        with tracer.trace("litellm.proxy.auth.get_user_object"):
+                            user_obj = await get_user_object(
+                                user_id=valid_token.user_id,
+                                prisma_client=prisma_client,
+                                user_api_key_cache=user_api_key_cache,
+                                user_id_upsert=False,
+                                parent_otel_span=parent_otel_span,
+                                proxy_logging_obj=proxy_logging_obj,
+                            )
+                    except Exception as e:
+                        verbose_logger.debug(
+                            "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {}".format(
+                                str(e)
+                            )
                         )
-                except Exception as e:
-                    verbose_logger.debug(
-                        "litellm.proxy.auth.user_api_key_auth.py::user_api_key_auth() - Unable to get user from db/cache. Setting user_obj to None. Exception received - {}".format(
-                            str(e)
-                        )
-                    )
-                    user_obj = None
+                        user_obj = None
 
                 if (
                     user_obj is not None

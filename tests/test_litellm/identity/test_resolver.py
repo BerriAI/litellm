@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, os.path.abspath("../.."))
 
+import pytest
+
 from litellm.constants import LITTELM_CLI_SERVICE_ACCOUNT_NAME
 from litellm.identity.principal import (
     AnonymousPrincipal,
@@ -32,30 +34,35 @@ def _jwt(claims):
     return f"{b({'alg':'HS256','typ':'JWT'})}.{b(claims)}.sig"
 
 
-def test_anonymous_when_no_credentials():
-    ctx = resolve_identity()
+@pytest.mark.asyncio
+async def test_anonymous_when_no_credentials():
+    ctx = await resolve_identity()
     assert isinstance(ctx.principal, AnonymousPrincipal)
 
 
-def test_api_key_principal_for_sk_key():
-    ctx = resolve_identity(api_key="sk-test")
+@pytest.mark.asyncio
+async def test_api_key_principal_for_sk_key():
+    ctx = await resolve_identity(api_key="sk-test")
     assert isinstance(ctx.principal, ApiKeyPrincipal)
 
 
-def test_jwt_principal_for_jwt_shaped_key():
-    ctx = resolve_identity(api_key=_jwt({"sub": "u1"}))
+@pytest.mark.asyncio
+async def test_jwt_principal_for_jwt_shaped_key():
+    ctx = await resolve_identity(api_key=_jwt({"sub": "u1"}))
     assert isinstance(ctx.principal, JWTPrincipal)
     assert ctx.principal.sub == "u1"
 
 
-def test_service_account_for_known_sentinel():
-    ctx = resolve_identity(api_key=LITTELM_CLI_SERVICE_ACCOUNT_NAME)
+@pytest.mark.asyncio
+async def test_service_account_for_known_sentinel():
+    ctx = await resolve_identity(api_key=LITTELM_CLI_SERVICE_ACCOUNT_NAME)
     assert isinstance(ctx.principal, ServiceAccountPrincipal)
     assert ctx.principal.name == LITTELM_CLI_SERVICE_ACCOUNT_NAME
 
 
-def test_end_user_and_audit_propagate():
-    ctx = resolve_identity(
+@pytest.mark.asyncio
+async def test_end_user_and_audit_propagate():
+    ctx = await resolve_identity(
         body={"user": "eu-42"},
         headers={"litellm-changed-by": "admin"},
     )
@@ -63,8 +70,9 @@ def test_end_user_and_audit_propagate():
     assert ctx.audit.changed_by == "admin"
 
 
-def test_client_info_from_request():
+@pytest.mark.asyncio
+async def test_client_info_from_request():
     req = _fake_request({"user-agent": "curl/8"}, client_host="127.0.0.1")
-    ctx = resolve_identity(request=req)
+    ctx = await resolve_identity(request=req)
     assert ctx.client.ip == "127.0.0.1"
     assert ctx.client.user_agent == "curl/8"
