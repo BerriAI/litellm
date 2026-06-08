@@ -1932,6 +1932,8 @@ async def test_model_connection(
         # Merge: config params (from proxy config) as base, request params override
         # This allows users to override specific params while using config for credentials
         litellm_params = {**config_litellm_params, **request_litellm_params}
+        if config_litellm_params.get("model") is not None:
+            litellm_params["model"] = config_litellm_params["model"]
 
         ## Auth check
         await ModelManagementAuthChecks.can_user_make_model_call(
