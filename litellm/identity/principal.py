@@ -10,7 +10,12 @@ for ``match``-style dispatch.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Tuple, Union
+
+from litellm.identity.service_accounts import SERVICE_ACCOUNT_NAMES
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import UserAPIKeyAuth
 
 
 @dataclass(frozen=True)
@@ -64,3 +69,15 @@ Principal = Union[
     ServiceAccountPrincipal,
     AnonymousPrincipal,
 ]
+
+PrincipalKind = Literal["service_account", "jwt", "api_key", "anonymous"]
+
+
+def classify_principal_kind(uak: "UserAPIKeyAuth") -> PrincipalKind:
+    if uak.api_key in SERVICE_ACCOUNT_NAMES or uak.key_alias in SERVICE_ACCOUNT_NAMES:
+        return "service_account"
+    if uak.jwt_claims:
+        return "jwt"
+    if uak.token:
+        return "api_key"
+    return "anonymous"

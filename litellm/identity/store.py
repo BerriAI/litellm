@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import status
 
+from litellm.identity.principal import classify_principal_kind
 from litellm.integrations.otel.model.spans import SpanRole
 from litellm.integrations.otel.runtime import traced
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -96,21 +97,11 @@ async def _fetch_from_db(
     return uak
 
 
-def _principal_kind(uak: "UserAPIKeyAuth") -> str:
-    if uak.api_key and uak.api_key == uak.team_id:
-        return "service_account"
-    if uak.jwt_claims:
-        return "jwt"
-    if uak.token:
-        return "api_key"
-    return "anonymous"
-
-
 @traced(
     "identity.load",
     role=SpanRole.SERVICE,
     attrs=lambda result: {
-        "identity.principal.kind": _principal_kind(result),
+        "identity.principal.kind": classify_principal_kind(result),
         "identity.principal.has_team": bool(result.team_id),
         "identity.principal.has_org": bool(result.org_id),
         "identity.principal.has_project": bool(result.project_id),

@@ -11,6 +11,7 @@ from litellm.identity.principal import (
     JWTPrincipal,
     SSOPrincipal,
     ServiceAccountPrincipal,
+    classify_principal_kind,
 )
 
 
@@ -63,3 +64,19 @@ def test_jwt_principal_hash_ignores_claims():
 def test_kind_is_not_constructor_arg():
     with pytest.raises(TypeError):
         ApiKeyPrincipal(kind="api_key", token_hash="x")  # type: ignore[call-arg]
+
+
+def test_classify_principal_kind_uses_name_set_not_team_id_equality():
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    collision = UserAPIKeyAuth(api_key="myteam", team_id="myteam")
+    assert collision.api_key == collision.team_id
+    assert classify_principal_kind(collision) == "api_key"
+
+    service_account = UserAPIKeyAuth.get_litellm_cli_user_api_key_auth()
+    assert classify_principal_kind(service_account) == "service_account"
+
+    jwt_principal = UserAPIKeyAuth(jwt_claims={"sub": "u"})
+    assert classify_principal_kind(jwt_principal) == "jwt"
+
+    assert classify_principal_kind(UserAPIKeyAuth()) == "anonymous"

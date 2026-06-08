@@ -16,11 +16,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from litellm.constants import (
-    LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
-    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-)
 from litellm.identity.context import AuditInfo, ClientInfo, IdentityContext
 from litellm.identity.extractors.api_key import (
     extract_api_key_principal,
@@ -35,6 +30,7 @@ from litellm.identity.principal import (
     Principal,
     ServiceAccountPrincipal,
 )
+from litellm.identity.service_accounts import SERVICE_ACCOUNT_NAMES
 from litellm.integrations.otel.model.spans import SpanRole
 from litellm.integrations.otel.runtime import traced
 
@@ -45,17 +41,9 @@ if TYPE_CHECKING:
 
     from litellm.identity.cache import IdentityCache
 
-_SERVICE_ACCOUNT_API_KEYS = frozenset(
-    {
-        LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-        LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-        LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
-    }
-)
-
 
 def _principal_from_raw_key(api_key: Optional[str]) -> Principal:
-    if api_key and api_key in _SERVICE_ACCOUNT_API_KEYS:
+    if api_key and api_key in SERVICE_ACCOUNT_NAMES:
         return ServiceAccountPrincipal(name=api_key)
 
     jwt_principal = extract_jwt_principal(api_key)
@@ -96,9 +84,7 @@ async def resolve_identity(
     audit = AuditInfo(changed_by=extract_audit_changed_by(headers))
     client: ClientInfo
     if request is not None:
-        client = extract_client_info(
-            request=request, general_settings=general_settings
-        )
+        client = extract_client_info(request=request, general_settings=general_settings)
     else:
         client = ClientInfo()
 

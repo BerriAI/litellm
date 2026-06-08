@@ -13,11 +13,7 @@ Invariants:
 
 from typing import TYPE_CHECKING
 
-from litellm.constants import (
-    LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
-    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-)
+from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 from litellm.identity.context import AuditInfo, ClientInfo, IdentityContext, RequestIds
 from litellm.identity.principal import (
     AnonymousPrincipal,
@@ -25,27 +21,22 @@ from litellm.identity.principal import (
     JWTPrincipal,
     Principal,
     ServiceAccountPrincipal,
+    classify_principal_kind,
 )
+from litellm.identity.service_accounts import SERVICE_ACCOUNT_NAMES
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
-_SERVICE_ACCOUNT_NAMES = frozenset(
-    {
-        LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-        LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-        LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
-    }
-)
-
 
 def _principal_from_uak(uak: "UserAPIKeyAuth") -> Principal:
-    if uak.api_key in _SERVICE_ACCOUNT_NAMES or uak.key_alias in _SERVICE_ACCOUNT_NAMES:
-        return ServiceAccountPrincipal(
-            name=uak.api_key if uak.api_key in _SERVICE_ACCOUNT_NAMES else uak.key_alias  # type: ignore[arg-type]
-        )
+    kind = classify_principal_kind(uak)
 
-    if uak.jwt_claims:
+    if kind == "service_account":
+        name = uak.api_key if uak.api_key in SERVICE_ACCOUNT_NAMES else uak.key_alias
+        return ServiceAccountPrincipal(name=name)  # type: ignore[arg-type]
+
+    if kind == "jwt":
         claims = uak.jwt_claims
         scope_claim = claims.get("scope") or claims.get("scp") or ""
         if isinstance(scope_claim, list):
@@ -66,9 +57,9 @@ def _principal_from_uak(uak: "UserAPIKeyAuth") -> Principal:
             mapped_org_id=uak.org_id,
         )
 
-    if uak.token:
+    if kind == "api_key":
         return ApiKeyPrincipal(
-            token_hash=uak.token,
+            token_hash=uak.token,  # type: ignore[arg-type]
             key_alias=uak.key_alias,
             user_id=uak.user_id,
             team_id=uak.team_id,

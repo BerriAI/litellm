@@ -1,0 +1,15 @@
+"""Sentinel names for litellm's internal service-account principals."""
+
+from litellm.constants import (
+    LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+)
+
+SERVICE_ACCOUNT_NAMES = frozenset(
+    {
+        LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+        LITTELM_CLI_SERVICE_ACCOUNT_NAME,
+        LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
+    }
+)
