@@ -166,11 +166,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                                 }
                             )
                         elif btype == "thinking":
-                            thinking_text = block.get("thinking", "")
-                            if thinking_text:
-                                asst_parts.append(
-                                    {"type": "output_text", "text": thinking_text}
-                                )
+                            # Thinking blocks are internal model reasoning and must not be
+                            # forwarded as output_text in replayed history (fixes #26916).
+                            pass
                     if asst_parts:
                         input_items.append(
                             {
