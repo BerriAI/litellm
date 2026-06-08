@@ -34,7 +34,7 @@ def _principal_from_uak(uak: "UserAPIKeyAuth") -> Principal:
         return ServiceAccountPrincipal(name=name)  # type: ignore[arg-type]
 
     if kind == "jwt":
-        claims = uak.jwt_claims
+        claims = uak.jwt_claims or {}
         aud = claims.get("aud")
         return JWTPrincipal(
             sub=claims.get("sub"),
