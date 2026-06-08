@@ -41,6 +41,14 @@ guardrails:
       max_cached_clients: 10
       block_message: "Content violates our policies and has been blocked by Alice WonderFence"
 
+      # Every remaining message segment is evaluated (user, assistant, tool),
+      # not just the last user turn, so disallowed content placed in an earlier
+      # turn or an assistant prefill cannot slip past. System prompts are
+      # admin-controlled and excluded by default to avoid false positives;
+      # set this to false to scan them too. skip_tool_message_in_guardrail is
+      # the matching knob for tool messages.
+      skip_system_message_in_guardrail: true
+
       # connection_pool_limit: 20
 
       # Enable only for trusted-gateway deployments that need to forward a

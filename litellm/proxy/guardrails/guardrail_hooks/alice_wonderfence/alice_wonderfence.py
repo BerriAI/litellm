@@ -25,11 +25,7 @@ from .chunked_evaluation import DEFAULT_MAX_CONCURRENCY, evaluate_segments
 from .client_cache import get_or_create_client, load_sdk
 from .credentials import resolve_credentials
 from .exceptions import WonderFenceBlockedError, WonderFenceMissingSecrets
-from .processing import (
-    apply_verdicts,
-    build_analysis_context,
-    request_user_text_indices,
-)
+from .processing import apply_verdicts, build_analysis_context
 
 if TYPE_CHECKING:
     from wonderfence_sdk.client import (  # type: ignore[import-untyped]
@@ -196,9 +192,6 @@ class WonderFenceGuardrail(CustomGuardrail):
             )
 
             if input_type == "request":
-                indices = request_user_text_indices(
-                    inputs.get("structured_messages"), texts
-                )
 
                 async def evaluate(text: str) -> Any:
                     return await client.evaluate_prompt(
@@ -206,7 +199,6 @@ class WonderFenceGuardrail(CustomGuardrail):
                     )
 
             else:
-                indices = list(range(len(texts)))
 
                 async def evaluate(text: str) -> Any:
                     return await client.evaluate_response(
@@ -216,24 +208,24 @@ class WonderFenceGuardrail(CustomGuardrail):
                         custom_fields=None,
                     )
 
-            segments = [texts[i] for i in indices]
-            if not segments:
-                return inputs
-
             logger.debug(
                 "Alice WonderFence (apply_guardrail): evaluating %d segment(s) app_id=%s guardrail=%s input_type=%s",
-                len(segments),
+                len(texts),
                 app_id,
                 self.guardrail_name,
                 input_type,
             )
             verdicts = await evaluate_segments(
-                segments,
+                texts,
                 evaluate,
                 max_concurrency=self._connection_pool_limit or DEFAULT_MAX_CONCURRENCY,
             )
             apply_verdicts(
-                inputs, indices, verdicts, self.guardrail_name, self.block_message
+                inputs,
+                list(range(len(texts))),
+                verdicts,
+                self.guardrail_name,
+                self.block_message,
             )
 
         except WonderFenceBlockedError as e:

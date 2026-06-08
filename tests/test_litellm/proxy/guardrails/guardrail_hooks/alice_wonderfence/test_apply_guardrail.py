@@ -99,12 +99,11 @@ async def test_apply_guardrail_mask_replaces_scanned_text(
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_mask_targets_correct_user_slot(
+async def test_apply_guardrail_mask_targets_only_the_flagged_slot(
     guardrail_and_client, make_request_data
 ):
-    """MASK must rewrite the ``texts`` entry of the offending user message in
-    place; assistant/system entries are never sent for evaluation, so they must
-    survive untouched. Confirms the positional mapping is correct."""
+    """MASK rewrites the ``texts`` entry of the flagged segment in place; the
+    other scanned entries survive untouched. Confirms positional 1:1 mapping."""
     guardrail, client = guardrail_and_client
 
     def evaluate(prompt, **kwargs):
@@ -117,23 +116,48 @@ async def test_apply_guardrail_mask_targets_correct_user_slot(
 
     client.evaluate_prompt.side_effect = evaluate
 
-    inputs = {
-        "structured_messages": [
-            {"role": "user", "content": "first"},
-            {"role": "assistant", "content": "ack"},
-            {"role": "user", "content": "sensitive content"},
-        ],
-        "texts": ["first", "ack", "sensitive content"],
-    }
     out = await guardrail.apply_guardrail(
-        inputs=inputs,
+        inputs={"texts": ["first", "ack", "sensitive content"]},
         request_data=make_request_data(),
         input_type="request",
     )
     assert out["texts"] == ["first", "ack", "[REDACTED]"]
-    evaluated = {c.kwargs["prompt"] for c in client.evaluate_prompt.call_args_list}
-    assert evaluated == {"first", "sensitive content"}
-    assert "ack" not in evaluated
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_non_user_role_segments(
+    guardrail_and_client, make_request_data
+):
+    """Bypass regression: blocked content in a system/assistant/tool message
+    must still BLOCK. The translation layer already strips system/tool when the
+    guardrail is configured to skip them, so whatever remains in ``texts`` is
+    scanned regardless of role; the hook must not re-filter to user-only."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if prompt == "disallowed system instruction" else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {
+        "structured_messages": [
+            {"role": "system", "content": "disallowed system instruction"},
+            {"role": "user", "content": "hello"},
+        ],
+        "texts": ["disallowed system instruction", "hello"],
+    }
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["action"] == "BLOCK"
 
 
 @pytest.mark.asyncio

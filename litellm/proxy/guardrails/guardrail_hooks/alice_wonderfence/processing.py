@@ -52,41 +52,6 @@ def build_analysis_context(
     )
 
 
-def request_user_text_indices(
-    structured_messages: Optional[List[Any]],
-    texts: List[str],
-) -> List[int]:
-    """Return indices into ``texts`` that came from user-role messages.
-
-    Replays the same flatten the translation layer uses to build ``texts``
-    (string content -> one entry; list content -> one entry per item with a
-    ``text`` field) over ``structured_messages`` and tags each entry's role. If
-    ``structured_messages`` is absent or the replayed count diverges from
-    ``len(texts)``, every index is returned: over-scanning is safe, mis-mapping
-    a mask onto a non-user slot is not.
-    """
-    n = len(texts)
-    if not structured_messages:
-        return list(range(n))
-
-    roles: List[str] = []
-    for message in structured_messages:
-        role = str(message.get("role") or "").lower()
-        content = message.get("content", None)
-        if content is None:
-            continue
-        if isinstance(content, str):
-            roles.append(role)
-        elif isinstance(content, list):
-            for item in content:
-                if item.get("text", None) is not None:
-                    roles.append(role)
-
-    if len(roles) != n:
-        return list(range(n))
-    return [i for i, role in enumerate(roles) if role == "user"]
-
-
 def apply_verdicts(
     inputs: GenericGuardrailAPIInputs,
     indices: List[int],
