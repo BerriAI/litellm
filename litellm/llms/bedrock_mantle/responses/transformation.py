@@ -56,6 +56,7 @@ class BedrockMantleResponsesAPIConfig(OpenAIResponsesAPIConfig, BaseAWSLLM):
         litellm_params: dict,
     ) -> str:
         explicit_region = self._explicit_region(litellm_params.get("aws_region_name"))
+        self._validate_aws_region_name(explicit_region)
         base = (
             api_base
             or get_secret_str("BEDROCK_MANTLE_API_BASE")

@@ -138,6 +138,24 @@ class TestBedrockMantleResponsesURL:
         url = cfg.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 
+    @pytest.mark.parametrize(
+        "malicious_region",
+        [
+            "us-east-2.attacker.com/",
+            "us-east-2.evil.com",
+            "foo/bar",
+            "us-east-1;rm -rf /",
+            "UPPER-CASE",
+        ],
+    )
+    def test_url_rejects_malicious_region(self, clear_aws_env, malicious_region):
+        cfg = BedrockMantleResponsesAPIConfig()
+        with pytest.raises(ValueError, match="Invalid AWS region format"):
+            cfg.get_complete_url(
+                api_base=None,
+                litellm_params={"aws_region_name": malicious_region},
+            )
+
 
 class TestBedrockMantleResponsesAuth:
     def test_config_api_key_takes_priority(self, monkeypatch):
