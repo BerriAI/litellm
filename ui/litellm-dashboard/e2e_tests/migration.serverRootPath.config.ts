@@ -19,6 +19,9 @@ export default defineConfig({
     trace: "on-first-retry",
     actionTimeout: 15 * 1000,
     navigationTimeout: 30 * 1000,
+    launchOptions: {
+      slowMo: process.env.SLOWMO ? parseInt(process.env.SLOWMO, 10) || 0 : 0,
+    },
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   timeout: 3 * 60 * 1000,

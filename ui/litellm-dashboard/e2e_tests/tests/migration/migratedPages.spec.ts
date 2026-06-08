@@ -12,6 +12,9 @@ import { dismissFeedbackPopup } from "../../helpers/navigation";
  * for the default mount. Boot the proxy with the matching value before running.
  */
 const ROOT = process.env.SERVER_ROOT_PATH ?? "";
+// Optional: linger on each state so a human can watch a headed run. No-op (0) by default.
+const WATCH_MS = Number(process.env.E2E_WATCH_MS ?? 0);
+const watch = (page: import("@playwright/test").Page) => (WATCH_MS ? page.waitForTimeout(WATCH_MS) : Promise.resolve());
 
 test.use({ storageState: ADMIN_STORAGE_PATH });
 
@@ -30,6 +33,7 @@ test.describe("App Router migrated pages", () => {
       // The dashboard shell rendered and the route did not 404 / crash.
       await expect(page.locator("a", { hasText: "Virtual Keys" })).toBeVisible({ timeout: 20_000 });
       expect(pageErrors, `page errors on ${ROOT}/ui/${segment}`).toEqual([]);
+      await watch(page);
 
       // 2. Clicking off to a not-yet-migrated page returns to the legacy switch
       //    (the migrated -> ?page= transition that used to double-navigate).
@@ -37,6 +41,7 @@ test.describe("App Router migrated pages", () => {
       await expect(page).toHaveURL(new RegExp(`${ROOT}/ui/\\?page=api-keys`));
       await dismissFeedbackPopup(page);
       expect(pageErrors, `page errors after leaving ${ROOT}/ui/${segment}`).toEqual([]);
+      await watch(page);
     });
   }
 });
