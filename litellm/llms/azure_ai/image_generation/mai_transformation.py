@@ -200,6 +200,9 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
     ) -> ImageResponse:
         response = raw_response.json()
 
+        if "usage" in response:
+            response["usage"] = self.normalize_mai_image_usage(response.get("usage"))
+
         logging_obj.post_call(
             input=request_data.get("prompt", ""),
             api_key=api_key,

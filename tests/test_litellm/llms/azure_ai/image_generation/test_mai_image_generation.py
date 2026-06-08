@@ -1,6 +1,8 @@
 import os
 import sys
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
@@ -208,6 +210,36 @@ class TestAzureMAIImageGeneration:
                 model="MAI-Image-2.5",
                 drop_params=False,
             )
+
+    def test_transform_image_generation_response_normalizes_mai_usage(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        raw_response = MagicMock(spec=httpx.Response)
+        raw_response.json.return_value = {
+            "created": 1780897477,
+            "data": [{"b64_json": "abc123"}],
+            "usage": {
+                "num_output_tokens": 1024,
+                "num_input_text_tokens": 22,
+                "output_image_tokens": 1024,
+            },
+        }
+
+        logging_obj = MagicMock()
+        image_response = config.transform_image_generation_response(
+            model="MAI-Image-2.5",
+            raw_response=raw_response,
+            model_response=ImageResponse(),
+            logging_obj=logging_obj,
+            request_data={"prompt": "A red fox"},
+            optional_params={"width": 1024, "height": 1024},
+            litellm_params={},
+            encoding=None,
+        )
+
+        assert image_response.data[0].b64_json == "abc123"
+        assert image_response.usage.output_tokens == 1024
+        assert image_response.usage.input_tokens == 22
+        assert image_response.usage.total_tokens == 1046
 
     def test_mai_image_cost_calculator_token_based(self):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
