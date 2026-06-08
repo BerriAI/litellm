@@ -28,10 +28,42 @@ describe("migratedHref / legacyPageHref", () => {
     expect(migratedHref("/api-reference")).toBe("/ui/api-reference");
   });
 
-  it("maps the api_ref legacy id to the api-reference route", async () => {
+  it("maps both the api_ref id and the hyphenated alias to the api-reference route", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { MIGRATED_PAGES } = await import("./migratedPages");
 
     expect(MIGRATED_PAGES.api_ref).toBe("api-reference");
+    expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
+  });
+});
+
+describe("legacyKeyForPathname", () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it("maps a migrated path back to its legacy sidebar key (including trailing slash)", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { legacyKeyForPathname } = await import("./migratedPages");
+
+    // Resolves to the sidebar key api_ref, not the hyphenated alias, so highlighting works.
+    expect(legacyKeyForPathname("/ui/api-reference")).toBe("api_ref");
+    expect(legacyKeyForPathname("/ui/api-reference/")).toBe("api_ref");
+  });
+
+  it("returns null for a not-yet-migrated path", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(legacyKeyForPathname("/ui/")).toBeNull();
+    expect(legacyKeyForPathname("/ui/some-legacy-page")).toBeNull();
+  });
+
+  it("strips a non-root serverRootPath prefix before matching", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/team-x/" }));
+    const { legacyKeyForPathname } = await import("./migratedPages");
+
+    expect(legacyKeyForPathname("/team-x/ui/api-reference")).toBe("api_ref");
+    expect(legacyKeyForPathname("/ui/api-reference")).toBeNull();
   });
 });
