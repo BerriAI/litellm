@@ -1,11 +1,13 @@
 """
 Unit tests for Amazon Bedrock Mantle Responses API configuration.
 
-Mantle's gpt-5.5 / gpt-5.4 are served ONLY on the non-standard
-`/openai/v1/responses` path. These tests lock the URL construction and
-Bearer auth that make that routing work.
+Mantle serves Responses on two paths: gpt frontier models on
+`/openai/v1/responses` and other Responses-capable models (e.g. gpt-oss) on the
+standard `/v1/responses`. These tests lock the per-model path selection in the
+gate, the URL construction for both paths, and the shared Bearer auth.
 """
 
+import copy
 import os
 import sys
 
@@ -89,6 +91,42 @@ class TestBedrockMantleResponsesURL:
         url = cfg.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://bedrock-mantle.us-east-1.api.aws/openai/v1/responses"
 
+    def test_standard_path_uses_region_from_env(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        url = cfg.get_complete_url(api_base=None, litellm_params={})
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
+        assert "/openai/v1/responses" not in url
+
+    def test_standard_path_normalizes_v1_base(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        url = cfg.get_complete_url(
+            api_base="https://bedrock-mantle.us-east-2.api.aws/v1",
+            litellm_params={},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
+        assert url.count("/responses") == 1
+        assert "/v1/v1/responses" not in url
+
+    def test_standard_path_full_endpoint_base_not_doubled(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        url = cfg.get_complete_url(
+            api_base="https://bedrock-mantle.us-east-2.api.aws/v1/responses",
+            litellm_params={},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/v1/responses"
+        assert url.count("/responses") == 1
+
+    def test_default_construction_keeps_openai_path(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-east-2")
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(api_base=None, litellm_params={})
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
 
 class TestBedrockMantleResponsesAuth:
     def test_config_api_key_takes_priority(self, monkeypatch):
@@ -158,6 +196,36 @@ class TestBedrockMantleResponsesAuth:
             is True
         )
 
+    def test_standard_path_still_uses_bearer_auth(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-key")
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        headers = cfg.validate_environment(
+            headers={},
+            model="openai.gpt-oss-120b",
+            litellm_params=GenericLiteLLMParams(),
+        )
+        assert headers["Authorization"] == "Bearer env-key"
+
+    def test_standard_path_opts_out_of_native_features(self):
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        assert cfg.supports_native_file_search() is False
+        assert cfg.supports_native_websocket() is False
+
+
+class TestBedrockMantleResponsesRequestBody:
+    def test_standard_path_outbound_body_carries_bare_model(self):
+        cfg = BedrockMantleResponsesAPIConfig(use_openai_path=False)
+        body = cfg.transform_responses_api_request(
+            model="openai.gpt-oss-120b",
+            input="hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["model"] == "openai.gpt-oss-120b"
+        assert "input" in body
+
 
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self):
@@ -168,6 +236,7 @@ class TestBedrockMantleResponsesRegistry:
             model="openai.gpt-5.5",
         )
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True
 
     def test_registry_returns_config_for_gpt_5_4_enum(self):
         from litellm.utils import ProviderConfigManager
@@ -177,6 +246,7 @@ class TestBedrockMantleResponsesRegistry:
             model="openai.gpt-5.4",
         )
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True
 
     def test_registry_returns_none_for_gpt_oss(self):
         # Regression guard: gpt-oss must NOT get the native Responses config; it
@@ -199,9 +269,10 @@ class TestBedrockMantleResponsesRegistry:
         assert cfg is None
 
     def test_registry_returns_config_for_future_frontier_model(self):
-        # Forward-compatibility: an unseen OpenAI gpt frontier model (e.g. gpt-6) must
-        # get the native Responses config without a code change. The gate allow-lists
-        # the openai.gpt- family (minus gpt-oss), so gpt-6 matches automatically.
+        # Forward-compatibility: an unseen OpenAI gpt frontier model (e.g. gpt-6),
+        # not yet in the price map, must get the openai-path Responses config with
+        # no code or JSON change. The name-convention fallback (openai.gpt- minus
+        # gpt-oss) catches it before any price-map entry exists.
         from litellm.utils import ProviderConfigManager
 
         cfg = ProviderConfigManager.get_provider_responses_api_config(
@@ -209,6 +280,48 @@ class TestBedrockMantleResponsesRegistry:
             model="openai.gpt-6",
         )
         assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True
+
+    def test_price_map_flag_routes_non_gpt_name_to_openai_path(
+        self, restore_model_cost
+    ):
+        # Data-driven onboarding: a frontier model whose name does NOT match the
+        # openai.gpt- convention can still be routed to /openai/v1/responses by
+        # declaring use_openai_responses_path in its price-map entry, with no code
+        # change. The string fallback alone could never catch this name.
+        from litellm.utils import ProviderConfigManager, register_model
+
+        register_model(
+            {
+                "bedrock_mantle/somelab.frontier-x": {
+                    "litellm_provider": "bedrock_mantle",
+                    "mode": "responses",
+                    "use_openai_responses_path": True,
+                }
+            }
+        )
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="somelab.frontier-x",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is True
+
+    def test_gpt_5_5_price_map_declares_openai_responses_path(self, local_cost_map):
+        # The gpt-5.x entries must carry the data-driven flag so frontier routing
+        # does not rely on the name-string fallback alone.
+        assert (
+            litellm.model_cost["bedrock_mantle/openai.gpt-5.5"].get(
+                "use_openai_responses_path"
+            )
+            is True
+        )
+        assert (
+            litellm.model_cost["bedrock_mantle/openai.gpt-5.4"].get(
+                "use_openai_responses_path"
+            )
+            is True
+        )
 
     @pytest.mark.parametrize(
         "model",
@@ -242,6 +355,129 @@ class TestBedrockMantleResponsesRegistry:
             model=None,
         )
         assert cfg is None
+
+    def test_declared_responses_non_openai_routes_to_standard_path(
+        self, restore_model_cost
+    ):
+        # New feature: a non-OpenAI model declared mode=responses (e.g. via a
+        # user's proxy model_info block) must route to the STANDARD /v1/responses
+        # path, not the frontier /openai/v1/responses path. Fails before the
+        # path-aware gate exists (old gate returned None for non-gpt models).
+        from litellm.utils import ProviderConfigManager, register_model
+
+        register_model(
+            {
+                "bedrock_mantle/somelab.future-model": {
+                    "litellm_provider": "bedrock_mantle",
+                    "mode": "responses",
+                }
+            }
+        )
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="somelab.future-model",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is False
+
+    def test_gpt_oss_opt_in_routes_to_standard_path(self, restore_model_cost):
+        # When a user opts gpt-oss into native Responses via model_info mode,
+        # it must take the STANDARD /v1/responses path (gpt-oss Responses is on
+        # /v1/responses, NOT the frontier /openai/v1/responses path).
+        from litellm.utils import ProviderConfigManager, register_model
+
+        register_model(
+            {
+                "bedrock_mantle/openai.gpt-oss-120b": {
+                    "litellm_provider": "bedrock_mantle",
+                    "mode": "responses",
+                }
+            }
+        )
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="openai.gpt-oss-120b",
+        )
+        assert isinstance(cfg, BedrockMantleResponsesAPIConfig)
+        assert cfg.use_openai_path is False
+
+    def test_unmapped_model_degrades_to_none_without_crashing(self, restore_model_cost):
+        # A non-frontier model that is not in model_cost makes get_model_info
+        # raise; the gate must swallow it and return None rather than crash.
+        from litellm.utils import ProviderConfigManager
+
+        litellm.model_cost.pop("bedrock_mantle/somelab.unmapped-model", None)
+        litellm.get_model_info.cache_clear()
+        cfg = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle",
+            model="somelab.unmapped-model",
+        )
+        assert cfg is None
+
+    def test_register_model_restore_undoes_existing_key_overwrite(self):
+        # Self-contained guard for the deepcopy requirement of restore_model_cost.
+        # register_model overwrites an existing key by mutating its nested dict in
+        # place, so the snapshot must be a deepcopy: a shallow dict() copy would
+        # share that nested dict and leave mode=responses after restore, making
+        # the final assertion fail. The in-place clear+update mirrors the fixture.
+        from litellm.utils import ProviderConfigManager, register_model
+
+        snapshot = copy.deepcopy(litellm.model_cost)
+        litellm.get_model_info.cache_clear()
+        try:
+            register_model(
+                {
+                    "bedrock_mantle/openai.gpt-oss-120b": {
+                        "litellm_provider": "bedrock_mantle",
+                        "mode": "responses",
+                    }
+                }
+            )
+            during = ProviderConfigManager.get_provider_responses_api_config(
+                provider="bedrock_mantle", model="openai.gpt-oss-120b"
+            )
+            assert isinstance(during, BedrockMantleResponsesAPIConfig)
+        finally:
+            litellm.model_cost.clear()
+            litellm.model_cost.update(snapshot)
+            litellm.get_model_info.cache_clear()
+        after = ProviderConfigManager.get_provider_responses_api_config(
+            provider="bedrock_mantle", model="openai.gpt-oss-120b"
+        )
+        assert after is None
+
+
+@pytest.fixture
+def restore_model_cost():
+    """Snapshot litellm.model_cost so register_model edits don't leak across tests.
+
+    register_model mutates the global litellm.model_cost, and get_model_info is
+    lru_cached, so without restore + cache_clear a registered model would bleed
+    into sibling tests in the same process.
+
+    Two subtleties make this fixture non-obvious:
+
+    1. The snapshot must be a deepcopy. register_model overwrites an existing key
+       via `litellm.model_cost.setdefault(key, {}).update(...)`, mutating the
+       nested dict in place; a shallow copy would share those nested dicts and
+       could not capture the pre-mutation values of an existing entry.
+    2. The restore must be in place (clear + update the SAME dict object), not a
+       reassignment. The conftest autouse `isolate_litellm_state` fixture
+       snapshots `litellm.model_cost` by reference and restores that reference on
+       its teardown, which runs after this one. Reassigning `litellm.model_cost`
+       to a fresh dict here is undone when conftest reinstalls its (in-place
+       mutated) reference, so the registered mode would leak and poison
+       TestBedrockMantleResponsesPricing. Mutating the original object in place
+       restores the contents conftest's reference points at.
+    """
+    original_model_cost = copy.deepcopy(litellm.model_cost)
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(original_model_cost)
+        litellm.get_model_info.cache_clear()
 
 
 @pytest.fixture

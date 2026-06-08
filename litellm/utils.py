@@ -8922,14 +8922,25 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Only OpenAI gpt frontier models (gpt-5.x, and future gpt-6 etc.) are
-            # served on the /openai/v1/responses path. gpt-oss and every non-OpenAI
-            # model on Mantle (nvidia, mistral, google, zai, ...) are chat-completions
-            # only and 400 on that path, so they fall through to None to keep the
-            # chat-completions emulation (see litellm/responses/main.py "config is None").
+            # gpt frontier models (gpt-5.x, future gpt-6) live on the
+            # /openai/v1/responses path; any other model declared mode=responses
+            # (price-map entry or a user model_info block) is served on the
+            # standard /v1/responses path. Everything else returns None and keeps
+            # the chat-completions emulation (see responses/main.py "config is None").
             model_lower = model.lower() if model else ""
             if "openai.gpt-" in model_lower and "gpt-oss" not in model_lower:
-                return litellm.BedrockMantleResponsesAPIConfig()
+                return litellm.BedrockMantleResponsesAPIConfig(use_openai_path=True)
+            if model:
+                try:
+                    if (
+                        get_model_info(model, "bedrock_mantle").get("mode")
+                        == "responses"
+                    ):
+                        return litellm.BedrockMantleResponsesAPIConfig(
+                            use_openai_path=False
+                        )
+                except Exception:
+                    pass
             return None
         return None
 
