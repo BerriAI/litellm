@@ -1,12 +1,13 @@
 """JWT principal extraction.
 
-Uses ``JWTHandler.is_jwt`` for shape detection and
-``JWTHandler.get_unverified_claims`` for claim peek. Signature
+Decodes claims without verifying the signature (PyJWT direct). Signature
 verification and DB-backed claim mapping live in ``JWTHandler.auth_builder``;
 that path runs from the resolver when DB access is available.
 """
 
 from typing import Optional
+
+import jwt
 
 from litellm.identity.jwt import parse_jwt_scopes
 from litellm.identity.principal import JWTPrincipal
@@ -22,12 +23,11 @@ def extract_jwt_principal(token: Optional[str]) -> Optional[JWTPrincipal]:
     if not token:
         return None
 
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-
-    if not JWTHandler.is_jwt(token=token):
+    try:
+        jwt.get_unverified_header(token)
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except jwt.PyJWTError:
         return None
-
-    claims = JWTHandler.get_unverified_claims(token=token) or {}
 
     aud = claims.get("aud")
 
