@@ -158,3 +158,117 @@ async def test_recreate_prisma_client_handles_missing_engine_pid(
 
     mock_kill.assert_not_called()  # PID was 0, kill skipped
     mock_new_prisma.connect.assert_awaited_once()
+
+
+# ── wait_for_prisma_engine tests ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prisma_engine_ready_on_first_attempt():
+    """Engine responds immediately — returns True after one probe."""
+    mock_prisma = AsyncMock()
+    mock_prisma.query_raw = AsyncMock(return_value=None)
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        result = await wrapper.wait_for_prisma_engine(retries=5, delay=1.0)
+
+    assert result is True
+    mock_prisma.query_raw.assert_awaited_once_with("SELECT 1")
+    mock_sleep.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prisma_engine_ready_after_retries():
+    """Engine fails twice then succeeds — returns True, sleeps between attempts."""
+    mock_prisma = AsyncMock()
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[Exception("not ready"), Exception("still not"), None]
+    )
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        result = await wrapper.wait_for_prisma_engine(
+            retries=5, delay=1.0, backoff_factor=0.0
+        )
+
+    assert result is True
+    assert mock_prisma.query_raw.await_count == 3
+    # Two sleeps: after attempt 1 and attempt 2
+    assert mock_sleep.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prisma_engine_never_ready():
+    """Engine fails every attempt — returns False after retries exhausted."""
+    mock_prisma = AsyncMock()
+    mock_prisma.query_raw = AsyncMock(side_effect=Exception("not ready"))
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        result = await wrapper.wait_for_prisma_engine(retries=3, delay=0.1)
+
+    assert result is False
+    assert mock_prisma.query_raw.await_count == 3
+    assert mock_sleep.await_count == 2  # slept after attempts 1 and 2
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prisma_engine_with_backoff_disabled():
+    """backoff_factor=0 means constant delay between attempts."""
+    mock_prisma = AsyncMock()
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[Exception("x"), Exception("x"), None]
+    )
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await wrapper.wait_for_prisma_engine(
+            retries=5, delay=2.0, backoff_factor=0.0
+        )
+
+    # With backoff_factor=0, all sleeps use the same delay
+    assert mock_sleep.await_count == 2
+    mock_sleep.assert_any_call(2.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prisma_engine_with_linear_backoff():
+    """backoff_factor=1.0 increases delay linearly: delay, 2*delay, 3*delay, ..."""
+    mock_prisma = AsyncMock()
+    mock_prisma.query_raw = AsyncMock(
+        side_effect=[Exception("x"), Exception("x"), Exception("x"), None]
+    )
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        await wrapper.wait_for_prisma_engine(
+            retries=5, delay=1.0, backoff_factor=1.0
+        )
+
+    assert mock_sleep.await_count == 3
+    # First sleep: delay=1.0, second: 2.0, third: 3.0
+    mock_sleep.assert_any_call(1.0)
+    mock_sleep.assert_any_call(2.0)
+    mock_sleep.assert_any_call(3.0)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_prisma_engine_single_retry():
+    """Single retry that fails — returns False, no sleep."""
+    mock_prisma = AsyncMock()
+    mock_prisma.query_raw = AsyncMock(side_effect=Exception("not ready"))
+
+    wrapper = PrismaWrapper(original_prisma=mock_prisma, iam_token_db_auth=False)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        result = await wrapper.wait_for_prisma_engine(retries=1, delay=1.0)
+
+    assert result is False
+    assert mock_prisma.query_raw.await_count == 1
+    mock_sleep.assert_not_called()
