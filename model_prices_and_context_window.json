@@ -14498,10 +14498,10 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://fireworks.ai/models/fireworks/glm-5p1",
-        "supports_function_calling": false,
+        "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_tool_choice": false
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "fireworks_ai/accounts/fireworks/models/gpt-oss-120b": {
         "input_cost_per_token": 1.5e-07,
@@ -14779,10 +14779,10 @@
         "mode": "chat",
         "output_cost_per_token": 4.4e-06,
         "source": "https://fireworks.ai/models/fireworks/glm-5p1",
-        "supports_function_calling": false,
+        "supports_function_calling": true,
         "supports_reasoning": true,
-        "supports_response_schema": false,
-        "supports_tool_choice": false
+        "supports_response_schema": true,
+        "supports_tool_choice": true
     },
     "fireworks_ai/kimi-k2p5": {
         "cache_read_input_token_cost": 1e-07,
