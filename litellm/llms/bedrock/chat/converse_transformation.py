@@ -1649,12 +1649,14 @@ class AmazonConverseConfig(BaseConfig):
                 bedrock_tool_config["toolChoice"] = tool_choice_values
 
         data: CommonRequestObject = {
-            "additionalModelRequestFields": additional_request_params,
-            "system": system_content_blocks,
             "inferenceConfig": self._transform_inference_params(
                 inference_params=inference_params
             ),
         }
+        if additional_request_params:
+            data["additionalModelRequestFields"] = additional_request_params
+        if system_content_blocks:
+            data["system"] = system_content_blocks
 
         # Handle all config blocks
         for config_name, config_class in self.get_config_blocks().items():
