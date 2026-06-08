@@ -779,6 +779,7 @@ async def _check_user_team_limits(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     user_api_key_cache: Any,
+    existing_team_max_budget: Optional[float] = None,
 ) -> None:
     """
     Check user team limits for standalone teams (not org-scoped).
@@ -789,27 +790,43 @@ async def _check_user_team_limits(
 
     Should only be called for standalone teams (when organization_id is None).
     For org-scoped teams, use _check_org_team_limits() instead.
+
+    `existing_team_max_budget` is the team's current `max_budget` on the
+    /team/update path. When the incoming `max_budget` is unchanged or lower
+    than the team's current budget, the personal-budget comparison is skipped
+    so a team admin can edit other fields (e.g. tpm_limit, team name) without
+    being blocked by a budget the team already has. The UI sends the full team
+    object on every update, so the unchanged `max_budget` would otherwise fail.
     """
     # Validate team budget against user's max_budget
     if data.max_budget is not None and user_api_key_dict.user_id is not None:
-        user_obj = await get_user_object(
-            user_id=user_api_key_dict.user_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            user_id_upsert=False,
+        # On /team/update, allow unchanged or lower budgets without checking
+        # the caller's personal max_budget. Only increases above the team's
+        # current budget are validated against the user's personal limit.
+        budget_unchanged_or_lower = (
+            existing_team_max_budget is not None
+            and data.max_budget <= existing_team_max_budget
         )
 
-        if (
-            user_obj is not None
-            and user_obj.max_budget is not None
-            and data.max_budget > user_obj.max_budget
-        ):
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
-                },
+        if not budget_unchanged_or_lower:
+            user_obj = await get_user_object(
+                user_id=user_api_key_dict.user_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
             )
+
+            if (
+                user_obj is not None
+                and user_obj.max_budget is not None
+                and data.max_budget > user_obj.max_budget
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
+                    },
+                )
 
     # Validate team models against user's allowed models
     if data.models is not None and len(user_api_key_dict.models) > 0:
@@ -1824,6 +1841,7 @@ async def update_team(  # noqa: PLR0915
                     user_api_key_dict=user_api_key_dict,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
+                    existing_team_max_budget=existing_team_row.max_budget,
                 )
 
         updated_kv = data.json(exclude_unset=True)

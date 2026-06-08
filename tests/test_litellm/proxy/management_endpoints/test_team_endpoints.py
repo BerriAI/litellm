@@ -4532,6 +4532,199 @@ async def test_update_team_standalone_budget_exceeds_user_limit():
 
 
 @pytest.mark.asyncio
+async def test_update_team_standalone_unchanged_budget_allowed():
+    """
+    Test that /team/update for a standalone team does NOT compare against the
+    caller's personal max_budget when the budget is unchanged.
+
+    This is the LiteLLM UI scenario: the UI sends the full team object on every
+    update (including the unchanged max_budget). A team admin only changing
+    tpm_limit should not be blocked by a budget the team already has.
+
+    Scenario:
+    - User (team admin) has personal max_budget=$100
+    - Standalone team exists with current budget=$500
+    - User updates tpm_limit and re-sends the unchanged max_budget=$500
+    - Expected: Should succeed (budget unchanged, not an increase)
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    team_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="standalone-unchanged-budget-admin",
+        models=[],
+    )
+
+    # UI re-sends the unchanged max_budget alongside the tpm_limit change.
+    update_request = UpdateTeamRequest(
+        team_id="standalone-unchanged-budget-123",
+        max_budget=500.0,  # Unchanged from the team's current budget
+        tpm_limit=50000,
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+        ) as mock_audit,
+    ):
+        # Mock existing standalone team (no organization_id) with budget=$500
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "standalone-unchanged-budget-123"
+        mock_existing_team.organization_id = None
+        mock_existing_team.max_budget = 500.0
+        mock_existing_team.model_id = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "standalone-unchanged-budget-123",
+            "organization_id": None,
+            "max_budget": 500.0,
+            "members_with_roles": [
+                {"user_id": "standalone-unchanged-budget-admin", "role": "admin"}
+            ],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+
+        # User has a restrictive personal budget that is lower than the team's.
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="standalone-unchanged-budget-admin",
+            max_budget=100.0,
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
+        mock_cache.async_set_cache = AsyncMock()
+
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "standalone-unchanged-budget-123"
+        mock_updated_team.organization_id = None
+        mock_updated_team.max_budget = 500.0
+        mock_updated_team.litellm_model_table = None
+        mock_updated_team.model_dump.return_value = {
+            "team_id": "standalone-unchanged-budget-123",
+            "organization_id": None,
+            "max_budget": 500.0,
+            "tpm_limit": 50000,
+        }
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
+
+        # Should NOT raise - unchanged budget skips the personal-budget check.
+        result = await update_team(
+            data=update_request,
+            http_request=dummy_request,
+            user_api_key_dict=team_admin_user,
+        )
+
+        assert result is not None
+        assert result["data"].max_budget == 500.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_standalone_lower_budget_allowed():
+    """
+    Test that /team/update for a standalone team allows lowering the budget
+    below the team's current value even when the new value still exceeds the
+    caller's personal max_budget.
+
+    Scenario:
+    - User (team admin) has personal max_budget=$100
+    - Standalone team exists with current budget=$500
+    - User lowers team budget to $300 (a decrease, still above user's $100)
+    - Expected: Should succeed (decrease is not an increase above team budget)
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import (
+        LiteLLM_UserTable,
+        UpdateTeamRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    team_admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="standalone-lower-budget-admin",
+        models=[],
+    )
+
+    update_request = UpdateTeamRequest(
+        team_id="standalone-lower-budget-123",
+        max_budget=300.0,  # Lower than current $500, still above user's $100
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
+        patch(
+            "litellm.proxy.proxy_server.create_audit_log_for_update", new=AsyncMock()
+        ) as mock_audit,
+    ):
+        mock_existing_team = MagicMock()
+        mock_existing_team.team_id = "standalone-lower-budget-123"
+        mock_existing_team.organization_id = None
+        mock_existing_team.max_budget = 500.0
+        mock_existing_team.model_id = None
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "standalone-lower-budget-123",
+            "organization_id": None,
+            "max_budget": 500.0,
+            "members_with_roles": [
+                {"user_id": "standalone-lower-budget-admin", "role": "admin"}
+            ],
+        }
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+        mock_prisma.jsonify_team_object = lambda db_data: db_data
+
+        mock_user_obj = LiteLLM_UserTable(
+            user_id="standalone-lower-budget-admin",
+            max_budget=100.0,
+        )
+        mock_cache.async_get_cache = AsyncMock(return_value=mock_user_obj)
+        mock_cache.async_set_cache = AsyncMock()
+
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "standalone-lower-budget-123"
+        mock_updated_team.organization_id = None
+        mock_updated_team.max_budget = 300.0
+        mock_updated_team.litellm_model_table = None
+        mock_updated_team.model_dump.return_value = {
+            "team_id": "standalone-lower-budget-123",
+            "organization_id": None,
+            "max_budget": 300.0,
+        }
+        mock_prisma.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
+
+        result = await update_team(
+            data=update_request,
+            http_request=dummy_request,
+            user_api_key_dict=team_admin_user,
+        )
+
+        assert result is not None
+        assert result["data"].max_budget == 300.0
+
+
+@pytest.mark.asyncio
 async def test_update_team_org_scoped_budget_exceeds_org_limit():
     """
     Test that /team/update for an org-scoped team fails when new budget exceeds organization's max_budget.
