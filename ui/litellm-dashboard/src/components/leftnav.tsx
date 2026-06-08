@@ -43,7 +43,7 @@ import {
 import NewBadge from "./common_components/NewBadge";
 import type { Organization } from "./networking";
 import UsageIndicator from "./UsageIndicator";
-import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
+import { MIGRATED_PAGES, migratedHref, legacyPageHref } from "@/utils/migratedPages";
 const { Sider } = Layout;
 
 // Define the props type
@@ -418,18 +418,9 @@ const Sidebar: React.FC<SidebarProps> = ({
   // Check if user is a team admin for any team
   const isTeamAdmin = useMemo(() => isUserTeamAdminForAnyTeam(teams ?? null, userId ?? ""), [teams, userId]);
 
-  // Navigate to page helper
-  const navigateToPage = (page: string) => {
-    // For migrated pages, just call setPage — the parent layout handles routing
-    if (MIGRATED_PAGES[page]) {
-      setPage(page);
-      return;
-    }
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
-    setPage(page);
-  };
+  // The parent (legacy root page or dashboard layout) owns navigation for both
+  // migrated and legacy pages; the sidebar only reports the selected page.
+  const navigateToPage = (page: string) => setPage(page);
 
   // Wrap label in <a> so every nav item supports right-click → "Open in new tab"
   // and Ctrl/Cmd+click to open in a new tab, while preserving SPA navigation for normal clicks.
@@ -447,15 +438,8 @@ const Sidebar: React.FC<SidebarProps> = ({
         </a>
       );
     }
-    // For migrated pages, generate a path-based href for right-click "Open in new tab"
     const migratedRoute = MIGRATED_PAGES[page];
-    const href = migratedRoute
-      ? migratedHref(migratedRoute)
-      : (() => {
-          const params = new URLSearchParams(window.location.search);
-          params.set("page", page);
-          return `?${params.toString()}`;
-        })();
+    const href = migratedRoute ? migratedHref(migratedRoute) : legacyPageHref(page);
     return (
       <a
         href={href}
