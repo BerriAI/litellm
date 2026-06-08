@@ -41,6 +41,16 @@ class TestAzureMAIImageEdit:
             == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
         )
 
+    def test_get_mai_image_edit_url_appends_edits_to_mai_root(self):
+        url = AzureFoundryMAIImageGenerationConfig.get_mai_image_edit_url(
+            api_base="https://my-resource.services.ai.azure.com/mai/v1",
+            api_version="preview",
+        )
+        assert (
+            url
+            == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
+        )
+
     def test_get_azure_ai_image_edit_config_returns_mai(self):
         config = get_azure_ai_image_edit_config("MAI-Image-2.5")
         assert isinstance(config, AzureFoundryMAIImageEditConfig)

@@ -46,16 +46,19 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         if api_base is None:
             raise ValueError("api_base is required for Azure AI MAI image editing")
 
-        api_base = api_base.rstrip("/")
         api_version = api_version or "preview"
+        path, separator, query = api_base.partition("?")
+        path = path.rstrip("/")
 
-        if "/mai/" in api_base:
-            api_base = api_base.replace("/images/generations", "/images/edits")
-            if "?" in api_base:
-                return api_base
-            return f"{api_base}?api-version={api_version}"
+        if "/mai/" in path:
+            prefix, _, _ = path.partition("/images/")
+            path = f"{prefix}/images/edits"
+        else:
+            path = f"{path}/mai/v1/images/edits"
 
-        return f"{api_base}/mai/v1/images/edits?api-version={api_version}"
+        if separator:
+            return f"{path}?{query}"
+        return f"{path}?api-version={api_version}"
 
     @staticmethod
     def is_mai_model(model: str) -> bool:
