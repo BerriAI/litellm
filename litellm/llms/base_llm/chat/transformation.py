@@ -442,6 +442,14 @@ class BaseConfig(ABC):
         """Hook for providers to post-process streaming responses. Default: pass-through."""
         return stream
 
+    def apply_assembled_streaming_response_metadata(
+        self,
+        response: "ModelResponse",
+        chunks: List[Any],
+    ) -> None:
+        """Hook for providers to merge chunk metadata into assembled streaming responses."""
+        return None
+
     def calculate_additional_costs(
         self, model: str, prompt_tokens: int, completion_tokens: int
     ) -> Optional[dict]:
