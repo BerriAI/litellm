@@ -705,6 +705,37 @@ def test_stream_chunk_builder_uses_assembled_model_for_provider_metadata():
     assert getattr(response, "vertex_ai_grounding_metadata") == grounding_metadata
 
 
+def test_stream_chunk_builder_propagates_vertex_ai_safety_results():
+    """Assembled response must expose safety data under the non-streaming field name."""
+    safety_ratings = [
+        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
+    ]
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-vertex-safety",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    setattr(chunk, "vertex_ai_safety_ratings", safety_ratings)
+    setattr(chunk, "vertex_ai_safety_results", safety_ratings)
+    chunk._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
+    chunk._hidden_params["vertex_ai_safety_results"] = safety_ratings
+
+    response = stream_chunk_builder(chunks=[chunk])
+    assert response is not None
+    assert getattr(response, "vertex_ai_safety_results") == safety_ratings
+    assert response._hidden_params["vertex_ai_safety_results"] == safety_ratings
+    assert response.model_dump()["vertex_ai_safety_results"] == safety_ratings
+
+
 def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
     """Dict snapshot chunks (model_dump) should also propagate Vertex AI metadata."""
     chunk_dict = ModelResponseStream(

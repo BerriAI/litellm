@@ -2257,6 +2257,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         "vertex_ai_grounding_metadata",
         "vertex_ai_url_context_metadata",
         "vertex_ai_safety_ratings",
+        "vertex_ai_safety_results",
         "vertex_ai_citation_metadata",
     )
 
@@ -2296,8 +2297,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 url_context_metadata
             )
         setattr(model_response, "vertex_ai_safety_ratings", safety_ratings)  # type: ignore
+        setattr(model_response, "vertex_ai_safety_results", safety_ratings)  # type: ignore
         if safety_ratings:
             model_response._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
+            model_response._hidden_params["vertex_ai_safety_results"] = safety_ratings
         setattr(model_response, "vertex_ai_citation_metadata", citation_metadata)  # type: ignore
         if citation_metadata:
             model_response._hidden_params["vertex_ai_citation_metadata"] = (
