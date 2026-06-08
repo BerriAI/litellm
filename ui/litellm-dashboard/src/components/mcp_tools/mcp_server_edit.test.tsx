@@ -665,7 +665,8 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(networking.listMCPTools).toHaveBeenCalledWith("access-token", "oauth_server_1", undefined);
+      // includeDisabledTools=true so the config screen gets the full catalog.
+      expect(networking.listMCPTools).toHaveBeenCalledWith("access-token", "oauth_server_1", undefined, true);
     });
     // OBO uses the backend-stored token; the browser passthrough store is never consulted.
     expect(mockIsTokenValid).not.toHaveBeenCalled();
@@ -694,9 +695,12 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(networking.listMCPTools).toHaveBeenCalledWith("access-token", "oauth_server_1", {
-        "x-mcp-oauth_server-authorization": "Bearer browser-token",
-      });
+      expect(networking.listMCPTools).toHaveBeenCalledWith(
+        "access-token",
+        "oauth_server_1",
+        { "x-mcp-oauth_server-authorization": "Bearer browser-token" },
+        true,
+      );
     });
     expect(mockGetToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
   });

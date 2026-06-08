@@ -337,7 +337,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     setToolsError(null);
 
     try {
-      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id, customHeaders);
+      // include_disabled_tools: configuring the allowlist needs the full server
+      // catalog, so tools toggled off still render (as unchecked) instead of vanishing.
+      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id, customHeaders, true);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
