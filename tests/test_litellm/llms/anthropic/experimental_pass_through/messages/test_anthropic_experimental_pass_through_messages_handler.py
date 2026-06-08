@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import sys
@@ -673,3 +674,33 @@ async def test_async_wrapper_sets_presanitized_and_sanitizes_once():
     assert spy.call_count == 1
     assert captured["presanitized"] is True
     assert [b["type"] for b in captured["messages"][0]["content"]] == ["tool_use"]
+
+
+@pytest.mark.asyncio
+async def test_aanthropic_messages_does_not_use_thread_executor():
+    """The async Anthropic /messages entry must dispatch the handler directly on
+    the running event loop, never through ``loop.run_in_executor``.
+
+    Mutation control: revert handler.py to
+    ``await loop.run_in_executor(None, func_with_context)`` and this test must
+    fail with AssertionError('thread hop fired').
+    """
+    from litellm.llms.anthropic.experimental_pass_through.messages import handler
+
+    loop = asyncio.get_running_loop()
+
+    def fail_on_thread_hop(*args, **kwargs):
+        raise AssertionError("thread hop fired")
+
+    with patch.object(loop, "run_in_executor", side_effect=fail_on_thread_hop):
+        response = await handler.anthropic_messages(
+            max_tokens=8,
+            messages=[{"role": "user", "content": "hi"}],
+            model="anthropic/claude-3-5-haiku-20241022",
+            custom_llm_provider="anthropic",
+            api_key="sk-test",
+            stream=False,
+            mock_response="pong",
+        )
+
+    assert response["content"][0]["text"] == "pong"

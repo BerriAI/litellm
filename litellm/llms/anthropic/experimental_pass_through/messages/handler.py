@@ -6,8 +6,6 @@
 """
 
 import asyncio
-import contextvars
-from functools import partial
 from typing import (
     Any,
     AsyncIterator,
@@ -300,11 +298,9 @@ async def anthropic_messages(
                 **kwargs,
             )
 
-    loop = asyncio.get_event_loop()
     kwargs["is_async"] = True
 
-    func = partial(
-        anthropic_messages_handler,
+    response = anthropic_messages_handler(
         max_tokens=max_tokens,
         messages=messages,
         model=model,
@@ -330,14 +326,11 @@ async def anthropic_messages(
         _litellm_messages_presanitized=True,
         **kwargs,
     )
-    ctx = contextvars.copy_context()
-    func_with_context = partial(ctx.run, func)
-    init_response = await loop.run_in_executor(None, func_with_context)
-
-    if asyncio.iscoroutine(init_response):
-        response = await init_response
-    else:
-        response = init_response
+    # ``anthropic_messages_handler`` returns a coroutine on the async backend
+    # paths but a materialized response on the ``mock_response`` shortcut, so
+    # only await when there is something to await.
+    if asyncio.iscoroutine(response):
+        return await response
     return response
 
 
