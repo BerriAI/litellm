@@ -5796,8 +5796,8 @@ class Router:
                 # (0) before raising so error messages reflect reality instead of
                 # carrying a stale value injected by the @client decorator.
                 if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
-                    setattr(original_exception, "max_retries", 0)
-                    setattr(original_exception, "num_retries", 0)
+                    setattr(original_exception, "max_retries", num_retries)
+                    setattr(original_exception, "num_retries", num_retries)
                 raise
 
             verbose_router_logger.debug(
