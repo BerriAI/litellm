@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.abspath("../../../../../.."))
 
 import litellm
 from litellm.llms.azure.azure import AzureChatCompletion
+from litellm.llms.azure.image_generation import get_azure_image_generation_config
 from litellm.llms.azure.image_generation.http_utils import (
     azure_deployment_image_generation_json_body,
 )
@@ -81,6 +82,10 @@ class TestAzureMAIImageGeneration:
 
     def test_get_azure_ai_image_generation_config_returns_mai(self):
         config = get_azure_ai_image_generation_config("MAI-Image-2.5")
+        assert isinstance(config, AzureFoundryMAIImageGenerationConfig)
+
+    def test_azure_image_generation_config_returns_mai(self):
+        config = get_azure_image_generation_config("MAI-Image-2.5")
         assert isinstance(config, AzureFoundryMAIImageGenerationConfig)
 
     def test_map_openai_params_size_to_width_height(self):
@@ -240,6 +245,41 @@ class TestAzureMAIImageGeneration:
         assert image_response.usage.output_tokens == 1024
         assert image_response.usage.input_tokens == 22
         assert image_response.usage.total_tokens == 1046
+
+    def test_azure_sync_image_generation_uses_mai_response_transform(self):
+        raw_response = MagicMock(spec=httpx.Response)
+        raw_response.json.return_value = {
+            "created": 1780897477,
+            "data": [{"b64_json": "abc123"}],
+            "usage": {
+                "num_output_tokens": 1024,
+                "num_input_text_tokens": 22,
+            },
+        }
+
+        class MAIImageGenerationAzureChatCompletion(AzureChatCompletion):
+            def make_sync_azure_httpx_request(self, **kwargs):
+                return raw_response
+
+        logging_obj = MagicMock()
+        image_response = MAIImageGenerationAzureChatCompletion().image_generation(
+            prompt="A red fox",
+            timeout=60.0,
+            optional_params={"width": 1792, "height": 1024},
+            logging_obj=logging_obj,
+            headers={},
+            model="MAI-Image-2.5",
+            api_key="test-key",
+            api_base="https://my-resource.services.ai.azure.com",
+            api_version="preview",
+            litellm_params={},
+        )
+
+        assert image_response.data[0].b64_json == "abc123"
+        assert image_response.usage.output_tokens == 1024
+        assert image_response.usage.input_tokens == 22
+        assert image_response.usage.total_tokens == 1046
+        assert image_response.size == "1792x1024"
 
     def test_mai_image_cost_calculator_token_based(self):
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"

@@ -49,6 +49,7 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         api_version = api_version or "preview"
 
         if "/mai/" in api_base:
+            api_base = api_base.replace("/images/generations", "/images/edits")
             if "?" in api_base:
                 return api_base
             return f"{api_base}?api-version={api_version}"

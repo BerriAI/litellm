@@ -43,7 +43,10 @@ from .common_utils import (
     process_azure_headers,
     select_azure_base_url_or_endpoint,
 )
-from .image_generation import get_azure_image_generation_config
+from .image_generation import (
+    AzureFoundryMAIImageGenerationConfig,
+    get_azure_image_generation_config,
+)
 from .image_generation.http_utils import azure_deployment_image_generation_json_body
 
 
@@ -1317,6 +1320,21 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 data=data,
                 headers=headers,
             )
+            provider_config = get_azure_image_generation_config(
+                data.get("model", "dall-e-2")
+            )
+            if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):
+                return provider_config.transform_image_generation_response(
+                    model=data.get("model", "dall-e-2"),
+                    raw_response=httpx_response,
+                    model_response=model_response or ImageResponse(),
+                    logging_obj=logging_obj,
+                    request_data=data,
+                    optional_params=data,
+                    litellm_params=data,
+                    encoding=litellm.encoding,
+                )
+
             response = httpx_response.json()
 
             ## LOGGING

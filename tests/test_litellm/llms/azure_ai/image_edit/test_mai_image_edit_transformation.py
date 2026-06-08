@@ -1,5 +1,4 @@
 import io
-import json
 import os
 import sys
 from unittest.mock import MagicMock
@@ -22,6 +21,19 @@ class TestAzureMAIImageEdit:
     def test_get_mai_image_edit_url(self):
         url = AzureFoundryMAIImageGenerationConfig.get_mai_image_edit_url(
             api_base="https://my-resource.services.ai.azure.com",
+            api_version="preview",
+        )
+        assert (
+            url
+            == "https://my-resource.services.ai.azure.com/mai/v1/images/edits?api-version=preview"
+        )
+
+    def test_get_mai_image_edit_url_rewrites_generation_url(self):
+        url = AzureFoundryMAIImageGenerationConfig.get_mai_image_edit_url(
+            api_base=(
+                "https://my-resource.services.ai.azure.com/mai/v1/images/generations"
+                "?api-version=preview"
+            ),
             api_version="preview",
         )
         assert (
