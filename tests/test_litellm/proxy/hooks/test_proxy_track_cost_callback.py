@@ -255,6 +255,55 @@ async def test_track_cost_callback_releases_budget_reservation_when_spend_tracki
 
 
 @pytest.mark.asyncio
+async def test_track_cost_callback_zeroes_response_cost_on_cache_hit():
+    logger = _ProxyDBLogger()
+    kwargs = {
+        "model": "gpt-4",
+        "call_type": "acompletion",
+        "cache_hit": True,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "hashed-key",
+                "user_api_key_user_id": "test_user",
+                "user_api_key_team_id": "test_team",
+            }
+        },
+        "standard_logging_object": {
+            "response_cost": 0.25,
+            "request_tags": None,
+        },
+        "stream": False,
+    }
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
+    mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters",
+            new_callable=AsyncMock,
+        ),
+        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),
+    ):
+        await logger._PROXY_track_cost_callback(
+            kwargs=kwargs,
+            completion_response=None,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
+    recorded_cost = (
+        mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs[
+            "response_cost"
+        ]
+    )
+    assert recorded_cost == 0.0
+
+
+@pytest.mark.asyncio
 async def test_track_cost_callback_releases_budget_reservation_when_response_cost_missing():
     logger = _ProxyDBLogger()
     budget_reservation = {"reserved_cost": 0.5, "entries": []}
