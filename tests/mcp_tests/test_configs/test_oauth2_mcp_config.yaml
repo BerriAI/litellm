@@ -44,6 +44,7 @@ mcp_servers:
     url: "http://localhost:0/mcp"
     transport: "http"
     auth_type: "oauth2"
+    oauth2_flow: "client_credentials"
     client_id: "test-client"
     client_secret: "test-secret"
     token_url: "http://localhost:0/oauth/token"
@@ -72,3 +73,9 @@ mcp_servers:
       - "mcp.tools.read"
       - "mcp.tools.execute"
     subject_token_type: "urn:ietf:params:oauth:token-type:access_token"
+
+# OAuth Passthrough (proxy forwards caller's Authorization to upstream)
+  math_oauth_passthrough:
+    url: "http://localhost:0/mcp"
+    transport: "http"
+    oauth_passthrough: true

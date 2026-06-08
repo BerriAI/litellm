@@ -53,7 +53,14 @@ SERVER_SPECS: dict[str, dict[str, typing.Optional[str]]] = {
     },
     "test_oauth2_server": {"auth_mode": "oauth2", "auth_secret": None},
     "test_pkce_server": {"auth_mode": "oauth2", "auth_secret": None},
-    "internal_mcp_server": {"auth_mode": "oauth2", "auth_secret": None},
+    "internal_mcp_server": {
+        "auth_mode": "oauth2",
+        "auth_secret": None,
+        "expected_subject_token": "user-subject-jwt",
+        "expected_audience": "api://internal-tools-mcp",
+        "expected_scope": "mcp.tools.read mcp.tools.execute",
+    },
+    "math_oauth_passthrough": {"auth_mode": "oauth2", "auth_secret": None},
 }
 
 
@@ -100,7 +107,15 @@ def _reserve_port(host: str = "127.0.0.1") -> int:
         return sock.getsockname()[1]
 
 
-def _start_mcp_server_process(*, auth_mode: str, port: int, auth_secret: typing.Optional[str]) -> subprocess.Popen:
+def _start_mcp_server_process(
+    *,
+    auth_mode: str,
+    port: int,
+    auth_secret: typing.Optional[str],
+    expected_subject_token: typing.Optional[str] = None,
+    expected_audience: typing.Optional[str] = None,
+    expected_scope: typing.Optional[str] = None,
+) -> subprocess.Popen:
     cmd = [
         sys.executable,
         str(MCP_SERVER_SCRIPT),
@@ -119,8 +134,16 @@ def _start_mcp_server_process(*, auth_mode: str, port: int, auth_secret: typing.
     ]
     if auth_secret is not None:
         cmd.extend(["--auth-secret", auth_secret])
+    if expected_subject_token is not None:
+        cmd.extend(["--expected-subject-token", expected_subject_token])
+    if expected_audience is not None:
+        cmd.extend(["--expected-audience", expected_audience])
+    if expected_scope is not None:
+        cmd.extend(["--expected-scope", expected_scope])
 
-    process = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    process = subprocess.Popen(
+        cmd, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
 
     start_time = time.time()
     while True:
@@ -136,7 +159,9 @@ def _start_mcp_server_process(*, auth_mode: str, port: int, auth_secret: typing.
         except OSError:
             if time.time() - start_time > PROXY_START_TIMEOUT:
                 process.terminate()
-                raise TimeoutError(f"MCP server did not start in time (auth_mode={auth_mode})")
+                raise TimeoutError(
+                    f"MCP server did not start in time (auth_mode={auth_mode})"
+                )
             time.sleep(0.05)
 
     return process
@@ -155,7 +180,9 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
 
 @pytest.fixture(scope="session")
 def mcp_auth_servers() -> typing.Iterator[dict[str, typing.Any]]:
-    servers = {name: {**spec, "port": _reserve_port()} for name, spec in SERVER_SPECS.items()}
+    servers = {
+        name: {**spec, "port": _reserve_port()} for name, spec in SERVER_SPECS.items()
+    }
 
     processes: list[subprocess.Popen] = []
     try:
@@ -164,6 +191,9 @@ def mcp_auth_servers() -> typing.Iterator[dict[str, typing.Any]]:
                 auth_mode=spec["auth_mode"],
                 port=spec["port"],
                 auth_secret=spec["auth_secret"],
+                expected_subject_token=spec.get("expected_subject_token"),
+                expected_audience=spec.get("expected_audience"),
+                expected_scope=spec.get("expected_scope"),
             )
             spec["process"] = process
             spec["base_url"] = f"http://127.0.0.1:{spec['port']}"
@@ -188,7 +218,11 @@ def proxy_server_url(
         server_config = config["mcp_servers"][server_name]
         base_url = spec["base_url"]
         server_config["url"] = f"{base_url}/mcp"
-        for endpoint_key in ("token_url", "authorization_url", "token_exchange_endpoint"):
+        for endpoint_key in (
+            "token_url",
+            "authorization_url",
+            "token_exchange_endpoint",
+        ):
             if endpoint_key in server_config:
                 suffix = "authorize" if "authorization" in endpoint_key else "token"
                 server_config[endpoint_key] = f"{base_url}/oauth/{suffix}"
@@ -213,14 +247,15 @@ async def _call_add_tool(
     headers: typing.Optional[dict[str, str]] = None,
 ) -> typing.Optional[str]:
     request_headers = {
-        "Authorization": PROXY_AUTHORIZATION_HEADER,
-        "x-mcp-servers": server_name,
+        "x-litellm-api-key": "Bearer sk-1234"
     }
     if headers:
         request_headers.update(headers)
 
     async with asyncio.timeout(20):
-        async with streamablehttp_client(url=f"{proxy_server_url}/mcp", headers=request_headers) as (
+        async with streamablehttp_client(
+            url=f"{proxy_server_url}/{server_name}/mcp", headers=request_headers
+        ) as (
             read,
             write,
             _get_session_id,
@@ -242,14 +277,15 @@ async def _list_tool_names(
     headers: typing.Optional[dict[str, str]] = None,
 ) -> list[str]:
     request_headers = {
-        "Authorization": PROXY_AUTHORIZATION_HEADER,
-        "x-mcp-servers": server_name,
+        "x-litellm-api-key": "Bearer sk-1234"
     }
     if headers:
         request_headers.update(headers)
 
     async with asyncio.timeout(20):
-        async with streamablehttp_client(url=f"{proxy_server_url}/mcp", headers=request_headers) as (
+        async with streamablehttp_client(
+            url=f"{proxy_server_url}/{server_name}/mcp", headers=request_headers
+        ) as (
             read,
             write,
             _get_session_id,
@@ -272,16 +308,27 @@ class TestProxyMcpAuthE2E:
             ("test_oauth2_server", 9, 10, "19"),
         ],
     )
-    async def test_proxy_forwards_configured_credential(self, proxy_server_url, server_name, a, b, expected) -> None:
-        result = await _call_add_tool(proxy_server_url=proxy_server_url, server_name=server_name, a=a, b=b)
+    async def test_proxy_forwards_configured_credential(
+        self, proxy_server_url, server_name, a, b, expected
+    ) -> None:
+        result = await _call_add_tool(
+            proxy_server_url=proxy_server_url, server_name=server_name, a=a, b=b
+        )
         assert result == expected
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "server_name",
-        ["math_api_key", "math_bearer_token", "math_authorization", "test_oauth2_server"],
+        [
+            "math_api_key",
+            "math_bearer_token",
+            "math_authorization",
+            "test_oauth2_server",
+        ],
     )
-    async def test_upstream_rejects_unauthenticated_request(self, mcp_auth_servers, server_name) -> None:
+    async def test_upstream_rejects_unauthenticated_request(
+        self, mcp_auth_servers, server_name
+    ) -> None:
         base_url = mcp_auth_servers[server_name]["base_url"]
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -291,7 +338,9 @@ class TestProxyMcpAuthE2E:
         assert response.status_code == 401
 
     @pytest.mark.asyncio
-    async def test_oauth_m2m_ignores_caller_authorization(self, proxy_server_url) -> None:
+    async def test_oauth_m2m_ignores_caller_authorization(
+        self, proxy_server_url
+    ) -> None:
         """M2M servers must never forward the caller's Authorization; the proxy
         fetches its own client_credentials token. A bogus caller token must not
         break the call (proves the proxy substitutes its own upstream token)."""
@@ -314,7 +363,9 @@ class TestProxyMcpAuthE2E:
             server_name="math_custom_header",
             a=4,
             b=5,
-            headers={f"x-mcp-math_custom_header-{DEFAULT_CUSTOM_HEADER}": DEFAULT_CUSTOM_HEADER_VALUE},
+            headers={
+                f"x-mcp-math_custom_header-{DEFAULT_CUSTOM_HEADER}": DEFAULT_CUSTOM_HEADER_VALUE
+            },
         )
         assert result == "9"
 
@@ -322,7 +373,9 @@ class TestProxyMcpAuthE2E:
     async def test_custom_header_required_for_discovery(self, proxy_server_url) -> None:
         """Without the per-server custom header the upstream rejects the request,
         so its tools must not be discoverable through the proxy."""
-        tool_names = await _list_tool_names(proxy_server_url=proxy_server_url, server_name="math_custom_header")
+        tool_names = await _list_tool_names(
+            proxy_server_url=proxy_server_url, server_name="math_custom_header"
+        )
         assert not any(name.endswith("add") for name in tool_names)
 
     @pytest.mark.asyncio
@@ -341,3 +394,34 @@ class TestProxyMcpAuthE2E:
             },
         )
         assert result == "13"
+
+    @pytest.mark.asyncio
+    async def test_oauth_passthrough_forwards_caller_token(
+        self, proxy_server_url
+    ) -> None:
+        """Passthrough: the proxy forwards the caller's Authorization header
+        directly to the upstream server without any token exchange."""
+        from tests.mcp_tests.mcp_server import DEFAULT_OAUTH_ACCESS_TOKEN
+
+        result = await _call_add_tool(
+            proxy_server_url=proxy_server_url,
+            server_name="math_oauth_passthrough",
+            a=10,
+            b=11,
+            headers={
+                "x-litellm-api-key": "Bearer sk-1234",
+                "Authorization": f"Bearer {DEFAULT_OAUTH_ACCESS_TOKEN}",
+            },
+        )
+        assert result == "21"
+
+    @pytest.mark.asyncio
+    async def test_oauth_passthrough_rejects_without_token(
+        self, proxy_server_url
+    ) -> None:
+        """Passthrough without a caller token: the upstream rejects it."""
+        tool_names = await _list_tool_names(
+            proxy_server_url=proxy_server_url,
+            server_name="math_oauth_passthrough",
+        )
+        assert not any(name.endswith("add") for name in tool_names)

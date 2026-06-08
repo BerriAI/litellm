@@ -27,6 +27,9 @@ _auth_mode = "none"
 _auth_secret: Optional[str] = None
 _client_id = DEFAULT_CLIENT_ID
 _client_secret = DEFAULT_CLIENT_SECRET
+_expected_subject_token: Optional[str] = None
+_expected_audience: Optional[str] = None
+_expected_scope: Optional[str] = None
 
 
 def _request_is_authorized(headers) -> bool:
@@ -42,7 +45,10 @@ def _request_is_authorized(headers) -> bool:
         return headers.get(DEFAULT_CUSTOM_HEADER) == _auth_secret
     if _auth_mode == "oauth2":
         auth = headers.get("authorization") or ""
-        return auth.startswith("Bearer ") and auth[len("Bearer ") :] in VALID_OAUTH_BEARER_TOKENS
+        return (
+            auth.startswith("Bearer ")
+            and auth[len("Bearer ") :] in VALID_OAUTH_BEARER_TOKENS
+        )
     return False
 
 
@@ -59,7 +65,9 @@ class _AuthMiddleware:
             await self.app(scope, receive, send)
             return
         if not _request_is_authorized(request.headers):
-            response = JSONResponse({"error": "unauthorized", "auth_mode": _auth_mode}, status_code=401)
+            response = JSONResponse(
+                {"error": "unauthorized", "auth_mode": _auth_mode}, status_code=401
+            )
             await response(scope, receive, send)
             return
         await self.app(scope, receive, send)
@@ -82,7 +90,10 @@ async def oauth_token(request: Request) -> JSONResponse:
     form = await request.form()
     grant_type = form.get("grant_type")
 
-    if form.get("client_id") != _client_id or form.get("client_secret") != _client_secret:
+    if (
+        form.get("client_id") != _client_id
+        or form.get("client_secret") != _client_secret
+    ):
         return JSONResponse({"error": "invalid_client"}, status_code=401)
 
     if grant_type == "client_credentials":
@@ -97,6 +108,15 @@ async def oauth_token(request: Request) -> JSONResponse:
     if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
         if not form.get("subject_token"):
             return JSONResponse({"error": "invalid_request"}, status_code=400)
+        if (
+            _expected_subject_token
+            and form.get("subject_token") != _expected_subject_token
+        ):
+            return JSONResponse({"error": "invalid_subject_token"}, status_code=400)
+        if _expected_audience and form.get("audience") != _expected_audience:
+            return JSONResponse({"error": "invalid_audience"}, status_code=400)
+        if _expected_scope and form.get("scope") != _expected_scope:
+            return JSONResponse({"error": "invalid_scope"}, status_code=400)
         return JSONResponse(
             {
                 "access_token": DEFAULT_OBO_ACCESS_TOKEN,
@@ -130,11 +150,15 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--auth-secret", default=None)
     parser.add_argument("--client-id", default=DEFAULT_CLIENT_ID)
     parser.add_argument("--client-secret", default=DEFAULT_CLIENT_SECRET)
+    parser.add_argument("--expected-subject-token", default=None)
+    parser.add_argument("--expected-audience", default=None)
+    parser.add_argument("--expected-scope", default=None)
     return parser.parse_args()
 
 
 def main() -> None:
     global _auth_mode, _auth_secret, _client_id, _client_secret
+    global _expected_audience, _expected_scope, _expected_subject_token
     args = _parse_args()
     transport = (args.transport or "stdio").lower()
 
@@ -142,6 +166,9 @@ def main() -> None:
     _auth_secret = args.auth_secret
     _client_id = args.client_id
     _client_secret = args.client_secret
+    _expected_subject_token = args.expected_subject_token
+    _expected_audience = args.expected_audience
+    _expected_scope = args.expected_scope
 
     if transport == "stdio":
         mcp.run(transport="stdio")
