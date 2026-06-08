@@ -168,9 +168,11 @@ def _redact_standard_logging_object(model_call_details: dict):
 # Input-bearing keys that show up in request-body snapshots
 # (proxy_server_request.body and additional_args.complete_input_dict).
 # "messages"/"prompt"/"input" are the OpenAI-style payload entry points;
+# "contents" is the Gemini/Vertex native user-turn field.
 # "system"/"system_prompt"/"instructions" are the provider-native top-level
-# system-prompt fields (Anthropic `system`, Responses API `instructions`),
-# which carry user content just as the messages do.
+# system-prompt fields (Anthropic `system`, Responses API `instructions`);
+# "system_instruction"/"systemInstruction" are the Gemini/Vertex equivalents.
+# All carry user content just as the messages do.
 def _redact_request_body_dict(body: dict):
     """Scrub the input/system-prompt keys on a materialised request-body dict."""
     if "messages" in body:
@@ -179,7 +181,17 @@ def _redact_request_body_dict(body: dict):
         body["prompt"] = ""
     if "input" in body:
         body["input"] = ""
-    for key in ("system", "system_prompt", "instructions"):
+    if "contents" in body:
+        body["contents"] = [
+            {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
+        ]
+    for key in (
+        "system",
+        "system_prompt",
+        "instructions",
+        "system_instruction",
+        "systemInstruction",
+    ):
         if key in body:
             body[key] = "redacted-by-litellm"
 

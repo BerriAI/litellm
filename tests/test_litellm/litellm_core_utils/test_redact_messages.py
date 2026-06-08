@@ -592,3 +592,67 @@ class TestPerformRedaction:
         assert cid["system"] == "redacted-by-litellm"
         assert cid["system_prompt"] == "redacted-by-litellm"
         assert cid["instructions"] == "redacted-by-litellm"
+
+    def test_redacts_gemini_native_fields_in_complete_input_dict(self):
+        """Gemini/Vertex wire-format requests carry the user turn in `contents`
+        and the system prompt in `system_instruction` / `systemInstruction`,
+        not the OpenAI-style `messages` / `system` keys — these provider-native
+        fields must be scrubbed from the wire-format request snapshot too."""
+        details = {
+            "additional_args": {
+                "complete_input_dict": {
+                    "model": "gemini-2.0-flash",
+                    "contents": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": "CANARY_INPUT_should_be_redacted"}],
+                        }
+                    ],
+                    "system_instruction": {
+                        "parts": [{"text": "CANARY_SYSTEM_should_be_redacted"}]
+                    },
+                    "systemInstruction": {
+                        "parts": [{"text": "CANARY_SYSTEM_should_be_redacted"}]
+                    },
+                }
+            }
+        }
+
+        perform_redaction(details, None)
+
+        cid = details["additional_args"]["complete_input_dict"]
+        assert cid["contents"] == [
+            {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
+        ]
+        assert cid["system_instruction"] == "redacted-by-litellm"
+        assert cid["systemInstruction"] == "redacted-by-litellm"
+
+    def test_redacts_gemini_native_fields_in_proxy_server_request_body(self):
+        """Same Gemini/Vertex native input fields can also land in the proxy
+        body snapshot — `contents` / `system_instruction` must be scrubbed."""
+        details = {
+            "litellm_params": {
+                "proxy_server_request": {
+                    "body": {
+                        "model": "gemini-2.0-flash",
+                        "contents": [
+                            {
+                                "role": "user",
+                                "parts": [{"text": "CANARY_INPUT_should_be_redacted"}],
+                            }
+                        ],
+                        "system_instruction": {
+                            "parts": [{"text": "CANARY_SYSTEM_should_be_redacted"}]
+                        },
+                    }
+                }
+            },
+        }
+
+        perform_redaction(details, None)
+
+        body = details["litellm_params"]["proxy_server_request"]["body"]
+        assert body["contents"] == [
+            {"role": "user", "parts": [{"text": "redacted-by-litellm"}]}
+        ]
+        assert body["system_instruction"] == "redacted-by-litellm"
