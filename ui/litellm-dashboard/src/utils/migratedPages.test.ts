@@ -34,6 +34,7 @@ describe("migratedHref / legacyPageHref", () => {
 
     expect(MIGRATED_PAGES.api_ref).toBe("api-reference");
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
+    expect(MIGRATED_PAGES["llm-playground"]).toBe("playground");
   });
 });
 
@@ -49,6 +50,7 @@ describe("legacyKeyForPathname", () => {
     // Resolves to the sidebar key api_ref, not the hyphenated alias, so highlighting works.
     expect(legacyKeyForPathname("/ui/api-reference")).toBe("api_ref");
     expect(legacyKeyForPathname("/ui/api-reference/")).toBe("api_ref");
+    expect(legacyKeyForPathname("/ui/playground")).toBe("llm-playground");
   });
 
   it("returns null for a not-yet-migrated path", async () => {
