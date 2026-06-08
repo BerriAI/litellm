@@ -63,13 +63,45 @@ def get_models_from_unified_file_id(unified_file_id: str) -> List[str]:
         return []
 
 
+def parse_passthrough_unified_batch_id(
+    file_id: str,
+) -> Optional[tuple[str, str]]:
+    """
+    Parse a decoded passthrough managed batch ID.
+
+    Format: litellm_proxy:passthrough;provider:{p};unified_id,{u};raw_id,{r}
+
+    Returns (provider, raw_batch_id) or None if not passthrough format.
+    """
+    if not isinstance(file_id, str) or ":passthrough;" not in file_id:
+        return None
+    try:
+        if "provider:" not in file_id or "raw_id," not in file_id:
+            return None
+        provider = file_id.split("provider:")[1].split(";")[0]
+        raw_batch_id = file_id.split("raw_id,")[1].split(";")[0]
+        if not provider or not raw_batch_id:
+            return None
+        return provider, raw_batch_id
+    except (IndexError, AttributeError):
+        return None
+
+
+def is_passthrough_unified_batch_id(file_id: str) -> bool:
+    """Return True if *file_id* is a decoded passthrough managed batch ID."""
+    return parse_passthrough_unified_batch_id(file_id) is not None
+
+
 def get_model_id_from_unified_batch_id(file_id: str) -> Optional[str]:
     """
     Get the model_id from the file_id
 
-    Expected format: litellm_proxy;model_id:{};llm_batch_id:{};llm_output_file_id:{}
+    Native proxy format: litellm_proxy;model_id:{};llm_batch_id:{};llm_output_file_id:{}
+    Passthrough format: provider string (e.g. azure, openai) for env-cred routing.
     """
-    ## use regex to get the model_id from the file_id
+    passthrough = parse_passthrough_unified_batch_id(file_id)
+    if passthrough is not None:
+        return passthrough[0]
     try:
         # Ensure file_id is a string and not a mock object
         if not isinstance(file_id, str):
@@ -84,10 +116,15 @@ def get_batch_id_from_unified_batch_id(file_id: str) -> str:
     # Ensure file_id is a string and not a mock object
     if not isinstance(file_id, str):
         return ""
+    passthrough = parse_passthrough_unified_batch_id(file_id)
+    if passthrough is not None:
+        return passthrough[1]
     if "llm_batch_id" in file_id:
         batch_id = file_id.split("llm_batch_id:", 1)[1]
-    else:
+    elif "generic_response_id:" in file_id:
         batch_id = file_id.split("generic_response_id:", 1)[1]
+    else:
+        return ""
     return re.split(r"[;,]", batch_id, maxsplit=1)[0]
 
 

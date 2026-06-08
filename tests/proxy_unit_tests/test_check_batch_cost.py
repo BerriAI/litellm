@@ -671,6 +671,95 @@ class TestCheckBatchCost:
         assert mock_response.output_file_id == fake_managed_output_id
         assert mock_response.error_file_id == fake_managed_error_id
 
+    @pytest.mark.asyncio
+    async def test_passthrough_managed_batch_uses_provider_and_output_models(
+        self, check_batch_cost_instance, mock_prisma_client, mock_llm_router
+    ):
+        """Passthrough managed batch IDs use provider for retrieve and output JSONL for cost."""
+        from unittest.mock import patch
+
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(
+            return_value=0
+        )
+        mock_prisma_client.db.litellm_managedobjecttable.update = AsyncMock()
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=None
+        )
+
+        mock_job = MagicMock()
+        mock_job.id = "job-passthrough-1"
+        mock_job.unified_object_id = "cGFzc3Rocm91Z2hfYmF0Y2g="
+        mock_job.created_by = "user-1"
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
+            return_value=[mock_job]
+        )
+        mock_llm_router.has_model_id.return_value = False
+
+        mock_response = MagicMock()
+        mock_response.status = "completed"
+        mock_response.output_file_id = "file-output-raw"
+        mock_response.error_file_id = None
+        mock_response.model_dump_json.return_value = (
+            '{"id":"batch-1","status":"completed"}'
+        )
+
+        decoded_id = (
+            "litellm_proxy:passthrough;provider:azure;"
+            "unified_id,uuid-1;raw_id,batch_passthrough_123"
+        )
+
+        mock_file_content = MagicMock()
+        mock_file_content.content = (
+            b'{"custom_id":"1","response":{"body":{"model":"gpt-4o-mini"}}}'
+        )
+
+        with (
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils._is_base64_encoded_unified_file_id",
+                side_effect=[decoded_id, None],
+            ),
+            patch("litellm.files.main.afile_content", new_callable=AsyncMock) as mock_afile,
+            patch(
+                "litellm.batches.batch_utils._get_file_content_as_dictionary",
+                return_value=[{"custom_id": "1", "response": {"body": {"model": "gpt-4o-mini"}}}],
+            ),
+            patch(
+                "litellm.batches.batch_utils.calculate_batch_cost_and_usage",
+                new_callable=AsyncMock,
+            ) as mock_calc,
+            patch(
+                "litellm.litellm_core_utils.litellm_logging.Logging"
+            ) as mock_logging_cls,
+            patch("litellm.aretrieve_batch", new_callable=AsyncMock) as mock_retrieve,
+            patch(
+                "litellm_enterprise.proxy.common_utils.check_batch_cost._get_passthrough_batch_retrieve_kwargs",
+                return_value={"custom_llm_provider": "azure", "api_key": "sk-test"},
+            ),
+        ):
+            mock_retrieve.return_value = mock_response
+            mock_afile.return_value = mock_file_content
+            mock_calc.return_value = (
+                0.02,
+                {"prompt_tokens": 20, "completion_tokens": 10},
+                ["gpt-4o-mini"],
+            )
+            mock_logging_obj = MagicMock()
+            mock_logging_obj.async_success_handler = AsyncMock()
+            mock_logging_cls.return_value = mock_logging_obj
+
+            await check_batch_cost_instance.check_batch_cost()
+
+        mock_retrieve.assert_awaited_once()
+        assert mock_retrieve.call_args.kwargs["batch_id"] == "batch_passthrough_123"
+        mock_calc.assert_awaited_once()
+        calc_kwargs = mock_calc.call_args.kwargs
+        assert calc_kwargs["custom_llm_provider"] == "azure"
+        assert calc_kwargs["model_name"] is None
+        assert (
+            mock_prisma_client.db.litellm_managedobjecttable.update.call_count == 1
+        )
+
 
 class TestUnmanagedVertexRouting:
     """Routing of unmanaged Vertex batches whose unified_object_id is a raw provider job id."""
