@@ -89,6 +89,51 @@ class GalileoObserve(CustomLogger):
             return bool(self.api_key)
         return bool(self.username and self.password)
 
+    async def async_health_check(self) -> dict:
+        try:
+            if not self.project_id:
+                return {
+                    "status": "unhealthy",
+                    "error_message": "GALILEO_PROJECT_ID environment variable not set",
+                }
+
+            if not self.base_url:
+                return {
+                    "status": "unhealthy",
+                    "error_message": "GALILEO_BASE_URL environment variable not set",
+                }
+
+            if self.use_v2_api:
+                if not self.api_key:
+                    return {
+                        "status": "unhealthy",
+                        "error_message": "GALILEO_API_KEY environment variable not set",
+                    }
+            elif not self.username or not self.password:
+                return {
+                    "status": "unhealthy",
+                    "error_message": (
+                        "GALILEO_USERNAME and GALILEO_PASSWORD environment "
+                        "variables must be set"
+                    ),
+                }
+
+            if not await self._ensure_headers():
+                return {
+                    "status": "unhealthy",
+                    "error_message": "Galileo authentication failed",
+                }
+
+            return {
+                "status": "healthy",
+                "message": "Galileo credentials are configured properly",
+            }
+        except Exception as e:
+            return {
+                "status": "unhealthy",
+                "error_message": f"Galileo health check failed: {str(e)}",
+            }
+
     async def async_set_galileo_headers(self) -> None:
         galileo_login_response = await self.async_httpx_handler.post(
             url=f"{self.base_url}/login",
