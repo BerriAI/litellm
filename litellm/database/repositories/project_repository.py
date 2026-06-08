@@ -4,8 +4,8 @@ Project repository for database operations on LiteLLM_ProjectTable.
 
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.project import LiteLLM_ProjectTable
-from litellm.repositories.base_repository import BaseRepository
+from litellm.database.models.project import LiteLLM_ProjectTable
+from litellm.database.repositories.base_repository import BaseRepository
 
 
 class ProjectRepository(BaseRepository[LiteLLM_ProjectTable]):

@@ -25,12 +25,12 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
-from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.model_repository import ModelRepository
+from litellm.database.repositories.table_repositories import (
     DailyTagSpendRepository,
     TagRepository,
 )
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.tag_management import (

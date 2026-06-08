@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from pydantic import model_validator
 
-from litellm.models.budget import LiteLLM_BudgetTable
+from litellm.database.models.budget import LiteLLM_BudgetTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 

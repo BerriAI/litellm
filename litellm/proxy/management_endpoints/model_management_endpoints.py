@@ -48,9 +48,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.table_repositories import ModelTableRepository
-from litellm.repositories.team_repository import TeamRepository
+from litellm.database.repositories.model_repository import ModelRepository
+from litellm.database.repositories.table_repositories import ModelTableRepository
+from litellm.database.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     UpdateUsefulLinksRequest,
 )

@@ -10,8 +10,8 @@ from typing import Dict, List, Optional
 
 from pydantic import ConfigDict, Field, model_validator
 
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.models.organization_membership import (
+from litellm.database.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.database.models.organization_membership import (
     LiteLLM_OrganizationMembershipTable,
 )
 from litellm.types.llms.base import LiteLLMPydanticObjectBase

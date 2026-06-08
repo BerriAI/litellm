@@ -6,7 +6,7 @@ from litellm.proxy._types import (
     Member,
     NewUserResponse,
 )
-from litellm.repositories.team_repository import TeamRepository
+from litellm.database.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
 

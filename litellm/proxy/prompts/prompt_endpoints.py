@@ -22,7 +22,7 @@ from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKey
 from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.path_utils import safe_filename
-from litellm.repositories.table_repositories import PromptRepository
+from litellm.database.repositories.table_repositories import PromptRepository
 from litellm.types.prompts.init_prompts import (
     ListPromptsResponse,
     PromptInfo,

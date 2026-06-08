@@ -30,7 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.table_repositories import ConfigOverridesRepository
+from litellm.database.repositories.table_repositories import ConfigOverridesRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.config_overrides import (
     ConfigOverrideSettingsResponse,

@@ -482,7 +482,7 @@ from litellm.proxy.utils import (
     update_spend,
 )
 from litellm.proxy.video_endpoints.endpoints import router as video_router
-from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.database.repositories.credentials_repository import CredentialsRepository
 from litellm.router import (
     AssistantsTypedDict,
     Deployment,
@@ -10368,9 +10368,9 @@ async def run_thread(
 # )
 # async def get_available_routes(user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)):
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
-from litellm.repositories.config_repository import ConfigRepository
-from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.config_repository import ConfigRepository
+from litellm.database.repositories.model_repository import ModelRepository
+from litellm.database.repositories.table_repositories import (
     AccessGroupRepository,
     ConfigOverridesRepository,
     InvitationLinkRepository,
@@ -10378,8 +10378,8 @@ from litellm.repositories.table_repositories import (
     SSOConfigRepository,
     UISettingsRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
 
 
 def _get_provider_token_counter(

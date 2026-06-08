@@ -9,7 +9,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import AgentsRepository
+from litellm.database.repositories.table_repositories import AgentsRepository
 from litellm.types.agents import AgentConfig, AgentResponse, PatchAgentRequest
 
 

@@ -6,8 +6,8 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.team import LiteLLM_TeamTable
-from litellm.repositories.base_repository import BaseRepository
+from litellm.database.models.team import LiteLLM_TeamTable
+from litellm.database.repositories.base_repository import BaseRepository
 
 
 class TeamRepository(BaseRepository[LiteLLM_TeamTable]):

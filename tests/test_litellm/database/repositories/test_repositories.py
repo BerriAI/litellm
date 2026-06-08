@@ -9,23 +9,23 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from litellm.models.base import DomainModel
-from litellm.models.budget import LiteLLM_BudgetTable
-from litellm.models.credentials import CredentialItem
-from litellm.models.team import LiteLLM_TeamTable
-from litellm.repositories.base_repository import BaseRepository
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.config_repository import ConfigRepository
-from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.object_permission_repository import (
+from litellm.database.models.base import DomainModel
+from litellm.database.models.budget import LiteLLM_BudgetTable
+from litellm.database.models.credentials import CredentialItem
+from litellm.database.models.team import LiteLLM_TeamTable
+from litellm.database.repositories.base_repository import BaseRepository
+from litellm.database.repositories.budget_repository import BudgetRepository
+from litellm.database.repositories.config_repository import ConfigRepository
+from litellm.database.repositories.credentials_repository import CredentialsRepository
+from litellm.database.repositories.model_repository import ModelRepository
+from litellm.database.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
-from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.project_repository import ProjectRepository
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.organization_repository import OrganizationRepository
+from litellm.database.repositories.project_repository import ProjectRepository
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 
@@ -203,7 +203,7 @@ class TestBaseRepository:
         assert len(budgets) == 1
 
     def test_record_to_dict_branches(self):
-        from litellm.repositories.base_repository import _record_to_dict
+        from litellm.database.repositories.base_repository import _record_to_dict
 
         assert _record_to_dict({"a": 1}) == {"a": 1}
 
@@ -300,11 +300,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.database.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_model_encrypts_params(self, mock_decrypt, mock_encrypt, repo):
@@ -318,11 +318,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.database.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_create_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
@@ -342,11 +342,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.database.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
@@ -368,7 +368,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_all(self, mock_decrypt, repo):
@@ -391,7 +391,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_unblocked(self, mock_decrypt, repo):
@@ -408,7 +408,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_find_by_name(self, mock_decrypt, repo):
@@ -424,11 +424,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.database.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_update_model(self, mock_decrypt, mock_encrypt, repo):
@@ -447,7 +447,7 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_delete_model(self, mock_decrypt, repo):
@@ -461,11 +461,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.database.repositories.model_repository.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
     async def test_block_unblock_model(self, mock_decrypt, mock_encrypt, repo):
@@ -1454,7 +1454,7 @@ class TestConfigRepository:
         assert result["router_settings"]["timeout"] == 60
 
     @pytest.mark.asyncio
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
+    @patch("litellm.database.repositories.config_repository.decrypt_value_helper")
     async def test_reconcile_config_with_environment_variables(
         self, mock_decrypt, repo
     ):
@@ -1498,7 +1498,7 @@ class TestConfigRepository:
         )
         assert result["router_settings"] == {"timeout": 30}
 
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
+    @patch("litellm.database.repositories.config_repository.decrypt_value_helper")
     def test_decrypt_env_variables_non_string(self, mock_decrypt, repo):
         mock_decrypt.side_effect = lambda value, **kw: value
         env_vars = {"string_val": "encrypted", "int_val": 123, "bool_val": True}
@@ -1506,7 +1506,7 @@ class TestConfigRepository:
         assert result["int_val"] == "123"
         assert result["bool_val"] == "True"
 
-    @patch("litellm.repositories.config_repository.decrypt_value_helper")
+    @patch("litellm.database.repositories.config_repository.decrypt_value_helper")
     def test_decrypt_env_variables_none_value(self, mock_decrypt, repo):
         mock_decrypt.return_value = None
         env_vars = {"key": "value"}
@@ -1913,7 +1913,7 @@ class TestModelRepositoryExtended:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
+        "litellm.database.repositories.model_repository.decrypt_value_helper",
         side_effect=lambda value, **kw: value,
     )
     async def test_find_by_team_id(self, mock_decrypt, repo):
@@ -2052,7 +2052,7 @@ class TestTeamRepositoryArchiveData:
     def test_build_archive_data_with_all_valid_fields(self, repo):
         from datetime import datetime
 
-        from litellm.models.team import Member
+        from litellm.database.models.team import Member
 
         team = LiteLLM_TeamTable(
             team_id="team-full",
@@ -2143,7 +2143,7 @@ class TestConfigRepositoryDeepCopy:
 
 class TestPrismaTableRepository:
     def test_table_property_returns_named_delegate(self):
-        from litellm.repositories.table_repositories import (
+        from litellm.database.repositories.table_repositories import (
             AgentsRepository,
             PolicyRepository,
         )
@@ -2157,14 +2157,14 @@ class TestPrismaTableRepository:
         assert agents.table is not policy.table
 
     def test_table_access_raises_without_db(self):
-        from litellm.repositories.table_repositories import SpendLogsRepository
+        from litellm.database.repositories.table_repositories import SpendLogsRepository
 
         repo = SpendLogsRepository(None)
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = repo.table
 
     def test_each_repository_binds_its_own_table_name(self):
-        import litellm.repositories.table_repositories as tr
+        import litellm.database.repositories.table_repositories as tr
 
         prisma_client = MagicMock()
         repos = [

@@ -12,7 +12,7 @@ from typing import List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.database.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 

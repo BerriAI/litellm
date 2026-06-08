@@ -7,7 +7,7 @@ Canonical definition for ``litellm_teammembership``. Re-exported from
 
 from typing import Optional, Union
 
-from litellm.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
+from litellm.database.models.budget import LiteLLM_BudgetTable, LiteLLM_BudgetTableFull
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 

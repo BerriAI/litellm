@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
-from litellm.repositories.object_permission_repository import ObjectPermissionRepository
-from litellm.repositories.table_repositories import ToolRepository
+from litellm.database.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.database.repositories.table_repositories import ToolRepository
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
     ToolPolicyOverrideRow,

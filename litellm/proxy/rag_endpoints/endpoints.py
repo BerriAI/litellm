@@ -27,7 +27,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
-from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.database.repositories.table_repositories import ManagedVectorStoresRepository
 
 router = APIRouter()
 

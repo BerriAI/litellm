@@ -17,7 +17,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
-from litellm.repositories.table_repositories import SkillsRepository
+from litellm.database.repositories.table_repositories import SkillsRepository
 
 # Skills are looked up on every chat completion that has skills enabled
 # (`SkillsInjectionHook` calls ``fetch_skill_from_db``). 60s LRU/TTL cache

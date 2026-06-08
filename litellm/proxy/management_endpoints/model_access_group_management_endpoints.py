@@ -19,7 +19,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     clear_cache,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.model_repository import ModelRepository
+from litellm.database.repositories.model_repository import ModelRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     AccessGroupInfo,
     DeleteModelGroupResponse,

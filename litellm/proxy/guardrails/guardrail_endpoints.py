@@ -27,7 +27,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-from litellm.repositories.table_repositories import GuardrailsRepository
+from litellm.database.repositories.table_repositories import GuardrailsRepository
 from litellm.types.guardrails import (
     PII_ENTITY_CATEGORIES_MAP,
     ApplyGuardrailRequest,

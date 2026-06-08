@@ -79,7 +79,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     normalize_route_for_root_path,
 )
-from litellm.repositories.table_repositories import TeamMembershipRepository
+from litellm.database.repositories.table_repositories import TeamMembershipRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.services import ServiceTypes
 

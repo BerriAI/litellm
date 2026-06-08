@@ -29,8 +29,8 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.vector_store_endpoints.utils import can_user_access_vector_store
-from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.table_repositories import ManagedVectorStoresRepository
+from litellm.database.repositories.model_repository import ModelRepository
+from litellm.database.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,

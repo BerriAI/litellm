@@ -4,8 +4,8 @@ Budget repository for database operations on LiteLLM_BudgetTable.
 
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.budget import LiteLLM_BudgetTable
-from litellm.repositories.base_repository import BaseRepository
+from litellm.database.models.budget import LiteLLM_BudgetTable
+from litellm.database.repositories.base_repository import BaseRepository
 
 
 class BudgetRepository(BaseRepository[LiteLLM_BudgetTable]):

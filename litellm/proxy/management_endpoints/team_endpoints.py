@@ -102,18 +102,18 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.budget_repository import BudgetRepository
+from litellm.database.repositories.organization_repository import OrganizationRepository
+from litellm.database.repositories.table_repositories import (
     AccessGroupRepository,
     DeletedTeamRepository,
     ModelTableRepository,
     OrganizationMembershipRepository,
     TeamMembershipRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.router import Router

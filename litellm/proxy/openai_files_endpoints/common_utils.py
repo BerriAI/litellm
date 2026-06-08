@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
 )

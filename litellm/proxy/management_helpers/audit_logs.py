@@ -18,7 +18,7 @@ from litellm.proxy._types import (
     Optional,
     UserAPIKeyAuth,
 )
-from litellm.repositories.table_repositories import AuditLogRepository
+from litellm.database.repositories.table_repositories import AuditLogRepository
 from litellm.types.utils import StandardAuditLogPayload
 
 _audit_log_callback_cache: Dict[str, CustomLogger] = {}

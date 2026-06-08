@@ -20,14 +20,14 @@ from typing import TYPE_CHECKING, ClassVar, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.organization_repository import OrganizationRepository
+from litellm.database.repositories.table_repositories import (
     SpendLogsRepository,
     TeamMembershipRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 

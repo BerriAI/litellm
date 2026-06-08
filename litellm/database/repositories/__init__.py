@@ -2,16 +2,16 @@
 Repository classes for database operations.
 """
 
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.config_repository import ConfigRepository
-from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.repositories.model_repository import ModelRepository
-from litellm.repositories.object_permission_repository import (
+from litellm.database.repositories.budget_repository import BudgetRepository
+from litellm.database.repositories.config_repository import ConfigRepository
+from litellm.database.repositories.credentials_repository import CredentialsRepository
+from litellm.database.repositories.model_repository import ModelRepository
+from litellm.database.repositories.object_permission_repository import (
     ObjectPermissionRepository,
 )
-from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.project_repository import ProjectRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.organization_repository import OrganizationRepository
+from litellm.database.repositories.project_repository import ProjectRepository
+from litellm.database.repositories.table_repositories import (
     AccessGroupRepository,
     AdaptiveRouterSessionRepository,
     AdaptiveRouterStateRepository,
@@ -60,9 +60,9 @@ from litellm.repositories.table_repositories import (
     WorkflowMessageRepository,
     WorkflowRunRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 

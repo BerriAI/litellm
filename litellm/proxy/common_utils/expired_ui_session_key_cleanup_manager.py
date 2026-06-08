@@ -21,7 +21,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 

@@ -34,7 +34,7 @@ from litellm.proxy.utils import (
     hash_password,
     verify_password,
 )
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 

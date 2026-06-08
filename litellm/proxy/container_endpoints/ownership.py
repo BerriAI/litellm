@@ -12,7 +12,7 @@ from litellm.proxy.common_utils.resource_ownership import (
     is_proxy_admin,
     user_can_access_resource_owner,
 )
-from litellm.repositories.table_repositories import ManagedObjectRepository
+from litellm.database.repositories.table_repositories import ManagedObjectRepository
 from litellm.responses.utils import ResponsesAPIRequestUtils
 
 CONTAINER_OBJECT_PURPOSE = "container"

@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
     DailyPolicyMetricsRepository,
     GuardrailsRepository,

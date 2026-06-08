@@ -27,8 +27,8 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import EndUserRepository
+from litellm.database.repositories.budget_repository import BudgetRepository
+from litellm.database.repositories.table_repositories import EndUserRepository
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )

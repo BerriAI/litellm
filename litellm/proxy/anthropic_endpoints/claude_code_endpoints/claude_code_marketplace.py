@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.table_repositories import ClaudeCodePluginRepository
+from litellm.database.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
     ListPluginsResponse,
     PluginListItem,

@@ -47,7 +47,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     prepare_data_with_credentials,
 )
 from litellm.proxy.utils import ProxyLogging, is_known_model
-from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.database.repositories.table_repositories import ManagedFileRepository
 from litellm.router import Router
 from litellm.types.llms.openai import (
     CREATE_FILE_REQUESTS_PURPOSE,

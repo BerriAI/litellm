@@ -19,7 +19,7 @@ from litellm.proxy.auth.auth_checks import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import get_prisma_client_or_throw
-from litellm.repositories.table_repositories import AccessGroupRepository
+from litellm.database.repositories.table_repositories import AccessGroupRepository
 from litellm.types.access_group import (
     AccessGroupCreateRequest,
     AccessGroupResponse,

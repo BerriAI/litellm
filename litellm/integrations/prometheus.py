@@ -46,9 +46,9 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     UserAPIKeyAuth,
 )
-from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.organization_repository import OrganizationRepository
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import (
     _sanitize_prometheus_label_name,

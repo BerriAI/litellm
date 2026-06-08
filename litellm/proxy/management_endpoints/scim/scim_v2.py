@@ -51,14 +51,14 @@ from litellm.proxy.management_endpoints.team_endpoints import (
     team_member_delete,
 )
 from litellm.proxy.utils import _premium_user_check, handle_exception_on_proxy
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
     TeamMembershipRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import *

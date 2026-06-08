@@ -24,10 +24,10 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     regenerate_key_fn,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     DeprecatedVerificationTokenRepository,
 )
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 

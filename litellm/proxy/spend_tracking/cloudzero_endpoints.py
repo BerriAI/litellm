@@ -11,7 +11,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.database.repositories.config_repository import ConfigRepository
 from litellm.types.proxy.cloudzero_endpoints import (
     CloudZeroExportRequest,
     CloudZeroExportResponse,

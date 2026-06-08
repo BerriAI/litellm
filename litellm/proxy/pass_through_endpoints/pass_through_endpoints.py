@@ -60,7 +60,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.utils import normalize_route_for_root_path
-from litellm.repositories.team_repository import TeamRepository
+from litellm.database.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (

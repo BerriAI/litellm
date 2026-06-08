@@ -14,14 +14,14 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
-from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.organization_repository import OrganizationRepository
+from litellm.database.repositories.table_repositories import (
     EndUserRepository,
     TagRepository,
     TeamMembershipRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.services import ServiceTypes

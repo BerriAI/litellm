@@ -55,7 +55,7 @@ from litellm.router_strategy.adaptive_router.update_queue import (
 _SESSION_STATE_SWEEP_THRESHOLD: int = 1024
 # Same pattern for the owner cache.
 _OWNER_CACHE_SWEEP_THRESHOLD: int = 1024
-from litellm.repositories.table_repositories import AdaptiveRouterStateRepository
+from litellm.database.repositories.table_repositories import AdaptiveRouterStateRepository
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import (
     AdaptiveRouterConfig,

@@ -74,11 +74,11 @@ from litellm.proxy.guardrails.tool_name_extraction import (
 )
 from litellm.proxy.route_llm_request import route_request
 from litellm.proxy.utils import PrismaClient, ProxyLogging, log_db_metrics
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.object_permission_repository import ObjectPermissionRepository
-from litellm.repositories.organization_repository import OrganizationRepository
-from litellm.repositories.project_repository import ProjectRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.budget_repository import BudgetRepository
+from litellm.database.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.database.repositories.organization_repository import OrganizationRepository
+from litellm.database.repositories.project_repository import ProjectRepository
+from litellm.database.repositories.table_repositories import (
     AccessGroupRepository,
     EndUserRepository,
     JWTKeyMappingRepository,
@@ -86,8 +86,8 @@ from litellm.repositories.table_repositories import (
     TagRepository,
     TeamMembershipRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
 from litellm.router import Router
 from litellm.utils import get_utc_datetime
 

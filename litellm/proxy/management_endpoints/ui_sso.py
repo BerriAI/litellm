@@ -110,9 +110,9 @@ from litellm.proxy.utils import (
     get_custom_url,
     get_server_root_path,
 )
-from litellm.repositories.table_repositories import SSOConfigRepository
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.table_repositories import SSOConfigRepository
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool, str_to_bool
 from litellm.types.proxy.management_endpoints.ui_sso import *  # noqa: F403, F401
 from litellm.types.proxy.management_endpoints.ui_sso import (

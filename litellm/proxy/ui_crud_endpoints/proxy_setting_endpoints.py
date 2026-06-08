@@ -12,8 +12,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_keys
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.config_repository import ConfigRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.config_repository import ConfigRepository
+from litellm.database.repositories.table_repositories import (
     DailyTagSpendRepository,
     SSOConfigRepository,
     UISettingsRepository,

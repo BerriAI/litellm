@@ -16,7 +16,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     AgentsRepository,
     MCPServerRepository,
 )

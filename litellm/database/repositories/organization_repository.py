@@ -4,8 +4,8 @@ Organization repository for database operations on LiteLLM_OrganizationTable.
 
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.organization import LiteLLM_OrganizationTable
-from litellm.repositories.base_repository import BaseRepository
+from litellm.database.models.organization import LiteLLM_OrganizationTable
+from litellm.database.repositories.base_repository import BaseRepository
 
 
 class OrganizationRepository(BaseRepository[LiteLLM_OrganizationTable]):

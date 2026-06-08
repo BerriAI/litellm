@@ -16,8 +16,8 @@ from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.policy_engine import (

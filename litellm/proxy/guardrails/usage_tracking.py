@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     DailyGuardrailMetricsRepository,
     SpendLogGuardrailIndexRepository,
 )

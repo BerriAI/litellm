@@ -19,7 +19,7 @@ from litellm.proxy.guardrails.guardrail_hooks.grayswan import (
 )
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import GuardrailsRepository
+from litellm.database.repositories.table_repositories import GuardrailsRepository
 from litellm.secret_managers.main import get_secret
 from litellm.types.guardrails import (
     Guardrail,

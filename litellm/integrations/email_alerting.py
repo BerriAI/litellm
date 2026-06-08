@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.proxy._types import WebhookEvent
-from litellm.repositories.team_repository import TeamRepository
+from litellm.database.repositories.team_repository import TeamRepository
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
 LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"

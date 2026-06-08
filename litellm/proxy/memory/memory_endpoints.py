@@ -29,8 +29,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.table_repositories import MemoryRepository
-from litellm.repositories.team_repository import TeamRepository
+from litellm.database.repositories.table_repositories import MemoryRepository
+from litellm.database.repositories.team_repository import TeamRepository
 from litellm.types.memory_management import (
     LiteLLM_MemoryRow,
     MemoryCreateRequest,

@@ -14,7 +14,7 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     UserAPIKeyAuth,
 )
-from litellm.repositories.table_repositories import AgentsRepository
+from litellm.database.repositories.table_repositories import AgentsRepository
 
 
 class AgentRequestHandler:

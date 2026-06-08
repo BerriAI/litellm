@@ -5,8 +5,8 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 import json
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.repositories.base_repository import BaseRepository
+from litellm.database.models.model import LiteLLM_ProxyModelTable
+from litellm.database.repositories.base_repository import BaseRepository
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,

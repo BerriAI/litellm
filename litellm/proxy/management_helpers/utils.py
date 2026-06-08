@@ -33,9 +33,9 @@ from litellm.proxy._types import (  # key request types; user request types; tea
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.table_repositories import TeamMembershipRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.budget_repository import BudgetRepository
+from litellm.database.repositories.table_repositories import TeamMembershipRepository
+from litellm.database.repositories.user_repository import UserRepository
 
 
 def get_new_internal_user_defaults(

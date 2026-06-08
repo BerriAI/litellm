@@ -8,7 +8,7 @@ so reads return the stored values verbatim.
 
 from typing import Any, Dict, Optional
 
-from litellm.models.credentials import CredentialItem
+from litellm.database.models.credentials import CredentialItem
 
 
 class CredentialsRepository:

@@ -43,7 +43,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
 )
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     ManagedFileRepository,
     ManagedObjectRepository,
 )

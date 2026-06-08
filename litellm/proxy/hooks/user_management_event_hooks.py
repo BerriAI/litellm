@@ -24,7 +24,7 @@ from litellm.proxy._types import (
     WebhookEvent,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.user_repository import UserRepository
 
 
 class UserManagementEventHooks:

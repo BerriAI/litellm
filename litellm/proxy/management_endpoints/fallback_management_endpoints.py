@@ -27,7 +27,7 @@ else:
         # fastapi is only required for proxy, not for SDK usage
         pass
 
-from litellm.repositories.config_repository import ConfigRepository
+from litellm.database.repositories.config_repository import ConfigRepository
 from litellm.types.management_endpoints.router_settings_endpoints import (
     FallbackCreateRequest,
     FallbackDeleteResponse,

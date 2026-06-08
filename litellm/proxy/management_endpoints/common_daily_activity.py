@@ -8,8 +8,8 @@ from fastapi import HTTPException, status
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import DeletedVerificationTokenRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.table_repositories import DeletedVerificationTokenRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (

@@ -7,9 +7,9 @@ Canonical definition for ``litellm_organizationtable``. Re-exported from
 
 from typing import List, Optional
 
-from litellm.models.budget import LiteLLM_BudgetTable
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.models.user import LiteLLM_UserTable
+from litellm.database.models.budget import LiteLLM_BudgetTable
+from litellm.database.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.database.models.user import LiteLLM_UserTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 

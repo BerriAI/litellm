@@ -17,7 +17,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
-from litellm.repositories.table_repositories import ClaudeCodePluginRepository
+from litellm.database.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (

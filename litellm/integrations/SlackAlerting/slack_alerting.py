@@ -37,8 +37,8 @@ from litellm.proxy._types import (
     VirtualKeyEvent,
     WebhookEvent,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *

@@ -60,7 +60,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.management_helpers.audit_logs import get_audit_log_changed_by
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     MCPServerRepository,
     MCPUserCredentialsRepository,
 )

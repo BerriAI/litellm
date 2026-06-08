@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
-from litellm.repositories.table_repositories import PolicyRepository
+from litellm.database.repositories.table_repositories import PolicyRepository
 from litellm.types.proxy.policy_engine import (
     GuardrailPipeline,
     PipelineStep,

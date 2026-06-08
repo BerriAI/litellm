@@ -4,7 +4,7 @@ from typing import List, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.table_repositories import MCPToolsetRepository
+from litellm.database.repositories.table_repositories import MCPToolsetRepository
 from litellm.types.mcp_server.mcp_toolset import (
     MCPToolset,
     NewMCPToolsetRequest,

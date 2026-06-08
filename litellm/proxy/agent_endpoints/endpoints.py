@@ -301,7 +301,7 @@ async def get_agents(
 from litellm.proxy.agent_endpoints.agent_registry import (
     global_agent_registry as AGENT_REGISTRY,
 )
-from litellm.repositories.table_repositories import AgentsRepository
+from litellm.database.repositories.table_repositories import AgentsRepository
 
 
 @router.post(

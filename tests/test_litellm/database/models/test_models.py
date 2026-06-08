@@ -6,36 +6,36 @@ from datetime import datetime
 
 import pytest
 
-from litellm.models.access_group import LiteLLM_AccessGroupTable
-from litellm.models.budget import (
+from litellm.database.models.access_group import LiteLLM_AccessGroupTable
+from litellm.database.models.budget import (
     LiteLLM_BudgetTable,
     LiteLLM_BudgetTableFull,
     LiteLLM_TeamMemberTable,
 )
-from litellm.models.config import LiteLLM_Config
-from litellm.models.credentials import CreateCredentialItem, CredentialItem
-from litellm.models.end_user import LiteLLM_EndUserTable
-from litellm.models.managed_files import (
+from litellm.database.models.config import LiteLLM_Config
+from litellm.database.models.credentials import CreateCredentialItem, CredentialItem
+from litellm.database.models.end_user import LiteLLM_EndUserTable
+from litellm.database.models.managed_files import (
     LiteLLM_ManagedFileTable,
     LiteLLM_ManagedObjectTable,
     LiteLLM_ManagedVectorStoresTable,
 )
-from litellm.models.mcp_server import LiteLLM_MCPServerTable
-from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
-from litellm.models.organization import LiteLLM_OrganizationTable
-from litellm.models.project import LiteLLM_ProjectTable
-from litellm.models.skills import LiteLLM_SkillsTable
-from litellm.models.spend_logs import LiteLLM_ErrorLogs, LiteLLM_SpendLogs
-from litellm.models.tag import LiteLLM_TagTable
-from litellm.models.team import (
+from litellm.database.models.mcp_server import LiteLLM_MCPServerTable
+from litellm.database.models.model import LiteLLM_ProxyModelTable
+from litellm.database.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.database.models.organization import LiteLLM_OrganizationTable
+from litellm.database.models.project import LiteLLM_ProjectTable
+from litellm.database.models.skills import LiteLLM_SkillsTable
+from litellm.database.models.spend_logs import LiteLLM_ErrorLogs, LiteLLM_SpendLogs
+from litellm.database.models.tag import LiteLLM_TagTable
+from litellm.database.models.team import (
     LiteLLM_DeletedTeamTable,
     LiteLLM_TeamTable,
     LiteLLM_TeamTableCachedObj,
 )
-from litellm.models.team_membership import LiteLLM_TeamMembership
-from litellm.models.user import LiteLLM_UserTable
-from litellm.models.verification_token import (
+from litellm.database.models.team_membership import LiteLLM_TeamMembership
+from litellm.database.models.user import LiteLLM_UserTable
+from litellm.database.models.verification_token import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_VerificationToken,
 )

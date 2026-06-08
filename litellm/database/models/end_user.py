@@ -9,8 +9,8 @@ from typing import Literal, Optional
 
 from pydantic import ConfigDict, model_validator
 
-from litellm.models.budget import LiteLLM_BudgetTable
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.database.models.budget import LiteLLM_BudgetTable
+from litellm.database.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 

@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Union
 
 from pydantic import ConfigDict
 
-from litellm.models.object_permission import LiteLLM_ObjectPermissionTable
+from litellm.database.models.object_permission import LiteLLM_ObjectPermissionTable
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 

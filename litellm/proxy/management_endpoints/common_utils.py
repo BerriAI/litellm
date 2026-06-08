@@ -23,7 +23,7 @@ from litellm.proxy._types import (  # noqa: F401  re-exported
 )
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.utils import _premium_user_check
-from litellm.repositories.team_repository import TeamRepository
+from litellm.database.repositories.team_repository import TeamRepository
 
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest

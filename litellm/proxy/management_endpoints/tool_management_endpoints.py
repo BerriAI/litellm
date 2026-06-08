@@ -21,13 +21,13 @@ if TYPE_CHECKING:
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.repositories.object_permission_repository import ObjectPermissionRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.database.repositories.table_repositories import (
     SpendLogsRepository,
     SpendLogToolIndexRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.tool_management import (

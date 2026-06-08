@@ -4,7 +4,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.proxy._types import CommonProxyErrors, InvitationNew, UserAPIKeyAuth
-from litellm.repositories.table_repositories import InvitationLinkRepository
+from litellm.database.repositories.table_repositories import InvitationLinkRepository
 
 
 async def create_invitation_for_user(

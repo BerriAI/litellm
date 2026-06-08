@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, get_args
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import remove_items_at_indices
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     ManagedVectorStoreIndexRepository,
     ManagedVectorStoresRepository,
 )

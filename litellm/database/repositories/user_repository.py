@@ -5,8 +5,8 @@ User repository for database operations on LiteLLM_UserTable.
 import json
 from typing import Any, Dict, List, Optional, Type
 
-from litellm.models.user import LiteLLM_UserTable
-from litellm.repositories.base_repository import BaseRepository
+from litellm.database.models.user import LiteLLM_UserTable
+from litellm.database.repositories.base_repository import BaseRepository
 
 
 class UserRepository(BaseRepository[LiteLLM_UserTable]):

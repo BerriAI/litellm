@@ -21,9 +21,9 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     get_spend_by_team_and_customer,
 )
 from litellm.proxy.utils import handle_exception_on_proxy
-from litellm.repositories.table_repositories import SpendLogsRepository
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.table_repositories import SpendLogsRepository
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 

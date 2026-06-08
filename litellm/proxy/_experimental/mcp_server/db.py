@@ -27,13 +27,13 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.repositories.object_permission_repository import ObjectPermissionRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.object_permission_repository import ObjectPermissionRepository
+from litellm.database.repositories.table_repositories import (
     MCPServerRepository,
     MCPUserCredentialsRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider

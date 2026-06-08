@@ -22,7 +22,7 @@ import asyncio
 from typing import Any, Dict, Tuple
 
 from litellm._logging import verbose_router_logger
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.table_repositories import (
     AdaptiveRouterSessionRepository,
     AdaptiveRouterStateRepository,
 )

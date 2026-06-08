@@ -139,17 +139,17 @@ from litellm.proxy.hooks.parallel_request_limiter import (
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
-from litellm.repositories.budget_repository import BudgetRepository
-from litellm.repositories.config_repository import ConfigRepository
-from litellm.repositories.table_repositories import (
+from litellm.database.repositories.budget_repository import BudgetRepository
+from litellm.database.repositories.config_repository import ConfigRepository
+from litellm.database.repositories.table_repositories import (
     EndUserRepository,
     HealthCheckRepository,
     SpendLogsRepository,
     UserNotificationsRepository,
 )
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.repositories.verification_token_repository import (
+from litellm.database.repositories.team_repository import TeamRepository
+from litellm.database.repositories.user_repository import UserRepository
+from litellm.database.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.secret_managers.main import str_to_bool

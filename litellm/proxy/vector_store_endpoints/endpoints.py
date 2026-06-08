@@ -17,7 +17,7 @@ from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store,
     get_litellm_managed_vector_store,
 )
-from litellm.repositories.table_repositories import ManagedVectorStoreIndexRepository
+from litellm.database.repositories.table_repositories import ManagedVectorStoreIndexRepository
 from litellm.types.vector_stores import IndexCreateRequest
 
 router = APIRouter()
