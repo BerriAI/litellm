@@ -34,7 +34,6 @@ const mockCallbacksResponse = {
     routing_strategy: "simple-shuffle",
     num_retries: 3,
     timeout: 30,
-    routing_groups: [],
   },
 };
 
@@ -130,34 +129,6 @@ describe("RouterSettings", () => {
       expect.objectContaining({
         router_settings: expect.objectContaining({
           routing_strategy: "simple-shuffle",
-        }),
-      }),
-    );
-  });
-
-  it("should send routing_groups as a list when saving load balancing settings", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<RouterSettings {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("textbox", { name: /routing_groups/i })).toBeInTheDocument();
-    });
-
-    await user.click(screen.getByRole("button", { name: /save changes/i }));
-
-    expect(setCallbacksCall).toHaveBeenCalledWith(
-      "test-token",
-      expect.objectContaining({
-        router_settings: expect.objectContaining({
-          routing_groups: [],
-        }),
-      }),
-    );
-    expect(setCallbacksCall).not.toHaveBeenCalledWith(
-      "test-token",
-      expect.objectContaining({
-        router_settings: expect.objectContaining({
-          routing_groups: "[]",
         }),
       }),
     );
