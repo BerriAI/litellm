@@ -63,6 +63,7 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_PROVIDER_METADATA_FIELDS,
     VERTEX_CREDENTIALS_TYPES,
     Candidates,
     ContentType,
@@ -2253,14 +2254,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             citation_metadata,
         )
 
-    _STREAM_METADATA_FIELDS = (
-        "vertex_ai_grounding_metadata",
-        "vertex_ai_url_context_metadata",
-        "vertex_ai_safety_ratings",
-        "vertex_ai_safety_results",
-        "vertex_ai_citation_metadata",
-    )
-
     @staticmethod
     def _get_stream_chunk_attr(chunk: Any, field_name: str) -> Any:
         if isinstance(chunk, dict):
@@ -2312,7 +2305,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         response: ModelResponse,
         chunks: List[Any],
     ) -> None:
-        for field_name in VertexGeminiConfig._STREAM_METADATA_FIELDS:
+        for field_name in VERTEX_AI_PROVIDER_METADATA_FIELDS:
             merged: List[Any] = []
             for chunk in chunks:
                 value = VertexGeminiConfig._get_stream_chunk_attr(chunk, field_name)

@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.secret_managers.main import str_to_bool
+from litellm.types.llms.vertex_ai import VERTEX_AI_PROVIDER_METADATA_FIELDS
 from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
@@ -28,14 +29,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObject = _LiteLLMLoggingObject
 else:
     LiteLLMLoggingObject = Any
-
-VERTEX_PROVIDER_METADATA_FIELDS = (
-    "vertex_ai_grounding_metadata",
-    "vertex_ai_url_context_metadata",
-    "vertex_ai_safety_ratings",
-    "vertex_ai_safety_results",
-    "vertex_ai_citation_metadata",
-)
 
 
 def redact_message_input_output_from_custom_logger(
@@ -110,21 +103,21 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
 
 def _redact_vertex_provider_metadata(obj: Any) -> None:
     if isinstance(obj, dict):
-        for field in VERTEX_PROVIDER_METADATA_FIELDS:
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
             if field in obj:
                 obj[field] = []
         hidden_params = obj.get("_hidden_params")
         if isinstance(hidden_params, dict):
-            for field in VERTEX_PROVIDER_METADATA_FIELDS:
+            for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
                 hidden_params.pop(field, None)
         return
 
-    for field in VERTEX_PROVIDER_METADATA_FIELDS:
+    for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
         if hasattr(obj, field):
             setattr(obj, field, [])
     hidden_params = getattr(obj, "_hidden_params", None)
     if isinstance(hidden_params, dict):
-        for field in VERTEX_PROVIDER_METADATA_FIELDS:
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
             hidden_params.pop(field, None)
 
 
@@ -148,7 +141,7 @@ def _redact_vertex_provider_metadata_from_litellm_params(
         hidden_params = metadata.get("hidden_params")
         if not isinstance(hidden_params, dict):
             continue
-        for field in VERTEX_PROVIDER_METADATA_FIELDS:
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
             hidden_params.pop(field, None)
 
 
