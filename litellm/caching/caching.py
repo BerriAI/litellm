@@ -425,29 +425,37 @@ class Cache:
         return hash_hex
 
     def _get_team_scope_for_cache_key(self, **kwargs) -> str:
-        """Optionally scope the cache key by the requesting team.
+        """Optionally scope the cache key by the requesting tenant.
 
         On a multi-tenant proxy the cache key is otherwise derived only from the
         request parameters, so two different teams (tenants) sending the same
         request share cache entries - one team can be served another's cached
         response. When ``add_team_id_to_cache_key`` is enabled (via
-        ``cache_params``), the requesting team id is folded into the cache key so
-        cache entries are not reused across teams; same-team requests still share
-        the cache. A request with no team falls back to the (hashed) api key, so
-        it is still isolated rather than silently sharing the global entry.
+        ``cache_params``), the authenticated team id is folded into the cache key
+        so entries are not reused across teams; same-team requests still share the
+        cache. A request whose key has no team falls back to the (hashed) virtual
+        key, so it is still isolated rather than silently sharing the global entry.
         Opt-in - the default preserves the existing behavior.
+
+        Security: the scope is read only from ``litellm_params["metadata"]``, which
+        the proxy populates from the authenticated key in
+        ``litellm.proxy.litellm_pre_call_utils`` - it strips any client-supplied
+        ``user_api_key_*`` fields from the request-body metadata before writing the
+        authenticated values, so the team/key used here cannot be forged by the
+        caller. The authenticated ``user_api_key_auth`` object is preferred. Direct
+        SDK calls (no proxy metadata) fall through to "" and keep today's behavior.
         """
         if not self.add_team_id_to_cache_key:
             return ""
-        metadata = kwargs.get("metadata") or {}
         litellm_params = kwargs.get("litellm_params") or {}
-        metadata_in_litellm_params = litellm_params.get("metadata") or {}
-        team_id = metadata.get(
+        metadata = litellm_params.get("metadata") or {}
+        user_api_key_auth = metadata.get("user_api_key_auth")
+        team_id = getattr(user_api_key_auth, "team_id", None) or metadata.get(
             "user_api_key_team_id"
-        ) or metadata_in_litellm_params.get("user_api_key_team_id")
+        )
         if team_id:
             return f"user_api_key_team_id: {team_id}"
-        api_key = metadata.get("user_api_key") or metadata_in_litellm_params.get(
+        api_key = getattr(user_api_key_auth, "api_key", None) or metadata.get(
             "user_api_key"
         )
         if api_key:
