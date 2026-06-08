@@ -1393,8 +1393,7 @@ class LiteLLMCompletionResponsesConfig:
                     or not typed_tool.get("parameters")
                 ):
                     raise ValueError(
-                        "Responses API namespace tools require description and "
-                        "parameters before converting to Chat Completion tools"
+                        "Namespace tools require description and parameters"
                     )
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
                 parameters = dict(typed_tool.get("parameters", {}) or {})

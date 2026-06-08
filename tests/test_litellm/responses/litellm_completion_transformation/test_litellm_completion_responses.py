@@ -1235,7 +1235,7 @@ class TestToolTransformation:
             "name": "mcp__node_repl",
         }
 
-        with pytest.raises(ValueError, match="namespace tools require description"):
+        with pytest.raises(ValueError, match="Namespace tools require description"):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools=[namespace_tool]
             )
