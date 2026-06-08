@@ -80,7 +80,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
             <Card key={result.guardrailName} className="bg-green-50 border-green-200">
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
-                  <div 
+                  <div
                     className="flex items-center space-x-2 cursor-pointer flex-1"
                     onClick={() => toggleResultCollapse(result.guardrailName)}
                   >
@@ -90,9 +90,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                       <DownOutlined className="text-gray-500 text-xs" />
                     )}
                     <CheckCircleOutlined className="text-green-600 text-lg" />
-                    <span className="text-sm font-medium text-green-800">
-                      {result.guardrailName}
-                    </span>
+                    <span className="text-sm font-medium text-green-800">{result.guardrailName}</span>
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center space-x-1 text-xs text-gray-600">
@@ -121,9 +119,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                 {!isCollapsed && (
                   <>
                     <div className="bg-white border border-green-200 rounded p-3">
-                      <label className="text-xs font-medium text-gray-600 mb-2 block">
-                        Output Text
-                      </label>
+                      <label className="text-xs font-medium text-gray-600 mb-2 block">Output Text</label>
                       <div className="font-mono text-sm text-gray-900 whitespace-pre-wrap break-words">
                         {result.response_text}
                       </div>
@@ -145,10 +141,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
           return (
             <Card key={errorItem.guardrailName} className="bg-red-50 border-red-200">
               <div className="flex items-start space-x-2">
-                <div 
-                  className="cursor-pointer mt-0.5"
-                  onClick={() => toggleResultCollapse(errorItem.guardrailName)}
-                >
+                <div className="cursor-pointer mt-0.5" onClick={() => toggleResultCollapse(errorItem.guardrailName)}>
                   {isCollapsed ? (
                     <RightOutlined className="text-gray-500 text-xs" />
                   ) : (
@@ -166,7 +159,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center justify-between mb-1">
-                    <p 
+                    <p
                       className="text-sm font-medium text-red-800 cursor-pointer"
                       onClick={() => toggleResultCollapse(errorItem.guardrailName)}
                     >
@@ -177,9 +170,7 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
                       <span className="font-medium">{errorItem.latency}ms</span>
                     </div>
                   </div>
-                  {!isCollapsed && (
-                    <p className="text-sm text-red-700 mt-1">{errorItem.error.message}</p>
-                  )}
+                  {!isCollapsed && <p className="text-sm text-red-700 mt-1">{errorItem.error.message}</p>}
                 </div>
               </div>
             </Card>
@@ -190,4 +181,3 @@ export function GuardrailTestResults({ results, errors }: GuardrailTestResultsPr
 }
 
 export default GuardrailTestResults;
-

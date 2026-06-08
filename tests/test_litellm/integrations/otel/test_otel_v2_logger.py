@@ -96,8 +96,12 @@ def _kwargs(payload=None):
     }
 
 
-def _logger(legacy_compat=True):
-    cfg = OpenTelemetryV2Config(exporter="in_memory", legacy_compat=legacy_compat)
+def _logger(legacy_compat=True, team_metadata_keys=None):
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=legacy_compat,
+        baggage_team_metadata_keys=team_metadata_keys or [],
+    )
     exporter = InMemorySpanExporter()
     tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
     return OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider), exporter
@@ -232,6 +236,155 @@ def test_idempotent_on_repeat_callback():
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
     asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
     assert len(exporter.get_finished_spans()) == 1
+
+
+# --------------------------------------------------------------------------- #
+#  MCP tool-call spans
+# --------------------------------------------------------------------------- #
+
+
+def _mcp_payload(**overrides):
+    payload = {
+        "call_type": "call_mcp_tool",
+        "status": "success",
+        "litellm_call_id": "mcp_1",
+        "response_cost": 0.01,
+        "metadata": {
+            "user_api_key_team_id": "t1",
+            "mcp_tool_call_metadata": {
+                "name": "get_weather",
+                "arguments": {"city": "Paris"},
+                "result": {"temp_c": 21},
+                "mcp_server_name": "weather-mcp",
+                "mcp_session_id": "sess-abc123",
+            },
+        },
+        "hidden_params": {},
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _logger_capturing():
+    from litellm.integrations.otel.model.config import CaptureMessageContent
+
+    cfg = OpenTelemetryV2Config(
+        exporter="in_memory",
+        legacy_compat=False,
+        capture_message_content=CaptureMessageContent.SPAN_ONLY,
+    )
+    exporter = InMemorySpanExporter()
+    tracer_provider = providers.build_tracer_provider(cfg, exporter=exporter)
+    return OpenTelemetryV2(config=cfg, tracer_provider=tracer_provider), exporter
+
+
+def test_mcp_tool_call_emits_client_span():
+    """A closed MCP tool call becomes a CLIENT span named ``tools/call {tool}``,
+    carrying the MCP semconv method/operation and the vendor server name."""
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/call get_weather"
+    assert span.kind is SpanKind.CLIENT
+    assert span.attributes["mcp.method.name"] == "tools/call"
+    assert span.attributes["mcp.session.id"] == "sess-abc123"
+    assert span.attributes[GenAI.OPERATION_NAME] == "execute_tool"
+    assert span.attributes["gen_ai.tool.name"] == "get_weather"
+    assert span.attributes[LiteLLM.MCP_SERVER_NAME] == "weather-mcp"
+    assert span.attributes[LiteLLM.CALL_ID] == "mcp_1"
+    assert span.status.status_code is StatusCode.UNSET
+    # Tool I/O is content: withheld while capture is off (the default).
+    assert "gen_ai.tool.call.arguments" not in span.attributes
+    assert "gen_ai.tool.call.result" not in span.attributes
+
+
+def test_mcp_tool_call_stateless_omits_session_id():
+    """A stateless MCP call carries no ``mcp-session-id``, so the span must omit
+    ``mcp.session.id`` rather than stamping an empty or ``None`` value."""
+    logger, exporter = _logger()
+    payload = _mcp_payload()
+    del payload["metadata"]["mcp_tool_call_metadata"]["mcp_session_id"]
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": payload}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert "mcp.session.id" not in span.attributes
+    assert span.attributes["mcp.method.name"] == "tools/call"
+
+
+def test_mcp_tool_call_is_not_logged_as_llm_call():
+    """The MCP branch must short-circuit the LLM-call path: even if ``pre_call``
+    opened a stray carrier for this id, the result is one MCP span, never an LLM
+    ``chat`` span."""
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    logger.log_pre_api_call(model="MCP: get_weather", messages=[], kwargs=kwargs)
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes["mcp.method.name"] == "tools/call"
+    assert "gen_ai.request.model" not in span.attributes
+
+
+def test_mcp_tool_call_captures_io_when_enabled():
+    logger, exporter = _logger_capturing()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    (span,) = exporter.get_finished_spans()
+    assert '"Paris"' in span.attributes["gen_ai.tool.call.arguments"]
+    assert "21" in span.attributes["gen_ai.tool.call.result"]
+
+
+def test_mcp_tool_call_failure_marks_error():
+    logger, exporter = _logger()
+    payload = _mcp_payload(
+        status="failure",
+        error_information={"error_class": "MCPError", "error_message": "upstream 500"},
+    )
+    asyncio.run(
+        logger.async_log_failure_event(
+            {"standard_logging_object": payload}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/call get_weather"
+    assert span.status.status_code is StatusCode.ERROR
+    assert span.attributes["error.type"] == "MCPError"
+
+
+def test_mcp_tool_call_deduped_on_repeat():
+    logger, exporter = _logger()
+    kwargs = {"standard_logging_object": _mcp_payload()}
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    asyncio.run(logger.async_log_success_event(kwargs, None, None, None))
+    assert len(exporter.get_finished_spans()) == 1
+
+
+def test_mcp_tool_call_metadata_read_from_nested_metadata_not_top_level():
+    """``mcp_tool_call_metadata`` lives under ``StandardLoggingPayload.metadata``;
+    a top-level copy (the pre-fix shape the reader used to look at) must be ignored
+    so the reader can't silently regress to producing an empty ``tools/call`` span
+    with no session id, tool name, or server name."""
+    logger, exporter = _logger()
+    payload = _mcp_payload()
+    # Move the real metadata to the top level only, mirroring the old buggy read
+    # location. ``call_type`` still classifies this as an MCP call, so the span is
+    # emitted, but none of its fields are reachable from the wrong nesting level.
+    payload["mcp_tool_call_metadata"] = payload["metadata"].pop(
+        "mcp_tool_call_metadata"
+    )
+    asyncio.run(
+        logger.async_log_success_event(
+            {"standard_logging_object": payload}, None, None, None
+        )
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "tools/call"
+    assert "mcp.session.id" not in span.attributes
+    assert "gen_ai.tool.name" not in span.attributes
+    assert LiteLLM.MCP_SERVER_NAME not in span.attributes
 
 
 def test_pre_call_idempotent_keeps_first_span():
@@ -415,17 +568,10 @@ def test_guardrail_span_anchors_to_root_inside_active_phase_span():
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
     )
     set_request_root_span(server)
-    request_data = {
-        "metadata": {
-            "standard_logging_guardrail_information": {
-                "guardrail_name": "my_guard",
-                "guardrail_status": "success",
-            }
-        }
-    }
+    entry = {"guardrail_name": "my_guard", "guardrail_status": "success"}
     with trace.use_span(server, end_on_exit=False):
         with logger.start_phase_span("auth /chat/completions"):
-            logger._emit_guardrail_spans(request_data)
+            logger.emit_guardrail_span(entry)
     server.end()
     by_name = {s.name: s for s in exporter.get_finished_spans()}
     guard = by_name["execute_guardrail my_guard"]
@@ -541,8 +687,9 @@ class _Auth:
 def test_provider_model_and_team_metadata_on_real_boundary_flow():
     """End-to-end on the proxy boundary path (the gap a pure-emitter test misses):
 
-    - ``litellm.team.metadata`` is known at auth, so it rides identity Baggage
-      seeded there onto EVERY span (server + LLM call).
+    - ``litellm.team.metadata`` (filtered to the allowlisted sub-keys) is known
+      at auth, so it rides identity Baggage seeded there onto EVERY span
+      (server + LLM call).
     - ``litellm.provider.model`` is only known once routing picks a deployment
       (in the payload at close), AFTER the auth seed and AFTER the boundary span
       starts — so it can't ride Baggage. It's stamped directly on the LLM-call
@@ -550,7 +697,7 @@ def test_provider_model_and_team_metadata_on_real_boundary_flow():
     """
     import json
 
-    logger, exporter = _logger()
+    logger, exporter = _logger(team_metadata_keys=["tier", "cost_center"])
     server = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
     )
@@ -1061,37 +1208,29 @@ def test_boundary_span_closes_without_proxy_fanout(monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def _guardrail_request_data(*, start, end):
+def _guardrail_entry(*, start, end):
     return {
-        "metadata": {
-            "standard_logging_guardrail_information": [
-                {
-                    "guardrail_name": "openai-moderation",
-                    "guardrail_mode": "pre_call",
-                    "guardrail_status": "success",
-                    "start_time": start,
-                    "end_time": end,
-                    "duration": end - start,
-                }
-            ],
-        }
+        "guardrail_name": "openai-moderation",
+        "guardrail_mode": "pre_call",
+        "guardrail_status": "success",
+        "start_time": start,
+        "end_time": end,
+        "duration": end - start,
     }
 
 
 def test_guardrail_span_parents_to_ambient_server_span():
-    """The post-call hook runs in the request task with the server span ambient,
-    so the guardrail span parents to it natively — no span threaded through
-    metadata. (Auth already finished, so no phase span is active.)"""
+    """``emit_guardrail_span`` runs in the request task with the server span
+    ambient, so with no explicit anchor set the guardrail span parents to it.
+    (Auth already finished, so no phase span is active.)"""
     logger, exporter = _logger()
     server = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
     )
-    data = _guardrail_request_data(start=1000.0, end=1000.5)
+    entry = _guardrail_entry(start=1000.0, end=1000.5)
     try:
         with trace.use_span(server, end_on_exit=False):
-            asyncio.run(
-                logger.async_post_call_success_hook(data, _Auth(), {"ok": True})
-            )
+            logger.emit_guardrail_span(entry)
     finally:
         server.end()
     g = {s.name: s for s in exporter.get_finished_spans()}[
@@ -1102,17 +1241,15 @@ def test_guardrail_span_parents_to_ambient_server_span():
 
 def test_guardrail_span_uses_actual_execution_timestamps():
     """A pre_call guardrail's span carries its real start/end (from the logging
-    entry), so it sorts before the LLM call instead of at post-call emit time."""
+    entry), so it sorts before the LLM call instead of at emission time."""
     logger, exporter = _logger()
     server = logger._emitter.start_span(
         SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
     )
-    data = _guardrail_request_data(start=1700.0, end=1700.25)
+    entry = _guardrail_entry(start=1700.0, end=1700.25)
     try:
         with trace.use_span(server, end_on_exit=False):
-            asyncio.run(
-                logger.async_post_call_success_hook(data, _Auth(), {"ok": True})
-            )
+            logger.emit_guardrail_span(entry)
     finally:
         server.end()
     g = {s.name: s for s in exporter.get_finished_spans()}[
@@ -1120,3 +1257,60 @@ def test_guardrail_span_uses_actual_execution_timestamps():
     ]
     assert g.start_time == to_ns(1700.0)
     assert g.end_time == to_ns(1700.25)
+
+
+def test_emit_guardrail_span_anchors_to_root_not_ambient_phase_span():
+    """With an explicit request-root anchor set, the guardrail span parents to it
+    even while a phase span is the active OTel context — the anchor wins over
+    ambient, so a guardrail emitted mid-``auth`` is a sibling of the LLM call, not
+    a child of ``auth``."""
+    logger, exporter = _logger()
+    server = logger._emitter.start_span(
+        SpanRole.PROXY_REQUEST, LITELLM_PROXY_REQUEST_SPAN_NAME
+    )
+    set_request_root_span(server)
+    entry = _guardrail_entry(start=2000.0, end=2000.1)
+    with logger.start_phase_span("auth /chat/completions"):
+        logger.emit_guardrail_span(entry)
+    server.end()
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    guard = by_name["execute_guardrail openai-moderation"]
+    auth_span = by_name["auth /chat/completions"]
+    assert guard.parent.span_id == server.get_span_context().span_id
+    assert guard.parent.span_id != auth_span.get_span_context().span_id
+
+
+def test_module_level_emit_guardrail_span_routes_to_registered_logger(monkeypatch):
+    """The module-level entry point custom_guardrail calls routes the entry to the
+    single registered v2 logger and emits exactly one span."""
+    import litellm.integrations.otel.logger as otel_logger
+
+    logger, exporter = _logger()
+    monkeypatch.setattr(otel_logger, "_registered_v2_logger", lambda: logger)
+
+    otel_logger.emit_guardrail_span(_guardrail_entry(start=3000.0, end=3000.2))
+
+    names = [s.name for s in exporter.get_finished_spans()]
+    assert names.count("execute_guardrail openai-moderation") == 1
+
+
+def test_module_level_emit_guardrail_span_noop_without_registered_logger(monkeypatch):
+    """No registered v2 logger (SDK path / OTel not configured) → emitting is a
+    no-op rather than an error."""
+    import litellm.integrations.otel.logger as otel_logger
+
+    monkeypatch.setattr(otel_logger, "_registered_v2_logger", lambda: None)
+    otel_logger.emit_guardrail_span(_guardrail_entry(start=1.0, end=2.0))
+
+
+def test_module_level_emit_guardrail_span_swallows_emit_errors(monkeypatch):
+    """Span emission is best-effort: a logger that raises must never propagate out
+    of the guardrail-recording path and break guardrail evaluation."""
+    import litellm.integrations.otel.logger as otel_logger
+
+    class _Boom:
+        def emit_guardrail_span(self, entry):
+            raise RuntimeError("emit blew up")
+
+    monkeypatch.setattr(otel_logger, "_registered_v2_logger", lambda: _Boom())
+    otel_logger.emit_guardrail_span(_guardrail_entry(start=1.0, end=2.0))

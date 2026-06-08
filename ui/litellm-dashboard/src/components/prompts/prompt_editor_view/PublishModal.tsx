@@ -32,7 +32,7 @@ const PublishModal: React.FC<PublishModalProps> = ({
           <TremorButton onClick={onPublish} loading={isSaving}>
             Publish
           </TremorButton>
-        </div>
+        </div>,
       ]}
     >
       <div className="py-4">
@@ -53,4 +53,3 @@ const PublishModal: React.FC<PublishModalProps> = ({
 };
 
 export default PublishModal;
-

@@ -22,9 +22,11 @@ def get_supported_openai_params(  # noqa: PLR0915
     ```
 
     Args:
-        base_model: For Azure, the true underlying model (e.g. ``"azure/gpt-5.2"``)
-            when the deployment name differs. Used for model-type detection so that
-            non-standard deployment names route to the correct config.
+        base_model: An optional capability hint for deployments whose ``model``
+            label isn't recognized on its own (e.g. an Azure deployment name, or a
+            friendly Bedrock alias). It is additive: the result is the union of the
+            params supported by ``model`` and by ``base_model``, so a hint can only
+            add capabilities, never strip ones the real model already supports.
 
     Returns:
     - List if custom_llm_provider is mapped
@@ -52,7 +54,15 @@ def get_supported_openai_params(  # noqa: PLR0915
         provider_config = None
 
     if provider_config and request_type == "chat_completion":
-        return provider_config.get_supported_openai_params(model=base_model or model)
+        supported_params = provider_config.get_supported_openai_params(model=model)
+        if base_model and base_model != model:
+            base_model_params = provider_config.get_supported_openai_params(
+                model=base_model
+            )
+            supported_params = list(
+                dict.fromkeys([*supported_params, *base_model_params])
+            )
+        return supported_params
 
     if custom_llm_provider == "bedrock":
         return litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
@@ -329,6 +339,11 @@ def get_supported_openai_params(  # noqa: PLR0915
             )
 
             return ElevenLabsAudioTranscriptionConfig().get_supported_openai_params(
+                model=model
+            )
+    elif custom_llm_provider == "soniox":
+        if request_type == "transcription":
+            return litellm.SonioxAudioTranscriptionConfig().get_supported_openai_params(
                 model=model
             )
     elif custom_llm_provider in litellm._custom_providers:

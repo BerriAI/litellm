@@ -67,9 +67,7 @@ describe("PaginatedModelSelect", () => {
   });
 
   it("should display custom placeholder when provided", () => {
-    renderWithProviders(
-      <PaginatedModelSelect onChange={mockOnChange} placeholder="Choose model" />,
-    );
+    renderWithProviders(<PaginatedModelSelect onChange={mockOnChange} placeholder="Choose model" />);
 
     expect(screen.getByText("Choose model")).toBeInTheDocument();
   });
@@ -102,9 +100,7 @@ describe("PaginatedModelSelect", () => {
   });
 
   it("should display selected value when value prop is provided", async () => {
-    renderWithProviders(
-      <PaginatedModelSelect value="model-1" onChange={mockOnChange} />,
-    );
+    renderWithProviders(<PaginatedModelSelect value="model-1" onChange={mockOnChange} />);
 
     const combobox = screen.getByRole("combobox");
     await userEvent.click(combobox);
@@ -160,9 +156,7 @@ describe("PaginatedModelSelect", () => {
       expect(screen.getByRole("option", { name: "GPT-4 (model-1)" })).toBeInTheDocument();
     });
 
-    const scrollableContainer = document.querySelector(
-      ".ant-select-dropdown .rc-virtual-list-holder",
-    );
+    const scrollableContainer = document.querySelector(".ant-select-dropdown .rc-virtual-list-holder");
     expect(scrollableContainer).toBeInTheDocument();
     expect(scrollableContainer).toHaveAttribute("style");
   });
@@ -268,9 +262,7 @@ describe("PaginatedModelSelect", () => {
   });
 
   it("should respect allowClear prop", () => {
-    renderWithProviders(
-      <PaginatedModelSelect value="model-1" onChange={mockOnChange} allowClear={false} />,
-    );
+    renderWithProviders(<PaginatedModelSelect value="model-1" onChange={mockOnChange} allowClear={false} />);
 
     expect(screen.getByRole("combobox")).toBeInTheDocument();
   });

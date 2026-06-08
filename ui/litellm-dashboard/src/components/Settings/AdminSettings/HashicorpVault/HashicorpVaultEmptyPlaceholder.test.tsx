@@ -22,8 +22,6 @@ describe("HashicorpVaultEmptyPlaceholder", () => {
 
   it("should display the description text about Vault purpose", () => {
     render(<HashicorpVaultEmptyPlaceholder onAdd={vi.fn()} />);
-    expect(
-      screen.getByText(/Configure Hashicorp Vault to securely manage provider API keys/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Configure Hashicorp Vault to securely manage provider API keys/)).toBeInTheDocument();
   });
 });

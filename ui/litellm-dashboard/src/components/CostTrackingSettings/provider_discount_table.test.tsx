@@ -6,10 +6,18 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import ProviderDiscountTable from "./provider_discount_table";
 
 vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() { return null; },
-  PencilAltIcon: function PencilAltIcon() { return null; },
-  CheckIcon: function CheckIcon() { return null; },
-  XIcon: function XIcon() { return null; },
+  TrashIcon: function TrashIcon() {
+    return null;
+  },
+  PencilAltIcon: function PencilAltIcon() {
+    return null;
+  },
+  CheckIcon: function CheckIcon() {
+    return null;
+  },
+  XIcon: function XIcon() {
+    return null;
+  },
 }));
 
 vi.mock("@tremor/react", () => ({
@@ -63,7 +71,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={DEFAULT_DISCOUNT_CONFIG}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
@@ -74,7 +82,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={DEFAULT_DISCOUNT_CONFIG}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("Provider")).toBeInTheDocument();
     expect(screen.getByText("Discount Percentage")).toBeInTheDocument();
@@ -87,7 +95,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={DEFAULT_DISCOUNT_CONFIG}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
   });
@@ -98,7 +106,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("5.0%")).toBeInTheDocument();
   });
@@ -110,7 +118,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     const pencilButton = screen.getByRole("button", { name: /PencilAltIcon/i });
@@ -126,7 +134,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -141,7 +149,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -162,7 +170,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -178,7 +186,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -196,7 +204,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -212,7 +220,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
@@ -227,7 +235,7 @@ describe("ProviderDiscountTable", () => {
         discountConfig={{ openai: 0.05 }}
         onDiscountChange={onDiscountChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));

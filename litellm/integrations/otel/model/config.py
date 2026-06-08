@@ -9,6 +9,7 @@ from typing_extensions import Annotated
 from litellm.integrations.otel.model.baggage import (
     BAGGAGE_PROMOTED_KEYS,
     DEFAULT_BAGGAGE_METADATA_KEYS,
+    DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
@@ -168,10 +169,25 @@ class OpenTelemetryV2Config(BaseSettings):
             "``callback_settings.otel.baggage_metadata_keys`` in config.yaml."
         ),
     )
+    baggage_team_metadata_keys: Annotated[List[str], NoDecode] = Field(
+        default_factory=lambda: list(DEFAULT_BAGGAGE_TEAM_METADATA_KEYS),
+        validation_alias=AliasChoices(
+            "baggage_team_metadata_keys", "LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS"
+        ),
+        description=(
+            "Sub-keys of the team's free-form metadata promoted under "
+            "``litellm.team.metadata``. Empty by default so none of a team's "
+            "metadata leaves the process until explicitly allowlisted. Configure "
+            "via the ``LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS`` env var "
+            "(comma-separated) or "
+            "``callback_settings.otel.baggage_team_metadata_keys`` in config.yaml."
+        ),
+    )
 
     @field_validator(
         "baggage_promoted_keys",
         "baggage_metadata_keys",
+        "baggage_team_metadata_keys",
         "mapper_names",
         mode="before",
     )

@@ -14,6 +14,7 @@ from litellm.integrations.otel.model.metadata import (
 )
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
+    MCPMethod,
     resolve_operation,
     resolve_provider,
 )
@@ -35,11 +36,13 @@ __all__ = [
     "LLMCallSpanData",
     "LLMRequestParams",
     "LLMUsage",
+    "MCPToolCallSpanData",
     "ProxyRequestSpanData",
     "ServerInfo",
     "ServiceSpanData",
     "SpanError",
     "ToolDefinition",
+    "is_mcp_tool_call",
 ]
 
 if TYPE_CHECKING:
@@ -307,6 +310,77 @@ class LLMCallSpanData:
             choices_out=choices_out if capture_content else (),
             system_fingerprint=as_str(response.get("system_fingerprint")),
         )
+
+
+# --- the MCP tool-call model ------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class MCPToolCallSpanData:
+    """One MCP ``tools/call`` execution, parsed from a closed request's payload.
+
+    The proxy is an MCP *client* to the upstream server it forwards the call to,
+    so this is a CLIENT span. ``arguments_json``/``result_json`` are the tool's
+    input/output — sensitive content, so they're only retained when content
+    capture is enabled, mirroring ``LLMCallSpanData``'s message bodies.
+    """
+
+    operation: GenAIOperation
+    method: str
+    tool_name: str
+    server_name: str | None
+    session_id: str | None
+    arguments_json: str | None
+    result_json: str | None
+    error: SpanError | None
+    response_cost: float | None
+    identity: RequestIdentity
+
+    @classmethod
+    def from_standard_logging_payload(
+        cls, payload: "StandardLoggingPayload", capture_content: bool = False
+    ) -> "MCPToolCallSpanData":
+        meta = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
+        return cls(
+            operation=resolve_operation(as_str(payload.get("call_type"))),
+            method=MCPMethod.TOOLS_CALL.value,
+            tool_name=as_str(meta.get("name")) or "",
+            server_name=as_str(meta.get("mcp_server_name")),
+            session_id=as_str(meta.get("mcp_session_id")),
+            arguments_json=(
+                _json_or_none(meta.get("arguments"))
+                if capture_content and meta.get("arguments") is not None
+                else None
+            ),
+            result_json=(
+                _json_or_none(meta.get("result"))
+                if capture_content and meta.get("result") is not None
+                else None
+            ),
+            error=_parse_error(payload),
+            response_cost=as_float(payload.get("response_cost")),
+            identity=RequestContext.from_standard_logging_payload(payload).identity,
+        )
+
+
+def _mcp_tool_call_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """The MCP gateway's tool-call metadata, which lives under
+    ``StandardLoggingPayload.metadata`` (a ``StandardLoggingMetadata`` key), not
+    at the payload's top level."""
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    meta = metadata.get("mcp_tool_call_metadata")
+    return meta if isinstance(meta, Mapping) else {}
+
+
+def is_mcp_tool_call(payload: Mapping[str, object]) -> bool:
+    """Whether a closed request's payload is an MCP tool call rather than an LLM
+    call — true when the MCP gateway stamped its tool-call metadata, or the call
+    type says so on a path that hasn't populated the metadata yet."""
+    return bool(_mcp_tool_call_metadata(payload)) or (
+        payload.get("call_type") == "call_mcp_tool"
+    )
 
 
 # --- service event_metadata sanitization ------------------------------------ #
