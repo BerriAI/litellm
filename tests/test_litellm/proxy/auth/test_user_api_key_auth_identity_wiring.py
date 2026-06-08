@@ -160,10 +160,8 @@ async def test_parity_uak_for_api_key_request_matches_pre_integration():
         legacy = await _run_master_builder(request_legacy, request_data)
 
     assert request_legacy.state.identity_context is None
-    assert wired.user_role == legacy.user_role == LitellmUserRoles.PROXY_ADMIN
-    assert wired.user_id == legacy.user_id
-    assert wired.api_key == legacy.api_key
-    assert wired.end_user_id == legacy.end_user_id
+    assert wired.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert wired.model_dump() == legacy.model_dump()
 
 
 def _jwt_result():
@@ -240,6 +238,6 @@ async def test_parity_uak_for_jwt_request_matches_pre_integration():
     assert request_wired.state.identity_context.principal.kind == "jwt"
     assert request_legacy.state.identity_context is None
 
-    assert wired.user_id == legacy.user_id == "jwt-human-user"
-    assert wired.team_id == legacy.team_id == "jwt-team"
-    assert wired.user_role == legacy.user_role == LitellmUserRoles.PROXY_ADMIN
+    assert wired.user_id == "jwt-human-user"
+    assert wired.team_id == "jwt-team"
+    assert wired.model_dump() == legacy.model_dump()
