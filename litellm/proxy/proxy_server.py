@@ -7363,6 +7363,28 @@ class ProxyStartupEvent:
         # Ensure minimum interval of 30 seconds for batch writing to prevent memory issues
         batch_writing_interval = proxy_batch_write_at + random.randint(0, 5)
 
+        # ── Prisma engine readiness gate ─────────────────────────────────
+        # During pod startup (especially in Kubernetes rolling deployments),
+        # the embedded Prisma Query Engine subprocess may not be ready when
+        # Uvicorn starts accepting traffic.  Background jobs that touch the
+        # database immediately will fail with httpx.ConnectError and lose
+        # spend data.  Wait here so every scheduled job below starts with a
+        # healthy connection.
+        if prisma_client is not None and hasattr(prisma_client, "db"):
+            db_wrapper = prisma_client.db
+            if hasattr(db_wrapper, "wait_for_prisma_engine"):
+                engine_ready = await db_wrapper.wait_for_prisma_engine(
+                    retries=30,
+                    delay=2.0,
+                    backoff_factor=1.0,
+                )
+                if not engine_ready:
+                    verbose_proxy_logger.warning(
+                        "Prisma engine did not become ready within the retry "
+                        "budget. Background jobs may fail on startup."
+                    )
+        # ──────────────────────────────────────────────────────────────────
+
         ### RESET BUDGET ###
         if general_settings.get("disable_reset_budget", False) is False:
             budget_reset_job = ResetBudgetJob(

@@ -455,6 +455,89 @@ class PrismaWrapper:
                     self._log_prefix,
                 )
 
+    async def wait_for_prisma_engine(
+        self,
+        retries: int = 30,
+        delay: float = 2.0,
+        backoff_factor: float = 1.0,
+    ) -> bool:
+        """Wait for the Prisma Query Engine subprocess to be ready.
+
+        During pod startup (especially in Kubernetes rolling deployments), the
+        embedded Prisma Query Engine — a Rust binary that runs as a local
+        subprocess — starts asynchronously alongside the application. Uvicorn
+        may begin accepting traffic and scheduling background jobs before the
+        engine's localhost HTTP socket is bound, causing ``httpx.ConnectError``
+        on every DB operation for the first 5–6 minutes.
+
+        This method probes the engine with a lightweight ``SELECT 1`` query
+        and blocks until the engine responds or the retry budget is exhausted.
+        It should be called at the top of
+        :meth:`ProxyConfig.initialize_scheduled_background_jobs` before any
+        DB-dependent background task is scheduled.
+
+        Parameters
+        ----------
+        retries:
+            Maximum number of probe attempts (default 30, ~60 s total at
+            default delay).
+        delay:
+            Seconds to wait between probes (default 2.0).
+        backoff_factor:
+            Multiplicative backoff applied after each failed probe. Use 0 to
+            disable backoff, 1.0 for linear backoff (delay, 2×delay, 3×delay,
+            …).
+
+        Returns
+        -------
+        bool
+            ``True`` if the engine became ready within the retry budget,
+            ``False`` otherwise (caller should decide whether to proceed
+            degraded or raise).
+        """
+        cumulative_delay = 0.0
+        for attempt in range(1, retries + 1):
+            try:
+                await self._original_prisma.query_raw("SELECT 1")
+                verbose_proxy_logger.info(
+                    "%sPrisma engine ready after %d attempt(s) / %.1f s.",
+                    self._log_prefix,
+                    attempt,
+                    cumulative_delay,
+                )
+                return True
+            except Exception:
+                if attempt == retries:
+                    verbose_proxy_logger.error(
+                        "%sPrisma engine did not become ready after %d attempts "
+                        "(%.1f s total). Background jobs may fail.",
+                        self._log_prefix,
+                        retries,
+                        cumulative_delay,
+                    )
+                    return False
+
+                # Log progress at decreasing frequency so logs stay readable
+                # on slow engine startup without being noisy when the engine
+                # comes up quickly.
+                if attempt <= 3 or attempt % 5 == 0:
+                    verbose_proxy_logger.warning(
+                        "%sPrisma engine not ready (attempt %d/%d, %.0f s elapsed). "
+                        "Waiting for local query-engine subprocess...",
+                        self._log_prefix,
+                        attempt,
+                        retries,
+                        cumulative_delay,
+                    )
+
+                wait = delay
+                if backoff_factor:
+                    wait = delay * (1.0 + backoff_factor * (attempt - 1))
+                cumulative_delay += wait
+                await asyncio.sleep(wait)
+
+        return False  # pragma: no cover — retries exhausted above
+
     def __getattr__(self, name: str):
         """
         Proxy attribute access to the underlying Prisma client.
