@@ -302,6 +302,18 @@ class TestBatchCreationHandler:
         assert "gpt-4o-mini" in decoded
 
 
+class TestIsSupportedOpenAIEndpoint:
+    def test_batch_list_get_not_supported(self):
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            PassThroughEndpointLogging,
+        )
+
+        handler = PassThroughEndpointLogging()
+        url = "https://api.openai.com/v1/batches"
+        assert handler._is_supported_openai_endpoint(url, method="GET") is False
+        assert handler._is_supported_openai_endpoint(url, method="POST") is True
+
+
 class TestOpenAIPassthroughHandlerBatchDispatch:
     def test_batch_creation_dispatched_from_main_handler(self):
         logging_obj = _make_logging_obj()

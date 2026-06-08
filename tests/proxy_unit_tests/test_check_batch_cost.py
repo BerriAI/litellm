@@ -1005,3 +1005,19 @@ class TestUnmanagedVertexRouting:
         update_data = prisma.db.litellm_managedobjecttable.update.call_args[1]["data"]
         assert update_data["batch_processed"] is True
         assert update_data["status"] == "complete"
+
+
+def test_passthrough_batch_retrieve_kwargs_includes_azure_api_version(monkeypatch):
+    from litellm_enterprise.proxy.common_utils.check_batch_cost import (
+        _get_passthrough_batch_retrieve_kwargs,
+    )
+
+    monkeypatch.setenv("AZURE_API_BASE", "https://example.openai.azure.com")
+    monkeypatch.setenv("AZURE_API_VERSION", "2024-10-21")
+
+    kwargs = _get_passthrough_batch_retrieve_kwargs("azure/gpt-4o-mini")
+
+    assert kwargs["custom_llm_provider"] == "azure"
+    assert kwargs["api_base"] == "https://example.openai.azure.com"
+    assert kwargs["api_version"] == "2024-10-21"
+    assert kwargs["model"] == "gpt-4o-mini"

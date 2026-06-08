@@ -46,6 +46,9 @@ def _get_passthrough_batch_retrieve_kwargs(model_id: str) -> dict:
         api_base = get_secret_str("AZURE_API_BASE")
         if api_base:
             retrieve_kwargs["api_base"] = api_base
+        api_version = get_secret_str("AZURE_API_VERSION")
+        if api_version:
+            retrieve_kwargs["api_version"] = api_version
         if model_id.startswith("azure/"):
             retrieve_kwargs["model"] = model_id.split("/", 1)[1]
 
