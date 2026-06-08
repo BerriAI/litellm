@@ -258,7 +258,12 @@ class XAIOAuthAuthenticator:
             raise XAIOAuthError(
                 f"xAI OAuth discovery request failed: {exc.response.status_code} {exc.response.text}"
             ) from exc
-        data = response.json()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise XAIOAuthError(
+                "xAI OAuth discovery response was not valid JSON"
+            ) from exc
         authorization_endpoint = data.get("authorization_endpoint")
         token_endpoint = data.get("token_endpoint")
         if not authorization_endpoint or not token_endpoint:
@@ -355,7 +360,10 @@ class XAIOAuthAuthenticator:
             raise XAIOAuthError(
                 f"xAI OAuth token request failed: {exc.response.status_code} {exc.response.text}"
             ) from exc
-        body = response.json()
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise XAIOAuthError("xAI OAuth token response was not valid JSON") from exc
         if not isinstance(body, dict):
             raise XAIOAuthError("xAI OAuth token response was not an object")
         return body

@@ -287,6 +287,19 @@ def test_discover_wraps_http_errors():
     )
 
 
+def test_discover_wraps_invalid_json_response():
+    authenticator = XAIOAuthAuthenticator(
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, text="<html>not-json</html>")
+            )
+        )
+    )
+
+    with pytest.raises(XAIOAuthError, match="discovery response was not valid JSON"):
+        authenticator._discover()
+
+
 def test_refresh_discovers_token_endpoint_when_auth_file_is_legacy(
     tmp_path, monkeypatch
 ):
@@ -337,6 +350,19 @@ def test_exchange_token_rejects_non_object_response():
     )
 
     with pytest.raises(XAIOAuthError, match="was not an object"):
+        authenticator._exchange_token("https://auth.x.ai/oauth/token", {})
+
+
+def test_exchange_token_wraps_invalid_json_response():
+    authenticator = XAIOAuthAuthenticator(
+        http_client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, text="<html>not-json</html>")
+            )
+        )
+    )
+
+    with pytest.raises(XAIOAuthError, match="token response was not valid JSON"):
         authenticator._exchange_token("https://auth.x.ai/oauth/token", {})
 
 
