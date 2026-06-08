@@ -104,18 +104,12 @@ class GalileoObserve(CustomLogger):
                     error_message="GALILEO_BASE_URL environment variable not set",
                 )
 
-            if self.use_v2_api:
-                if not self.api_key:
-                    return IntegrationHealthCheckStatus(
-                        status="unhealthy",
-                        error_message="GALILEO_API_KEY environment variable not set",
-                    )
-            elif not self.username or not self.password:
+            if not self.use_v2_api and (not self.username or not self.password):
                 return IntegrationHealthCheckStatus(
                     status="unhealthy",
                     error_message=(
-                        "GALILEO_USERNAME and GALILEO_PASSWORD environment "
-                        "variables must be set"
+                        "GALILEO_API_KEY or GALILEO_USERNAME and GALILEO_PASSWORD "
+                        "environment variables must be set"
                     ),
                 )
 
@@ -452,9 +446,9 @@ class GalileoObserve(CustomLogger):
         return prompt
 
     @staticmethod
-    def _serialize_galileo_output(value: Any) -> Optional[str]:
+    def _serialize_galileo_output(value: Any) -> str:
         if value is None:
-            return None
+            return ""
         if isinstance(value, str):
             return value
 
@@ -513,7 +507,7 @@ class GalileoObserve(CustomLogger):
         response_obj: Any,
         level: str = "DEFAULT",
         status_message: Optional[str] = None,
-    ) -> Tuple[str, Optional[str], Any]:
+    ) -> Tuple[str, str, Any]:
         """
         Mirror Langfuse _get_langfuse_input_output_content for Galileo ingest.
 
@@ -603,7 +597,7 @@ class GalileoObserve(CustomLogger):
         ):
             input_val = kwargs.get("input")
             return (
-                self._serialize_galileo_output(input_val) or "",
+                self._serialize_galileo_output(input_val),
                 self._serialize_galileo_output(response_obj),
                 input_val,
             )
@@ -632,7 +626,7 @@ class GalileoObserve(CustomLogger):
 
     def get_output_str_from_response(
         self, response_obj: Any, kwargs: Dict[str, Any]
-    ) -> Optional[str]:
+    ) -> str:
         _, output_text, _ = self._get_galileo_input_output_content(
             kwargs=kwargs, response_obj=response_obj
         )
@@ -713,8 +707,6 @@ class GalileoObserve(CustomLogger):
         input_text, output_text, messages = self._get_galileo_input_output_content(
             kwargs=kwargs, response_obj=response_obj
         )
-        if output_text is None:
-            output_text = ""
 
         raw_start = slo.get("startTime")
         raw_end = slo.get("endTime")
