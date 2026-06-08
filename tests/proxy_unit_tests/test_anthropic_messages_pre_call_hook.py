@@ -51,7 +51,7 @@ def client_no_auth(fake_env_vars):
 
 @mock_patch_anthropic_messages()
 def test_anthropic_messages_runs_proxy_async_pre_call_hook(
-    mock_anthropic_messages, client_no_auth
+    mock_anthropic_messages, client_no_auth, monkeypatch
 ):
     hook_calls = []
 
@@ -63,33 +63,28 @@ def test_anthropic_messages_runs_proxy_async_pre_call_hook(
             data["metadata"] = {**(data.get("metadata") or {}), "source": "unit-test"}
             return data
 
-    original_callbacks = litellm.callbacks
-    litellm.callbacks = [AnthropicMessagesPreCallHook()]
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicMessagesPreCallHook()])
 
-    try:
-        response = client_no_auth.post(
-            "/v1/messages",
-            json={
-                "model": "gpt-3.5-turbo",
-                "max_tokens": 100,
-                "messages": [{"role": "user", "content": "hi"}],
-            },
-        )
+    response = client_no_auth.post(
+        "/v1/messages",
+        json={
+            "model": "test_openai_models",
+            "max_tokens": 100,
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+    )
 
-        assert response.status_code == 200
-        assert response.json()["content"][0]["text"] == "Hello from LiteLLM"
-        assert hook_calls == ["anthropic_messages"]
-        mock_anthropic_messages.assert_called_once()
-        assert (
-            mock_anthropic_messages.call_args.kwargs["metadata"]["source"]
-            == "unit-test"
-        )
-    finally:
-        litellm.callbacks = original_callbacks
+    assert response.status_code == 200
+    assert response.json()["content"][0]["text"] == "Hello from LiteLLM"
+    assert hook_calls == ["anthropic_messages"]
+    mock_anthropic_messages.assert_called_once()
+    assert mock_anthropic_messages.call_args.kwargs["metadata"]["source"] == "unit-test"
 
 
 @pytest.mark.asyncio
-async def test_experimental_anthropic_messages_runs_proxy_async_pre_call_hook():
+async def test_experimental_anthropic_messages_runs_proxy_async_pre_call_hook(
+    monkeypatch,
+):
     from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
         anthropic_messages,
     )
@@ -108,32 +103,28 @@ async def test_experimental_anthropic_messages_runs_proxy_async_pre_call_hook():
             data["temperature"] = 0.2
             return data
 
-    original_callbacks = litellm.callbacks
-    original_flag = litellm.use_chat_completions_url_for_anthropic_messages
-    litellm.callbacks = [AnthropicMessagesPreCallHook()]
-    litellm.use_chat_completions_url_for_anthropic_messages = True
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicMessagesPreCallHook()])
+    monkeypatch.setattr(
+        litellm, "use_chat_completions_url_for_anthropic_messages", True
+    )
 
-    try:
-        with mock.patch(
-            "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
-            return_value=EXAMPLE_ANTHROPIC_MESSAGES_RESULT,
-        ) as mock_handler:
-            response = await anthropic_messages(
-                model="openai/gpt-4o-mini",
-                max_tokens=100,
-                messages=[{"role": "user", "content": "hi"}],
-                metadata={"existing": "keep"},
-                custom_llm_provider="openai",
-            )
+    with mock.patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler",
+        return_value=EXAMPLE_ANTHROPIC_MESSAGES_RESULT,
+    ) as mock_handler:
+        response = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"existing": "keep"},
+            custom_llm_provider="openai",
+        )
 
-        assert response == EXAMPLE_ANTHROPIC_MESSAGES_RESULT
-        assert hook_calls == [("anthropic_messages", "openai/gpt-4o-mini")]
-        mock_handler.assert_called_once()
-        assert mock_handler.call_args.kwargs["metadata"] == {
-            "existing": "keep",
-            "source": "experimental-unit-test",
-        }
-        assert mock_handler.call_args.kwargs["temperature"] == 0.2
-    finally:
-        litellm.callbacks = original_callbacks
-        litellm.use_chat_completions_url_for_anthropic_messages = original_flag
+    assert response == EXAMPLE_ANTHROPIC_MESSAGES_RESULT
+    assert hook_calls == [("anthropic_messages", "openai/gpt-4o-mini")]
+    mock_handler.assert_called_once()
+    assert mock_handler.call_args.kwargs["metadata"] == {
+        "existing": "keep",
+        "source": "experimental-unit-test",
+    }
+    assert mock_handler.call_args.kwargs["temperature"] == 0.2
