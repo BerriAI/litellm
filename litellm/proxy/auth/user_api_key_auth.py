@@ -22,7 +22,7 @@ import litellm
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._service_logger import ServiceLogging
 from litellm.constants import LITELLM_PROXY_MASTER_KEY_ALIAS
-from litellm.identity import build_user_api_key_auth_from_jwt_result
+from litellm.identity import build_user_api_key_auth_from_jwt_result, resolve_identity
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
 from litellm.integrations.otel.runtime import phase_span, seed_request_identity
 from litellm.litellm_core_utils.dd_tracing import tracer
@@ -1048,6 +1048,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 custom_litellm_key_header_name=custom_litellm_key_header_name,
             )
 
+        # Build the typed identity context alongside the legacy chain. It is
+        # pure-read; a failure here must not break authentication, so the
+        # context is left unset and downstream falls back to the inline reads.
+        try:
+            request.state.identity_context = await resolve_identity(
+                api_key=api_key,
+                request=request,
+                body=request_data,
+                headers=_safe_get_request_headers(request),
+                general_settings=general_settings,
+            )
+        except Exception:
+            request.state.identity_context = None
+
         if open_telemetry_logger is not None:
             # Reuse the span created by user_api_key_auth (before body parse)
             # so it survives _read_request_body failures. For callers that
@@ -1350,8 +1364,13 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         _end_user_object = None
         end_user_params = {}
 
-        raw_end_user_id = get_end_user_id_from_request_body(
-            request_data, _safe_get_request_headers(request)
+        identity_context = getattr(request.state, "identity_context", None)
+        raw_end_user_id = (
+            identity_context.end_user_id
+            if identity_context is not None
+            else get_end_user_id_from_request_body(
+                request_data, _safe_get_request_headers(request)
+            )
         )
         end_user_id = await resolve_and_validate_end_user_id(
             raw_end_user_id=raw_end_user_id,
