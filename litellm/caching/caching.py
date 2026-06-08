@@ -309,9 +309,13 @@ class Cache:
                     param_value = kwargs[param]
                     cache_key += f"{str(param)}: {str(param_value)}"
 
-        verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
+        verbose_logger.debug(
+            "\nCreated cache key: %s (source material length: %d)",
+            hashed_cache_key,
+            len(cache_key),
+        )
         # Remove preset_cache_key from kwargs to avoid "got multiple values" TypeError
         # when kwargs already contains preset_cache_key from upstream callers
         kwargs_for_preset = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
