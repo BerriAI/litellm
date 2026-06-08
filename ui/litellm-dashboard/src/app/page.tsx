@@ -54,6 +54,7 @@ import {
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
 import { isAdminRole } from "@/utils/roles";
+import { MIGRATED_PAGES } from "@/utils/migratedPages";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -64,13 +65,6 @@ interface ProxySettings {
   PROXY_LOGOUT_URL: string;
   LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
-
-/**
- * Map of legacy query-param page keys → new path-based route segments.
- * When a user visits ?page=<key>, they are redirected to /ui/<value>.
- * Add entries here as pages are migrated from the if/else chain to path-based routes.
- */
-const LEGACY_REDIRECTS: Record<string, string> = {};
 
 function CreateKeyPageContent() {
   const { authLoading, token, userID, userRole, userEmail, accessToken, premiumUser, setUserRole, setUserEmail } =
@@ -202,11 +196,11 @@ function CreateKeyPageContent() {
   }, [redirectToLogin]);
 
   // Redirect legacy query-param pages to their new path-based routes
-  const isLegacyRedirect = page in LEGACY_REDIRECTS;
+  const isLegacyRedirect = page in MIGRATED_PAGES;
   useEffect(() => {
     if (!authLoading && isLegacyRedirect) {
       const base = (proxyBaseUrl || "") + "/ui";
-      router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
+      router.replace(`${base}/${MIGRATED_PAGES[page]}`);
     }
   }, [authLoading, isLegacyRedirect, page, router]);
 
