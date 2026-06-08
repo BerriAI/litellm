@@ -91,11 +91,11 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
 
         output_tokens = normalized_usage.get("output_tokens")
         if output_tokens is None:
-            output_tokens = (
-                normalized_usage.get("num_output_tokens")
-                or normalized_usage.get("output_image_tokens")
-                or 0
-            )
+            output_tokens = normalized_usage.get("num_output_tokens")
+        if output_tokens is None:
+            output_tokens = normalized_usage.get("output_image_tokens")
+        if output_tokens is None:
+            output_tokens = 0
 
         input_tokens = normalized_usage.get("input_tokens")
         if input_tokens is None:

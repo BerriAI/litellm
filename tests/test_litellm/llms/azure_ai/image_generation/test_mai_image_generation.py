@@ -246,6 +246,19 @@ class TestAzureMAIImageGeneration:
         assert image_response.usage.input_tokens == 22
         assert image_response.usage.total_tokens == 1046
 
+    def test_normalize_mai_usage_preserves_zero_output_tokens(self):
+        config = AzureFoundryMAIImageGenerationConfig()
+        normalized = config.normalize_mai_image_usage(
+            {
+                "num_output_tokens": 0,
+                "output_image_tokens": 1024,
+                "num_input_text_tokens": 22,
+            }
+        )
+        assert normalized["output_tokens"] == 0
+        assert normalized["input_tokens"] == 22
+        assert normalized["total_tokens"] == 22
+
     def test_azure_sync_image_generation_uses_mai_response_transform(self):
         raw_response = MagicMock(spec=httpx.Response)
         raw_response.json.return_value = {
