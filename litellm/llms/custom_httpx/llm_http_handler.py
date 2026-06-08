@@ -1,6 +1,5 @@
 import json
 import ssl
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -14,6 +13,7 @@ from typing import (
     Union,
     cast,
 )
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import httpx  # type: ignore
 from openai.types.file_deleted import FileDeleted
@@ -2339,10 +2339,20 @@ class BaseLLMHTTPHandler:
                         fake_stream=fake_stream,
                     )
 
+                headers, signed_body = responses_api_provider_config.sign_request(
+                    headers=headers,
+                    optional_params=dict(litellm_params),
+                    request_data=data,
+                    api_base=api_base,
+                    model=model,
+                    stream=stream,
+                    fake_stream=fake_stream,
+                )
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
+                    json=data if signed_body is None else None,
+                    data=signed_body,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
@@ -2371,10 +2381,20 @@ class BaseLLMHTTPHandler:
                 )
             else:
                 # For non-streaming requests
+                headers, signed_body = responses_api_provider_config.sign_request(
+                    headers=headers,
+                    optional_params=dict(litellm_params),
+                    request_data=data,
+                    api_base=api_base,
+                    model=model,
+                    stream=stream,
+                    fake_stream=fake_stream,
+                )
                 response = sync_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
+                    json=data if signed_body is None else None,
+                    data=signed_body,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                 )
@@ -2485,10 +2505,20 @@ class BaseLLMHTTPHandler:
                         fake_stream=fake_stream,
                     )
 
+                headers, signed_body = responses_api_provider_config.sign_request(
+                    headers=headers,
+                    optional_params=dict(litellm_params),
+                    request_data=data,
+                    api_base=api_base,
+                    model=model,
+                    stream=stream,
+                    fake_stream=fake_stream,
+                )
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
+                    json=data if signed_body is None else None,
+                    data=signed_body,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                     stream=stream,
@@ -2519,10 +2549,20 @@ class BaseLLMHTTPHandler:
                 )
             else:
                 # For non-streaming, proceed as before
+                headers, signed_body = responses_api_provider_config.sign_request(
+                    headers=headers,
+                    optional_params=dict(litellm_params),
+                    request_data=data,
+                    api_base=api_base,
+                    model=model,
+                    stream=stream,
+                    fake_stream=fake_stream,
+                )
                 response = await async_httpx_client.post(
                     url=api_base,
                     headers=headers,
-                    json=data,
+                    json=data if signed_body is None else None,
+                    data=signed_body,
                     timeout=timeout
                     or float(response_api_optional_request_params.get("timeout", 0)),
                 )

@@ -318,3 +318,23 @@ class BaseResponsesAPIConfig(ABC):
                 data["input"]
             ),
         }
+
+    def sign_request(
+        self,
+        headers: dict,
+        optional_params: dict,
+        request_data: dict,
+        api_base: str,
+        model: Optional[str] = None,
+        stream: Optional[bool] = None,
+        fake_stream: Optional[bool] = None,
+    ) -> Tuple[dict, Optional[bytes]]:
+        """Sign the final outbound request just before it is sent.
+
+        Mirrors ``BaseConfig.sign_request`` for chat. Called after every body
+        mutation (normalize, extra_body, fake-stream strip). Returns
+        ``(headers, signed_body)``; when ``signed_body`` is not None the handler
+        sends those exact bytes, so body-hashing schemes (e.g. AWS SigV4) stay
+        valid regardless of later re-serialization. Default is a no-op.
+        """
+        return headers, None
