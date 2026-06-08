@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import httpx
 from httpx._types import RequestFiles
@@ -43,8 +43,9 @@ class AzureFoundryMAIImageEditConfig(OpenAIImageEditConfig):
 
             if key in supported_params:
                 if key == "size" and value:
-                    self._validate_size_param(value)
-                    optional_params[key] = value
+                    size_param = cast(str, value)
+                    self._validate_size_param(size_param)
+                    optional_params[key] = size_param
                 else:
                     optional_params[key] = value
             elif not drop_params:
