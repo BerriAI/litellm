@@ -3172,9 +3172,7 @@ class Logging(LiteLLMLoggingBaseClass):
             ## return unified Usage object
             resp = result.response
             resp_is_dict = isinstance(resp, dict)
-            usage = (
-                resp.get("usage") if resp_is_dict else getattr(resp, "usage", None)
-            )
+            usage = resp.get("usage") if resp_is_dict else getattr(resp, "usage", None)
             if isinstance(usage, ResponseAPIUsage):
                 transformed_usage = (
                     ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
