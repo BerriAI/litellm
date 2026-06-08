@@ -289,11 +289,7 @@ describe("useGuardrails", () => {
       expect(result.current.isSuccess).toBe(true);
     });
 
-    expect(result.current.data?.globalGuardrailNames).toEqual(
-      new Set(["global-guard-a", "global-guard-b"]),
-    );
-    expect(result.current.data?.optionalGuardrailNames).toEqual(
-      new Set(["optional-guard-a", "optional-guard-b"]),
-    );
+    expect(result.current.data?.globalGuardrailNames).toEqual(new Set(["global-guard-a", "global-guard-b"]));
+    expect(result.current.data?.optionalGuardrailNames).toEqual(new Set(["optional-guard-a", "optional-guard-b"]));
   });
 });

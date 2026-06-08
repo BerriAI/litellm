@@ -12,7 +12,7 @@ export interface StoreModelInDBResponse {
 
 const performStoreModelInDB = async (
   accessToken: string,
-  params: StoreModelInDBParams
+  params: StoreModelInDBParams,
 ): Promise<StoreModelInDBResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/config/field/update` : `/config/field/update`;
@@ -41,11 +41,7 @@ const performStoreModelInDB = async (
   return data;
 };
 
-export const useStoreModelInDB = (): UseMutationResult<
-  StoreModelInDBResponse,
-  Error,
-  StoreModelInDBParams
-> => {
+export const useStoreModelInDB = (): UseMutationResult<StoreModelInDBResponse, Error, StoreModelInDBParams> => {
   const { accessToken } = useAuthorized();
 
   return useMutation<StoreModelInDBResponse, Error, StoreModelInDBParams>({

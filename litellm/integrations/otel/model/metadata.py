@@ -255,26 +255,6 @@ def model_from_request_data(data: object) -> str | None:
     return None
 
 
-def guardrail_entries_from_request_data(
-    request_data: Mapping[str, Any],
-) -> list[dict]:
-    """The guardrail-information dicts buried in ``metadata`` of a post-call dict.
-
-    ``standard_logging_guardrail_information`` is stored as either a single dict
-    or a list of them; normalize to a list of dicts (dropping non-dict noise) so
-    the caller just iterates. Empty list when none are present.
-    """
-    metadata = request_data.get("metadata")
-    if not isinstance(metadata, Mapping):
-        return []
-    info = metadata.get("standard_logging_guardrail_information")
-    if isinstance(info, Mapping):
-        return [cast(dict, info)]
-    if isinstance(info, list):
-        return [entry for entry in info if isinstance(entry, dict)]
-    return []
-
-
 def resolve_provider_model(payload: "StandardLoggingPayload") -> str | None:
     """The model litellm dispatched to the provider, from the payload.
 

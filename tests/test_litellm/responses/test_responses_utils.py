@@ -327,7 +327,8 @@ class TestResponseAPILoggingUtils:
             "output_tokens_details": {
                 "reasoning_tokens": 30,
                 "image_tokens": 100,
-                "text_tokens": 70,
+                "text_tokens": 50,
+                "audio_tokens": 20,
             },
         }
 
@@ -346,7 +347,61 @@ class TestResponseAPILoggingUtils:
         assert result.completion_tokens_details is not None
         assert result.completion_tokens_details.reasoning_tokens == 30
         assert result.completion_tokens_details.image_tokens == 100
-        assert result.completion_tokens_details.text_tokens == 70
+        assert result.completion_tokens_details.text_tokens == 50
+        assert result.completion_tokens_details.audio_tokens == 20
+
+    def test_transform_response_api_usage_with_realtime_keys(self):
+        """Realtime input_token_details / output_token_details normalize for Usage."""
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_token_details": {
+                "text_tokens": 8,
+                "audio_tokens": 2,
+                "cached_tokens": 0,
+            },
+            "output_token_details": {
+                "text_tokens": 12,
+                "audio_tokens": 8,
+            },
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.text_tokens == 8
+        assert result.prompt_tokens_details.audio_tokens == 2
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.text_tokens == 12
+        assert result.completion_tokens_details.audio_tokens == 8
+
+    def test_transform_response_api_usage_tokens_details_keep_values(self):
+        """Keeps input_tokens_details / output_tokens_details when singular keys are also present."""
+        usage = {
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "total_tokens": 30,
+            "input_tokens_details": {"text_tokens": 10},
+            "output_tokens_details": {"text_tokens": 20},
+            "input_token_details": {"text_tokens": 1, "audio_tokens": 99},
+            "output_token_details": {"text_tokens": 2, "audio_tokens": 98},
+        }
+
+        result = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
+
+        assert result.prompt_tokens_details is not None
+        assert result.prompt_tokens_details.text_tokens == 10
+        assert result.prompt_tokens_details.audio_tokens is None
+
+        assert result.completion_tokens_details is not None
+        assert result.completion_tokens_details.text_tokens == 20
+        assert result.completion_tokens_details.audio_tokens is None
 
 
 class TestResponsesAPIProviderSpecificParams:

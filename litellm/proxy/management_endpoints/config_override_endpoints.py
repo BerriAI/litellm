@@ -30,6 +30,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.repositories.table_repositories import ConfigOverridesRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.proxy.management_endpoints.config_overrides import (
     ConfigOverrideSettingsResponse,
@@ -254,7 +255,7 @@ async def update_hashicorp_vault_config(
 
     # Merge ALL fields the user didn't send: try DB first, fall back to env vars.
     # Omitted field = keep existing; empty string = clear/remove the field.
-    existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    existing_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
     existing_decrypted: Optional[Dict[str, Any]] = None
@@ -321,7 +322,7 @@ async def update_hashicorp_vault_config(
     # Only persist to DB after successful init
     encrypted_data = proxy_config._encrypt_env_variables(config_data)
     config_value = safe_dumps(encrypted_data)
-    await prisma_client.db.litellm_configoverrides.upsert(
+    await ConfigOverridesRepository(prisma_client).table.upsert(
         where={"config_type": "hashicorp_vault"},
         data={
             "create": {
@@ -391,7 +392,7 @@ async def get_hashicorp_vault_config(
     field_schema = _build_field_schema(HashicorpVaultConfig)
 
     # Try to load from DB
-    db_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    db_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
 
@@ -448,7 +449,7 @@ async def delete_hashicorp_vault_config(
 
     # Capture the prior config before delete so the audit-log row can
     # show *what* was removed (keys only — values get redacted).
-    existing_record = await prisma_client.db.litellm_configoverrides.find_unique(
+    existing_record = await ConfigOverridesRepository(prisma_client).table.find_unique(
         where={"config_type": "hashicorp_vault"}
     )
     before_config: Optional[Dict[str, Any]] = None
@@ -463,7 +464,7 @@ async def delete_hashicorp_vault_config(
     # Delete DB record if it exists — ignore if not found
     deleted = False
     try:
-        await prisma_client.db.litellm_configoverrides.delete(
+        await ConfigOverridesRepository(prisma_client).table.delete(
             where={"config_type": "hashicorp_vault"}
         )
         deleted = True

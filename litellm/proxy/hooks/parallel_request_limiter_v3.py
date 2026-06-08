@@ -23,8 +23,6 @@ from typing import (
     cast,
 )
 
-from fastapi import HTTPException
-
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
@@ -34,6 +32,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
+)
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.utils import CallTypes, ModelResponse, Usage
@@ -1967,8 +1970,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         response: RateLimitResponse,
         descriptors: List[RateLimitDescriptor],
+        requested_model: Optional[str] = None,
     ) -> None:
-        """Handle rate limit exceeded error by raising HTTPException."""
+        """Handle rate limit exceeded by raising :class:`ProxyRateLimitError` (a 429)."""
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
@@ -1999,14 +2003,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"Limit resets at: {reset_time_formatted}"
                 )
 
-                raise HTTPException(
-                    status_code=429,
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    requested_model
+                )
+                raise ProxyRateLimitError(
                     detail=detail,
                     headers={
                         "retry-after": str(self.window_size),
                         "rate_limit_type": str(status["rate_limit_type"]),
                         "reset_at": reset_time_formatted,
                     },
+                    rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+                    model=resolved_model,
+                    llm_provider=llm_provider,
                 )
 
     async def async_pre_call_hook(
@@ -2115,6 +2124,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._handle_rate_limit_error(
                     response=response,
                     descriptors=descriptors,
+                    requested_model=requested_model,
                 )
             else:
                 # add descriptors to request headers
@@ -2188,6 +2198,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
+                        requested_model=requested_model,
                     )
                 else:
                     self._stash_value_in_metadata_channels(

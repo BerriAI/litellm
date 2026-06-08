@@ -3147,6 +3147,7 @@ def get_optional_params_image_gen(
     size: Optional[str] = None,
     style: Optional[str] = None,
     user: Optional[str] = None,
+    imageConfig: Optional[dict] = None,
     custom_llm_provider: Optional[str] = None,
     additional_drop_params: Optional[list] = None,
     provider_config: Optional[BaseImageGenerationConfig] = None,
@@ -3183,6 +3184,7 @@ def get_optional_params_image_gen(
         "size": None,
         "style": None,
         "user": None,
+        "imageConfig": None,
     }
 
     non_default_params = _get_non_default_params(
@@ -4547,6 +4549,18 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
 
+    elif custom_llm_provider == "text-completion-inception":
+        optional_params = litellm.InceptionTextCompletionConfig().map_openai_params(
+            non_default_params=non_default_params,
+            optional_params=optional_params,
+            model=model,
+            drop_params=(
+                drop_params
+                if drop_params is not None and isinstance(drop_params, bool)
+                else False
+            ),
+        )
+
     elif custom_llm_provider == "databricks":
         optional_params = litellm.DatabricksConfig().map_openai_params(
             non_default_params=non_default_params,
@@ -4857,7 +4871,7 @@ def add_provider_specific_params_to_optional_params(
             )
             is False
         ):
-            extra_body = passed_params.pop("extra_body", None) or {}
+            extra_body = dict(passed_params.pop("extra_body", None) or {})
             for k in passed_params.keys():
                 if k not in openai_params and passed_params[k] is not None:
                     extra_body[k] = passed_params[k]
@@ -6083,6 +6097,7 @@ def _get_model_info_helper(  # noqa: PLR0915
                     "provider_specific_entry", None
                 ),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
+                supports_image_size=_model_info.get("supports_image_size", None),
             )
     except Exception as e:
         verbose_logger.debug(f"Error getting model info: {e}")
@@ -6637,6 +6652,14 @@ def validate_environment(  # noqa: PLR0915
                 keys_in_environment = True
             else:
                 missing_keys.append("CODESTRAL_API_KEY")
+        elif (
+            custom_llm_provider == "inception"
+            or custom_llm_provider == "text-completion-inception"
+        ):
+            if "INCEPTION_API_KEY" in os.environ:
+                keys_in_environment = True
+            else:
+                missing_keys.append("INCEPTION_API_KEY")
         elif custom_llm_provider == "deepseek":
             if "DEEPSEEK_API_KEY" in os.environ:
                 keys_in_environment = True
@@ -8291,6 +8314,7 @@ class ProviderConfigManager:
             LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
             LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
             LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
+            LlmProviders.INCEPTION: (lambda: litellm.InceptionChatConfig(), False),
             LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
             LlmProviders.TEXT_COMPLETION_OPENAI: (
                 lambda: litellm.OpenAITextCompletionConfig(),
@@ -8354,6 +8378,10 @@ class ProviderConfigManager:
             LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
             LlmProviders.TEXT_COMPLETION_CODESTRAL: (
                 lambda: litellm.CodestralTextCompletionConfig(),
+                False,
+            ),
+            LlmProviders.TEXT_COMPLETION_INCEPTION: (
+                lambda: litellm.InceptionTextCompletionConfig(),
                 False,
             ),
             LlmProviders.SAMBANOVA: (lambda: litellm.SambanovaConfig(), False),
@@ -8788,6 +8816,12 @@ class ProviderConfigManager:
             )
 
             return NvidiaRivaAudioTranscriptionConfig()
+        elif litellm.LlmProviders.SONIOX == provider:
+            from litellm.llms.soniox.audio_transcription.transformation import (
+                SonioxAudioTranscriptionConfig,
+            )
+
+            return SonioxAudioTranscriptionConfig()
         return None
 
     @staticmethod
@@ -8881,6 +8915,16 @@ class ProviderConfigManager:
             return litellm.OpenRouterResponsesAPIConfig()
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
+        elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
+            # Only OpenAI gpt frontier models (gpt-5.x, and future gpt-6 etc.) are
+            # served on the /openai/v1/responses path. gpt-oss and every non-OpenAI
+            # model on Mantle (nvidia, mistral, google, zai, ...) are chat-completions
+            # only and 400 on that path, so they fall through to None to keep the
+            # chat-completions emulation (see litellm/responses/main.py "config is None").
+            model_lower = model.lower() if model else ""
+            if "openai.gpt-" in model_lower and "gpt-oss" not in model_lower:
+                return litellm.BedrockMantleResponsesAPIConfig()
+            return None
         return None
 
     @staticmethod
@@ -8928,6 +8972,8 @@ class ProviderConfigManager:
             return litellm.FireworksAITextCompletionConfig()
         elif LlmProviders.TOGETHER_AI == provider:
             return litellm.TogetherAITextCompletionConfig()
+        elif LlmProviders.TEXT_COMPLETION_INCEPTION == provider:
+            return litellm.InceptionTextCompletionConfig()
         return litellm.OpenAITextCompletionConfig()
 
     @staticmethod
@@ -9478,6 +9524,7 @@ class ProviderConfigManager:
         from litellm.llms.searxng.search.transformation import SearXNGSearchConfig
         from litellm.llms.serper.search.transformation import SerperSearchConfig
         from litellm.llms.tavily.search.transformation import TavilySearchConfig
+        from litellm.llms.you_com.search.transformation import YouComSearchConfig
 
         PROVIDER_TO_CONFIG_MAP = {
             SearchProviders.PERPLEXITY: PerplexitySearchConfig,
@@ -9493,6 +9540,7 @@ class ProviderConfigManager:
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
             SearchProviders.SEARCHAPI: SearchAPIConfig,
             SearchProviders.SERPER: SerperSearchConfig,
+            SearchProviders.YOU_COM: YouComSearchConfig,
             SearchProviders.APISERPENT: APISerpentSearchConfig,
         }
         config_class = PROVIDER_TO_CONFIG_MAP.get(provider, None)

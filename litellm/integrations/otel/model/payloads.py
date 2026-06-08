@@ -340,7 +340,7 @@ class MCPToolCallSpanData:
     def from_standard_logging_payload(
         cls, payload: "StandardLoggingPayload", capture_content: bool = False
     ) -> "MCPToolCallSpanData":
-        meta = cast(Mapping[str, object], payload.get("mcp_tool_call_metadata") or {})
+        meta = _mcp_tool_call_metadata(cast(Mapping[str, object], payload))
         return cls(
             operation=resolve_operation(as_str(payload.get("call_type"))),
             method=MCPMethod.TOOLS_CALL.value,
@@ -363,11 +363,22 @@ class MCPToolCallSpanData:
         )
 
 
+def _mcp_tool_call_metadata(payload: Mapping[str, object]) -> Mapping[str, object]:
+    """The MCP gateway's tool-call metadata, which lives under
+    ``StandardLoggingPayload.metadata`` (a ``StandardLoggingMetadata`` key), not
+    at the payload's top level."""
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    meta = metadata.get("mcp_tool_call_metadata")
+    return meta if isinstance(meta, Mapping) else {}
+
+
 def is_mcp_tool_call(payload: Mapping[str, object]) -> bool:
     """Whether a closed request's payload is an MCP tool call rather than an LLM
     call — true when the MCP gateway stamped its tool-call metadata, or the call
     type says so on a path that hasn't populated the metadata yet."""
-    return bool(payload.get("mcp_tool_call_metadata")) or (
+    return bool(_mcp_tool_call_metadata(payload)) or (
         payload.get("call_type") == "call_mcp_tool"
     )
 

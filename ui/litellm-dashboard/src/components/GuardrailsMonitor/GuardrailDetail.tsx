@@ -1,16 +1,8 @@
-import {
-  ArrowLeftOutlined,
-  SafetyOutlined,
-  SettingOutlined,
-  WarningOutlined,
-} from "@ant-design/icons";
+import { ArrowLeftOutlined, SafetyOutlined, SettingOutlined, WarningOutlined } from "@ant-design/icons";
 import { useQuery } from "@tanstack/react-query";
 import { Button, Col, Row, Spin, Tabs } from "antd";
 import React, { useMemo, useState } from "react";
-import {
-  getGuardrailsUsageDetail,
-  getGuardrailsUsageLogs,
-} from "@/components/networking";
+import { getGuardrailsUsageDetail, getGuardrailsUsageLogs } from "@/components/networking";
 import { EvaluationSettingsModal } from "./EvaluationSettingsModal";
 import { LogViewer } from "./LogViewer";
 import { MetricCard } from "./MetricCard";
@@ -24,28 +16,23 @@ interface GuardrailDetailProps {
   endDate: string;
 }
 
-const statusColors: Record<
-  string,
-  { bg: string; text: string; dot: string }
-> = {
+const statusColors: Record<string, { bg: string; text: string; dot: string }> = {
   healthy: { bg: "bg-green-50", text: "text-green-700", dot: "bg-green-500" },
   warning: { bg: "bg-amber-50", text: "text-amber-700", dot: "bg-amber-500" },
   critical: { bg: "bg-red-50", text: "text-red-700", dot: "bg-red-500" },
 };
 
-export function GuardrailDetail({
-  guardrailId,
-  onBack,
-  accessToken = null,
-  startDate,
-  endDate,
-}: GuardrailDetailProps) {
+export function GuardrailDetail({ guardrailId, onBack, accessToken = null, startDate, endDate }: GuardrailDetailProps) {
   const [activeTab, setActiveTab] = useState("overview");
   const [evaluationModalOpen, setEvaluationModalOpen] = useState(false);
   const [logsPage, setLogsPage] = useState(1);
   const logsPageSize = 50;
 
-  const { data: detailData, isLoading: detailLoading, error: detailError } = useQuery({
+  const {
+    data: detailData,
+    isLoading: detailLoading,
+    error: detailError,
+  } = useQuery({
     queryKey: ["guardrails-usage-detail", guardrailId, startDate, endDate],
     queryFn: () => getGuardrailsUsageDetail(accessToken!, guardrailId, startDate, endDate),
     enabled: !!accessToken && !!guardrailId,
@@ -123,12 +110,7 @@ export function GuardrailDetail({
   return (
     <div>
       <div className="mb-6">
-        <Button
-          type="link"
-          icon={<ArrowLeftOutlined />}
-          onClick={onBack}
-          className="pl-0 mb-4"
-        >
+        <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
           Back to Overview
         </Button>
 
