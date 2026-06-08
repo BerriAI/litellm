@@ -14,11 +14,7 @@ import {
   Switch,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
-import {
-  getGeneralSettingsCall,
-  updateConfigFieldSetting,
-  deleteConfigFieldSetting,
-} from "./networking";
+import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "./networking";
 import { InputNumber } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
@@ -117,23 +113,13 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
         </TabList>
         <TabPanels className="px-8 py-6">
           <TabPanel>
-            <RouterSettings
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <RouterSettings accessToken={accessToken} userRole={userRole} userID={userID} modelData={modelData} />
           </TabPanel>
           <TabPanel>
             <RoutingGroups />
           </TabPanel>
           <TabPanel>
-            <Fallbacks
-              accessToken={accessToken}
-              userRole={userRole}
-              userID={userID}
-              modelData={modelData}
-            />
+            <Fallbacks accessToken={accessToken} userRole={userRole} userID={userID} modelData={modelData} />
           </TabPanel>
           <TabPanel>
             <Card>

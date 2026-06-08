@@ -237,6 +237,7 @@ LLM_CONFIG_NAMES = (
     "PerplexityResponsesConfig",
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
+    "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -320,6 +321,7 @@ LLM_CONFIG_NAMES = (
     "LemonadeChatConfig",
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
+    "SonioxAudioTranscriptionConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -958,6 +960,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
         ".llms.openrouter.responses.transformation",
         "OpenRouterResponsesAPIConfig",
     ),
+    "BedrockMantleResponsesAPIConfig": (
+        ".llms.bedrock_mantle.responses.transformation",
+        "BedrockMantleResponsesAPIConfig",
+    ),
     "GoogleAIStudioInteractionsConfig": (
         ".llms.gemini.interactions.transformation",
         "GoogleAIStudioInteractionsConfig",
@@ -1189,6 +1195,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AmazonNovaChatConfig": (
         ".llms.amazon_nova.chat.transformation",
         "AmazonNovaChatConfig",
+    ),
+    "SonioxAudioTranscriptionConfig": (
+        ".llms.soniox.audio_transcription.transformation",
+        "SonioxAudioTranscriptionConfig",
     ),
 }
 

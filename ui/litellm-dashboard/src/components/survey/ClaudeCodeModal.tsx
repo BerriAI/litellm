@@ -41,15 +41,12 @@ export function ClaudeCodeModal({ isOpen, onClose, onComplete }: ClaudeCodeModal
 
         {/* Content */}
         <div className="p-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-4">
-            Help us improve your experience
-          </h2>
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">Help us improve your experience</h2>
           <p className="text-gray-600 mb-6">
-            We&apos;d love to hear about your experience using LiteLLM with Claude Code. Your feedback helps us improve the product for everyone.
+            We&apos;d love to hear about your experience using LiteLLM with Claude Code. Your feedback helps us improve
+            the product for everyone.
           </p>
-          <p className="text-sm text-gray-500 mb-6">
-            This brief survey takes about 2-3 minutes to complete.
-          </p>
+          <p className="text-sm text-gray-500 mb-6">This brief survey takes about 2-3 minutes to complete.</p>
 
           <Button
             type="primary"
@@ -57,7 +54,7 @@ export function ClaudeCodeModal({ isOpen, onClose, onComplete }: ClaudeCodeModal
             block
             onClick={handleOpenForm}
             icon={<ExternalLink className="h-4 w-4" />}
-            style={{ backgroundColor: '#7c3aed', borderColor: '#7c3aed' }}
+            style={{ backgroundColor: "#7c3aed", borderColor: "#7c3aed" }}
           >
             Open Feedback Form
           </Button>
@@ -66,4 +63,3 @@ export function ClaudeCodeModal({ isOpen, onClose, onComplete }: ClaudeCodeModal
     </div>
   );
 }
-

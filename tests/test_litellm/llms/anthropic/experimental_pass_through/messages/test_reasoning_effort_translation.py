@@ -2,6 +2,7 @@
 
 import pytest
 
+import litellm
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -9,6 +10,22 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
 )
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled backup cost map so Opus 4.8 adaptive detection (driven
+    by the ``supports_adaptive_thinking`` flag) doesn't depend on the
+    network-fetched ``main`` copy, which lacks the flag until this branch merges."""
+    original = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original
+        litellm.get_model_info.cache_clear()
 
 
 @pytest.mark.parametrize(
@@ -289,6 +306,40 @@ def test_legacy_thinking_high_budget_keeps_xhigh_when_supported():
     result = config.transform_anthropic_messages_request(
         model="claude-opus-4-7",
         messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive"}
+    assert result.get("output_config") == {"effort": "xhigh"}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "claude-opus-4-8",
+        "bedrock/us.anthropic.claude-opus-4-8",
+        "bedrock/invoke/us.anthropic.claude-opus-4-8",
+    ],
+)
+def test_legacy_thinking_translates_to_adaptive_for_opus_48(
+    model, local_model_cost_map
+):
+    """Regression for issue #29188: Opus 4.8 requires adaptive thinking, but the
+    legacy ``thinking.type='enabled'`` shape was passed through unchanged for
+    Bedrock 4.8 (its cost-map entry lacked ``supports_adaptive_thinking`` and the
+    lookup didn't strip the provider prefix), so Bedrock rejected the request. The
+    reporter's reproducer used ``budget_tokens=24000``, the ``xhigh`` bucket."""
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 100,
+        "thinking": {"type": "enabled", "budget_tokens": 24000},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model=model,
+        messages=[{"role": "user", "content": "ping"}],
         anthropic_messages_optional_request_params=optional_params,
         litellm_params={},
         headers={},

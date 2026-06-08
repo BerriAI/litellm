@@ -18,7 +18,7 @@ vi.mock("../networking", () => ({
 
 // Mock scrollIntoView which is not available in jsdom
 beforeEach(() => {
-  Element.prototype.scrollIntoView = () => { };
+  Element.prototype.scrollIntoView = () => {};
 });
 
 describe("ChatUI", () => {
@@ -369,7 +369,9 @@ describe("ChatUI", () => {
       expect(screen.queryByText("Fill")).toBeNull();
     });
 
-    const customProxyInput = screen.getByPlaceholderText("Optional: Enter custom proxy URL (e.g., http://localhost:5000)");
+    const customProxyInput = screen.getByPlaceholderText(
+      "Optional: Enter custom proxy URL (e.g., http://localhost:5000)",
+    );
     expect(customProxyInput).toHaveValue(testProxyUrl);
   });
 
@@ -381,7 +383,7 @@ describe("ChatUI", () => {
         userRole="user"
         userID="1234567890"
         disabledPersonalKeyCreation={false}
-      />
+      />,
     );
 
     await waitFor(() => {

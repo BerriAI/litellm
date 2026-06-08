@@ -11,6 +11,20 @@ locals {
   # the stack can reference local.name.
   name = "${var.tenant}-litellm-${var.env}"
 
+  # This is a reusable module — it declares no `provider` block, so the AWS
+  # provider's `default_tags` is the caller's concern, not ours. To keep the
+  # same per-resource tagging the stack had when it owned the provider, the
+  # module threads `local.tags` onto every taggable resource itself. Callers
+  # may layer org-wide tags on top via their own provider `default_tags`
+  # (those merge with these). `var.tags` is the per-deployment override.
+  tags = merge(
+    {
+      "litellm:stack" = local.name
+      "managed-by"    = "terraform"
+    },
+    var.tags,
+  )
+
   gateway_path_prefixes = [
     "/v1/chat/*", "/chat/*",
     "/v1/completions*", "/completions*",

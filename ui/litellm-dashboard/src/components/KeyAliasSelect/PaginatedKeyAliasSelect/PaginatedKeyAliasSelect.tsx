@@ -35,13 +35,11 @@ export const PaginatedKeyAliasSelect = ({
 
   const teamId = allFilters?.["Team ID"] || undefined;
 
-  const {
-    data,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isLoading,
-  } = useInfiniteKeyAliases(pageSize, debouncedSearch || undefined, teamId);
+  const { data, fetchNextPage, hasNextPage, isFetchingNextPage, isLoading } = useInfiniteKeyAliases(
+    pageSize,
+    debouncedSearch || undefined,
+    teamId,
+  );
 
   const options = useMemo(() => {
     if (!data?.pages) return [];
@@ -62,8 +60,7 @@ export const PaginatedKeyAliasSelect = ({
 
   const handlePopupScroll = (e: UIEvent<HTMLDivElement>) => {
     const target = e.currentTarget;
-    const scrollRatio =
-      (target.scrollTop + target.clientHeight) / target.scrollHeight;
+    const scrollRatio = (target.scrollTop + target.clientHeight) / target.scrollHeight;
 
     if (scrollRatio >= SCROLL_THRESHOLD && hasNextPage && !isFetchingNextPage) {
       fetchNextPage();
