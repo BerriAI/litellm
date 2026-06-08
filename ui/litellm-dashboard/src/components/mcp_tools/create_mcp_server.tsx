@@ -188,6 +188,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     },
     onBeforeRedirect: persistCreateUiState,
+    flowSource: "create",
   });
 
   React.useEffect(() => {

@@ -166,6 +166,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
     },
     onBeforeRedirect: persistEditUiState,
+    flowSource: "edit",
   });
 
   const initialStaticHeaders = React.useMemo(() => {
