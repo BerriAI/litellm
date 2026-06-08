@@ -479,8 +479,9 @@ class PrismaWrapper:
         Parameters
         ----------
         retries:
-            Maximum number of probe attempts (default 30, ~60 s total at
-            default delay).
+            Maximum number of probe attempts (default 30; ~870 s total at
+            default delay with backoff_factor=1.0, or ~60 s when
+            backoff_factor=0).
         delay:
             Seconds to wait between probes (default 2.0).
         backoff_factor:
@@ -506,7 +507,15 @@ class PrismaWrapper:
                     cumulative_delay,
                 )
                 return True
-            except Exception:
+            except Exception as exc:
+                verbose_proxy_logger.debug(
+                    "%sPrisma engine probe %d/%d failed: %s: %s",
+                    self._log_prefix,
+                    attempt,
+                    retries,
+                    type(exc).__name__,
+                    exc,
+                )
                 if attempt == retries:
                     verbose_proxy_logger.error(
                         "%sPrisma engine did not become ready after %d attempts "
