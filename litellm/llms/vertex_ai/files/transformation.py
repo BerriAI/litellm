@@ -406,7 +406,9 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         )
 
     def _get_configured_bucket_name(self, litellm_params: Dict) -> str:
-        bucket_name = litellm_params.get("gcs_bucket_name") or os.getenv("GCS_BUCKET_NAME")
+        bucket_name = litellm_params.get("gcs_bucket_name") or os.getenv(
+            "GCS_BUCKET_NAME"
+        )
         if not bucket_name:
             raise ValueError("GCS bucket_name is required")
         return bucket_name
