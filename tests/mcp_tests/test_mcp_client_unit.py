@@ -14,7 +14,11 @@ sys.path.insert(0, os.path.abspath("../../.."))
 import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
-from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
+from mcp.types import (
+    CallToolResult as MCPCallToolResult,
+    ListToolsRequest,
+    Tool as MCPTool,
+)
 
 
 def test_mcp_client_uses_configurable_default_timeout():
@@ -179,14 +183,17 @@ class TestMCPClientUnitTests:
         ]
         mock_result = MagicMock()
         mock_result.tools = mock_tools
-        mock_session_instance.list_tools.return_value = mock_result
+        mock_session_instance.send_request.return_value = mock_result
 
         client = MCPClient("http://example.com")
         result = await client.list_tools()
 
         assert result == mock_tools
         mock_session_instance.initialize.assert_called_once()
-        mock_session_instance.list_tools.assert_called_once()
+        mock_session_instance.list_tools.assert_not_called()
+        mock_session_instance.send_request.assert_called_once()
+        request, _result_type = mock_session_instance.send_request.call_args.args
+        assert isinstance(request.root, ListToolsRequest)
 
     @pytest.mark.asyncio
     @patch.object(mcp_client_module, "streamable_http_client")
