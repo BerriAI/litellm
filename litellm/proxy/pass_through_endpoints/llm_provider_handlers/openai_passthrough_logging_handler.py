@@ -32,23 +32,70 @@ from litellm.types.passthrough_endpoints.pass_through_endpoints import (
 from litellm.types.utils import ImageResponse, LlmProviders, PassthroughCallTypes
 from litellm.utils import ModelResponse, TextCompletionResponse
 
-# Hostnames that route to OpenAI-compatible APIs. `cognitiveservices.azure.com`
-# is the Azure subdomain used by newer Azure OpenAI resource types (e.g. the
-# "Azure AI Foundry" / Cognitive Services-hosted deployments). Older Azure
-# OpenAI resources use `openai.azure.com`; both are valid in production.
-_OPENAI_COMPATIBLE_HOSTNAMES = (
-    "api.openai.com",
-    "openai.azure.com",
-    "cognitiveservices.azure.com",
-)
+# Hostnames that route to OpenAI-compatible APIs.
+#
+# `api.openai.com` is OpenAI proper. The two Azure domains below are *shared by
+# every Azure Cognitive Service* (Speech, Vision, Language, ...), not just Azure
+# OpenAI: `openai.azure.com` is the classic Azure OpenAI domain, while
+# `cognitiveservices.azure.com` is used by newer "Azure AI Foundry" /
+# Cognitive Services-hosted Azure OpenAI deployments. Because the hostname alone
+# cannot tell Azure OpenAI apart from the other Cognitive Services on those
+# domains, requests there must additionally carry an OpenAI-style path segment.
+_OPENAI_HOSTNAMES = ("api.openai.com",)
+_AZURE_OPENAI_HOSTNAMES = ("openai.azure.com", "cognitiveservices.azure.com")
+# Path markers that identify an Azure request as Azure OpenAI rather than Speech
+# / Vision / Language / ... `/openai/` is the native Azure OpenAI path prefix;
+# `/v1/` is the OpenAI-v1 surface used by LiteLLM's pass-through routing. Other
+# Cognitive Services use service-named prefixes and versions like `/v3.1/`,
+# `/v1.0/`, so they do not collide with these markers.
+_AZURE_OPENAI_PATH_MARKERS = ("/openai/", "/v1/")
+
+
+def _hostname_matches(hostname: str, suffixes: tuple) -> bool:
+    """True if hostname equals one of `suffixes` or is a subdomain of it.
+
+    Uses suffix matching (not a bare substring test) so look-alikes such as
+    `cognitiveservices.azure.com.attacker.example` are not accepted.
+    """
+    return any(
+        hostname == suffix or hostname.endswith("." + suffix) for suffix in suffixes
+    )
 
 
 def _is_openai_compatible_host(hostname: Optional[str]) -> bool:
-    """True if the hostname is one of the recognized OpenAI-compatible
-    surfaces (OpenAI proper or any Azure OpenAI subdomain)."""
+    """True if the hostname is OpenAI proper or one of the Azure OpenAI domains.
+
+    Hostname-only check, kept for the route-level helpers that additionally
+    require a specific OpenAI path (e.g. `/v1/chat/completions`). When only the
+    hostname would otherwise gate dispatch, use `_is_openai_compatible_url` so
+    non-OpenAI Azure Cognitive Services on the shared domains are excluded.
+    """
     if not hostname:
         return False
-    return any(host in hostname for host in _OPENAI_COMPATIBLE_HOSTNAMES)
+    return _hostname_matches(hostname, _OPENAI_HOSTNAMES) or _hostname_matches(
+        hostname, _AZURE_OPENAI_HOSTNAMES
+    )
+
+
+def _is_openai_compatible_url(url_route: Optional[str]) -> bool:
+    """True if the URL targets an OpenAI-compatible API surface.
+
+    For the shared Azure Cognitive Services domains we additionally require an
+    OpenAI-style path segment (`/openai/` or `/v1/`) so non-OpenAI Azure services
+    (Speech, Vision, Language, ...) on the same domain are not misclassified as
+    OpenAI routes.
+    """
+    if not url_route:
+        return False
+    parsed_url = urlparse(url_route)
+    hostname = parsed_url.hostname
+    if not hostname:
+        return False
+    if _hostname_matches(hostname, _OPENAI_HOSTNAMES):
+        return True
+    if _hostname_matches(hostname, _AZURE_OPENAI_HOSTNAMES):
+        return any(marker in parsed_url.path for marker in _AZURE_OPENAI_PATH_MARKERS)
+    return False
 
 
 class OpenAIPassthroughLoggingHandler(BasePassthroughLoggingHandler):

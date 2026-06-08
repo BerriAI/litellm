@@ -824,6 +824,14 @@ class TestOpenAIPassthroughIntegration:
             == True
         )
         assert self.handler.is_openai_route("https://api.openai.com/v1/models") == True
+        # Azure OpenAI on the shared Cognitive Services domain, identified by an
+        # OpenAI-style path segment.
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/v1/chat/completions"
+            )
+            == True
+        )
 
         # Negative cases
         assert (
@@ -838,6 +846,28 @@ class TestOpenAIPassthroughIntegration:
         )
         assert (
             self.handler.is_openai_route("https://api.assemblyai.com/v2/transcript")
+            == False
+        )
+        # Non-OpenAI Azure Cognitive Services share the `cognitiveservices.azure.com`
+        # domain but must NOT be classified as OpenAI routes (no OpenAI path segment).
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/speechtotext/v3.1/recognize"
+            )
+            == False
+        )
+        assert (
+            self.handler.is_openai_route(
+                "https://my-resource.cognitiveservices.azure.com/vision/v3.2/analyze"
+            )
+            == False
+        )
+        # A look-alike domain that merely contains an OpenAI host as a substring
+        # must be rejected by the suffix-based hostname match.
+        assert (
+            self.handler.is_openai_route(
+                "https://cognitiveservices.azure.com.attacker.example/v1/chat/completions"
+            )
             == False
         )
         assert self.handler.is_openai_route("") == False
