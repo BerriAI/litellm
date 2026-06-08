@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import httpx
 
@@ -38,9 +38,84 @@ class AzureFoundryMAIImageGenerationConfig(BaseImageGenerationConfig):
         return f"{api_base}/mai/v1/images/generations?api-version={api_version}"
 
     @staticmethod
+    def get_mai_image_edit_url(
+        api_base: Optional[str],
+        api_version: Optional[str],
+    ) -> str:
+        if api_base is None:
+            raise ValueError("api_base is required for Azure AI MAI image editing")
+
+        api_base = api_base.rstrip("/")
+        api_version = api_version or "preview"
+
+        if "/mai/" in api_base:
+            if "?" in api_base:
+                return api_base
+            return f"{api_base}?api-version={api_version}"
+
+        return f"{api_base}/mai/v1/images/edits?api-version={api_version}"
+
+    @staticmethod
     def is_mai_model(model: str) -> bool:
         model_normalized = model.lower().replace("-", "").replace("_", "")
         return "maiimage" in model_normalized
+
+    @staticmethod
+    def normalize_mai_image_usage(usage: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """Map Azure MAI usage fields to OpenAI ImageUsage schema."""
+        if usage is None:
+            return {
+                "input_tokens": 0,
+                "input_tokens_details": {"image_tokens": 0, "text_tokens": 0},
+                "output_tokens": 0,
+                "total_tokens": 0,
+            }
+
+        normalized_usage = dict(usage)
+        input_tokens_details = normalized_usage.get("input_tokens_details")
+        if not isinstance(input_tokens_details, dict):
+            input_tokens_details = {}
+
+        text_tokens = normalized_usage.get("num_input_text_tokens")
+        if text_tokens is None:
+            text_tokens = input_tokens_details.get("text_tokens")
+        if text_tokens is None:
+            text_tokens = normalized_usage.get("input_tokens", 0) or 0
+
+        image_tokens = normalized_usage.get("num_input_image_tokens")
+        if image_tokens is None:
+            image_tokens = input_tokens_details.get("image_tokens")
+        if image_tokens is None:
+            image_tokens = 0
+
+        output_tokens = normalized_usage.get("output_tokens")
+        if output_tokens is None:
+            output_tokens = (
+                normalized_usage.get("num_output_tokens")
+                or normalized_usage.get("output_image_tokens")
+                or 0
+            )
+
+        input_tokens = normalized_usage.get("input_tokens")
+        if input_tokens is None:
+            input_tokens = text_tokens + image_tokens
+
+        total_tokens = normalized_usage.get("total_tokens")
+        if total_tokens is None:
+            total_tokens = input_tokens + output_tokens
+
+        normalized_usage.update(
+            {
+                "input_tokens": input_tokens,
+                "input_tokens_details": {
+                    "image_tokens": image_tokens,
+                    "text_tokens": text_tokens,
+                },
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+            }
+        )
+        return normalized_usage
 
     def get_supported_openai_params(
         self, model: str
