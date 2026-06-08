@@ -115,7 +115,7 @@
     "structured-output-2024-03-01": null,
     "prompt-caching-scope-2026-01-05": null,
     "skills-2025-10-02": null,
-    "structured-outputs-2025-11-13": null,
+    "structured-outputs-2025-11-13": "structured-outputs-2025-11-13",
     "text_editor_20241022": null,
     "text_editor_20250124": null,
     "token-efficient-tools-2025-02-19": null,
