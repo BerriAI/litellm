@@ -45,3 +45,15 @@ def test_user_agent_passthrough():
     req = _fake_request({"user-agent": "curl/8"}, client_host="127.0.0.1")
     info = extract_client_info(req, general_settings={})
     assert info.user_agent == "curl/8"
+
+
+def test_extract_client_info_uses_starlette_headers_case_insensitively():
+    from starlette.datastructures import Headers
+
+    req = _fake_request(
+        Headers({"X-Forwarded-For": "1.2.3.4", "User-Agent": "curl/8"}),
+        client_host="127.0.0.1",
+    )
+    info = extract_client_info(req, general_settings={})
+    assert info.forwarded_chain == ["1.2.3.4"]
+    assert info.user_agent == "curl/8"
