@@ -525,6 +525,45 @@ def test_galileo_get_ingest_request_legacy(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_galileo_async_health_check_success(galileo_v2_env):
+    logger = GalileoObserve()
+    current_user_resp = MagicMock()
+    current_user_resp.status_code = 200
+
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
+        mock_get.return_value = current_user_resp
+        result = await logger.async_health_check()
+
+    assert result["status"] == "healthy"
+    mock_get.assert_awaited_once_with(
+        url="https://api.galileo.ai/current_user",
+        headers={
+            "accept": "application/json",
+            "Content-Type": "application/json",
+            "Galileo-API-Key": "test-api-key",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_api_error(galileo_v2_env):
+    logger = GalileoObserve()
+    current_user_resp = MagicMock()
+    current_user_resp.status_code = 401
+
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
+        mock_get.return_value = current_user_resp
+        result = await logger.async_health_check()
+
+    assert result["status"] == "unhealthy"
+    assert "HTTP 401" in result["error_message"]
+
+
+@pytest.mark.asyncio
 async def test_galileo_ensure_headers_v2_missing_key(monkeypatch):
     monkeypatch.delenv("GALILEO_API_KEY", raising=False)
     monkeypatch.setenv("GALILEO_PROJECT_ID", "p")
