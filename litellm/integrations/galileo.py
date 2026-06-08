@@ -517,7 +517,7 @@ class GalileoObserve(CustomLogger):
         """
         Mirror Langfuse _get_langfuse_input_output_content for Galileo ingest.
 
-        Returns (input_text, output_text, messages_for_span). output_text None skips ingest.
+        Returns (input_text, output_text, messages_for_span).
         """
         call_type = kwargs.get("call_type")
         prompt = self._build_prompt(kwargs)
@@ -530,10 +530,11 @@ class GalileoObserve(CustomLogger):
             return self._prompt_to_input_text(prompt), status_message, prompt
 
         if response_obj is not None and (
-            call_type == "embedding"
+            call_type in ("embedding", "aembedding")
             or isinstance(response_obj, litellm.EmbeddingResponse)
         ):
-            return self._prompt_to_input_text(prompt), None, prompt
+            # Match Langfuse OTEL: log embeddings without serializing vectors.
+            return self._prompt_to_input_text(prompt), "embedding-output", prompt
 
         if response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
             output = self._get_chat_content_for_galileo(response_obj)
@@ -627,7 +628,7 @@ class GalileoObserve(CustomLogger):
                 kwargs.get("messages") or [],
             )
 
-        return self._prompt_to_input_text(prompt), None, kwargs.get("messages") or []
+        return self._prompt_to_input_text(prompt), "", kwargs.get("messages") or []
 
     def get_output_str_from_response(
         self, response_obj: Any, kwargs: Dict[str, Any]
@@ -713,10 +714,7 @@ class GalileoObserve(CustomLogger):
             kwargs=kwargs, response_obj=response_obj
         )
         if output_text is None:
-            verbose_logger.debug(
-                "Galileo Logger: skipping %s — no text output to log", _call_type
-            )
-            return
+            output_text = ""
 
         raw_start = slo.get("startTime")
         raw_end = slo.get("endTime")
