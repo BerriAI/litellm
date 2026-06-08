@@ -660,6 +660,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
     # Mock dependencies
     mock_prisma_client = MagicMock()
+    mock_prisma_client.db.wait_for_prisma_engine = AsyncMock(return_value=True)
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
     mock_proxy_logging.slack_alerting_instance = MagicMock()
     mock_proxy_config = AsyncMock()
@@ -5391,6 +5392,7 @@ async def test_store_model_in_db_db_override_when_config_false():
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.db.wait_for_prisma_engine = AsyncMock(return_value=True)
 
     # Mock DB returning store_model_in_db=True in general_settings
     mock_db_record = MagicMock()
@@ -5439,6 +5441,7 @@ async def test_store_model_in_db_db_check_skipped_when_already_true(monkeypatch)
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.db.wait_for_prisma_engine = AsyncMock(return_value=True)
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
 
     mock_proxy_logging = MagicMock(spec=ProxyLogging)
@@ -5480,6 +5483,7 @@ async def test_store_model_in_db_db_failure_graceful(monkeypatch):
     from litellm.proxy.utils import ProxyLogging
 
     mock_prisma_client = MagicMock()
+    mock_prisma_client.db.wait_for_prisma_engine = AsyncMock(return_value=True)
     # Simulate DB failure
     mock_prisma_client.db.litellm_config.find_first = AsyncMock(
         side_effect=Exception("DB connection error")
