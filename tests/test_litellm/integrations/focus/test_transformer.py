@@ -15,6 +15,7 @@ def test_should_include_organization_fields_in_tags():
         {
             "date": [date(2024, 1, 2)],
             "spend": [1.25],
+            "api_requests": [1],
             "api_key": ["hashed-key"],
             "api_key_alias": ["prod-key"],
             "model": ["gpt-4o"],
@@ -42,6 +43,7 @@ def test_should_omit_missing_organization_fields_from_tags():
         {
             "date": [date(2024, 1, 2)],
             "spend": [0.5],
+            "api_requests": [1],
             "api_key": ["hashed-key"],
             "api_key_alias": ["prod-key"],
             "model": ["gpt-4o-mini"],
