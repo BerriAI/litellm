@@ -80,6 +80,16 @@ class TestAzureMAIImageGeneration:
         )
         assert url == api
 
+    def test_get_mai_image_generation_url_appends_generations_to_mai_root(self):
+        url = AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
+            api_base="https://my-resource.services.ai.azure.com/mai/v1",
+            api_version="preview",
+        )
+        assert (
+            url
+            == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
+        )
+
     def test_get_azure_ai_image_generation_config_returns_mai(self):
         config = get_azure_ai_image_generation_config("MAI-Image-2.5")
         assert isinstance(config, AzureFoundryMAIImageGenerationConfig)
