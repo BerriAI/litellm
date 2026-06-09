@@ -8,16 +8,25 @@ DEFAULT_COMETAPI_API_BASE = "https://api.cometapi.com/v1"
 
 
 def get_cometapi_api_key(api_key: Optional[str] = None) -> Optional[str]:
+    import litellm
+
     return (
-        api_key or get_secret_str("COMETAPI_KEY") or get_secret_str("COMETAPI_API_KEY")
+        api_key
+        or litellm.cometapi_key
+        or get_secret_str("COMETAPI_KEY")
+        or get_secret_str("COMETAPI_API_KEY")
+        or litellm.api_key
     )
 
 
 def get_cometapi_api_base(api_base: Optional[str] = None) -> str:
+    import litellm
+
     return (
         api_base
         or get_secret_str("COMETAPI_BASE_URL")
         or get_secret_str("COMETAPI_API_BASE")
+        or litellm.api_base
         or DEFAULT_COMETAPI_API_BASE
     )
 
@@ -26,9 +35,18 @@ def get_cometapi_complete_url(api_base: Optional[str], endpoint: str) -> str:
     base_url = get_cometapi_api_base(api_base).rstrip("/")
     normalized_endpoint = endpoint.strip("/")
     parsed_endpoint = urlsplit(normalized_endpoint)
-    if not normalized_endpoint or parsed_endpoint.query or parsed_endpoint.fragment:
+    if (
+        not normalized_endpoint
+        or parsed_endpoint.scheme
+        or parsed_endpoint.netloc
+        or parsed_endpoint.query
+        or parsed_endpoint.fragment
+        or ".." in normalized_endpoint.split("/")
+    ):
         raise ValueError("CometAPI endpoint must be a non-empty path")
     parsed_base_url = urlsplit(base_url)
+    if parsed_base_url.query or parsed_base_url.fragment:
+        raise ValueError("CometAPI api_base must not include query or fragment")
     path_segments = [segment for segment in parsed_base_url.path.split("/") if segment]
     endpoint_segments = normalized_endpoint.split("/")
     invalid_version_segments = [
@@ -57,8 +75,8 @@ def get_cometapi_complete_url(api_base: Optional[str], endpoint: str) -> str:
             parsed_base_url.scheme,
             parsed_base_url.netloc,
             complete_path,
-            parsed_base_url.query,
-            parsed_base_url.fragment,
+            "",
+            "",
         )
     )
 

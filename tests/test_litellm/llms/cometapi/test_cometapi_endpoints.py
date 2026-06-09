@@ -82,6 +82,7 @@ def test_cometapi_embedding_url_normalization(api_base, expected, monkeypatch):
 
 def test_cometapi_key_and_base_precedence(monkeypatch):
     _clear_cometapi_env(monkeypatch)
+    _pollute_openai_globals(monkeypatch)
     monkeypatch.setenv("COMETAPI_KEY", "comet-env-key")
     monkeypatch.setenv("COMETAPI_BASE_URL", "https://proxy.example.com/openai/v1")
 
@@ -91,6 +92,14 @@ def test_cometapi_key_and_base_precedence(monkeypatch):
         "https://explicit.example.com/v1"
     )
     assert get_cometapi_api_base() == "https://proxy.example.com/openai/v1"
+
+
+def test_cometapi_key_and_base_fall_back_to_litellm_globals(monkeypatch):
+    _clear_cometapi_env(monkeypatch)
+    _pollute_openai_globals(monkeypatch)
+
+    assert get_cometapi_api_key() == "openai-global-key"
+    assert get_cometapi_api_base() == "https://openai.invalid/v1"
 
 
 def test_cometapi_complete_url_preserves_existing_v1_path(monkeypatch):
@@ -121,12 +130,40 @@ def test_cometapi_complete_url_rejects_non_v1_paths(api_base, monkeypatch):
         get_cometapi_complete_url(api_base, "embeddings")
 
 
-@pytest.mark.parametrize("endpoint", ["", "/", "embeddings?foo=bar", "embeddings#frag"])
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "",
+        "/",
+        "embeddings?foo=bar",
+        "embeddings#frag",
+        "http://evil.test/x",
+        "../embeddings",
+    ],
+)
 def test_cometapi_complete_url_rejects_invalid_endpoints(endpoint, monkeypatch):
     _clear_cometapi_env(monkeypatch)
 
     with pytest.raises(ValueError, match="CometAPI endpoint must be a non-empty path"):
         get_cometapi_complete_url("https://api.cometapi.com/v1", endpoint)
+
+
+@pytest.mark.parametrize(
+    "api_base",
+    [
+        "https://api.cometapi.com/v1?tenant=test",
+        "https://api.cometapi.com/v1#fragment",
+    ],
+)
+def test_cometapi_complete_url_rejects_api_base_query_or_fragment(
+    api_base, monkeypatch
+):
+    _clear_cometapi_env(monkeypatch)
+
+    with pytest.raises(
+        ValueError, match="CometAPI api_base must not include query or fragment"
+    ):
+        get_cometapi_complete_url(api_base, "embeddings")
 
 
 def test_cometapi_embedding_uses_api_key_alias(monkeypatch):
@@ -414,6 +451,7 @@ def test_cometapi_speech_uses_cometapi_key_and_base(monkeypatch):
     _clear_cometapi_env(monkeypatch)
     _pollute_openai_globals(monkeypatch)
     monkeypatch.setenv("COMETAPI_API_KEY", "comet-env-key")
+    monkeypatch.setenv("COMETAPI_BASE_URL", "https://api.cometapi.com/v1")
 
     with patch("litellm.main.openai_chat_completions.audio_speech") as mock_speech:
         mock_speech.return_value = b"audio"
@@ -451,6 +489,7 @@ def test_cometapi_speech_requires_voice(monkeypatch):
 def test_cometapi_transcription_uses_cometapi_key_and_base(monkeypatch):
     _clear_cometapi_env(monkeypatch)
     _pollute_openai_globals(monkeypatch)
+    monkeypatch.setenv("COMETAPI_BASE_URL", "https://api.cometapi.com/v1")
 
     audio_file = io.BytesIO(b"not-real-audio")
     audio_file.name = "sample.wav"
@@ -565,6 +604,7 @@ class _OpenAIClient:
 def test_cometapi_moderation_uses_cometapi_key_and_base(monkeypatch):
     _clear_cometapi_env(monkeypatch)
     _pollute_openai_globals(monkeypatch)
+    monkeypatch.setenv("COMETAPI_BASE_URL", "https://api.cometapi.com/v1")
 
     _OpenAIClient.instances = []
     with patch("litellm.main.openai.OpenAI", _OpenAIClient):
@@ -586,6 +626,7 @@ def test_cometapi_moderation_uses_cometapi_key_and_base(monkeypatch):
 def test_cometapi_moderation_accepts_bare_model_with_custom_provider(monkeypatch):
     _clear_cometapi_env(monkeypatch)
     _pollute_openai_globals(monkeypatch)
+    monkeypatch.setenv("COMETAPI_BASE_URL", "https://api.cometapi.com/v1")
 
     _OpenAIClient.instances = []
     with patch("litellm.main.openai.OpenAI", _OpenAIClient):
@@ -653,6 +694,7 @@ class _AsyncOpenAIClient:
 async def test_cometapi_amoderation_uses_cometapi_key_and_base(monkeypatch):
     _clear_cometapi_env(monkeypatch)
     _pollute_openai_globals(monkeypatch)
+    monkeypatch.setenv("COMETAPI_BASE_URL", "https://api.cometapi.com/v1")
 
     fake_client = _AsyncOpenAIClient()
     with patch(
