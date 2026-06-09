@@ -23,6 +23,7 @@ jobs:
     with:
       test-path: >-
         tests/test_litellm/secret_managers
+        tests/test_litellm/identity
         tests/test_litellm/a2a_protocol
         tests/test_litellm/anthropic_interface
         tests/test_litellm/completion_extras
