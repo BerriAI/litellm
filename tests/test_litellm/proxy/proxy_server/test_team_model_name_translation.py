@@ -151,21 +151,53 @@ async def test_model_info_v2_translates_team_model_name(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
-    """/v1/model/info list path (no litellm_model_id) must surface the public
-    name. Covers the list comprehension that assigns _get_proxy_model_info's
-    return back into all_models (#28382 review)."""
+    """/v1/model/info list path (no litellm_model_id) must include team-scoped
+    deployments from the router model list and surface the public name plus
+    access_via_team_ids (#28382)."""
+    team_row = _team_row()
+    global_row = {
+        "model_name": "gpt-4o",
+        "litellm_params": {"model": "gpt-4o"},
+        "model_info": {"id": "normal-id-1", "db_model": False},
+    }
     router = MagicMock()
-    router.get_model_names.return_value = ["team-claude-sonnet"]
+    router.model_list = [team_row, global_row]
+    router.get_model_names.return_value = ["gpt-4o"]
     router.get_model_access_groups.return_value = {}
-    router.get_model_list.return_value = [_team_row()]
 
     monkeypatch.setattr(ps, "user_model", None)
-    monkeypatch.setattr(ps, "llm_model_list", [_team_row()])
+    monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(ps, "get_key_models", lambda **kw: [])
-    monkeypatch.setattr(ps, "get_team_models", lambda **kw: [])
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
     monkeypatch.setattr(
-        ps, "get_complete_model_list", lambda **kw: ["team-claude-sonnet"]
+        ps,
+        "get_all_team_and_direct_access_models",
+        AsyncMock(
+            side_effect=lambda all_models, **kwargs: [
+                {
+                    **m,
+                    "model_info": {
+                        **m.get("model_info", {}),
+                        **(
+                            {"access_via_team_ids": ["team-abc-123"]}
+                            if m.get("model_info", {}).get("team_id")
+                            else {"direct_access": True}
+                        ),
+                    },
+                }
+                for m in all_models
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(
+        mlh,
+        "append_agents_to_model_info",
+        AsyncMock(side_effect=lambda models, **kw: models),
     )
 
     admin = UserAPIKeyAuth(
@@ -176,3 +208,7 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     names = [m["model_name"] for m in resp["data"]]
     assert "team-claude-sonnet" in names
     assert "model_name_team-abc-123_4a6b8" not in names
+    team_model = next(
+        m for m in resp["data"] if m["model_name"] == "team-claude-sonnet"
+    )
+    assert team_model["model_info"]["access_via_team_ids"] == ["team-abc-123"]

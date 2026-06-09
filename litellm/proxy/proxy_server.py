@@ -12384,6 +12384,27 @@ async def model_metrics_exceptions(
     return {"data": response, "exception_types": list(exception_types)}
 
 
+def _deployment_matches_allowed_model_names(
+    model: Dict[str, Any], allowed_model_names: Set[str]
+) -> bool:
+    """Match a router deployment against allowed public model names.
+
+    Team-scoped rows store an internal routing key in ``model_name``; callers
+    with key/team restrictions still refer to the public name in
+    ``model_info.team_public_model_name``.
+    """
+    if model.get("model_name") in allowed_model_names:
+        return True
+    model_info = model.get("model_info")
+    if not isinstance(model_info, dict):
+        return False
+    team_public_model_name = model_info.get("team_public_model_name")
+    return (
+        isinstance(team_public_model_name, str)
+        and team_public_model_name in allowed_model_names
+    )
+
+
 def _translate_model_name_for_response(model: dict) -> dict:
     """For team-scoped DB rows, replace `model_name` with the public name
     in `model_info.team_public_model_name` before returning. The DB column
@@ -12553,49 +12574,67 @@ async def model_info_v1(  # noqa: PLR0915
         )
         return {"data": [_deployment_info_dict]}
 
-    all_models: List[dict] = []
-    model_access_groups: Dict[str, List[str]] = defaultdict(list)
-    ## CHECK IF MODEL RESTRICTIONS ARE SET AT KEY/TEAM LEVEL ##
-    if llm_router is None:
-        proxy_model_list = []
+    # Return router deployments (same source as /v2/model/info), not wildcard-
+    # expanded model names from get_complete_model_list(). Team-scoped rows
+    # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
+    # when v1 resolved models only via public model_name strings.
+    all_models: List[dict] = copy.deepcopy(llm_router.model_list)
+
+    if prisma_client is not None:
+        all_models = await get_all_team_and_direct_access_models(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+            all_models=all_models,
+        )
     else:
-        proxy_model_list = llm_router.get_model_names()
         model_access_groups = llm_router.get_model_access_groups()
-    key_models = get_key_models(
+        proxy_model_list = llm_router.get_model_names()
+        key_models = get_key_models(
+            user_api_key_dict=user_api_key_dict,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+        team_models = get_team_models(
+            team_models=user_api_key_dict.team_models,
+            proxy_model_list=proxy_model_list,
+            model_access_groups=model_access_groups,
+        )
+        if key_models or team_models:
+            allowed_model_names = set(
+                get_complete_model_list(
+                    key_models=key_models,
+                    team_models=team_models,
+                    proxy_model_list=proxy_model_list,
+                    user_model=user_model,
+                    infer_model_from_keys=general_settings.get(
+                        "infer_model_from_keys", False
+                    ),
+                    llm_router=llm_router,
+                    return_wildcard_routes=False,
+                )
+            )
+            all_models = [
+                model
+                for model in all_models
+                if _deployment_matches_allowed_model_names(model, allowed_model_names)
+            ]
+
+    all_models = [
+        _translate_model_name_for_response(
+            _enrich_model_info_with_litellm_data(model=model, llm_router=llm_router)
+        )
+        for model in all_models
+    ]
+
+    from litellm.proxy.agent_endpoints.model_list_helpers import (
+        append_agents_to_model_info,
+    )
+
+    all_models = await append_agents_to_model_info(
+        models=all_models,
         user_api_key_dict=user_api_key_dict,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
     )
-    team_models = get_team_models(
-        team_models=user_api_key_dict.team_models,
-        proxy_model_list=proxy_model_list,
-        model_access_groups=model_access_groups,
-    )
-    all_models_str = get_complete_model_list(
-        key_models=key_models,
-        team_models=team_models,
-        proxy_model_list=proxy_model_list,
-        user_model=user_model,
-        infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
-        llm_router=llm_router,
-    )
-
-    if len(all_models_str) > 0:
-        _relevant_models = []
-        for model in all_models_str:
-            router_models = llm_router.get_model_list(model_name=model)
-            if router_models is not None:
-                _relevant_models.extend(router_models)
-        if llm_model_list is not None:
-            all_models = copy.deepcopy(_relevant_models)  # type: ignore
-        else:
-            all_models = []
-
-    # Reassign each entry: _get_proxy_model_info returns a (possibly new)
-    # dict via _translate_model_name_for_response, which does NOT mutate in
-    # place. Binding only the loop variable would drop the public-name swap
-    # for team-scoped rows and leak the internal routing key (#28382).
-    all_models = [_get_proxy_model_info(model=model) for model in all_models]
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
