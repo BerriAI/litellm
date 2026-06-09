@@ -593,6 +593,7 @@ class ChunkProcessor:
         web_search_requests: Optional[int] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
+        cost: Optional[float] = None
         for chunk in chunks:
             usage_chunk: Optional[Usage] = None
             if "usage" in chunk:
@@ -638,6 +639,11 @@ class ChunkProcessor:
                     and usage_chunk.server_tool_use is not None
                 ):
                     server_tool_use = usage_chunk.server_tool_use
+                _cost = getattr(usage_chunk, "cost", None)
+                if _cost is None and isinstance(usage_chunk, dict):
+                    _cost = usage_chunk.get("cost")
+                if _cost is not None:
+                    cost = _cost
                 if (
                     usage_chunk_dict["prompt_tokens_details"] is not None
                     and getattr(
@@ -663,6 +669,7 @@ class ChunkProcessor:
             web_search_requests=web_search_requests,
             completion_tokens_details=completion_tokens_details,
             prompt_tokens_details=prompt_tokens_details,
+            cost=cost,
         )
 
     def calculate_usage(
@@ -760,6 +767,8 @@ class ChunkProcessor:
 
         if server_tool_use is not None:
             returned_usage.server_tool_use = server_tool_use
+        if calculated_usage_per_chunk["cost"] is not None:
+            returned_usage.cost = calculated_usage_per_chunk["cost"]
         if web_search_requests is not None:
             if returned_usage.prompt_tokens_details is None:
                 returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(

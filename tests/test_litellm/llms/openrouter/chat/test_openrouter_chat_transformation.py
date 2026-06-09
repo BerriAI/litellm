@@ -528,6 +528,61 @@ def test_openrouter_cost_tracking_streaming():
     assert result2.usage.cost == 0.0001
 
 
+def test_openrouter_streaming_cost_propagated_to_final_response():
+    """
+    OpenRouter streams `usage.cost` in the final chunk. After
+    stream_chunk_builder rebuilds the response, the cost must land on
+    `_hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"]`
+    so response_cost_calculator picks it up (mirrors the non-streaming path).
+    """
+    from litellm.main import stream_chunk_builder
+
+    handler = OpenRouterChatCompletionStreamingHandler(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk1 = {
+        "id": "gen-stream-789",
+        "created": 1234567890,
+        "model": "openrouter/anthropic/claude-sonnet-4.5",
+        "choices": [{"delta": {"content": "Hi", "reasoning": None}, "index": 0}],
+    }
+    chunk2 = {
+        "id": "gen-stream-789",
+        "created": 1234567890,
+        "model": "openrouter/anthropic/claude-sonnet-4.5",
+        "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+            "cost": 0.00042,
+        },
+        "choices": [
+            {
+                "delta": {"content": "", "reasoning": None},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+    }
+
+    parsed_chunks = [handler.chunk_parser(chunk1), handler.chunk_parser(chunk2)]
+
+    final_response = stream_chunk_builder(
+        chunks=parsed_chunks,
+        messages=[{"role": "user", "content": "Hi"}],
+    )
+
+    assert final_response is not None
+    assert final_response.usage.cost == 0.00042
+    assert (
+        final_response._hidden_params["additional_headers"][
+            "llm_provider-x-litellm-response-cost"
+        ]
+        == 0.00042
+    )
+
+
 def test_openrouter_reasoning_models_allow_reasoning_effort_param():
     """
     OpenRouter reasoning-capable models should accept the reasoning_effort param.
