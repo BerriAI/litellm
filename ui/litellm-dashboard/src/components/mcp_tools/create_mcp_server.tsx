@@ -134,6 +134,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     status: oauthStatus,
     error: oauthError,
     tokenResponse: oauthTokenResponse,
+    reset: resetOAuthFlow,
   } = useMcpOAuthFlow({
     accessToken,
     getCredentials: () => form.getFieldValue("credentials"),
@@ -554,12 +555,15 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
     }
   }, [formValues.server_name]);
 
-  // Clear formValues when modal closes to reset child components
+  // Clear form and OAuth state when the modal closes so a previous server's
+  // authorization never bleeds into the next "Add New MCP Server" session.
   React.useEffect(() => {
     if (!isModalVisible) {
       setFormValues({});
+      setOauthAccessToken(null);
+      resetOAuthFlow();
     }
-  }, [isModalVisible]);
+  }, [isModalVisible, resetOAuthFlow]);
 
   const isAdmin = isAdminRole(userRole);
 

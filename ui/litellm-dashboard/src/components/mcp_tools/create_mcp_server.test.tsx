@@ -17,15 +17,23 @@ vi.mock("@/utils/mcpTokenStore", () => ({
 }));
 
 // Mutable holder so individual tests can simulate "Authorize & Fetch" having
-// produced a token before submit.
-const oauthHook = vi.hoisted(() => ({ tokenResponse: null as Record<string, unknown> | null }));
+// produced a token before submit, and inspect the reset wiring.
+const oauthHook = vi.hoisted(() => ({
+  tokenResponse: null as Record<string, unknown> | null,
+  reset: vi.fn(),
+  onTokenReceived: null as ((token: Record<string, unknown> | null) => void) | null,
+}));
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
-  useMcpOAuthFlow: () => ({
-    startOAuthFlow: vi.fn(),
-    status: "idle",
-    error: null,
-    tokenResponse: oauthHook.tokenResponse,
-  }),
+  useMcpOAuthFlow: (opts: { onTokenReceived: (token: Record<string, unknown> | null) => void }) => {
+    oauthHook.onTokenReceived = opts.onTokenReceived;
+    return {
+      startOAuthFlow: vi.fn(),
+      status: "idle",
+      error: null,
+      tokenResponse: oauthHook.tokenResponse,
+      reset: oauthHook.reset,
+    };
+  },
 }));
 
 vi.mock("./mcp_server_cost_config", () => ({
@@ -121,6 +129,7 @@ describe("CreateMCPServer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     oauthHook.tokenResponse = null;
+    oauthHook.onTokenReceived = null;
   });
 
   it("should render the modal with title when visible", () => {
@@ -613,6 +622,55 @@ describe("CreateMCPServer", () => {
       });
 
       expect(defaultProps.setModalVisible).toHaveBeenCalledWith(false);
+    });
+
+    it("does not leak a previous server's OAuth token into the next add-server session", async () => {
+      const usedToken = (token: string) =>
+        vi.mocked(networking.testMCPToolsListRequest).mock.calls.some((call) => call[2] === token);
+
+      const { rerender } = render(<CreateMCPServer {...defaultProps} />);
+
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://server-a.example.com/mcp" } });
+      });
+
+      // Simulate "Authorize & Fetch Token" completing for server A.
+      await act(async () => {
+        oauthHook.onTokenReceived?.({ access_token: "stale-token-A", expires_in: 3600 });
+      });
+
+      // Precondition: the freshly fetched token drives the tool preview for server A.
+      await waitFor(() => {
+        expect(usedToken("stale-token-A")).toBe(true);
+      });
+
+      // Parent hides the modal (Cancel / successful create both flip this prop).
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+
+      // The OAuth flow state (source of the "Token fetched" badge) is reset on close.
+      expect(oauthHook.reset).toHaveBeenCalled();
+
+      vi.mocked(networking.testMCPToolsListRequest).mockClear();
+
+      // Reopen for a brand-new server and enter a different URL without re-authorizing.
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+      const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(reopenedUrlInput, { target: { value: "https://server-b.example.com/mcp" } });
+      });
+
+      // The previous server's token must never be replayed for the new session.
+      expect(usedToken("stale-token-A")).toBe(false);
     });
   });
 
