@@ -8893,3 +8893,43 @@ async def test_team_member_budget_duration_not_sent_does_not_update():
 
     assert "team_member_budget_duration" not in updated_kv
     assert "team_member_budget" not in updated_kv
+
+
+@pytest.mark.asyncio
+async def test_clear_team_member_budget_fields_no_budget_row_skips_update():
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="admin-user",
+    )
+
+    team_table = LiteLLM_TeamTable(
+        team_id="test-team",
+        metadata=None,
+        members_with_roles=[],
+    )
+
+    updated_kv = {
+        "team_id": "test-team",
+        "team_member_budget": None,
+        "team_member_rpm_limit": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock,
+    ) as mock_update_budget:
+        result = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            explicitly_set_fields={"team_member_budget", "team_member_rpm_limit"},
+        )
+
+    mock_update_budget.assert_not_awaited()
+    assert "team_member_budget" not in result
+    assert "team_member_rpm_limit" not in result
