@@ -3289,6 +3289,20 @@ async def delete_team(
 
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
 
+    ## DELETE ASSOCIATED BYOK MODELS
+    # Runs before the team rows are deleted so a mid-flight failure never leaves
+    # the team gone with its models orphaned.
+    from litellm.proxy.management_endpoints.model_management_endpoints import (
+        delete_team_models,
+    )
+    from litellm.proxy.proxy_server import llm_router
+
+    await delete_team_models(
+        team_ids=data.team_ids,
+        prisma_client=prisma_client,
+        llm_router=llm_router,
+    )
+
     # ## DELETE TEAM MEMBERSHIPS
     for team_row in team_rows:
         ### get all team members
