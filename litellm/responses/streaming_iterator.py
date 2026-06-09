@@ -1252,6 +1252,7 @@ class ResponsesWebSocketStreaming:
         user_api_key_dict: Optional[Any] = None,
         request_data: Optional[Dict] = None,
         first_message: Optional[str] = None,
+        guardrail_callbacks: Optional[List[Any]] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1261,6 +1262,7 @@ class ResponsesWebSocketStreaming:
         self.messages: list[Dict] = []
         self.input_messages: list[Dict[str, str]] = []
         self.first_message = first_message
+        self.guardrail_callbacks: List[Any] = guardrail_callbacks or []
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1352,7 +1354,8 @@ class ResponsesWebSocketStreaming:
                     response_str = raw_response
 
                 self._store_event(response_str)
-                await self.websocket.send_text(response_str)
+                unmasked_str = self._unmask_response_completed(response_str)
+                await self.websocket.send_text(unmasked_str)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
@@ -1361,20 +1364,135 @@ class ResponsesWebSocketStreaming:
         finally:
             await self._log_messages()
 
+    async def _mask_response_create(self, message: str) -> str:
+        """
+        Apply Presidio PII masking to a ``response.create`` message before it
+        is forwarded to the upstream provider.
+
+        Walks the ``input`` field of the message (string or list of message
+        items), calls ``check_pii`` on every text block, and stores the
+        resulting ``pii_tokens`` map in ``self.request_data["metadata"]`` for
+        later unmasking.  Non-``response.create`` messages are returned
+        unchanged.
+        """
+        if not self.guardrail_callbacks:
+            return message
+
+        try:
+            msg_obj = json.loads(message)
+        except (json.JSONDecodeError, TypeError):
+            return message
+
+        if msg_obj.get("type") != "response.create":
+            return message
+
+        if "metadata" not in self.request_data:
+            self.request_data["metadata"] = {}
+
+        modified = False
+        for cb in self.guardrail_callbacks:
+            presidio_config = cb.get_presidio_settings_from_request_data(
+                self.request_data
+            )
+            input_data = msg_obj.get("input", [])
+
+            if isinstance(input_data, str):
+                msg_obj["input"] = await cb.check_pii(
+                    text=input_data,
+                    output_parse_pii=True,
+                    presidio_config=presidio_config,
+                    request_data=self.request_data,
+                )
+                modified = True
+
+            elif isinstance(input_data, list):
+                for item in input_data:
+                    if not isinstance(item, dict):
+                        continue
+                    content = item.get("content", [])
+                    if isinstance(content, str):
+                        item["content"] = await cb.check_pii(
+                            text=content,
+                            output_parse_pii=True,
+                            presidio_config=presidio_config,
+                            request_data=self.request_data,
+                        )
+                        modified = True
+                    elif isinstance(content, list):
+                        for block in content:
+                            if (
+                                isinstance(block, dict)
+                                and block.get("type") == "input_text"
+                                and isinstance(block.get("text"), str)
+                            ):
+                                block["text"] = await cb.check_pii(
+                                    text=block["text"],
+                                    output_parse_pii=True,
+                                    presidio_config=presidio_config,
+                                    request_data=self.request_data,
+                                )
+                                modified = True
+
+        return json.dumps(msg_obj) if modified else message
+
+    def _unmask_response_completed(self, response_str: str) -> str:
+        """
+        Apply Presidio PII unmasking to a ``response.completed`` event before
+        it is forwarded back to the client.
+
+        Uses the ``pii_tokens`` map stored during ``_mask_response_create`` to
+        replace every token (e.g. ``<EMAIL_ADDRESS_1>``) with the original
+        value.  Events that are not ``response.completed``, or where no tokens
+        were stored, are returned unchanged.
+        """
+        if not self.guardrail_callbacks:
+            return response_str
+
+        pii_tokens: Dict[str, str] = (self.request_data.get("metadata") or {}).get(
+            "pii_tokens", {}
+        )
+        if not pii_tokens:
+            return response_str
+
+        try:
+            evt_obj = json.loads(response_str)
+        except (json.JSONDecodeError, TypeError):
+            return response_str
+
+        if evt_obj.get("type") != "response.completed":
+            return response_str
+
+        cb = self.guardrail_callbacks[0]
+        modified = False
+        response_obj = evt_obj.get("response", {})
+        for output_item in response_obj.get("output", []):
+            for content_block in output_item.get("content", []):
+                if not isinstance(content_block, dict):
+                    continue
+                text = content_block.get("text")
+                if isinstance(text, str):
+                    unmasked = cb._unmask_pii_text(text, pii_tokens)
+                    if unmasked != text:
+                        content_block["text"] = unmasked
+                        modified = True
+
+        return json.dumps(evt_obj) if modified else response_str
+
     async def client_to_backend(self) -> None:
         """Forward response.create events from client to backend."""
         try:
             if self.first_message is not None:
+                masked_first = await self._mask_response_create(self.first_message)
                 self._store_input(self.first_message)
-                self._store_event(self.first_message)
-                await self.backend_ws.send(self.first_message)  # type: ignore[union-attr]
+                self._store_event(masked_first)
+                await self.backend_ws.send(masked_first)  # type: ignore[union-attr]
 
             while True:
                 message = await self.websocket.receive_text()
-
+                masked = await self._mask_response_create(message)
                 self._store_input(message)
-                self._store_event(message)
-                await self.backend_ws.send(message)  # type: ignore[union-attr]
+                self._store_event(masked)
+                await self.backend_ws.send(masked)  # type: ignore[union-attr]
 
         except Exception as e:
             verbose_logger.debug("Responses WS client_to_backend ended: %s", e)

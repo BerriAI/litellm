@@ -5575,7 +5575,11 @@ class BaseLLMHTTPHandler:
         import websockets
         from websockets.asyncio.client import ClientConnection
 
-        litellm_params = GenericLiteLLMParams()
+        litellm_params = GenericLiteLLMParams(
+            api_base=api_base,
+            api_key=api_key,
+            **kwargs,
+        )
         headers = responses_api_provider_config.validate_environment(
             headers={},
             model=model,
@@ -5584,14 +5588,14 @@ class BaseLLMHTTPHandler:
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        http_url = responses_api_provider_config.get_complete_url(
+        ws_url = responses_api_provider_config.get_websocket_url(
             api_base=api_base,
-            litellm_params={},
+            litellm_params=dict(litellm_params),
         )
-        ws_url = http_url.replace("https://", "wss://").replace("http://", "ws://")
-        # OpenAI's WebSocket responses endpoint requires ?model= in the URL,
-        # matching the Realtime API convention (wss://.../v1/realtime?model=...).
-        # Use urllib.parse so existing query params (e.g. api-version) are preserved.
+        # Some providers (e.g. OpenAI) require ?model= in the WebSocket URL.
+        # Providers that encode the model differently (e.g. Azure sends it in the
+        # response.create body) return a URL that already has no model param —
+        # we only add it when not already present.
         _parsed = urlparse(ws_url)
         _qs = parse_qs(_parsed.query)
         if "model" not in _qs:
@@ -5626,6 +5630,24 @@ class BaseLLMHTTPHandler:
                 _request_data: Dict[str, Any] = {}
                 if litellm_metadata:
                     _request_data["litellm_metadata"] = litellm_metadata
+
+                _ws_guardrail_callbacks: list = []
+                try:
+                    import litellm as _litellm
+                    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
+                        _OPTIONAL_PresidioPIIMasking,
+                    )
+
+                    _ws_guardrail_callbacks = [
+                        cb
+                        for cb in _litellm.callbacks
+                        if isinstance(cb, _OPTIONAL_PresidioPIIMasking)
+                        and getattr(cb, "output_parse_pii", False)
+                        and not getattr(cb, "apply_to_output", False)
+                    ]
+                except Exception:
+                    pass
+
                 streaming = ResponsesWebSocketStreaming(
                     websocket=websocket,
                     backend_ws=cast(ClientConnection, backend_ws),
@@ -5633,6 +5655,7 @@ class BaseLLMHTTPHandler:
                     user_api_key_dict=user_api_key_dict,
                     request_data=_request_data,
                     first_message=first_message,
+                    guardrail_callbacks=_ws_guardrail_callbacks,
                 )
                 await streaming.bidirectional_forward()
 

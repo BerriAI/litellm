@@ -185,6 +185,32 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             default_api_version=AZURE_DEFAULT_RESPONSES_API_VERSION,
         )
 
+    def supports_native_websocket(self) -> bool:
+        return True
+
+    def get_websocket_url(
+        self,
+        api_base: Optional[str],
+        litellm_params: dict,
+    ) -> str:
+        """
+        Azure Responses WebSocket endpoint is at /openai/v1/responses with no
+        api-version query param. Auth is via Authorization header, model is sent
+        in the response.create body — not the URL.
+        """
+        if api_base is None:
+            raise ValueError("api_base is required for Azure WebSocket")
+        import httpx
+
+        base = api_base.rstrip("/")
+        # Strip existing /openai/responses path if the api_base already contains it
+        for suffix in ("/openai/v1/responses", "/openai/responses"):
+            if base.endswith(suffix):
+                base = base[: -len(suffix)]
+                break
+        ws_url = base.replace("https://", "wss://").replace("http://", "ws://")
+        return f"{ws_url}/openai/v1/responses"
+
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################

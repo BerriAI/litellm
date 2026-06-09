@@ -2330,6 +2330,47 @@ async def test_apply_to_output_streaming_bytes_only_logs_warning():
 
 
 @pytest.mark.asyncio
+async def test_output_parse_pii_streaming_responses_events_passthrough(
+    mock_user_api_key,
+):
+    """
+    Regression test: when output_parse_pii=True and pii_tokens exist, /v1/responses
+    streaming events must pass through instead of being dropped.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+
+    response_events = [
+        {"type": "response.created", "response": {"id": "resp_1"}},
+        {"type": "response.output_text.delta", "delta": "Hello"},
+        {
+            "type": "response.completed",
+            "response": {"id": "resp_1", "status": "completed"},
+        },
+    ]
+
+    async def mock_stream():
+        for event in response_events:
+            yield event
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data={
+            "metadata": {
+                "pii_tokens": {"<EMAIL_ADDRESS_1>": "john@example.com"},
+            }
+        },
+    ):
+        collected.append(chunk)
+
+    assert collected == response_events
+
+
+@pytest.mark.asyncio
 async def test_anonymize_text_uses_correct_positions_no_parse_pii():
     """
     Regression test for anonymizer offset bug (fixes #24160).

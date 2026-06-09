@@ -46,11 +46,30 @@ class TestResponsesAPIWebSocketSupport:
         ), "OpenAI should support native websocket"
 
     def test_azure_supports_native_websocket(self):
-        """Azure should support native websocket (inherits from OpenAI)"""
+        """Azure should support native websocket"""
         config = AzureOpenAIResponsesAPIConfig()
         assert (
             config.supports_native_websocket() is True
         ), "Azure should support native websocket"
+
+    def test_azure_websocket_url_uses_v1_path(self):
+        """Azure WebSocket URL must use /openai/v1/responses (no api-version)"""
+        config = AzureOpenAIResponsesAPIConfig()
+        url = config.get_websocket_url(
+            api_base="https://myresource.cognitiveservices.azure.com",
+            litellm_params={"api_version": "2025-04-01-preview"},
+        )
+        assert url == "wss://myresource.cognitiveservices.azure.com/openai/v1/responses"
+        assert "api-version" not in url
+
+    def test_azure_websocket_url_strips_existing_path(self):
+        """api_base that already contains /openai/responses must be cleaned"""
+        config = AzureOpenAIResponsesAPIConfig()
+        url = config.get_websocket_url(
+            api_base="https://myresource.cognitiveservices.azure.com/openai/responses",
+            litellm_params={},
+        )
+        assert url == "wss://myresource.cognitiveservices.azure.com/openai/v1/responses"
 
     def test_xai_uses_managed_websocket(self):
         """XAI should use managed websocket handler"""
@@ -1000,9 +1019,7 @@ class TestNativeWebSocketUrlConstruction:
 
         mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
         mock_config.supports_native_websocket.return_value = True
-        mock_config.get_complete_url.return_value = (
-            "https://api.openai.com/v1/responses"
-        )
+        mock_config.get_websocket_url.return_value = "wss://api.openai.com/v1/responses"
         mock_config.validate_environment.return_value = {}
 
         mock_logging = MagicMock()
@@ -1051,8 +1068,8 @@ class TestNativeWebSocketUrlConstruction:
 
         mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
         mock_config.supports_native_websocket.return_value = True
-        mock_config.get_complete_url.return_value = (
-            "https://custom.example.com/v1/responses?api-version=2024-05-01"
+        mock_config.get_websocket_url.return_value = (
+            "wss://custom.example.com/v1/responses?api-version=2024-05-01"
         )
         mock_config.validate_environment.return_value = {}
 
@@ -1084,3 +1101,49 @@ class TestNativeWebSocketUrlConstruction:
         assert qs.get("api-version") == [
             "2024-05-01"
         ], f"existing param lost: {captured_urls[0]}"
+
+    @pytest.mark.asyncio
+    async def test_ws_passes_litellm_params_to_get_websocket_url(self):
+        """Deployment api_version must reach get_websocket_url (Azure WS URL)."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
+        mock_config.supports_native_websocket.return_value = True
+        mock_config.get_websocket_url.return_value = (
+            "wss://example.openai.azure.com/openai/v1/responses"
+        )
+        mock_config.validate_environment.return_value = {}
+
+        mock_logging = MagicMock()
+        mock_logging.pre_call = MagicMock()
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        handler = BaseLLMHTTPHandler()
+        mock_ws = MagicMock()
+        mock_ws.close = AsyncMock()
+
+        class FakeConnect:
+            def __init__(self, url, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                raise Exception("stop")
+
+            async def __aexit__(self, *args):
+                pass
+
+        with patch("websockets.connect", FakeConnect):
+            await handler.async_responses_websocket(
+                model="gpt-5.3-codex",
+                websocket=mock_ws,
+                logging_obj=mock_logging,
+                responses_api_provider_config=mock_config,
+                api_key="sk-test",
+                api_base="https://example.openai.azure.com",
+                api_version="2025-04-01-preview",
+            )
+
+        mock_config.get_websocket_url.assert_called_once()
+        _, call_kwargs = mock_config.get_websocket_url.call_args
+        assert call_kwargs["litellm_params"]["api_version"] == "2025-04-01-preview"
