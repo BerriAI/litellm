@@ -1356,7 +1356,7 @@ class ResponsesWebSocketStreaming:
                     response_str = raw_response
 
                 self._store_event(response_str)
-                unmasked_str = self._unmask_response_completed(response_str)
+                unmasked_str = self._unmask_response_event(response_str)
                 output_masked_str = await self._mask_response_completed(unmasked_str)
                 await self.websocket.send_text(output_masked_str)
 
@@ -1454,15 +1454,29 @@ class ResponsesWebSocketStreaming:
 
         return json.dumps(msg_obj) if modified else message
 
-    def _unmask_response_completed(self, response_str: str) -> str:
+    # Delta event types whose ``delta`` field may contain PII tokens.
+    _DELTA_EVENT_TYPES = frozenset(
+        {
+            "response.output_text.delta",
+            "response.reasoning_summary_text.delta",
+            "response.refusal.delta",
+            "response.function_call_arguments.delta",
+        }
+    )
+
+    def _unmask_response_event(self, response_str: str) -> str:
         """
-        Apply Presidio PII unmasking to a ``response.completed`` event before
-        it is forwarded back to the client.
+        Apply Presidio PII unmasking to backend events before forwarding to
+        the client.
+
+        Handles two shapes:
+        - ``response.completed``: walks ``response.output[*].content[*].text``
+        - streaming delta events (``response.output_text.delta``, etc.):
+          replaces tokens in the ``delta`` field
 
         Uses the ``pii_tokens`` map stored during ``_mask_response_create`` to
         replace every token (e.g. ``<EMAIL_ADDRESS_1>``) with the original
-        value.  Events that are not ``response.completed``, or where no tokens
-        were stored, are returned unchanged.
+        value.  Events with no stored tokens are returned unchanged.
         """
         if not self.guardrail_callbacks:
             return response_str
@@ -1478,24 +1492,33 @@ class ResponsesWebSocketStreaming:
         except (json.JSONDecodeError, TypeError):
             return response_str
 
-        if evt_obj.get("type") != "response.completed":
-            return response_str
-
         cb = self.guardrail_callbacks[0]
-        modified = False
-        response_obj = evt_obj.get("response", {})
-        for output_item in response_obj.get("output", []):
-            for content_block in output_item.get("content", []):
-                if not isinstance(content_block, dict):
-                    continue
-                text = content_block.get("text")
-                if isinstance(text, str):
-                    unmasked = cb._unmask_pii_text(text, pii_tokens)
-                    if unmasked != text:
-                        content_block["text"] = unmasked
-                        modified = True
+        event_type = evt_obj.get("type")
 
-        return json.dumps(evt_obj) if modified else response_str
+        if event_type == "response.completed":
+            modified = False
+            response_obj = evt_obj.get("response", {})
+            for output_item in response_obj.get("output", []):
+                for content_block in output_item.get("content", []):
+                    if not isinstance(content_block, dict):
+                        continue
+                    text = content_block.get("text")
+                    if isinstance(text, str):
+                        unmasked = cb._unmask_pii_text(text, pii_tokens)
+                        if unmasked != text:
+                            content_block["text"] = unmasked
+                            modified = True
+            return json.dumps(evt_obj) if modified else response_str
+
+        if event_type in self._DELTA_EVENT_TYPES:
+            delta = evt_obj.get("delta")
+            if isinstance(delta, str):
+                unmasked = cb._unmask_pii_text(delta, pii_tokens)
+                if unmasked != delta:
+                    evt_obj["delta"] = unmasked
+                    return json.dumps(evt_obj)
+
+        return response_str
 
     async def _mask_response_completed(self, response_str: str) -> str:
         """
