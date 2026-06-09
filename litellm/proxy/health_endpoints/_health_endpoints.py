@@ -208,11 +208,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
-<<<<<<< HEAD
-            "galileo",
-=======
             "newrelic",
->>>>>>> f7926f705c (Wiring in the test message from the LiteLLM callback UX.)
             "sqs",
         ]:
             raise HTTPException(
