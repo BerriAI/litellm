@@ -1482,6 +1482,10 @@ class TestTemporaryMCPSessionEndpoints:
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
                 mock_manager,
             ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[non_admin]),
+            ),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await _get_cached_temporary_mcp_server_or_404("server-x", non_admin)
@@ -1513,6 +1517,10 @@ class TestTemporaryMCPSessionEndpoints:
             patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
                 mock_manager,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.build_effective_auth_contexts",
+                AsyncMock(return_value=[non_admin]),
             ),
         ):
             result = await _get_cached_temporary_mcp_server_or_404(
