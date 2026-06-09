@@ -1559,6 +1559,9 @@ class Usage(SafeAttributeModel, CompletionUsage):
     prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
     """Breakdown of tokens used in the prompt."""
 
+    cache_creation: Optional[CacheCreationTokenDetails] = None
+    """Anthropic cache creation token breakdown by TTL."""
+
     def __init__(  # noqa: PLR0915
         self,
         prompt_tokens: Optional[int] = None,
@@ -1670,6 +1673,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
             total_tokens=total_tokens or 0,
             completion_tokens_details=_completion_tokens_details or None,
             prompt_tokens_details=_prompt_tokens_details or None,
+            cache_creation=params.get("cache_creation"),
         )
 
         if server_tool_use is not None:
@@ -1700,7 +1704,12 @@ class Usage(SafeAttributeModel, CompletionUsage):
             self._cache_read_input_tokens = params["prompt_cache_hit_tokens"]
 
         for k, v in params.items():
+            if k == "cache_creation":
+                continue
             setattr(self, k, v)
+
+        if self.cache_creation is None:
+            del self.cache_creation
 
     def __contains__(self, key):
         # Define custom behavior for the 'in' operator
