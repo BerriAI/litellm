@@ -7,9 +7,8 @@ carrier.
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Optional
-
-from fastapi import status
 
 from litellm.identity.principal import classify_principal_kind
 from litellm.integrations.otel.model.spans import SpanRole
@@ -144,7 +143,7 @@ async def load_identity(
             ),
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
-            code=status.HTTP_401_UNAUTHORIZED,
+            code=HTTPStatus.UNAUTHORIZED,
         )
 
     await cache.set(hashed_token, uak)
