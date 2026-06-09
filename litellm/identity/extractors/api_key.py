@@ -8,6 +8,7 @@ Wraps the existing ``get_api_key`` (header extraction) and
 from typing import Optional
 
 from litellm.identity.principal import ApiKeyPrincipal
+from litellm.proxy._types import UserAPIKeyAuth
 
 
 def hash_principal_token(api_key: str) -> str:
@@ -17,8 +18,6 @@ def hash_principal_token(api_key: str) -> str:
     keys) can reuse the same hashing without re-importing the Pydantic
     model.
     """
-    from litellm.proxy._types import UserAPIKeyAuth
-
     return UserAPIKeyAuth._safe_hash_litellm_api_key(api_key)
 
 

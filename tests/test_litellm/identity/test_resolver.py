@@ -85,7 +85,7 @@ async def test_resolve_user_api_key_auth_hashes_token_then_loads_identity():
 
     sentinel = object()
     with patch(
-        "litellm.identity.store.load_identity",
+        "litellm.identity.resolver.load_identity",
         new=AsyncMock(return_value=sentinel),
     ) as mock_load:
         result = await resolve_user_api_key_auth(

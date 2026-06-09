@@ -7,10 +7,9 @@ the carrier.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Tuple
+from typing import Any, Tuple
 
-if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
 def parse_jwt_scopes(claims: dict) -> Tuple[str, ...]:
@@ -45,8 +44,6 @@ def build_user_api_key_auth_from_jwt_result(
     because the auth_builder result reports it but the call site already
     branched on it; threading it through avoids re-checking.
     """
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
     team_id = result["team_id"]
     team_object = result["team_object"]
     user_id = result["user_id"]

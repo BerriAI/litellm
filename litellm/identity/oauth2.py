@@ -6,10 +6,9 @@ an already-validated response payload into the carrier.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
-if TYPE_CHECKING:
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
 def build_user_api_key_auth_from_oauth2_response(
@@ -31,8 +30,6 @@ def build_user_api_key_auth_from_oauth2_response(
     Active-token validation, scope checks, and token-not-active rejection
     happen upstream in ``Oauth2Handler``; this builder trusts its input.
     """
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
     user_id: Optional[str] = response_data.get(user_id_field_name)
     raw_role = response_data.get(user_role_field_name)
     user_team_id: Optional[str] = response_data.get(user_team_id_field_name)

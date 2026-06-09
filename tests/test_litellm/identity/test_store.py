@@ -172,7 +172,7 @@ async def test_cold_path_bundles_user_into_cache():
     with (
         patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
         patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
+            "litellm.identity.store.get_user_object",
             side_effect=_fake_get_user_object,
         ),
     ):
@@ -254,7 +254,7 @@ async def test_cold_path_fetches_object_permission_when_only_id_present():
     with (
         patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
         patch(
-            "litellm.proxy.auth.auth_checks.get_object_permission",
+            "litellm.identity.store.get_object_permission",
             new=AsyncMock(return_value=fetched),
         ) as mock_get_perm,
     ):
@@ -285,7 +285,7 @@ async def test_cold_path_swallows_object_permission_lookup_failure():
     with (
         patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
         patch(
-            "litellm.proxy.auth.auth_checks.get_object_permission",
+            "litellm.identity.store.get_object_permission",
             new=AsyncMock(side_effect=RuntimeError("db blip")),
         ),
     ):
@@ -307,7 +307,7 @@ async def test_populate_legacy_cache_delegates_to_cache_key_object():
 
     uak = UserAPIKeyAuth(token="hash-legacy", user_id="u1")
     with patch(
-        "litellm.proxy.auth.auth_checks._cache_key_object", new=AsyncMock()
+        "litellm.identity.store._cache_key_object", new=AsyncMock()
     ) as mock_cache_key:
         await _populate_legacy_cache(
             hashed_token="hash-legacy",
@@ -328,7 +328,7 @@ async def test_populate_legacy_cache_swallows_write_failures():
 
     uak = UserAPIKeyAuth(token="hash-legacy", user_id="u1")
     with patch(
-        "litellm.proxy.auth.auth_checks._cache_key_object",
+        "litellm.identity.store._cache_key_object",
         new=AsyncMock(side_effect=RuntimeError("redis down")),
     ):
         await _populate_legacy_cache(
