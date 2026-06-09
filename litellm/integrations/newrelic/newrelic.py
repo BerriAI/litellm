@@ -52,6 +52,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.types.integrations.newrelic import NewRelicInitParams
 from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 from litellm.types.utils import ModelResponse, Message, StandardLoggingPayload
@@ -545,6 +546,16 @@ class NewRelicLogger(CustomLogger):
         if not end_time:
             end_time = kwargs.get("end_time")
 
+        # Content is recorded only when the NR-specific switches allow it AND
+        # LiteLLM's wider redaction decision (turn_off_message_logging, dynamic
+        # params, headers) does not require redaction. Async streaming hands the
+        # callback an unredacted async_complete_streaming_response, so without
+        # this gate generated content would still reach NR even when the user
+        # has globally disabled message logging.
+        record_content = self.record_content and not should_redact_message_logging(
+            kwargs
+        )
+
         # Extract request messages, preferring StandardLoggingPayload.
         # SLO messages can be a string (serialized/redacted), so only use it when it's a list.
         slo_messages = (
@@ -566,8 +577,7 @@ class NewRelicLogger(CustomLogger):
             if start_time is not None:
                 message_data["timestamp"] = int(self._to_epoch_ms(start_time))
 
-            # Only add content if recording is enabled
-            if self.record_content:
+            if record_content:
                 message_data["content"] = self._extract_message_content(msg)
 
             messages.append(message_data)
@@ -592,8 +602,7 @@ class NewRelicLogger(CustomLogger):
                     if end_time is not None:
                         message_data["timestamp"] = int(self._to_epoch_ms(end_time))
 
-                    # Only add content if recording is enabled
-                    if self.record_content:
+                    if record_content:
                         message_data["content"] = self._extract_message_content(message)
 
                     messages.append(message_data)

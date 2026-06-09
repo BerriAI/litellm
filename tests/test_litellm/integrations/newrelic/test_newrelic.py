@@ -18,6 +18,7 @@ _mock_newrelic.agent = _mock_newrelic_agent
 sys.modules["newrelic"] = _mock_newrelic
 sys.modules["newrelic.agent"] = _mock_newrelic_agent
 
+import litellm
 import litellm.integrations.newrelic.newrelic as nr_module
 from litellm.integrations.newrelic.newrelic import NewRelicLogger
 
@@ -385,6 +386,85 @@ class TestExtractAllMessagesContentDisabled:
 
         for msg in messages:
             assert "content" not in msg
+
+
+class TestExtractAllMessagesRespectsLitellmRedaction:
+    """Regression tests for the async-streaming redaction bypass.
+
+    NR-specific switches alone are insufficient: when
+    ``litellm.turn_off_message_logging=True`` (or the per-request equivalents),
+    async streaming callbacks receive an unredacted
+    ``async_complete_streaming_response``. Without consulting LiteLLM's
+    redaction decision the integration would still write generated content
+    into NR events.
+    """
+
+    def _assert_no_content(self, logger, kwargs):
+        response = make_response(content="streamed assistant text")
+
+        messages = logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        # All extracted messages must carry no content payload
+        for msg in messages:
+            assert (
+                "content" not in msg
+            ), f"content leaked despite redaction signal: {msg}"
+        # And there must actually be at least one user + one assistant entry,
+        # otherwise the test would pass vacuously.
+        assert any(not m.get("is_response") for m in messages)
+        assert any(m.get("is_response") for m in messages)
+
+    def test_global_turn_off_message_logging_blocks_content(self, monkeypatch):
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+        logger = make_logger()
+        assert logger.record_content is True
+
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "user prompt"}])
+        self._assert_no_content(logger, kwargs)
+
+    def test_dynamic_param_turn_off_message_logging_blocks_content(self):
+        logger = make_logger()
+        assert logger.record_content is True
+
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "user prompt"}])
+        kwargs["standard_callback_dynamic_params"] = {
+            "turn_off_message_logging": True,
+        }
+        self._assert_no_content(logger, kwargs)
+
+    def test_enable_redaction_header_blocks_content(self):
+        logger = make_logger()
+        assert logger.record_content is True
+
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "user prompt"}])
+        kwargs["litellm_params"]["metadata"]["headers"] = {
+            "x-litellm-enable-message-redaction": True,
+        }
+        self._assert_no_content(logger, kwargs)
+
+    def test_dynamic_param_explicit_false_overrides_global_redaction(self, monkeypatch):
+        """The dynamic param has higher priority than the global flag (see
+        should_redact_message_logging). When a caller explicitly opts back into
+        message logging per-request, NR must record content again."""
+        monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+        logger = make_logger()
+
+        kwargs = make_kwargs(messages=[{"role": "user", "content": "ok to log"}])
+        kwargs["standard_callback_dynamic_params"] = {
+            "turn_off_message_logging": False,
+        }
+        response = make_response(content="response text")
+
+        messages = logger._extract_all_messages(
+            kwargs, response, response_model="gpt-4", vendor="openai"
+        )
+
+        request_msg = next(m for m in messages if not m.get("is_response"))
+        response_msg = next(m for m in messages if m.get("is_response"))
+        assert request_msg["content"] == "ok to log"
+        assert response_msg["content"] == "response text"
 
 
 class TestExtractAllMessagesTimestamps:
