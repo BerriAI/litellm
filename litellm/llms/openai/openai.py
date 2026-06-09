@@ -1204,15 +1204,12 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         Returns (headers, response_dict) where response_dict is always a dict.
         """
-        try:
-            raw_response = await openai_aclient.embeddings.with_raw_response.create(
-                **data, timeout=timeout
-            )  # type: ignore
-            headers = dict(raw_response.headers)
-            parsed = raw_response.parse()
-            return headers, self._normalize_embedding_response(parsed, data)
-        except Exception as e:
-            raise e
+        raw_response = await openai_aclient.embeddings.with_raw_response.create(
+            **data, timeout=timeout
+        )  # type: ignore
+        headers = dict(raw_response.headers)
+        parsed = raw_response.parse()
+        return headers, self._normalize_embedding_response(parsed, data)
 
     def _normalize_embedding_response(
         self,
@@ -1223,12 +1220,16 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             return response.model_dump()
         if isinstance(response, dict):
             return response
-        return {
-            "object": "list",
-            "data": list(response) if isinstance(response, list) else [],
-            "model": request_data.get("model", ""),
-            "usage": {"prompt_tokens": 0, "total_tokens": 0},
-        }
+        raise OpenAIError(
+            status_code=500,
+            message=(
+                "Embedding response is not a mapping or Pydantic model. "
+                "If you are using an OpenAI-compatible server, "
+                "make sure the api_base includes the API prefix (e.g. /v1). "
+                f"Received type: {type(response).__name__}. "
+                f"Response: {str(response)[:500]}"
+            ),
+        )
 
     @track_llm_api_timing()
     def make_sync_openai_embedding_request(
@@ -1245,16 +1246,13 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
         Returns (headers, response_dict) where response_dict is always a dict.
         """
-        try:
-            raw_response = openai_client.embeddings.with_raw_response.create(
-                **data, timeout=timeout
-            )  # type: ignore
+        raw_response = openai_client.embeddings.with_raw_response.create(
+            **data, timeout=timeout
+        )  # type: ignore
 
-            headers = dict(raw_response.headers)
-            parsed = raw_response.parse()
-            return headers, self._normalize_embedding_response(parsed, data)
-        except Exception as e:
-            raise e
+        headers = dict(raw_response.headers)
+        parsed = raw_response.parse()
+        return headers, self._normalize_embedding_response(parsed, data)
 
     async def aembedding(
         self,
