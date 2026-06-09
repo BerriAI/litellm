@@ -1362,7 +1362,13 @@ class PrometheusLogger(CustomLogger):
         user_id: Optional[str] = None,
         user_api_key_org_id: Optional[str] = None,
     ):
-        _metadata = litellm_params.get("metadata") or {}
+        # For batch/files/responses/thread/assistant endpoints, add_litellm_data_to_request
+        # stores budget metadata under "litellm_metadata" not "metadata" (fixes #29937).
+        _metadata = (
+            litellm_params.get("metadata")
+            or litellm_params.get("litellm_metadata")
+            or {}
+        )
         _team_spend = _metadata.get("user_api_key_team_spend", None)
         _team_max_budget = _metadata.get("user_api_key_team_max_budget", None)
 
