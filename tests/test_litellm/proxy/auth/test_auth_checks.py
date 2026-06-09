@@ -2409,6 +2409,38 @@ async def test_virtual_key_budget_check_fallback_no_counter():
         assert exc_info.value.current_cost == 15.0
 
 
+@pytest.mark.parametrize(
+    "non_finite_max_budget",
+    [float("nan"), float("inf")],
+    ids=["nan", "positive_infinity"],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_check_non_finite_max_budget_does_not_bypass(
+    non_finite_max_budget,
+):
+    """Non-finite max_budget must not disable enforcement (GHSA-2rv4-xv66-fpjg)."""
+    from litellm.proxy.utils import ProxyLogging
+
+    valid_token = UserAPIKeyAuth(
+        token="test-hashed-token",
+        spend=0.0,
+        max_budget=non_finite_max_budget,
+        user_id="test-user",
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        return 999.0
+
+    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend):
+        await _virtual_key_max_budget_check(
+            valid_token=valid_token,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+
 @pytest.mark.asyncio
 async def test_team_budget_check_reads_from_spend_counter():
     """Team budget check should use get_current_spend when counter exists."""
