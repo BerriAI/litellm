@@ -4137,3 +4137,67 @@ def test_handle_jwt_retired_jwks_methods_are_gone(method_name):
     assert not hasattr(JWTHandler, method_name)
     with pytest.raises(AttributeError):
         getattr(JWTHandler(), method_name)
+
+
+def test_build_jwks_client_enables_caching_with_configured_ttl():
+    """The default factory must hand PyJWKClient a cache and wire its lifespan to
+    the configured public-key TTL, so a multi-process deploy caches JWKS for the
+    intended duration instead of refetching on every token.
+    """
+    from jwt import PyJWKClient
+
+    from litellm.caching import DualCache
+
+    jwks_url = "https://idp.example.com/jwks.json"
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(public_key_ttl=4242),
+    )
+
+    client = jwt_handler._build_jwks_client(jwks_url)
+
+    assert isinstance(client, PyJWKClient)
+    assert client.uri == jwks_url
+    assert client.jwk_set_cache is not None
+    assert client.jwk_set_cache.lifespan == 4242
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_rejects_token_when_no_jwks_url_has_matching_key(monkeypatch):
+    """When every configured JWT_PUBLIC_KEY_URL serves a JWKS without the token's
+    kid, auth_jwt must reject the token rather than fall through to decoding with
+    a missing signing key.
+    """
+    from litellm.caching import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    first_jwks_url = "https://first.example.com/keys"
+    second_jwks_url = "https://second.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", f"{first_jwks_url}, {second_jwks_url}")
+
+    _, first_jwk = _get_rsa_key_and_jwk(kid="first-key")
+    _, second_jwk = _get_rsa_key_and_jwk(kid="second-key")
+    unmatched_private_key, _ = _get_rsa_key_and_jwk(kid="unmatched-key")
+
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory(
+            {first_jwks_url: [first_jwk], second_jwks_url: [second_jwk]}
+        )
+    )
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=unmatched_private_key,
+        issuer="https://first.example.com",
+        audience="my-audience",
+        kid="unmatched-key",
+    )
+
+    with pytest.raises(Exception, match="Invalid JWT Submitted"):
+        await jwt_handler.auth_jwt(token=token)
