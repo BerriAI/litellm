@@ -48528,7 +48528,7 @@ export interface operations {
                 /** @description Team ID in the request parameters */
                 team_id?: string;
                 /** @description Limit the number of keys returned */
-                key_limit?: number;
+                key_limit?: number | null;
             };
             header?: never;
             path?: never;
