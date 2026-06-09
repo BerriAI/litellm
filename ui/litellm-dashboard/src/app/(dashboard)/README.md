@@ -2,7 +2,9 @@
 
 The LiteLLM UI is currently being refactored/rewritten to reduce development friction. Please read this document to understand what's expected for new contributions.
 
-The project follows strict NextJS file structure. All pages on the site (determined by the sidebar) are contained in their own folder, and routing is automatically handled by NextJS based on the file structure.
+This document describes the target architecture. Most pages today are still served by the legacy `?page=` switch in `src/app/page.tsx`; `MIGRATED_PAGES` in `src/utils/migratedPages.ts` is the source of truth for which pages have been cut over to path routes. See [MIGRATION.md](./MIGRATION.md) for the migration plan, current status, and the per-page cutover recipe. Do not add a `page.tsx` route here ahead of its cutover PR.
+
+The target is strict NextJS file structure. All pages on the site (determined by the sidebar) are contained in their own folder, and routing is automatically handled by NextJS based on the file structure.
 
 For example, NextJS will automatically render the admin settings page when the user visits `/settings/admin-settings`
 
