@@ -566,7 +566,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                 await self._enforce_batch_file_model_access(
                     user_api_key_dict=user_api_key_dict,
                     file_content_as_dict=file_content_as_dict,
-                    target_model_names=target_model_names if target_model_names else None,
+                    target_model_names=target_model_names or None,
                 )
 
             input_file_usage = _get_batch_job_input_file_usage(
@@ -627,14 +627,10 @@ class _PROXY_BatchRateLimiter(CustomLogger):
 
         if target_model_names:
             models = target_model_names
-            resolve_via_router = False
         else:
             models = _get_models_from_batch_input_file_content(file_content_as_dict)
             if not models:
                 return
-            # body.model may be the provider id after replace_model_in_jsonl;
-            # map to proxy model_name for auth on the JSONL fallback path.
-            resolve_via_router = True
 
         team_object = None
         if (
@@ -666,10 +662,6 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         llm_model_list = llm_router.model_list if llm_router is not None else None
         for model in models:
             model_to_check = model
-            if resolve_via_router and llm_router is not None:
-                proxy_model_name = llm_router.resolve_model_name_from_model_id(model)
-                if proxy_model_name is not None:
-                    model_to_check = proxy_model_name
             try:
                 if team_object is not None:
                     try:
