@@ -29,6 +29,8 @@ query-filters:
   # this rule targets. SHA256 is the correct, intended choice for keyed lookups.
   - exclude:
       id: py/weak-sensitive-data-hashing        # CWE-327/916
+  - exclude:
+      id: py/log-injection                      # CWE-117 — taint explosion through litellm's pervasive logging; same scaling class as the excluded py/clear-text-logging-sensitive-data
 
 paths-ignore:
   - tests

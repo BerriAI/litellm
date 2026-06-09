@@ -9,7 +9,8 @@
 backend/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
 gateway/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
 migrations/Dockerfile | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
-.github/workflows/codeql.yml | timeout-minutes: 90 | CodeQL analyze job timeout raised 30->90 min so python leg completes (upstream 30 min is too short for this codebase)
+.github/workflows/codeql.yml        | timeout-minutes: 90                       | CodeQL analyze job timeout raised 30->90 min so python leg completes (upstream 30 min is too short for this codebase)
+.github/codeql/codeql-config.yml    | py/log-injection                          | Exclude CWE-117 query: taint explosion from pervasive logging; same scaling class as py/clear-text-logging-sensitive-data
 
 # Sync log
 # 2026-06-08: security sweep — all 3 Dockerfile digest pins intact; CodeQL cancelled (pre-existing on litellm_internal_staging).
