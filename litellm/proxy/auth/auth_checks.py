@@ -3529,9 +3529,6 @@ async def _virtual_key_max_budget_check(
             fallback_spend=fallback_spend,
         )
 
-        # Stale-counter reconciliation for explicit budget-window resets.
-        # If DB spend is reset to 0 but the counter still holds stale value,
-        # clear it to avoid false lockouts in the fresh budget window.
         if (
             fallback_spend == 0.0
             and spend > 0.0
@@ -3548,7 +3545,6 @@ async def _virtual_key_max_budget_check(
                     await _invalidate_spend_counter(counter_key=counter_key)
                     spend = 0.0
             except Exception:
-                # Never fail auth because stale-counter cleanup failed.
                 pass
 
         ####################################

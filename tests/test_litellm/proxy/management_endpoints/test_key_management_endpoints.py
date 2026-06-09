@@ -6496,6 +6496,7 @@ async def test_reset_key_spend_success(monkeypatch):
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
         ) as mock_delete_cache,
+        patch("litellm.proxy.proxy_server._invalidate_spend_counter") as mock_invalidate,
     ):
         mock_hash_token.return_value = hashed_key
         mock_check_admin.return_value = None
@@ -6520,6 +6521,7 @@ async def test_reset_key_spend_success(monkeypatch):
         assert response["max_budget"] == 200.0
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
         mock_delete_cache.assert_awaited_once()
+        mock_invalidate.assert_awaited_once_with(counter_key=f"spend:key:{hashed_key}")
 
 
 @pytest.mark.asyncio
