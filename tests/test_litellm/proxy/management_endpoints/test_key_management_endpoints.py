@@ -4137,6 +4137,9 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
 
     # Mock cache delete_cache method
     mock_user_api_key_cache.delete_cache = MagicMock()
+    # `delete_verification_tokens` now also invalidates the identity cache,
+    # which awaits `async_delete_cache`.
+    mock_user_api_key_cache.async_delete_cache = AsyncMock()
 
     mock_create_many = AsyncMock()
     mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
