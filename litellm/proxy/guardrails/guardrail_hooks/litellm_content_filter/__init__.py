@@ -38,6 +38,10 @@ def initialize_guardrail(
         patterns=litellm_params.patterns,
         blocked_words=litellm_params.blocked_words,
         blocked_words_file=litellm_params.blocked_words_file,
+        pattern_redaction_format=getattr(
+            litellm_params, "pattern_redaction_format", None
+        ),
+        keyword_redaction_tag=getattr(litellm_params, "keyword_redaction_tag", None),
         event_hook=litellm_params.mode,  # type: ignore
         default_on=litellm_params.default_on or False,
         categories=getattr(litellm_params, "categories", None),
