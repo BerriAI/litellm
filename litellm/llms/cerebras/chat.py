@@ -68,6 +68,7 @@ class CerebrasConfig(OpenAIGPTConfig):
             "tool_choice",
             "tools",
             "user",
+            "max_retries",
         ]
 
         # Only add reasoning_effort for models that support it
