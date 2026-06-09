@@ -7013,6 +7013,51 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
     return f"data: {chunk}\n\n"
 
 
+# Sentinel yielded by ``_iter_with_keepalive`` to signal that the keepalive
+# interval elapsed with no chunk, so the caller should emit an SSE heartbeat.
+# Must be a unique object (not a string) since real chunks can be strings.
+_STREAM_KEEPALIVE = object()
+
+
+async def _iter_with_keepalive(aiter, keepalive_seconds: float):
+    """Yield items from ``aiter``, optionally emitting keepalive heartbeats.
+
+    When ``keepalive_seconds <= 0`` (the default), this is a plain ``async for``
+    over ``aiter`` with no per-chunk Task wrapping — the hot path with zero
+    overhead vs. the unwrapped iterator.
+
+    When ``keepalive_seconds > 0``, each ``__anext__()`` is wrapped in a Task so
+    it can be polled with a timeout; if no chunk arrives within the interval,
+    the ``_STREAM_KEEPALIVE`` sentinel is yielded so the caller can emit an SSE
+    comment heartbeat. The in-flight Task is cancelled on early close so it
+    doesn't leak when the client disconnects mid-stream.
+    """
+    if keepalive_seconds <= 0:
+        async for item in aiter:
+            yield item
+        return
+
+    pending = None
+    try:
+        while True:
+            if pending is None:
+                pending = asyncio.ensure_future(aiter.__anext__())
+            done, _ = await asyncio.wait({pending}, timeout=keepalive_seconds)
+            if not done:
+                yield _STREAM_KEEPALIVE
+                continue
+            try:
+                item = pending.result()
+            except StopAsyncIteration:
+                break
+            finally:
+                pending = None
+            yield item
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+
+
 async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -7048,7 +7093,27 @@ async def async_data_generator(  # noqa: PLR0915
         else:
             stream_iterator = response
 
+        # Optional client-controlled SSE keepalive: when ``keepalive_seconds``
+        # > 0 is set on the request, emit an SSE comment (``: ping``) if no
+        # upstream chunk arrives within that interval. Useful when an
+        # intermediary proxy (e.g. an L7 inference proxy, ALB, nginx) cuts
+        # idle streams while the model is generating but producing
+        # filtered-out chunks (e.g. Anthropic ``ping`` events that the OpenAI
+        # translation layer maps to empty chunks and then drops). Absent or
+        # 0 -> no keepalive, no behaviour change vs. the upstream fast path.
+        try:
+            _ka_secs = float(request_data.get("keepalive_seconds") or 0)
+        except (TypeError, ValueError):
+            _ka_secs = 0.0
+        if _ka_secs > 0:
+            stream_iterator = _iter_with_keepalive(
+                stream_iterator.__aiter__(), _ka_secs
+            )
+
         async for chunk in stream_iterator:
+            if chunk is _STREAM_KEEPALIVE:
+                yield ": ping\n\n"
+                continue
             if needs_per_chunk_hook:
                 ### CALL HOOKS ### - modify outgoing data
                 chunk, _str_so_far = await _apply_streaming_chunk_hooks(
