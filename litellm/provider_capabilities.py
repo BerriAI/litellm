@@ -176,6 +176,8 @@ def capabilities_from_model_info(
     supports_audio_input: bool = False,
     supports_audio_output: bool = False,
     supports_prompt_caching: bool = False,
+    supports_response_schema: bool = False,
+    supports_reasoning: bool = False,
     **_: object,  # ignore unknown keys from model_cost_map
 ) -> ProviderCapabilities:
     """Bridge: construct ProviderCapabilities from existing model_cost_map flags.
@@ -188,9 +190,11 @@ def capabilities_from_model_info(
             vision=supports_vision,
             streaming=supports_streaming,
             function_calling=supports_function_calling,
+            structured_output=supports_response_schema,
             audio_input=supports_audio_input,
             audio_output=supports_audio_output,
             prompt_caching=supports_prompt_caching,
+            reasoning=supports_reasoning,
         ),
         # strengths comes from model_cost_map scoring or defaults to neutral
     )

@@ -161,3 +161,17 @@ class TestCapabilitiesFromModelInfo:
             supports_vision=True,
         )
         assert cap.supports_vision is True
+
+    def test_maps_response_schema_to_structured_output(self):
+        """supports_response_schema should map to structured_output."""
+        cap = capabilities_from_model_info(
+            supports_response_schema=True,
+        )
+        assert cap.supports_structured_output is True
+
+    def test_maps_reasoning_flag(self):
+        """supports_reasoning should be preserved."""
+        cap = capabilities_from_model_info(
+            supports_reasoning=True,
+        )
+        assert cap.supports.reasoning is True
