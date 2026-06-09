@@ -328,6 +328,13 @@ async def health_services_endpoint(  # noqa: PLR0915
                 "message": "Mock LLM request made - check langfuse.",
             }
         elif service == "newrelic":
+            if not _is_proxy_admin(user_api_key_dict):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "Only proxy admins can trigger the New Relic test event."
+                    },
+                )
             from litellm.integrations.newrelic.newrelic import NewRelicLogger
 
             newrelic_logger = NewRelicLogger()
