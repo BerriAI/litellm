@@ -881,7 +881,23 @@ async def pass_through_request(
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        # If the body doesn't carry a model, fall back to deriving it from the URL path.
+        import urllib.parse
+
+        parsed_url = urllib.parse.urlparse(str(url))
+        url_host = parsed_url.hostname or ""
+        url_path = (parsed_url.path or "").lstrip("/")
+
+        url_provider = "unknown"
+        if url_host:
+            parts = url_host.split(".")
+            url_provider = parts[-2] if len(parts) >= 2 else url_host
+
+        url_identifier = url_path or url_host
+
+        passthrough_model = (
+            _parsed_body.get("model") if isinstance(_parsed_body, dict) else None
+        ) or url_identifier or "unknown"
         start_time = datetime.now()
         logging_obj = Logging(
             model=passthrough_model,
@@ -927,6 +943,16 @@ async def pass_through_request(
             request=request,
             logging_obj=logging_obj,
         )
+
+        # Inject upstream URL model tag for observability (Langfuse / Spend Logs)
+        if url_identifier:
+            tag = f"{url_provider}_model:{url_identifier}"
+            litellm_params_dict = kwargs.setdefault("litellm_params", {})
+            metadata_dict = litellm_params_dict.setdefault("metadata", {})
+            metadata_dict[f"{url_provider}_model"] = url_identifier
+            tags_list = metadata_dict.setdefault("tags", [])
+            if isinstance(tags_list, list) and tag not in tags_list:
+                tags_list.append(tag)
 
         # Store custom_llm_provider in kwargs and logging object if provided
         if custom_llm_provider:

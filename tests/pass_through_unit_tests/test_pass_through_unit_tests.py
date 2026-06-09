@@ -652,3 +652,52 @@ def test_custom_pricing_used_in_cost_calculation():
 
     print(f"Cache-aware cost: {cache_cost}")
     print("✅ Custom pricing parameters are correctly used in cost calculation")
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_url_model_derivation(mock_request, mock_user_api_key_dict):
+    """
+    Test that when a request body does not contain a 'model' key, the model is derived
+    from the URL and appropriate tags are added for observability.
+    """
+    mock_response = AsyncMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response._content = b'{"mock": "response"}'
+    async def mock_aread(): return mock_response._content
+    mock_response.aread = mock_aread
+
+    mock_logging_update = MagicMock()
+
+    with (
+        patch("httpx.AsyncClient.request", return_value=mock_response),
+        patch("httpx.AsyncClient.send", return_value=mock_response),
+        patch("litellm.litellm_core_utils.litellm_logging.Logging.update_environment_variables", new=mock_logging_update)
+    ):
+        request = mock_request(
+            headers={}, method="POST", request_body={"prompt": "hello"}
+        )
+        
+        target_url = "https://fal.run/fal-ai/flux/schnell"
+        
+        response = await pass_through_request(
+            request=request,
+            target=target_url,
+            custom_headers={},
+            user_api_key_dict=mock_user_api_key_dict,
+            custom_body={"prompt": "hello"}  # No model provided
+        )
+        
+        assert response.status_code == 200
+        
+        # Check that update_environment_variables was called with derived model and tag
+        mock_logging_update.assert_called_once()
+        _, kwargs = mock_logging_update.call_args
+        
+        assert kwargs["model"] == "fal-ai/flux/schnell"
+        
+        litellm_params = kwargs["litellm_params"]
+        tags = litellm_params["metadata"]["tags"]
+        assert "fal_model:fal-ai/flux/schnell" in tags
+        assert litellm_params["metadata"]["fal_model"] == "fal-ai/flux/schnell"
+
