@@ -649,6 +649,7 @@ describe("MCPServerEdit (tool list fetch)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(networking.listMCPTools).mockResolvedValue({ tools: [], error: null });
+    mockOauth.tokenResponse = null;
   });
 
   it("loads an OBO server's tools via GET listMCPTools with no passthrough headers", async () => {
@@ -707,6 +708,46 @@ describe("MCPServerEdit (tool list fetch)", () => {
       );
     });
     expect(mockGetToken).toHaveBeenCalledWith("oauth_server_1", "user-1");
+  });
+
+  it("uses the staged OAuth token to load passthrough tools after authorize", async () => {
+    const passthroughServer = { ...interactiveOAuthServer, delegate_auth_to_upstream: true };
+    mockIsTokenValid.mockReturnValue(false);
+    vi.mocked(networking.listMCPTools).mockResolvedValue({
+      tools: [{ name: "read_user" }],
+      error: null,
+    });
+
+    const props = {
+      mcpServer: passthroughServer,
+      accessToken: "access-token",
+      userID: "user-1",
+      onCancel: vi.fn(),
+      onSuccess: vi.fn(),
+      availableAccessGroups: [],
+    };
+
+    const { rerender } = render(<MCPServerEdit {...props} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
+        "Authenticate with this server in the Tools tab",
+      );
+    });
+    expect(networking.listMCPTools).not.toHaveBeenCalled();
+
+    mockOauth.tokenResponse = { access_token: "staged-token", expires_in: 1800 };
+    rerender(<MCPServerEdit {...props} />);
+
+    await waitFor(() => {
+      expect(networking.listMCPTools).toHaveBeenCalledWith(
+        "access-token",
+        "oauth_server_1",
+        { "x-mcp-oauth_server-authorization": "Bearer staged-token" },
+        true,
+      );
+    });
+    expect(mockGetToken).not.toHaveBeenCalled();
   });
 
   it("prompts to authenticate and does not fetch when a passthrough server has no session token", async () => {
@@ -803,6 +844,42 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       );
     });
     expect(mockSetToken).not.toHaveBeenCalled();
+  });
+
+  it("does not show success when OBO token persistence fails after update", async () => {
+    mockOauth.tokenResponse = {
+      access_token: "obo-tok",
+      refresh_token: "obo-refresh",
+      expires_in: 3600,
+      scope: "read write",
+    };
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+    vi.mocked(networking.storeMCPOAuthUserCredential).mockRejectedValueOnce(new Error("write failed"));
+    const onSuccess = vi.fn();
+
+    render(
+      <MCPServerEdit
+        mcpServer={interactiveOAuthServer}
+        accessToken="access-token"
+        userID="user-1"
+        onCancel={vi.fn()}
+        onSuccess={onSuccess}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalled();
+    });
+    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
+      "MCP Server updated, but failed to persist OAuth token: write failed",
+    );
+    expect(NotificationsManager.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
+    expect(onSuccess).not.toHaveBeenCalled();
   });
 
   it("persists the passthrough token to sessionStorage on save after authorize", async () => {
