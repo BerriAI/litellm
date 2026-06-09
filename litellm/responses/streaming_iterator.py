@@ -1366,20 +1366,16 @@ class ResponsesWebSocketStreaming:
                 # guardrails does not appear in success logs.
                 self._store_event(output_masked_str)
 
-                # When apply_to_output masking is active, suppress delta events
-                # and response.output_item.done: per-fragment Presidio cannot
-                # reliably catch PII that spans multiple delta chunks, and
-                # output_item.done carries the same text that response.completed
-                # already delivers in fully-masked form.
+                # When apply_to_output masking is active, suppress delta events:
+                # per-fragment Presidio cannot reliably catch PII that spans
+                # multiple delta chunks (e.g. "alice@" + "example.com").
+                # Clients receive the fully-masked response.completed instead.
                 if self.output_guardrail_callbacks:
                     try:
                         _evt_type = json.loads(output_masked_str).get("type")
                     except (json.JSONDecodeError, TypeError):
                         _evt_type = None
-                    if (
-                        _evt_type in self._DELTA_EVENT_TYPES
-                        or _evt_type == "response.output_item.done"
-                    ):
+                    if _evt_type in self._DELTA_EVENT_TYPES:
                         continue
 
                 await self.websocket.send_text(output_masked_str)
@@ -1582,20 +1578,6 @@ class ResponsesWebSocketStreaming:
                     evt_obj["delta"] = unmasked
                     return json.dumps(evt_obj)
 
-        if event_type == "response.output_item.done":
-            modified = False
-            item = evt_obj.get("item") or {}
-            for content_block in item.get("content") or []:
-                if not isinstance(content_block, dict):
-                    continue
-                text = content_block.get("text")
-                if isinstance(text, str):
-                    unmasked = cb._unmask_pii_text(text, pii_tokens)
-                    if unmasked != text:
-                        content_block["text"] = unmasked
-                        modified = True
-            return json.dumps(evt_obj) if modified else response_str
-
         return response_str
 
     async def _mask_response_completed(self, response_str: str) -> str:
@@ -1651,23 +1633,6 @@ class ResponsesWebSocketStreaming:
                             if masked != text:
                                 content_block["text"] = masked
                                 modified = True
-
-            elif event_type == "response.output_item.done":
-                item = evt_obj.get("item") or {}
-                for content_block in item.get("content") or []:
-                    if not isinstance(content_block, dict):
-                        continue
-                    text = content_block.get("text")
-                    if isinstance(text, str) and text:
-                        masked = await cb.check_pii(
-                            text=text,
-                            output_parse_pii=False,
-                            presidio_config=presidio_config,
-                            request_data=self.request_data,
-                        )
-                        if masked != text:
-                            content_block["text"] = masked
-                            modified = True
 
             elif event_type in self._DELTA_EVENT_TYPES:
                 delta = evt_obj.get("delta")
