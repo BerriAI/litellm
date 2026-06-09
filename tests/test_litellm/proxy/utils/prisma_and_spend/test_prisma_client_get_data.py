@@ -234,7 +234,9 @@ async def test_query_first_with_cached_plan_fallback_retries_on_cached_plan_erro
 async def test_query_first_with_cached_plan_fallback_reraises_non_plan_errors(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.query_first = AsyncMock(side_effect=RuntimeError("totally unrelated"))
+    prisma_client.db.query_first = AsyncMock(
+        side_effect=RuntimeError("totally unrelated")
+    )
     with pytest.raises(RuntimeError, match="totally unrelated"):
         await prisma_client._query_first_with_cached_plan_fallback("SELECT 1")
 
@@ -351,7 +353,9 @@ async def test_get_data_token_find_unique_returns_record(
 async def test_get_data_token_find_unique_missing_token_raises_401(
     prisma_client: PrismaClient,
 ) -> None:
-    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=None
+    )
     with pytest.raises(HTTPException) as excinfo:
         await prisma_client.get_data(token="sk-missing", table_name="key")
     err = excinfo.value
@@ -398,3 +402,26 @@ async def test_get_data_logs_and_raises_on_db_error(
     )
     with pytest.raises(RuntimeError, match="network split"):
         await prisma_client.get_data(token="sk-broken", table_name="key")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", [5, None])
+async def test_get_data_team_keys_forward_limit_as_take(
+    prisma_client: PrismaClient, limit: Any
+) -> None:
+    """The /team/info ``key_limit`` must reach Prisma as ``take`` so the
+    database caps how many of a team's keys come back.
+    ``limit=None`` leaves ``take`` unset so every key is returned.
+    """
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+    await prisma_client.get_data(
+        team_id="team-1",
+        table_name="key",
+        query_type="find_all",
+        limit=limit,
+    )
+    assert prisma_client.db.litellm_verificationtoken.find_many.await_args.kwargs == {
+        "take": limit,
+        "where": {"team_id": "team-1"},
+        "include": {"litellm_budget_table": True},
+    }

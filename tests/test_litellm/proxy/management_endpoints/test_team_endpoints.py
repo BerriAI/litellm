@@ -8306,6 +8306,8 @@ async def test_new_team_encrypts_callback_vars(
     assert cv["langfuse_secret_key"] != "sk-real"
     recovered = decrypt_callback_vars(metadata)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-real"
+
+
 def _non_admin_auth():
     return UserAPIKeyAuth(
         user_id="u-team-admin", user_role=LitellmUserRoles.INTERNAL_USER
@@ -8404,3 +8406,34 @@ async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
             )
     assert str(exc.value.code) == "403"
     assert "allowed_passthrough_routes" in str(exc.value.message)
+
+
+@pytest.mark.asyncio
+async def test_team_info_forwards_key_limit_to_get_data():
+    """/team/info must thread its ``key_limit`` query param into the key
+    lookup so the database caps how many keys are returned for the team.
+    """
+    from fastapi import Request
+
+    from litellm.proxy.management_endpoints import team_endpoints
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=LiteLLM_TeamTable(team_id="team-1")
+    )
+    mock_prisma.get_data = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+        patch.object(
+            team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])
+        ),
+    ):
+        await team_endpoints.team_info(
+            http_request=MagicMock(spec=Request),
+            team_id="team-1",
+            key_limit=7,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert mock_prisma.get_data.await_args.kwargs["limit"] == 7
