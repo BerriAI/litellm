@@ -2,33 +2,21 @@ import json
 import os
 import sys
 from datetime import datetime
-from unittest.mock import AsyncMock, Mock, patch, MagicMock
+from unittest.mock import AsyncMock, patch, MagicMock
 from typing import Optional
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-import fastapi
-from fastapi import FastAPI
 from fastapi.routing import APIRoute
 import httpx
 import pytest
-import litellm
-from typing import AsyncGenerator
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
-from litellm.proxy.pass_through_endpoints.success_handler import (
-    PassThroughEndpointLogging,
-)
-from litellm.proxy.pass_through_endpoints.streaming_handler import (
-    PassThroughStreamingHandler,
-)
 
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     pass_through_request,
 )
-from fastapi import Request
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     _update_metadata_with_tags_in_header,
