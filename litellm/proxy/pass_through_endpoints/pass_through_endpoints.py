@@ -557,6 +557,8 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
             request=request,
             metadata=_metadata,
         )
+        _metadata["passthrough_target_url"] = passthrough_logging_payload.get("url")
+        _metadata["user_api_key_request_route"] = user_api_key_dict.request_route
 
         # Set internal keys after merging client-supplied metadata so a request
         # body that mirrors them cannot clobber the authenticated key or the
@@ -1302,6 +1304,7 @@ async def pass_through_request(  # noqa: PLR0915
             model_id=None,
             cache_key=None,
             api_base=str(url._uri_reference),
+            response_cost=cost_per_request,
         )
 
         response_headers = HttpPassThroughEndpointHelpers.get_response_headers(

@@ -2585,6 +2585,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
+    spend_log_flush_max_retries: Optional[int] = Field(
+        None,
+        description="Max retries when flushing spend logs to the DB on transient errors (deadlock, pool timeout, connection errors). Defaults to SPEND_LOG_FLUSH_MAX_RETRIES env (3).",
+    )
     mcp_internal_ip_ranges: Optional[List[str]] = Field(
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
@@ -3635,6 +3639,8 @@ class SpendLogsMetadata(TypedDict):
     cost_breakdown: Optional[
         CostBreakdown
     ]  # Detailed cost breakdown (input_cost, output_cost, margin, discount, etc.)
+    user_api_key_request_route: Optional[str]
+    passthrough_target_url: Optional[str]
 
 
 class SpendLogsPayload(TypedDict):
@@ -3958,6 +3964,42 @@ DB_CONNECTION_ERROR_TYPES = (
     httpx.ReadError,
     httpx.ReadTimeout,
 )
+
+
+def is_spend_log_flush_retryable_error(e: Exception) -> bool:
+    import asyncio
+
+    import prisma.errors
+
+    if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        return True
+    if isinstance(
+        e,
+        (
+            httpx.PoolTimeout,
+            httpx.TimeoutException,
+            httpx.WriteTimeout,
+            httpx.ConnectTimeout,
+            asyncio.TimeoutError,
+        ),
+    ):
+        return True
+    if isinstance(e, prisma.errors.PrismaError):
+        error_message = str(e).lower()
+        retry_keywords = (
+            "deadlock",
+            "could not serialize",
+            "p2034",
+            "pool timeout",
+            "timed out",
+            "timeout",
+            "connection",
+            "too many connections",
+            "server closed",
+            "transaction failed",
+        )
+        return any(keyword in error_message for keyword in retry_keywords)
+    return False
 
 
 class SSOUserDefinedValues(TypedDict):

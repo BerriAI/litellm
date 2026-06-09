@@ -42,6 +42,7 @@ from litellm.proxy._types import (
     ProxyException,
     SpendLogsMetadata,
     SpendLogsPayload,
+    is_spend_log_flush_retryable_error,
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
@@ -5340,6 +5341,7 @@ class ProxyUpdateSpend:
                 "Spend tracking - processing %d spend logs for DB write",
                 len(logs_to_process),
             )
+        spend_log_redis_buffer = _get_spend_log_redis_buffer(proxy_logging_obj)
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
@@ -5361,7 +5363,6 @@ class ProxyUpdateSpend:
                         )
                         del json_data
                         if response.status_code == 200:
-                            # Items already removed from queue at start of function
                             pass
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
@@ -5376,33 +5377,37 @@ class ProxyUpdateSpend:
                             verbose_proxy_logger.debug(
                                 f"Flushed {len(batch)} logs to the DB."
                             )
-                            # Explicitly clear batch memory
                             del batch, batch_with_dates
 
-                        # Items already removed from queue at start of function
                         async with prisma_client._spend_log_transactions_lock:
                             remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
                             f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
-                except DB_CONNECTION_ERROR_TYPES as e:
-                    if i is None:
-                        i = 0
-                    verbose_proxy_logger.warning(
-                        "Spend tracking - DB connection error writing spend logs, "
-                        "retry %d/%d. logs_count=%d, error=%s",
-                        i + 1,
-                        n_retry_times,
-                        len(logs_to_process),
-                        str(e),
-                    )
-                    if i >= n_retry_times:
-                        raise
-                    await asyncio.sleep(2**i)
+                except Exception as e:
+                    if (
+                        is_spend_log_flush_retryable_error(e)
+                        and i < n_retry_times
+                    ):
+                        verbose_proxy_logger.warning(
+                            "Spend tracking - retryable error writing spend logs, "
+                            "retry %d/%d. logs_count=%d, error=%s",
+                            i + 1,
+                            n_retry_times,
+                            len(logs_to_process),
+                            str(e),
+                        )
+                        await asyncio.sleep(2**i)
+                        continue
+                    raise
         except Exception as e:
-            # Logs already removed from queue at start - don't put them back
-            # This matches the original behavior where logs are removed even on error
+            if is_spend_log_flush_retryable_error(e):
+                await _requeue_failed_spend_logs(
+                    prisma_client=prisma_client,
+                    logs_to_process=logs_to_process,
+                    spend_log_redis_buffer=spend_log_redis_buffer,
+                )
             _raise_failed_update_spend_exception(
                 e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj
             )
@@ -5516,6 +5521,107 @@ async def update_daily_tag_spend(
         verbose_proxy_logger.error(f"Error updating daily tag spend: {e}")
 
 
+def get_spend_log_flush_max_retries() -> int:
+    """
+    Max retries when flushing spend logs to the DB on transient errors.
+
+    Precedence (highest wins):
+      1. general_settings.spend_log_flush_max_retries
+      2. SPEND_LOG_FLUSH_MAX_RETRIES env (via litellm.constants)
+      3. DEFAULT_SPEND_LOG_FLUSH_MAX_RETRIES (3)
+    """
+    from litellm.constants import (
+        DEFAULT_SPEND_LOG_FLUSH_MAX_RETRIES,
+        SPEND_LOG_FLUSH_MAX_RETRIES,
+    )
+
+    default_retries = SPEND_LOG_FLUSH_MAX_RETRIES or DEFAULT_SPEND_LOG_FLUSH_MAX_RETRIES
+
+    try:
+        from litellm.proxy.proxy_server import general_settings
+    except Exception:
+        return default_retries
+
+    configured = general_settings.get("spend_log_flush_max_retries")
+    if configured is None:
+        return default_retries
+    return max(0, int(configured))
+
+
+def _dedupe_spend_logs_by_request_id(
+    logs: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen_request_ids: set = set()
+    for log in logs:
+        request_id = log.get("request_id")
+        if request_id is not None and request_id in seen_request_ids:
+            continue
+        if request_id is not None:
+            seen_request_ids.add(request_id)
+        deduped.append(log)
+    return deduped
+
+
+def _get_spend_log_redis_buffer(
+    proxy_logging_obj: ProxyLogging,
+) -> Optional[Any]:
+    db_spend_update_writer = getattr(
+        proxy_logging_obj, "db_spend_update_writer", None
+    )
+    if db_spend_update_writer is None:
+        return None
+    return getattr(db_spend_update_writer, "spend_log_redis_buffer", None)
+
+
+async def _requeue_failed_spend_logs(
+    prisma_client: PrismaClient,
+    logs_to_process: List[Dict[str, Any]],
+    spend_log_redis_buffer: Optional[Any],
+) -> None:
+    if not logs_to_process:
+        return
+    async with prisma_client._spend_log_transactions_lock:
+        prisma_client.spend_log_transactions = (
+            logs_to_process + prisma_client.spend_log_transactions
+        )
+    if spend_log_redis_buffer is not None:
+        if spend_log_redis_buffer.is_enabled() is True:
+            await spend_log_redis_buffer.requeue_spend_log_rows(
+                [cast(SpendLogsPayload, log) for log in logs_to_process]
+            )
+    verbose_proxy_logger.warning(
+        "Spend tracking - re-queued %d spend logs after flush failure",
+        len(logs_to_process),
+    )
+
+
+async def _collect_spend_logs_for_flush(
+    prisma_client: PrismaClient,
+    proxy_logging_obj: ProxyLogging,
+    max_logs: int,
+) -> List[Dict[str, Any]]:
+    spend_log_redis_buffer = _get_spend_log_redis_buffer(proxy_logging_obj)
+    redis_logs: List[Dict[str, Any]] = []
+    remaining_slots = max_logs
+    if spend_log_redis_buffer is not None:
+        if spend_log_redis_buffer.is_enabled() is True:
+            redis_logs = await spend_log_redis_buffer.pop_buffered_spend_log_rows(
+                max_rows=remaining_slots
+            )
+        remaining_slots = max(0, max_logs - len(redis_logs))
+
+    memory_logs: List[Dict[str, Any]] = []
+    async with prisma_client._spend_log_transactions_lock:
+        if remaining_slots > 0:
+            memory_logs = prisma_client.spend_log_transactions[:remaining_slots]
+            prisma_client.spend_log_transactions = (
+                prisma_client.spend_log_transactions[len(memory_logs) :]
+            )
+
+    return _dedupe_spend_logs_by_request_id(redis_logs + memory_logs)
+
+
 async def update_spend_logs_job(
     prisma_client: PrismaClient,
     db_writer_client: Optional[AsyncHTTPHandler],
@@ -5527,20 +5633,29 @@ async def update_spend_logs_job(
     This job is triggered based on queue size rather than time.
     Pops the batch once, writes spend logs, then runs guardrail usage tracking.
     """
-    n_retry_times = 3
+    # Retries on transient DB errors (deadlock, pool timeout, etc.).
+    # Defaults to 3; override via general_settings.spend_log_flush_max_retries
+    # or SPEND_LOG_FLUSH_MAX_RETRIES env.
+    n_retry_times = get_spend_log_flush_max_retries()
     MAX_LOGS_PER_INTERVAL = 10000
 
-    # Atomically pop batch from queue
-    async with prisma_client._spend_log_transactions_lock:
-        queue_size = len(prisma_client.spend_log_transactions)
-    if queue_size == 0:
-        return
+    spend_log_redis_buffer = _get_spend_log_redis_buffer(proxy_logging_obj)
+    redis_queue_size = 0
+    if spend_log_redis_buffer is not None and spend_log_redis_buffer.is_enabled() is True:
+        redis_queue_size = await spend_log_redis_buffer.get_buffered_row_count()
 
     async with prisma_client._spend_log_transactions_lock:
-        logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
-        prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[
-            len(logs_to_process) :
-        ]
+        memory_queue_size = len(prisma_client.spend_log_transactions)
+    if memory_queue_size == 0 and redis_queue_size == 0:
+        return
+
+    logs_to_process = await _collect_spend_logs_for_flush(
+        prisma_client=prisma_client,
+        proxy_logging_obj=proxy_logging_obj,
+        max_logs=MAX_LOGS_PER_INTERVAL,
+    )
+    if not logs_to_process:
+        return
 
     await ProxyUpdateSpend.update_spend_logs(
         n_retry_times=n_retry_times,

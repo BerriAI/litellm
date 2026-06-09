@@ -295,6 +295,7 @@ REDIS_DAILY_END_USER_SPEND_UPDATE_BUFFER_KEY = (
 )
 REDIS_DAILY_AGENT_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_agent_spend_update_buffer"
 REDIS_DAILY_TAG_SPEND_UPDATE_BUFFER_KEY = "litellm_daily_tag_spend_update_buffer"
+REDIS_SPEND_LOG_BUFFER_KEY = "litellm_spend_log_buffer"
 MAX_REDIS_BUFFER_DEQUEUE_COUNT = int(os.getenv("MAX_REDIS_BUFFER_DEQUEUE_COUNT", 100))
 # Bounds asyncio.Queue() instances (log queues, spend update queues, etc.) to prevent unbounded memory growth
 LITELLM_ASYNCIO_QUEUE_MAXSIZE = int(os.getenv("LITELLM_ASYNCIO_QUEUE_MAXSIZE", 1000))
@@ -1494,6 +1495,15 @@ SPEND_LOG_CLEANUP_BATCH_FAILURE_BACKOFF_SECONDS = float(
 )
 SPEND_LOG_QUEUE_SIZE_THRESHOLD = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_POLL_INTERVAL = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
+DEFAULT_SPEND_LOG_FLUSH_MAX_RETRIES = 3
+SPEND_LOG_FLUSH_MAX_RETRIES = max(
+    0,
+    int(
+        os.getenv(
+            "SPEND_LOG_FLUSH_MAX_RETRIES", DEFAULT_SPEND_LOG_FLUSH_MAX_RETRIES
+        )
+    ),
+)
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE = int(
     os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000)
 )

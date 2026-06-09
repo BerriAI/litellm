@@ -1656,3 +1656,68 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
     )
 
     assert captured_where_values == expected_order
+
+
+@pytest.mark.asyncio
+async def test_insert_spend_log_to_db_buffers_memory_and_redis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server_mod
+
+    monkeypatch.setattr(
+        proxy_server_mod,
+        "general_settings",
+        {"use_redis_transaction_buffer": True},
+    )
+
+    mock_redis_cache = MagicMock()
+    mock_redis_cache.async_rpush = AsyncMock()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.spend_log_transactions = []
+    mock_prisma_client._spend_log_transactions_lock = asyncio.Lock()
+
+    db_writer = DBSpendUpdateWriter(redis_cache=mock_redis_cache)
+    payload = {
+        "request_id": "req-buffer-test",
+        "spend": 0.42,
+        "model": "gpt-4o-mini",
+    }
+
+    await db_writer._insert_spend_log_to_db(
+        payload=payload,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert mock_prisma_client.spend_log_transactions == [payload]
+    mock_redis_cache.async_rpush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_insert_spend_log_to_db_skips_redis_when_buffer_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm.proxy.proxy_server as proxy_server_mod
+
+    monkeypatch.setattr(
+        proxy_server_mod,
+        "general_settings",
+        {"use_redis_transaction_buffer": False},
+    )
+
+    mock_redis_cache = MagicMock()
+    mock_redis_cache.async_rpush = AsyncMock()
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.spend_log_transactions = []
+    mock_prisma_client._spend_log_transactions_lock = asyncio.Lock()
+
+    db_writer = DBSpendUpdateWriter(redis_cache=mock_redis_cache)
+    payload = {"request_id": "req-no-redis", "spend": 0.1}
+
+    await db_writer._insert_spend_log_to_db(
+        payload=payload,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert mock_prisma_client.spend_log_transactions == [payload]
+    mock_redis_cache.async_rpush.assert_not_awaited()
+
