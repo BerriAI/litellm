@@ -28,6 +28,9 @@ class MinimaxMessagesConfig(AnthropicMessagesConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "minimax"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
         """

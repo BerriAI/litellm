@@ -4,9 +4,9 @@ import re
 from importlib.resources import files
 from typing import Any, Dict, List, Optional
 
-import litellm
 from fastapi import APIRouter, HTTPException, Request
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.get_blog_posts import (
     BlogPost,
@@ -17,6 +17,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
+from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
@@ -159,13 +160,13 @@ def _load_endpoints() -> List[Dict[str, Any]]:
 )
 async def public_model_hub():
     import litellm
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _convert_health_check_to_dict,
+    )
     from litellm.proxy.proxy_server import (
         _get_model_group_info,
         llm_router,
         prisma_client,
-    )
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
     )
 
     if llm_router is None:
@@ -266,7 +267,7 @@ async def public_skill_hub():
 
     try:
         prisma_client = await _get_prisma_client()
-        plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
+        plugins = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where={"enabled": True}
         )
         items = []

@@ -2,6 +2,7 @@ import { Text, TextInput } from "@tremor/react";
 import { Button as AntButton, Form, Modal, Select } from "antd";
 import React, { useEffect, useState } from "react";
 import NumericalInput from "../shared/numerical_input";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
 
 interface BaseMember {
   user_email?: string;
@@ -21,7 +22,7 @@ interface ModalConfig {
   additionalFields?: Array<{
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select";
+    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -65,6 +66,7 @@ const MemberModal = <T extends BaseMember>({
           max_budget_in_team: (initialData as any).max_budget_in_team || null,
           tpm_limit: (initialData as any).tpm_limit || null,
           rpm_limit: (initialData as any).rpm_limit || null,
+          budget_duration: (initialData as any).budget_duration || null,
           // Keep array values for multi-select fields
           allowed_models: (initialData as any).allowed_models || [],
         };
@@ -117,7 +119,7 @@ const MemberModal = <T extends BaseMember>({
   const renderField = (field: {
     name: string;
     label: string | React.ReactNode;
-    type: "input" | "select" | "numerical" | "multi-select";
+    type: "input" | "select" | "numerical" | "multi-select" | "budget-duration";
     options?: Array<{ label: string; value: string }>;
     rules?: any[];
     step?: number;
@@ -155,6 +157,8 @@ const MemberModal = <T extends BaseMember>({
             allowClear
           />
         );
+      case "budget-duration":
+        return <BudgetDurationDropdown />;
       default:
         return null;
     }

@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.constants import (
     EXPIRED_UI_SESSION_KEY_CLEANUP_JOB_NAME,
     LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_BATCH_SIZE,
@@ -16,11 +15,15 @@ from litellm.constants import (
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.proxy._types import KeyRequest, LiteLLM_VerificationToken, UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 
 
 class ExpiredUISessionKeyCleanupManager:
@@ -147,7 +150,7 @@ class ExpiredUISessionKeyCleanupManager:
         Find expired LiteLLM dashboard session keys.
         """
         now = datetime.now(timezone.utc)
-        return await self.prisma_client.db.litellm_verificationtoken.find_many(
+        return await VerificationTokenRepository(self.prisma_client).table.find_many(
             where={
                 "team_id": UI_SESSION_TOKEN_TEAM_ID,
                 "expires": {"lt": now},

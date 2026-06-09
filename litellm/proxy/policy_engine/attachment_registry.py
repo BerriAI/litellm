@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.repositories.table_repositories import PolicyAttachmentRepository
 from litellm.types.proxy.policy_engine import (
     PolicyAttachment,
     PolicyAttachmentCreateRequest,
@@ -278,21 +279,21 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse with the created attachment
         """
         try:
-            created_attachment = (
-                await prisma_client.db.litellm_policyattachmenttable.create(
-                    data={
-                        "policy_name": attachment_request.policy_name,
-                        "scope": attachment_request.scope,
-                        "teams": attachment_request.teams or [],
-                        "keys": attachment_request.keys or [],
-                        "models": attachment_request.models or [],
-                        "tags": attachment_request.tags or [],
-                        "created_at": datetime.now(timezone.utc),
-                        "updated_at": datetime.now(timezone.utc),
-                        "created_by": created_by,
-                        "updated_by": created_by,
-                    }
-                )
+            created_attachment = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.create(
+                data={
+                    "policy_name": attachment_request.policy_name,
+                    "scope": attachment_request.scope,
+                    "teams": attachment_request.teams or [],
+                    "keys": attachment_request.keys or [],
+                    "models": attachment_request.models or [],
+                    "tags": attachment_request.tags or [],
+                    "created_at": datetime.now(timezone.utc),
+                    "updated_at": datetime.now(timezone.utc),
+                    "created_by": created_by,
+                    "updated_by": created_by,
+                }
             )
 
             # Also add to in-memory registry
@@ -340,17 +341,15 @@ class AttachmentRegistry:
         """
         try:
             # Get attachment before deleting
-            attachment = (
-                await prisma_client.db.litellm_policyattachmenttable.find_unique(
-                    where={"attachment_id": attachment_id}
-                )
-            )
+            attachment = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 raise Exception(f"Attachment with ID {attachment_id} not found")
 
             # Delete from DB
-            await prisma_client.db.litellm_policyattachmenttable.delete(
+            await PolicyAttachmentRepository(prisma_client).table.delete(
                 where={"attachment_id": attachment_id}
             )
 
@@ -379,11 +378,9 @@ class AttachmentRegistry:
             PolicyAttachmentDBResponse if found, None otherwise
         """
         try:
-            attachment = (
-                await prisma_client.db.litellm_policyattachmenttable.find_unique(
-                    where={"attachment_id": attachment_id}
-                )
-            )
+            attachment = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_unique(where={"attachment_id": attachment_id})
 
             if attachment is None:
                 return None
@@ -419,10 +416,10 @@ class AttachmentRegistry:
             List of PolicyAttachmentDBResponse objects
         """
         try:
-            attachments = (
-                await prisma_client.db.litellm_policyattachmenttable.find_many(
-                    order={"created_at": "desc"},
-                )
+            attachments = await PolicyAttachmentRepository(
+                prisma_client
+            ).table.find_many(
+                order={"created_at": "desc"},
             )
 
             return [

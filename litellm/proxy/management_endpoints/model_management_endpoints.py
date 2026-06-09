@@ -48,6 +48,9 @@ from litellm.proxy.management_endpoints.team_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.table_repositories import ModelTableRepository
+from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     UpdateUsefulLinksRequest,
 )
@@ -86,7 +89,7 @@ async def get_db_model(
 ) -> Optional[Deployment]:
     db_model = cast(
         Optional[BaseModel],
-        await prisma_client.db.litellm_proxymodeltable.find_unique(
+        await ModelRepository(prisma_client).table.find_unique(
             where={"model_id": model_id}
         ),
     )
@@ -290,7 +293,7 @@ async def patch_model(
         update_data["updated_at"] = cast(str, get_utc_datetime())
 
         # Perform partial update
-        updated_model = await prisma_client.db.litellm_proxymodeltable.update(
+        updated_model = await ModelRepository(prisma_client).table.update(
             where={"model_id": model_id},
             data=update_data,
         )
@@ -362,7 +365,7 @@ async def _add_model_to_db(
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
     if should_create_model_in_db:
-        model_response = await prisma_client.db.litellm_proxymodeltable.create(
+        model_response = await ModelRepository(prisma_client).table.create(
             data=_data  # type: ignore
         )
     else:
@@ -558,7 +561,7 @@ async def _setup_new_team_model_assignment(
 
 
 async def _get_team_deployments(
-    team_id: str, prisma_client: PrismaClient
+    team_id: str, prisma_client: PrismaClient, table: Optional[Any] = None
 ) -> List[LiteLLM_ProxyModelTable]:
     """
     Fetch all deployments for a given team_id from the database.
@@ -569,9 +572,13 @@ async def _get_team_deployments(
     Note: prisma-client-py 0.11.0 does not support JSON path filtering, so we filter
     by the model_name prefix (team models use "model_name_{team_id}_*") and confirm
     team_id in model_info with Python-side filtering.
+
+    Pass ``table`` (a transaction's proxy-model table) to run the read inside an
+    existing transaction.
     """
     prefix = f"model_name_{team_id}_"
-    response = await prisma_client.db.litellm_proxymodeltable.find_many(
+    table = table or ModelRepository(prisma_client).table
+    response = await table.find_many(
         where={
             "model_name": {"startswith": prefix},
         }
@@ -591,6 +598,42 @@ async def _get_team_deployments(
         if isinstance(model_info, dict) and model_info.get("team_id") == team_id:
             result.append(row)
     return result
+
+
+async def delete_team_models(
+    team_ids: List[str],
+    prisma_client: PrismaClient,
+    llm_router: Optional[Any],
+) -> List[str]:
+    """
+    Delete every BYOK model owned by the given teams, from the DB and the router.
+
+    The DB rows are removed inside a single transaction, so deletion is atomic
+    across all team_ids. Each team's rows are deleted by the exact model_ids read
+    in the same transaction, which keeps the deleted set identical to the set
+    handed to the router. The router is synced only after the transaction commits,
+    so a rollback can never leave a deployment live in the router without its row.
+
+    Returns the model_ids that were deleted.
+    """
+    deleted_model_ids: List[str] = []
+    async with prisma_client.db.tx() as tx:
+        for team_id in team_ids:
+            rows = await _get_team_deployments(
+                team_id, prisma_client, table=tx.litellm_proxymodeltable
+            )
+            model_ids = [row.model_id for row in rows]
+            if model_ids:
+                await tx.litellm_proxymodeltable.delete_many(
+                    where={"model_id": {"in": model_ids}}
+                )
+                deleted_model_ids.extend(model_ids)
+
+    if llm_router is not None:
+        for model_id in deleted_model_ids:
+            llm_router.delete_deployment(id=model_id)
+
+    return deleted_model_ids
 
 
 async def _get_team_public_model_names(
@@ -828,7 +871,7 @@ class ModelManagementAuthChecks:
                 detail={"error": CommonProxyErrors.not_premium_user.value},
             )
 
-        _existing_team_row = await prisma_client.db.litellm_teamtable.find_unique(
+        _existing_team_row = await TeamRepository(prisma_client).table.find_unique(
             where={"team_id": model_params.model_info.team_id}
         )
 
@@ -857,16 +900,29 @@ class ModelManagementAuthChecks:
         user_api_key_dict: UserAPIKeyAuth,
         prisma_client: PrismaClient,
         premium_user: bool,
+        allow_missing_team: bool = False,
     ) -> Literal[True]:
         ## Check team model auth
         if (
             model_params.model_info is not None
             and model_params.model_info.team_id is not None
         ):
-            team_obj_row = await prisma_client.db.litellm_teamtable.find_unique(
+            team_obj_row = await TeamRepository(prisma_client).table.find_unique(
                 where={"team_id": model_params.model_info.team_id}
             )
             if team_obj_row is None:
+                # The team was deleted. Callers that opt in (e.g. model deletion) may
+                # act on the orphaned model, but only as a proxy admin -- without the
+                # team there is no team-admin membership left to verify.
+                if allow_missing_team:
+                    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+                        return True
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "Only a proxy admin can delete a model whose team has been deleted."
+                        },
+                    )
                 raise HTTPException(
                     status_code=400,
                     detail={
@@ -937,7 +993,7 @@ async def delete_model(
                 },
             )
 
-        model_in_db = await prisma_client.db.litellm_proxymodeltable.find_unique(
+        model_in_db = await ModelRepository(prisma_client).table.find_unique(
             where={"model_id": model_info.id}
         )
         if model_in_db is None:
@@ -952,6 +1008,7 @@ async def delete_model(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             premium_user=premium_user,
+            allow_missing_team=True,
         )
 
         # update DB
@@ -961,7 +1018,7 @@ async def delete_model(
             - store keys separately
             """
             # encrypt litellm params #
-            result = await prisma_client.db.litellm_proxymodeltable.delete(
+            result = await ModelRepository(prisma_client).table.delete(
                 where={"model_id": model_info.id}
             )
 
@@ -1039,7 +1096,7 @@ async def delete_team_model_alias(
     Returns:
     - List of team id + model alias pairs that were removed
     """
-    team_model_aliases = await prisma_client.db.litellm_modeltable.find_many(
+    team_model_aliases = await ModelTableRepository(prisma_client).table.find_many(
         include={"team": True}
     )
     tasks = []
@@ -1056,7 +1113,7 @@ async def delete_team_model_alias(
                 removed_model_aliases.append((team_model_alias.team.team_id, key))
             del model_aliases[key]
             tasks.append(
-                prisma_client.db.litellm_modeltable.update(
+                ModelTableRepository(prisma_client).table.update(
                     where={"id": id},
                     data={"model_aliases": json.dumps(model_aliases)},
                 )
@@ -1275,11 +1332,9 @@ async def update_model(
         if _model_id is None:
             raise Exception("model_info.id not provided")
 
-        _existing_litellm_params = (
-            await prisma_client.db.litellm_proxymodeltable.find_unique(
-                where={"model_id": _model_id}
-            )
-        )
+        _existing_litellm_params = await ModelRepository(
+            prisma_client
+        ).table.find_unique(where={"model_id": _model_id})
 
         if _existing_litellm_params is None:
             if (
@@ -1340,7 +1395,7 @@ async def update_model(
                 "litellm_params": json.dumps(merged_dictionary),  # type: ignore
                 "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             }
-            model_response = await prisma_client.db.litellm_proxymodeltable.update(
+            model_response = await ModelRepository(prisma_client).table.update(
                 where={"model_id": _model_id},
                 data=_data,  # type: ignore
             )

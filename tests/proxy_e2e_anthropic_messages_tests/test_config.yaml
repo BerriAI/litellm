@@ -3,6 +3,7 @@ model_list:
     litellm_params:
       model: "anthropic/claude-sonnet-4-5-20250929"
       api_key: os.environ/ANTHROPIC_API_KEY
+      api_base: os.environ/RECORDER_ANTHROPIC_BASE_URL # In CI, routes through the record/replay proxy; unset elsewhere -> direct to Anthropic
 
   - model_name: bedrock-claude-sonnet-3.5
     litellm_params:
