@@ -1201,16 +1201,34 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         Helper to:
         - call embeddings.create.with_raw_response when litellm.return_response_headers is True
         - call embeddings.create by default
+
+        Returns (headers, response_dict) where response_dict is always a dict.
         """
         try:
             raw_response = await openai_aclient.embeddings.with_raw_response.create(
                 **data, timeout=timeout
             )  # type: ignore
             headers = dict(raw_response.headers)
-            response = raw_response.parse()
-            return headers, response
+            parsed = raw_response.parse()
+            return headers, self._normalize_embedding_response(parsed, data)
         except Exception as e:
             raise e
+
+    def _normalize_embedding_response(
+        self,
+        response: Any,
+        request_data: dict,
+    ) -> dict:
+        if hasattr(response, "model_dump"):
+            return response.model_dump()
+        if isinstance(response, dict):
+            return response
+        return {
+            "object": "list",
+            "data": list(response) if isinstance(response, list) else [],
+            "model": request_data.get("model", ""),
+            "usage": {"prompt_tokens": 0, "total_tokens": 0},
+        }
 
     @track_llm_api_timing()
     def make_sync_openai_embedding_request(
@@ -1224,6 +1242,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
         Helper to:
         - call embeddings.create.with_raw_response when litellm.return_response_headers is True
         - call embeddings.create by default
+
+        Returns (headers, response_dict) where response_dict is always a dict.
         """
         try:
             raw_response = openai_client.embeddings.with_raw_response.create(
@@ -1231,8 +1251,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             )  # type: ignore
 
             headers = dict(raw_response.headers)
-            response = raw_response.parse()
-            return headers, response
+            parsed = raw_response.parse()
+            return headers, self._normalize_embedding_response(parsed, data)
         except Exception as e:
             raise e
 
@@ -1266,16 +1286,15 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 logging_obj=logging_obj,
             )
             logging_obj.model_call_details["response_headers"] = headers
-            stringified_response = response.model_dump()
             ## LOGGING
             logging_obj.post_call(
                 input=input,
                 api_key=api_key,
                 additional_args={"complete_input_dict": data},
-                original_response=stringified_response,
+                original_response=response,
             )
             returned_response: EmbeddingResponse = convert_to_model_response_object(
-                response_object=stringified_response,
+                response_object=response,
                 model_response_object=model_response,
                 response_type="embedding",
                 _response_headers=headers,
@@ -1377,7 +1396,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 original_response=sync_embedding_response,
             )
             response: EmbeddingResponse = convert_to_model_response_object(
-                response_object=sync_embedding_response.model_dump(),
+                response_object=sync_embedding_response,
                 model_response_object=model_response,
                 _response_headers=headers,
                 response_type="embedding",
