@@ -555,7 +555,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 # final_chunk is a reference into responses_so_far so this
                 # mutates the list that the caller holds.
                 await self._apply_guardrail_responses_to_output(
-                    response=cast("ResponsesAPIResponse", response_obj),
+                    response=response_obj,
                     responses=guardrailed_texts,
                     task_mappings=task_mappings,
                 )
