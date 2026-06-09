@@ -38,6 +38,7 @@ interface UseMcpOAuthFlowResult {
   status: McpOAuthStatus;
   error: string | null;
   tokenResponse: Record<string, any> | null;
+  reset: () => void;
 }
 
 export const useMcpOAuthFlow = ({
@@ -332,10 +333,18 @@ export const useMcpOAuthFlow = ({
     resumeOAuthFlow();
   }, [resumeOAuthFlow]);
 
+  const reset = useCallback(() => {
+    setStatus("idle");
+    setError(null);
+    setTokenResponse(null);
+    processingRef.current = false;
+  }, []);
+
   return {
     startOAuthFlow,
     status,
     error,
     tokenResponse,
+    reset,
   };
 };
