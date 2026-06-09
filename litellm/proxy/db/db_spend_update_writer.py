@@ -55,9 +55,6 @@ from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
 )
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
-from litellm.proxy.db.db_transaction_queue.spend_log_redis_buffer import (
-    SpendLogRedisBuffer,
-)
 from litellm.proxy.db.db_transaction_queue.spend_update_queue import SpendUpdateQueue
 from litellm.proxy.db.db_transaction_queue.tool_discovery_queue import (
     ToolDiscoveryQueue,
@@ -115,7 +112,6 @@ class DBSpendUpdateWriter:
     ):
         self.redis_cache = redis_cache
         self.redis_update_buffer = RedisUpdateBuffer(redis_cache=self.redis_cache)
-        self.spend_log_redis_buffer = SpendLogRedisBuffer(redis_cache=self.redis_cache)
         self.pod_lock_manager = PodLockManager()
         self.spend_update_queue = SpendUpdateQueue()
         self.tool_discovery_queue = ToolDiscoveryQueue()
@@ -759,12 +755,12 @@ class DBSpendUpdateWriter:
                 payload.get("request_id"), payload.get("spend")
             )
         )
-        if prisma_client is not None:
+        if prisma_client is not None and spend_logs_url is not None:
             async with prisma_client._spend_log_transactions_lock:
                 prisma_client.spend_log_transactions.append(payload)
-            await self.spend_log_redis_buffer.buffer_spend_log_row(
-                cast(SpendLogsPayload, payload)
-            )
+        elif prisma_client is not None:
+            async with prisma_client._spend_log_transactions_lock:
+                prisma_client.spend_log_transactions.append(payload)
         else:
             verbose_proxy_logger.debug(
                 "prisma_client is None. Skipping writing spend logs to db."

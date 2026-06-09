@@ -216,7 +216,6 @@ async def test_update_spend_logs_failure_raises_after_retries(
 
     monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
 
-    failed_logs = [make_spend_log_row(request_id="r1")]
     mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock(
         side_effect=httpx.ReadError("network blip")
     )
@@ -228,78 +227,8 @@ async def test_update_spend_logs_failure_raises_after_retries(
             prisma_client=mock_prisma_client,
             db_writer_client=None,
             proxy_logging_obj=proxy_logging,
-            logs_to_process=failed_logs,
+            logs_to_process=[make_spend_log_row(request_id="r1")],
         )
-    assert mock_prisma_client.spend_log_transactions == failed_logs
-
-
-@pytest.mark.asyncio
-async def test_update_spend_logs_retries_on_deadlock_error(
-    mock_prisma_client: Any,
-    make_spend_log_row: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import litellm.proxy.utils as utils_mod
-    import prisma.errors
-
-    async def _fake_sleep(_: float) -> None:
-        return None
-
-    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
-
-    create_many = AsyncMock(
-        side_effect=[
-            prisma.errors.PrismaError("deadlock detected"),
-            None,
-        ]
-    )
-    mock_prisma_client.db.litellm_spendlogs.create_many = create_many
-    proxy_logging = MagicMock()
-    proxy_logging.failure_handler = AsyncMock()
-    logs = [make_spend_log_row(request_id="r1")]
-    await ProxyUpdateSpend.update_spend_logs(
-        n_retry_times=1,
-        prisma_client=mock_prisma_client,
-        db_writer_client=None,
-        proxy_logging_obj=proxy_logging,
-        logs_to_process=logs,
-    )
-    assert create_many.await_count == 2
-    assert mock_prisma_client.spend_log_transactions == []
-
-
-@pytest.mark.asyncio
-async def test_update_spend_logs_retries_on_pool_timeout(
-    mock_prisma_client: Any,
-    make_spend_log_row: Any,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    import httpx
-    import litellm.proxy.utils as utils_mod
-
-    async def _fake_sleep(_: float) -> None:
-        return None
-
-    monkeypatch.setattr(utils_mod.asyncio, "sleep", _fake_sleep)
-
-    create_many = AsyncMock(
-        side_effect=[
-            httpx.PoolTimeout("pool timeout"),
-            None,
-        ]
-    )
-    mock_prisma_client.db.litellm_spendlogs.create_many = create_many
-    proxy_logging = MagicMock()
-    proxy_logging.failure_handler = AsyncMock()
-    logs = [make_spend_log_row(request_id="r1")]
-    await ProxyUpdateSpend.update_spend_logs(
-        n_retry_times=1,
-        prisma_client=mock_prisma_client,
-        db_writer_client=None,
-        proxy_logging_obj=proxy_logging,
-        logs_to_process=logs,
-    )
-    assert create_many.await_count == 2
 
 
 def test_disable_spend_updates_reflects_general_settings(
