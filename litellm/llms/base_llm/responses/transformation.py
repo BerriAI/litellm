@@ -275,6 +275,14 @@ class BaseResponsesAPIConfig(ABC):
         )
         return http_url.replace("https://", "wss://").replace("http://", "ws://")
 
+    def model_in_websocket_url(self) -> bool:
+        """
+        Return True if the model should be appended as a ?model= query param to
+        the WebSocket URL. Providers that identify the model via the request body
+        (e.g. Azure Responses API) should override this to return False.
+        """
+        return True
+
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################
