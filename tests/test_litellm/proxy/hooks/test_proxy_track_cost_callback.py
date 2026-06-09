@@ -17,6 +17,14 @@ from litellm.proxy.hooks.proxy_track_cost_callback import (
     _update_database_and_spend_counters,
 )
 
+_UPDATE_DATABASE_RESPONSE_COST_ARG_INDEX = 9
+
+
+def _response_cost_from_update_database_call(call) -> float:
+    if "response_cost" in call.kwargs:
+        return call.kwargs["response_cost"]
+    return call.args[_UPDATE_DATABASE_RESPONSE_COST_ARG_INDEX]
+
 
 @pytest.mark.asyncio
 async def test_async_post_call_failure_hook():
@@ -295,10 +303,8 @@ async def test_track_cost_callback_zeroes_response_cost_on_cache_hit():
         )
 
     mock_proxy_logging.db_spend_update_writer.update_database.assert_awaited_once()
-    recorded_cost = (
-        mock_proxy_logging.db_spend_update_writer.update_database.await_args.kwargs[
-            "response_cost"
-        ]
+    recorded_cost = _response_cost_from_update_database_call(
+        mock_proxy_logging.db_spend_update_writer.update_database.await_args
     )
     assert recorded_cost == 0.0
 
