@@ -7,6 +7,7 @@ trusted proxy (delegated to ``IPAddressUtils.is_request_from_trusted_proxy``).
 from typing import Any, Dict, List, Mapping, Optional
 
 from litellm.identity.context import ClientInfo
+from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
 
 def _split_forwarded_chain(raw: Optional[str]) -> List[str]:
@@ -33,8 +34,6 @@ def extract_client_info(
     xff = headers.get("x-forwarded-for")
     if xff:
         forwarded_chain = _split_forwarded_chain(xff)
-
-    from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
     ip: Optional[str]
     if forwarded_chain and IPAddressUtils.is_request_from_trusted_proxy(

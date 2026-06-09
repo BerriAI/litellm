@@ -23,6 +23,7 @@ from litellm.identity.principal import (
     ServiceAccountPrincipal,
 )
 from litellm.identity.service_accounts import SERVICE_ACCOUNT_NAMES
+from litellm.identity.store import load_identity
 from litellm.integrations.otel.model.spans import SpanRole
 from litellm.integrations.otel.runtime import traced
 
@@ -104,8 +105,6 @@ async def resolve_user_api_key_auth(
     centralized via ``hash_principal_token`` so the auth chain doesn't
     re-implement the JWT-vs-key hashing rules.
     """
-    from litellm.identity.store import load_identity
-
     hashed_token = hash_principal_token(api_key)
     return await load_identity(
         hashed_token=hashed_token,

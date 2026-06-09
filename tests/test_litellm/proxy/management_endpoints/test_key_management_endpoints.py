@@ -4137,6 +4137,9 @@ async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
 
     # Mock cache delete_cache method
     mock_user_api_key_cache.delete_cache = MagicMock()
+    # `delete_verification_tokens` now also invalidates the identity cache,
+    # which awaits `async_delete_cache`.
+    mock_user_api_key_cache.async_delete_cache = AsyncMock()
 
     mock_create_many = AsyncMock()
     mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
@@ -11668,3 +11671,50 @@ async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption(
         msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
         assert str(code) == "400"
         assert "cannot exceed" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_verification_tokens_clears_identity_cache():
+    """A revoked key must not survive in the identity cache.
+
+    delete_verification_tokens clears the legacy key cache; it must also
+    invalidate the ``identity:v1:<hash>`` entry, otherwise a deleted key
+    keeps authenticating until the identity-cache TTL expires.
+    """
+    from litellm.identity.cache import IdentityCache
+    from litellm.proxy._types import LitellmUserRoles, hash_token
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints import key_management_endpoints as kme
+
+    raw_key = "sk-delete-identity"
+    hashed = hash_token(raw_key)
+
+    backend = UserApiKeyCache()
+    identity_cache = IdentityCache(dual_cache=backend)
+    await identity_cache.set(hashed, UserAPIKeyAuth(token=hashed, user_id="u1"))
+    assert await identity_cache.get(hashed) is not None
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin", api_key="sk-admin"
+    )
+
+    prisma = MagicMock()
+    prisma.delete_data = AsyncMock(return_value=[hashed])
+
+    key_row = MagicMock()
+    key_row.token = hashed
+    repo = MagicMock()
+    repo.table.find_many = AsyncMock(return_value=[key_row])
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma),
+        patch.object(kme, "VerificationTokenRepository", MagicMock(return_value=repo)),
+        patch.object(kme, "_persist_deleted_verification_tokens", new=AsyncMock()),
+    ):
+        await kme.delete_verification_tokens(
+            tokens=[raw_key],
+            user_api_key_cache=backend,
+            user_api_key_dict=admin,
+        )
+
+    assert await identity_cache.get(hashed) is None

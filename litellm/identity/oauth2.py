@@ -6,10 +6,19 @@ an already-validated response payload into the carrier.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+import os
+from typing import Optional
 
-if TYPE_CHECKING:
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+
+UNKNOWN_ROLE_DEFAULT_ENV = "LITELLM_OAUTH2_UNKNOWN_ROLE_DEFAULT"
+
+
+def _unknown_role_fallback() -> Optional[LitellmUserRoles]:
+    raw = os.getenv(UNKNOWN_ROLE_DEFAULT_ENV)
+    if not raw:
+        return None
+    return LitellmUserRoles(raw)
 
 
 def build_user_api_key_auth_from_oauth2_response(
@@ -30,9 +39,12 @@ def build_user_api_key_auth_from_oauth2_response(
 
     Active-token validation, scope checks, and token-not-active rejection
     happen upstream in ``Oauth2Handler``; this builder trusts its input.
-    """
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
+    Unknown IdP role values are rejected by default. Set
+    ``LITELLM_OAUTH2_UNKNOWN_ROLE_DEFAULT`` to a valid
+    ``LitellmUserRoles`` value to map unknown roles to that fallback;
+    an invalid env value raises on first use so misconfiguration is loud.
+    """
     user_id: Optional[str] = response_data.get(user_id_field_name)
     raw_role = response_data.get(user_role_field_name)
     user_team_id: Optional[str] = response_data.get(user_team_id_field_name)
@@ -43,8 +55,12 @@ def build_user_api_key_auth_from_oauth2_response(
     else:
         try:
             user_role = LitellmUserRoles(raw_role)
-        except ValueError:
-            user_role = LitellmUserRoles.INTERNAL_USER
+        except ValueError as e:
+            fallback = _unknown_role_fallback()
+            if fallback is not None:
+                user_role = fallback
+            else:
+                raise ValueError(f"Invalid OAuth2 role: {raw_role!r}") from e
 
     return UserAPIKeyAuth(
         api_key=token,

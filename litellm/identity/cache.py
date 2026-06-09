@@ -17,9 +17,10 @@ from typing import TYPE_CHECKING, Optional
 from litellm.integrations.otel.model.spans import SpanRole
 from litellm.integrations.otel.runtime import traced
 
+from litellm.proxy._types import UserAPIKeyAuth
+
 if TYPE_CHECKING:
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy._types import UserAPIKeyAuth
 
 
 IDENTITY_KEY_PREFIX = "identity:v1"
@@ -41,10 +42,6 @@ def user_generation_key(user_id: str) -> str:
 
 def org_generation_key(org_id: str) -> str:
     return f"{IDENTITY_GENERATION_PREFIX}:org:{org_id}"
-
-
-def _generation_attr_key(scope: str) -> str:
-    return f"identity_cache_generation_{scope}"
 
 
 def _attach_generations(uak: "UserAPIKeyAuth", generations: dict) -> None:
@@ -90,8 +87,6 @@ class IdentityCache:
         },
     )
     async def get(self, token_hash: str) -> Optional["UserAPIKeyAuth"]:
-        from litellm.proxy._types import UserAPIKeyAuth
-
         cache_key = identity_cache_key(token_hash)
         cached = await self._cache.async_get_cache(
             key=cache_key, model_type=UserAPIKeyAuth

@@ -6,6 +6,8 @@ identifier only. DB validation stays in ``resolve_and_validate_end_user_id``.
 
 from typing import Optional
 
+from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+
 
 def extract_end_user_id(
     body: Optional[dict],
@@ -13,7 +15,4 @@ def extract_end_user_id(
 ) -> Optional[str]:
     if body is None:
         body = {}
-
-    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
-
     return get_end_user_id_from_request_body(request_body=body, request_headers=headers)

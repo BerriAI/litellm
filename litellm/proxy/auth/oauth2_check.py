@@ -143,14 +143,18 @@ class Oauth2Handler:
                 # OAuth2 Token Introspection (RFC 7662) - requires POST with form data
                 verbose_proxy_logger.debug("Using OAuth2 introspection endpoint (POST)")
 
-                headers, data = Oauth2Handler._prepare_introspection_request(
-                    token=token,
-                    oauth_client_id=oauth_client_id,
-                    oauth_client_secret=oauth_client_secret,
+                headers, introspection_body = (
+                    Oauth2Handler._prepare_introspection_request(
+                        token=token,
+                        oauth_client_id=oauth_client_id,
+                        oauth_client_secret=oauth_client_secret,
+                    )
                 )
 
                 response = await client.post(
-                    token_info_endpoint, headers=headers, data=data
+                    token_info_endpoint,
+                    headers=headers,
+                    content=introspection_body,
                 )
             else:
                 # Generic token info endpoint - uses GET with Bearer token

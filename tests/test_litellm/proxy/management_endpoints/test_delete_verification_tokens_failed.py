@@ -26,7 +26,6 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     delete_verification_tokens,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -95,6 +94,7 @@ async def test_delete_all_tokens_admin_returns_empty_failed_tokens(monkeypatch):
 
     mock_cache = MagicMock()
     mock_cache.delete_cache = MagicMock()
+    mock_cache.async_delete_cache = AsyncMock()
 
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
@@ -133,6 +133,7 @@ async def test_delete_tokens_non_admin_all_succeed_returns_empty_failed_tokens(
 
     mock_cache = MagicMock()
     mock_cache.delete_cache = MagicMock()
+    mock_cache.async_delete_cache = AsyncMock()
 
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
@@ -184,6 +185,7 @@ async def test_delete_tokens_non_admin_token_not_in_db_returns_failed_tokens(
 
     mock_cache = MagicMock()
     mock_cache.delete_cache = MagicMock()
+    mock_cache.async_delete_cache = AsyncMock()
 
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
@@ -235,6 +237,7 @@ async def test_delete_tokens_admin_partial_db_failure_returns_failed_tokens(
 
     mock_cache = MagicMock()
     mock_cache.delete_cache = MagicMock()
+    mock_cache.async_delete_cache = AsyncMock()
 
     monkeypatch.setattr(
         "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
