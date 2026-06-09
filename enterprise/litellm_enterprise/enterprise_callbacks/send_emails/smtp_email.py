@@ -1,7 +1,6 @@
 """
 This is the litellm SMTP email integration
 """
-
 import asyncio
 from typing import List
 

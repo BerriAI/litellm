@@ -15,6 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
 
 from .base_email import BaseEmailLogger
 
+
 SENDGRID_API_ENDPOINT = "https://api.sendgrid.com/v3/mail/send"
 
 
