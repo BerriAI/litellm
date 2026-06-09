@@ -9,6 +9,7 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    _adjust_dates_for_timezone,
     _is_user_agent_tag,
     get_api_key_metadata,
     get_daily_activity,
@@ -55,6 +56,33 @@ async def test_get_daily_activity_empty_entity_id_list():
     # Check that team_id is set to empty list
     assert "team_id" in where_conditions
     assert where_conditions["team_id"] == {"in": []}
+
+
+@pytest.mark.parametrize(
+    "timezone_offset_minutes",
+    [
+        pytest.param(480, id="pst_west_of_utc"),
+        pytest.param(-330, id="ist_east_of_utc"),
+        pytest.param(0, id="utc"),
+        pytest.param(None, id="no_offset"),
+    ],
+)
+def test_adjust_dates_for_timezone_single_day_is_unchanged(timezone_offset_minutes):
+    # Regression: selecting a single local day in any timezone must keep the
+    # query window pinned to that one day. Previously, ±1 day was added based
+    # on the JS timezone offset, which inflated single-day totals on the
+    # aggregated usage dashboard for non-UTC users.
+    start, end = _adjust_dates_for_timezone(
+        "2026-04-15", "2026-04-15", timezone_offset_minutes
+    )
+    assert start == "2026-04-15"
+    assert end == "2026-04-15"
+
+
+def test_adjust_dates_for_timezone_multi_day_range_is_unchanged():
+    start, end = _adjust_dates_for_timezone("2026-04-10", "2026-04-15", -330)
+    assert start == "2026-04-10"
+    assert end == "2026-04-15"
 
 
 def test_is_user_agent_tag():

@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Union
 
@@ -390,38 +390,20 @@ def _adjust_dates_for_timezone(
     timezone_offset_minutes: Optional[int],
 ) -> Tuple[str, str]:
     """
-    Adjust date range to account for timezone differences.
+    Return the date range unchanged.
 
-    The database stores dates in UTC. When a user in a different timezone
-    selects a local date range, we need to expand the UTC query range to
-    capture all records that fall within their local date range.
+    ``LiteLLM_DailyUserSpend.date`` is stored as a ``YYYY-MM-DD`` UTC string
+    at day granularity, and the UI formats ``start_date``/``end_date`` from
+    the browser's local year/month/day — so the strings already line up with
+    how rows are keyed. The previous ±1 day expansion pulled an adjacent UTC
+    day into the result set, inflating single-day totals for any non-UTC
+    user (e.g. IST users saw two days summed together).
 
-    Args:
-        start_date: Start date in YYYY-MM-DD format (user's local date)
-        end_date: End date in YYYY-MM-DD format (user's local date)
-        timezone_offset_minutes: Minutes behind UTC (positive = west of UTC)
-            This matches JavaScript's Date.getTimezoneOffset() convention.
-            For example: PST = +480 (8 hours * 60 = 480 minutes behind UTC)
-
-    Returns:
-        Tuple of (adjusted_start_date, adjusted_end_date) in YYYY-MM-DD format
+    ``timezone_offset_minutes`` is kept in the signature for compatibility
+    with callers; it is intentionally ignored.
     """
-    if timezone_offset_minutes is None or timezone_offset_minutes == 0:
-        return start_date, end_date
-
-    start = datetime.strptime(start_date, "%Y-%m-%d")
-    end = datetime.strptime(end_date, "%Y-%m-%d")
-
-    if timezone_offset_minutes > 0:
-        # West of UTC (Americas): local evening extends into next UTC day
-        # e.g., Feb 4 23:59 PST = Feb 5 07:59 UTC
-        end = end + timedelta(days=1)
-    else:
-        # East of UTC (Asia/Europe): local morning starts in previous UTC day
-        # e.g., Feb 4 00:00 IST = Feb 3 18:30 UTC
-        start = start - timedelta(days=1)
-
-    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    del timezone_offset_minutes
+    return start_date, end_date
 
 
 def _build_where_conditions(
