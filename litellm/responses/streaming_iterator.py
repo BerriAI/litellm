@@ -1254,6 +1254,7 @@ class ResponsesWebSocketStreaming:
         first_message: Optional[str] = None,
         guardrail_callbacks: Optional[List[Any]] = None,
         output_guardrail_callbacks: Optional[List[Any]] = None,
+        authorized_model: Optional[str] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1265,6 +1266,9 @@ class ResponsesWebSocketStreaming:
         self.first_message = first_message
         self.guardrail_callbacks: List[Any] = guardrail_callbacks or []
         self.output_guardrail_callbacks: List[Any] = output_guardrail_callbacks or []
+        # Model name authorized at connection time; enforced on every
+        # response.create frame to prevent deployment-substitution attacks.
+        self.authorized_model: Optional[str] = authorized_model
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1367,20 +1371,47 @@ class ResponsesWebSocketStreaming:
         finally:
             await self._log_messages()
 
+    def _enforce_authorized_model(self, msg_obj: dict) -> bool:
+        """
+        Overwrite any ``model`` field in a ``response.create`` frame with the
+        connection-authorized model to prevent deployment-substitution attacks.
+
+        Handles both shapes:
+          flat:   ``{"type": "response.create", "model": "...", ...}``
+          nested: ``{"type": "response.create", "response": {"model": "...", ...}}``
+
+        Returns True if the object was modified.
+        """
+        if not self.authorized_model:
+            return False
+        modified = False
+        if "model" in msg_obj and msg_obj["model"] != self.authorized_model:
+            msg_obj["model"] = self.authorized_model
+            modified = True
+        nested = msg_obj.get("response")
+        if (
+            isinstance(nested, dict)
+            and "model" in nested
+            and nested["model"] != self.authorized_model
+        ):
+            nested["model"] = self.authorized_model
+            modified = True
+        return modified
+
     async def _mask_response_create(self, message: str) -> str:
         """
-        Apply Presidio PII masking to a ``response.create`` message before it
-        is forwarded to the upstream provider.
+        Enforce the authorized model and apply Presidio PII masking to a
+        ``response.create`` message before it is forwarded to the upstream
+        provider.
 
-        Walks the ``input`` field of the message (string or list of message
-        items), calls ``check_pii`` on every text block, and stores the
-        resulting ``pii_tokens`` map in ``self.request_data["metadata"]`` for
-        later unmasking.  Non-``response.create`` messages are returned
-        unchanged.
+        - Overwrites any ``model`` field with the connection-authorized model
+          to prevent deployment-substitution attacks (always applied).
+        - Walks the ``input`` field, calls ``check_pii`` on every text block,
+          and stores the resulting ``pii_tokens`` map in
+          ``self.request_data["metadata"]`` for later unmasking.
+
+        Non-``response.create`` messages are returned unchanged.
         """
-        if not self.guardrail_callbacks:
-            return message
-
         try:
             msg_obj = json.loads(message)
         except (json.JSONDecodeError, TypeError):
@@ -1389,10 +1420,16 @@ class ResponsesWebSocketStreaming:
         if msg_obj.get("type") != "response.create":
             return message
 
+        # Always enforce the authorized model, even when PII masking is off.
+        model_modified = self._enforce_authorized_model(msg_obj)
+
+        if not self.guardrail_callbacks:
+            return json.dumps(msg_obj) if model_modified else message
+
         if "metadata" not in self.request_data:
             self.request_data["metadata"] = {}
 
-        modified = False
+        modified = model_modified
         for cb in self.guardrail_callbacks:
             presidio_config = cb.get_presidio_settings_from_request_data(
                 self.request_data
