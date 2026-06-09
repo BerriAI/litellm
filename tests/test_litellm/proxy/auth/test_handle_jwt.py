@@ -4201,3 +4201,31 @@ async def test_auth_jwt_rejects_token_when_no_jwks_url_has_matching_key(monkeypa
 
     with pytest.raises(Exception, match="Invalid JWT Submitted"):
         await jwt_handler.auth_jwt(token=token)
+
+
+def test_update_environment_rebuilds_jwks_clients_with_new_ttl():
+    """PyJWKClient bakes its cache lifespan at construction time. A config reload
+    through update_environment changes public_key_ttl, so cached clients must be
+    dropped; otherwise the new TTL never reaches the JWKS cache.
+    """
+    from litellm.caching import DualCache
+
+    jwks_url = "https://idp.example.com/jwks.json"
+    jwt_handler = JWTHandler()
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(public_key_ttl=111),
+    )
+    first_client = jwt_handler._jwks_client_for(jwks_url)
+    assert first_client.jwk_set_cache.lifespan == 111
+
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(public_key_ttl=222),
+    )
+    second_client = jwt_handler._jwks_client_for(jwks_url)
+
+    assert second_client is not first_client
+    assert second_client.jwk_set_cache.lifespan == 222

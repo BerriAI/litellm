@@ -128,6 +128,7 @@ class JWTHandler:
         self.user_api_key_cache = user_api_key_cache
         self.litellm_jwtauth = litellm_jwtauth
         self.leeway = leeway
+        self._jwks_clients.clear()
 
     def _rbac_role_from_role_mapping(self, token: dict) -> Optional[RBAC_ROLES]:
         """
