@@ -15,3 +15,4 @@ migrations/Dockerfile | FROM.*sha256:    | Digest-pinned base image (not ARG-var
 # Sync log
 # 2026-06-08: security sweep — all 3 Dockerfile digest pins intact; CodeQL cancelled (pre-existing on litellm_internal_staging).
 # 2026-06-08: merged 10 upstream commits from BerriAI/litellm:litellm_internal_staging (-X theirs); all 3 Dockerfile digest pins intact.
+# 2026-06-09: synced upstream (PR #52); all 5 fork patches intact. CodeQL python SAST restored — push-triggered scan on d634c906 succeeded in 4.5 min (timeout-minutes: 90 + py/log-injection exclusion).
