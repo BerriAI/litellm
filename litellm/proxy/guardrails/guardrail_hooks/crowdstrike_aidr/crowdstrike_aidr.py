@@ -105,6 +105,16 @@ def _extract_text_from_content(content: object) -> str:
     return ""
 
 
+def _merge_metadata_bags(request_data: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    merged: dict[str, Any] = {}
+    present = False
+    for bag in (request_data.get("metadata"), request_data.get("litellm_metadata")):
+        if isinstance(bag, Mapping):
+            present = True
+            merged.update(bag)
+    return merged if present else None
+
+
 class CrowdStrikeAIDRHandler(CustomGuardrail):
     """
     CrowdStrike AIDR AI Guardrail handler to interact with the CrowdStrike AIDR
@@ -321,8 +331,8 @@ class CrowdStrikeAIDRHandler(CustomGuardrail):
         if model:
             ai_guard_payload["model"] = model
 
-        metadata = request_data.get("litellm_metadata", request_data.get("metadata"))
-        if isinstance(metadata, Mapping):
+        metadata = _merge_metadata_bags(request_data)
+        if metadata is not None:
             user_id = metadata.get("user_api_key_user_id")
             if user_id:
                 ai_guard_payload["user_id"] = user_id
