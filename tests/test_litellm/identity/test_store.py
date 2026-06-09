@@ -218,3 +218,134 @@ async def test_hydrated_copy_is_request_scoped():
 
     assert b.parent_otel_span is None
     assert b.request_route is None
+
+
+@pytest.mark.asyncio
+async def test_cache_miss_without_prisma_raises_no_db_connected():
+    cache_backend = UserApiKeyCache()
+    identity_cache = IdentityCache(dual_cache=cache_backend)
+
+    with pytest.raises(Exception) as excinfo:
+        await load_identity(
+            hashed_token="hash-no-db",
+            prisma_client=None,
+            cache=identity_cache,
+            user_api_key_cache=cache_backend,
+        )
+
+    assert "No DB Connected" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_cold_path_fetches_object_permission_when_only_id_present():
+    cache_backend = UserApiKeyCache()
+    identity_cache = IdentityCache(dual_cache=cache_backend)
+    prisma = _stub_prisma_client()
+    prisma.get_data.return_value = _verification_token_view(
+        token="hash-op",
+        user_id=None,
+        team_id=None,
+        object_permission_id="op-99",
+    )
+
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    fetched = LiteLLM_ObjectPermissionTable(object_permission_id="op-99")
+    with (
+        patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            new=AsyncMock(return_value=fetched),
+        ) as mock_get_perm,
+    ):
+        result = await load_identity(
+            hashed_token="hash-op",
+            prisma_client=prisma,
+            cache=identity_cache,
+            user_api_key_cache=cache_backend,
+        )
+
+    assert mock_get_perm.await_count == 1
+    assert result.object_permission is not None
+    assert result.object_permission.object_permission_id == "op-99"
+
+
+@pytest.mark.asyncio
+async def test_cold_path_swallows_object_permission_lookup_failure():
+    cache_backend = UserApiKeyCache()
+    identity_cache = IdentityCache(dual_cache=cache_backend)
+    prisma = _stub_prisma_client()
+    prisma.get_data.return_value = _verification_token_view(
+        token="hash-op-err",
+        user_id=None,
+        team_id=None,
+        object_permission_id="op-err",
+    )
+
+    with (
+        patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_object_permission",
+            new=AsyncMock(side_effect=RuntimeError("db blip")),
+        ),
+    ):
+        result = await load_identity(
+            hashed_token="hash-op-err",
+            prisma_client=prisma,
+            cache=identity_cache,
+            user_api_key_cache=cache_backend,
+        )
+
+    assert result.object_permission is None
+    assert result.object_permission_id == "op-err"
+
+
+@pytest.mark.asyncio
+async def test_populate_legacy_cache_delegates_to_cache_key_object():
+    from litellm.identity.store import _populate_legacy_cache
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    uak = UserAPIKeyAuth(token="hash-legacy", user_id="u1")
+    with patch(
+        "litellm.proxy.auth.auth_checks._cache_key_object", new=AsyncMock()
+    ) as mock_cache_key:
+        await _populate_legacy_cache(
+            hashed_token="hash-legacy",
+            uak=uak,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=None,
+        )
+
+    assert mock_cache_key.await_count == 1
+    assert mock_cache_key.await_args.kwargs["hashed_token"] == "hash-legacy"
+    assert mock_cache_key.await_args.kwargs["user_api_key_obj"] is uak
+
+
+@pytest.mark.asyncio
+async def test_populate_legacy_cache_swallows_write_failures():
+    from litellm.identity.store import _populate_legacy_cache
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    uak = UserAPIKeyAuth(token="hash-legacy", user_id="u1")
+    with patch(
+        "litellm.proxy.auth.auth_checks._cache_key_object",
+        new=AsyncMock(side_effect=RuntimeError("redis down")),
+    ):
+        await _populate_legacy_cache(
+            hashed_token="hash-legacy",
+            uak=uak,
+            user_api_key_cache=UserApiKeyCache(),
+            proxy_logging_obj=None,
+        )
+
+
+def test_rehydrate_bundled_user_nulls_out_uncoercible_dict():
+    from litellm.identity.store import _rehydrate_bundled_user
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    uak = UserAPIKeyAuth(token="hash-bad-user")
+    uak.user = {"user_id": "u1", "tpm_limit": "not-an-int"}
+
+    _rehydrate_bundled_user(uak)
+
+    assert uak.user is None

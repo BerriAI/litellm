@@ -8,6 +8,8 @@ import pytest
 from litellm.caching.dual_cache import DualCache
 from litellm.identity.cache import (
     IdentityCache,
+    _attach_generations,
+    _read_generations,
     identity_cache_key,
     team_generation_key,
     user_generation_key,
@@ -132,3 +134,53 @@ async def test_snapshot_generations_maps_returned_values_by_scope():
     snapshot = await cache._snapshot_generations_for(uak)
 
     assert snapshot == {"team": 7, "user": 3}
+
+
+def test_attach_generations_initializes_non_dict_metadata():
+    uak = UserAPIKeyAuth(token="hash-x", user_id="u1")
+    uak.metadata = None  # type: ignore[assignment]
+
+    _attach_generations(uak, {"team": 4})
+
+    assert isinstance(uak.metadata, dict)
+    assert _read_generations(uak) == {"team": 4}
+
+
+@pytest.mark.asyncio
+async def test_is_stale_is_false_when_entry_carries_no_generations():
+    fake = _CountingCache()
+    cache = IdentityCache(dual_cache=fake)  # type: ignore[arg-type]
+    uak = UserAPIKeyAuth(token="hash-x", user_id="u1", team_id="t1")
+    assert _read_generations(uak) == {}
+
+    assert await cache._is_stale(uak) is False
+    # No stored generations means there is nothing to compare, so the cache
+    # layer must not issue a generation read.
+    assert fake.batch_get_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_snapshot_generations_returns_empty_for_unscoped_entry():
+    fake = _CountingCache()
+    cache = IdentityCache(dual_cache=fake)  # type: ignore[arg-type]
+    uak = UserAPIKeyAuth(token="hash-x")
+
+    assert await cache._snapshot_generations_for(uak) == {}
+    assert fake.batch_get_calls == 0
+
+
+def test_get_identity_cache_falls_back_to_proxy_cache_when_arg_omitted():
+    import litellm.identity.cache as cache_module
+    import litellm.proxy.proxy_server as proxy_server
+
+    saved = cache_module._identity_cache
+    saved_proxy_cache = proxy_server.user_api_key_cache
+    sentinel = _user_api_key_cache()
+    cache_module._identity_cache = None
+    proxy_server.user_api_key_cache = sentinel
+    try:
+        built = cache_module.get_identity_cache()
+        assert built._cache is sentinel
+    finally:
+        cache_module._identity_cache = saved
+        proxy_server.user_api_key_cache = saved_proxy_cache

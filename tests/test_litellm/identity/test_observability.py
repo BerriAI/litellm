@@ -6,7 +6,11 @@ sys.path.insert(0, os.path.abspath("../.."))
 import pytest
 
 from litellm.integrations.otel.model.spans import SpanRole
-from litellm.integrations.otel.runtime import traced
+from litellm.integrations.otel.runtime import (
+    _apply_span_attrs,
+    _resolve_attrs,
+    traced,
+)
 
 
 @pytest.mark.asyncio
@@ -73,3 +77,47 @@ def test_decorator_rejects_sync_functions():
         @traced("identity.sync-not-allowed", role=SpanRole.SERVICE)
         def sync_fn():
             return None
+
+
+def test_resolve_attrs_passes_result_positionally_when_builder_lacks_result_param():
+    seen = {}
+
+    def builder(value):
+        seen["value"] = value
+        return {"identity.kind": "api_key"}
+
+    out = _resolve_attrs(builder, args=("a",), kwargs={"k": "v"}, result="RESULT")
+
+    assert seen["value"] == "RESULT"
+    assert out == {"identity.kind": "api_key"}
+
+
+def test_resolve_attrs_returns_empty_without_a_builder():
+    assert _resolve_attrs(None, args=(), kwargs={}, result="x") == {}
+
+
+class _RecordingSpan:
+    def __init__(self):
+        self.attrs = {}
+
+    def set_attribute(self, key, value):
+        self.attrs[key] = value
+
+
+def test_apply_span_attrs_sets_non_null_values_and_skips_none():
+    span = _RecordingSpan()
+    _apply_span_attrs(span, {"a": 1, "b": None, "c": "x"})
+    assert span.attrs == {"a": 1, "c": "x"}
+
+
+def test_apply_span_attrs_is_noop_without_span_or_attrs():
+    _apply_span_attrs(None, {"a": 1})
+    _apply_span_attrs(_RecordingSpan(), None)
+
+
+def test_apply_span_attrs_swallows_set_attribute_errors():
+    class _Boom:
+        def set_attribute(self, key, value):
+            raise RuntimeError("span closed")
+
+    _apply_span_attrs(_Boom(), {"a": 1})

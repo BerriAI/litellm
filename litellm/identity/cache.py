@@ -43,10 +43,6 @@ def org_generation_key(org_id: str) -> str:
     return f"{IDENTITY_GENERATION_PREFIX}:org:{org_id}"
 
 
-def _generation_attr_key(scope: str) -> str:
-    return f"identity_cache_generation_{scope}"
-
-
 def _attach_generations(uak: "UserAPIKeyAuth", generations: dict) -> None:
     """Stash the generation counters this entry was minted under.
 
