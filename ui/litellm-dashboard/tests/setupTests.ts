@@ -138,6 +138,8 @@ vi.mock("@tremor/react", async (importOriginal) => {
 // Global mock for useAuthorized hook to avoid repeating the same mock in every test file
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({
+    isLoading: false,
+    isAuthorized: true,
     token: "123",
     accessToken: "123",
     userId: "user-1",

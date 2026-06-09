@@ -25,13 +25,8 @@ type AuthContextValue = {
   disabledPersonalKeyCreation: boolean;
   showSSOBanner: boolean;
 
-  setToken: React.Dispatch<React.SetStateAction<string | null>>;
-  setUserID: React.Dispatch<React.SetStateAction<string | null>>;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
-  setAccessToken: React.Dispatch<React.SetStateAction<string | null>>;
-  setPremiumUser: React.Dispatch<React.SetStateAction<boolean>>;
-  setShowSSOBanner: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -40,12 +35,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [token, setToken] = useState<string | null>(null);
   const [userID, setUserID] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState("");
+  const [userRole, setUserRole] = useState(formatUserRole(""));
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [premiumUser, setPremiumUser] = useState(false);
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
-  const [showSSOBanner, setShowSSOBanner] = useState(true);
+  const [showSSOBanner, setShowSSOBanner] = useState(false);
 
   // Load runtime UI config (populates proxyBaseUrl etc.) before clearing
   // authLoading, so any consumer that builds proxy-rooted URLs from authLoading=false
@@ -105,15 +100,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     setAccessToken(decoded.key);
     setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
+    setShowSSOBanner(decoded.login_method === "username_password");
 
     if (decoded.user_role) {
       setUserRole(formatUserRole(decoded.user_role));
     }
     if (decoded.user_email) {
       setUserEmail(decoded.user_email);
-    }
-    if (decoded.login_method) {
-      setShowSSOBanner(decoded.login_method === "username_password");
     }
     if (decoded.premium_user) {
       setPremiumUser(decoded.premium_user);
@@ -136,13 +129,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     premiumUser,
     disabledPersonalKeyCreation,
     showSSOBanner,
-    setToken,
-    setUserID,
     setUserRole,
     setUserEmail,
-    setAccessToken,
-    setPremiumUser,
-    setShowSSOBanner,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
