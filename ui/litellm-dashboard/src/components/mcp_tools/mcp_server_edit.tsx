@@ -2,8 +2,18 @@ import React, { useState, useEffect } from "react";
 import { Form, Select, Button as AntdButton, Tooltip, Input, InputNumber } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
-import { AUTH_TYPE, OAUTH_FLOW, MCPServer, MCPServerCostInfo, TRANSPORT } from "./types";
-import { updateMCPServer, listMCPTools } from "../networking";
+import {
+  AUTH_TYPE,
+  OAUTH_FLOW,
+  MCP_OAUTH2_FLOW_M2M,
+  MCPServer,
+  MCPServerCostInfo,
+  TRANSPORT,
+  getMcpOAuthMode,
+} from "./types";
+import { updateMCPServer, listMCPTools, storeMCPOAuthUserCredential } from "../networking";
+import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
+import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
 import MCPToolConfiguration from "./mcp_tool_configuration";
@@ -18,6 +28,7 @@ import { getSecureItem, setSecureItem } from "@/utils/secureStorage";
 interface MCPServerEditProps {
   mcpServer: MCPServer;
   accessToken: string | null;
+  userID?: string | null;
   onCancel: () => void;
   onSuccess: (server: MCPServer) => void;
   availableAccessGroups: string[];
@@ -25,11 +36,12 @@ interface MCPServerEditProps {
 
 const AUTH_TYPES_REQUIRING_AUTH_VALUE = [AUTH_TYPE.API_KEY, AUTH_TYPE.BEARER_TOKEN, AUTH_TYPE.TOKEN, AUTH_TYPE.BASIC];
 const AUTH_TYPES_REQUIRING_CREDENTIALS = [...AUTH_TYPES_REQUIRING_AUTH_VALUE, AUTH_TYPE.OAUTH2, AUTH_TYPE.AWS_SIGV4];
-const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
+export const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
 const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   mcpServer,
   accessToken,
+  userID,
   onCancel,
   onSuccess,
   availableAccessGroups,
@@ -57,8 +69,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
   const isAwsSigV4AuthType = authType === AUTH_TYPE.AWS_SIGV4;
   const oauthFlowTypeValue = Form.useWatch("oauth_flow_type", form) as string | undefined;
   const isM2MFlow = isOAuthAuthType && oauthFlowTypeValue === OAUTH_FLOW.M2M;
-
-  const [oauthAccessToken, setOauthAccessToken] = useState<string | null>(null);
 
   // Watch form fields that affect tool fetching
   const currentUrl = Form.useWatch("url", form);
@@ -140,8 +150,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       };
     },
     onTokenReceived: (token) => {
-      setOauthAccessToken(token?.access_token ?? null);
-
       if (token?.access_token) {
         const credentials = {
           access_token: token.access_token,
@@ -158,6 +166,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
     },
     onBeforeRedirect: persistEditUiState,
+    flowSource: "edit",
   });
 
   const initialStaticHeaders = React.useMemo(() => {
@@ -216,6 +225,20 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }),
     [mcpServer, effectiveTransport, initialStaticHeaders, initialEnvVars, initialEnvJson],
   );
+
+  // antd applies `initialValues` only at first mount. When the server loads after
+  // mount (e.g. returning from the OAuth redirect lands on Overview and the form
+  // mounts before the server data is ready), the form would stay blank. Re-sync it
+  // from the loaded server once per server_id so it always reflects the saved config;
+  // the OAuth-restore effect below then overlays any in-progress edits on top.
+  const syncedServerIdRef = React.useRef<string | null>(null);
+  useEffect(() => {
+    if (!mcpServer.server_id || syncedServerIdRef.current === mcpServer.server_id) {
+      return;
+    }
+    syncedServerIdRef.current = mcpServer.server_id;
+    form.setFieldsValue(initialValues);
+  }, [mcpServer.server_id, initialValues, form]);
 
   // Initialize cost config from existing server data
   useEffect(() => {
@@ -280,6 +303,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!pendingRestoredValues) {
       return;
     }
+    // Set transport first so transport-dependent fields render, then apply the rest
+    // on the re-run triggered by the transportType watch (without it the effect's
+    // deps never change and the second pass never runs, leaving fields blank).
     const transport = pendingRestoredValues.transport || mcpServer.transport;
     if (transport && transport !== form.getFieldValue("transport")) {
       form.setFieldsValue({ transport });
@@ -287,7 +313,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     form.setFieldsValue(pendingRestoredValues);
     setPendingRestoredValues(null);
-  }, [pendingRestoredValues, form, mcpServer.transport]);
+  }, [pendingRestoredValues, form, mcpServer.transport, transportType]);
 
   // Transform string array to object array for initial form values
   useEffect(() => {
@@ -304,28 +330,52 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       return;
     }
     fetchTools();
-  }, [mcpServer, accessToken]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token]);
 
   const fetchTools = async () => {
     if (!accessToken || !mcpServer.server_id) return;
+
+    // OBO/M2M/static auth is attached server-side from the stored credential, so
+    // a plain GET /tools/list?server_id suffices. PKCE passthrough holds the token
+    // in the browser, so forward it from sessionStorage as the x-mcp header the
+    // same way the Tools playground does.
+    let customHeaders: Record<string, string> | undefined;
+    const isPassthrough =
+      getMcpOAuthMode({
+        auth_type: mcpServer.auth_type,
+        oauth2_flow: mcpServer.oauth2_flow,
+        delegate_auth_to_upstream: mcpServer.delegate_auth_to_upstream,
+      }) === "passthrough";
+    if (isPassthrough) {
+      const token =
+        oauthTokenResponse?.access_token ??
+        (isTokenValid(mcpServer.server_id, userID)
+          ? getToken(mcpServer.server_id, userID)?.access_token ?? null
+          : null);
+      if (!token) {
+        setTools([]);
+        setToolsError("Authenticate with this server in the Tools tab to load and configure its tools.");
+        return;
+      }
+      customHeaders = buildMcpPassthroughAuthHeader(mcpServer.alias, token);
+    }
 
     setIsLoadingTools(true);
     setToolsError(null);
 
     try {
-      // Use the GET endpoint which looks up stored credentials by server_id,
-      // rather than POST /test/tools/list which requires inline credentials.
-      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id);
+      // include_disabled_tools: configuring the allowlist needs the full server
+      // catalog, so tools toggled off still render (as unchecked) instead of vanishing.
+      const toolsResponse = await listMCPTools(accessToken, mcpServer.server_id, customHeaders, true);
 
       if (toolsResponse.tools && !toolsResponse.error) {
         setTools(toolsResponse.tools);
       } else {
-        console.error("Failed to fetch tools:", toolsResponse.message);
         setTools([]);
         setToolsError(toolsResponse.message || "Failed to load tools");
       }
     } catch (error) {
-      console.error("Tools fetch error:", error);
       setTools([]);
       setToolsError(error instanceof Error ? error.message : "Failed to load tools");
     } finally {
@@ -627,6 +677,46 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
 
       const updated = await updateMCPServer(accessToken, payload);
+
+      // Persist the token staged via "Authorize & Fetch" (mirrors the create flow's
+      // commit-on-submit): OBO writes the per-user token to the DB, passthrough keeps
+      // it in sessionStorage. M2M/static auth resolve server-side and need neither.
+      if (oauthTokenResponse?.access_token) {
+        const oauthMode = getMcpOAuthMode({
+          auth_type: restValues.auth_type,
+          oauth2_flow: isM2MFlow ? MCP_OAUTH2_FLOW_M2M : null,
+          delegate_auth_to_upstream: Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream),
+        });
+        try {
+          if (oauthMode === "obo") {
+            const scope = oauthTokenResponse.scope;
+            await storeMCPOAuthUserCredential(accessToken, mcpServer.server_id, {
+              access_token: oauthTokenResponse.access_token,
+              refresh_token: oauthTokenResponse.refresh_token,
+              expires_in: oauthTokenResponse.expires_in,
+              scopes: typeof scope === "string" && scope ? scope.split(" ") : undefined,
+            });
+          } else if (oauthMode === "passthrough") {
+            setToken(
+              mcpServer.server_id,
+              {
+                access_token: oauthTokenResponse.access_token,
+                expires_in: oauthTokenResponse.expires_in,
+                refresh_token: oauthTokenResponse.refresh_token,
+                token_type: oauthTokenResponse.token_type,
+              },
+              userID,
+            );
+          }
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : "";
+          NotificationsManager.fromBackend(
+            "MCP Server updated, but failed to persist OAuth token" + (message ? `: ${message}` : ""),
+          );
+          return;
+        }
+      }
+
       NotificationsManager.success("MCP Server updated successfully");
       onSuccess(updated);
     } catch (error: any) {
@@ -1146,7 +1236,6 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <div className="mt-6">
               <MCPToolConfiguration
                 accessToken={accessToken}
-                oauthAccessToken={oauthAccessToken}
                 formValues={{
                   server_id: mcpServer.server_id,
                   server_name: currentServerName ?? mcpServer.server_name,
@@ -1172,6 +1261,10 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 toolNameToDescription={toolNameToDescription}
                 onToolNameToDisplayNameChange={setToolNameToDisplayName}
                 onToolNameToDescriptionChange={setToolNameToDescription}
+                externalTools={tools}
+                externalIsLoading={isLoadingTools}
+                externalError={toolsError}
+                externalCanFetch={true}
               />
             </div>
 
