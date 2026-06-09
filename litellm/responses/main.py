@@ -954,6 +954,14 @@ def responses(
             # Update local_vars to include the converted text parameter
             local_vars["text"] = text
 
+        # Mirror completion()'s OpenAI-SDK-style base_url -> internal api_base promotion
+        # (litellm/main.py:1384). YAML model_list / OpenAI client kwargs use 'base_url';
+        # CredentialLiteLLMParams stores 'api_base'. Without this, GenericLiteLLMParams
+        # below leaves api_base=None and the request goes to api.openai.com regardless of
+        # the configured base_url (issue #30026).
+        if kwargs.get("base_url") is not None and kwargs.get("api_base") is None:
+            kwargs["api_base"] = kwargs.pop("base_url")
+
         # get llm provider logic
         litellm_params = GenericLiteLLMParams(**kwargs)
 
