@@ -2094,9 +2094,7 @@ def client(original_function):  # noqa: PLR0915
             # Injecting litellm.num_retries here for router calls causes misleading
             # "LiteLLM Retried: N times" in error messages even when zero retries
             # occurred (e.g. TimeoutErrorRetries=0 in retry_policy).
-            _is_router_or_proxy_call = "model_group" in (
-                kwargs.get("metadata") or {}
-            )
+            _is_router_or_proxy_call = "model_group" in (kwargs.get("metadata") or {})
             if not _is_router_or_proxy_call:
                 setattr(
                     e, "num_retries", num_retries

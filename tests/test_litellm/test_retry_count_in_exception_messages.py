@@ -20,10 +20,10 @@ from litellm import Router
 from litellm.exceptions import Timeout, InternalServerError
 from litellm.types.router import RetryPolicy
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_timeout(message="Connection timed out"):
     return Timeout(
@@ -61,6 +61,7 @@ def _make_router(retry_policy: dict) -> Router:
 # exceptions.py: is-not-None check
 # ---------------------------------------------------------------------------
 
+
 class TestExceptionStrFormat:
     def test_zero_num_retries_is_displayed(self):
         """num_retries=0 should appear in __str__, not be silently suppressed."""
@@ -94,6 +95,7 @@ class TestExceptionStrFormat:
 # router.py: TimeoutErrorRetries=0 stamps 0 on exception
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_timeout_zero_retries_stamps_zero_on_exception():
     """
@@ -118,9 +120,7 @@ async def test_timeout_zero_retries_stamps_zero_on_exception():
         f"Expected num_retries=0, got {raised.num_retries}. "
         "TimeoutErrorRetries=0 should stamp 0 retries, not litellm.num_retries."
     )
-    assert raised.max_retries == 0, (
-        f"Expected max_retries=0, got {raised.max_retries}."
-    )
+    assert raised.max_retries == 0, f"Expected max_retries=0, got {raised.max_retries}."
 
 
 @pytest.mark.asyncio
@@ -141,18 +141,15 @@ async def test_internal_server_error_three_retries_stamps_correctly():
             )
 
     raised = exc_info.value
-    assert raised.num_retries == 3, (
-        f"Expected num_retries=3, got {raised.num_retries}."
-    )
-    assert raised.max_retries == 3, (
-        f"Expected max_retries=3, got {raised.max_retries}."
-    )
+    assert raised.num_retries == 3, f"Expected num_retries=3, got {raised.num_retries}."
+    assert raised.max_retries == 3, f"Expected max_retries=3, got {raised.max_retries}."
     assert mock_call.call_count == 4  # 1 initial + 3 retries
 
 
 # ---------------------------------------------------------------------------
 # utils.py: decorator does not inject litellm.num_retries for router calls
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_decorator_does_not_inject_global_num_retries_for_router_calls():
