@@ -125,10 +125,20 @@ class TestTensormeshCostMap:
             assert litellm.model_cost[model]["supports_tool_choice"] is True, model
             assert litellm.model_cost[model]["supports_prompt_caching"] is True, model
 
-    def test_reasoning_only_on_deepseek(self):
+    def test_reasoning_flag_matches_expected_set(self):
+        reasoning_models = {
+            "tensormesh/deepseek-ai/DeepSeek-V4-Flash",
+            "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8",
+            "tensormesh/Qwen/Qwen3.6-27B-FP8",
+            "tensormesh/lukealonso/GLM-5.1-NVFP4-MTP",
+            "tensormesh/MiniMaxAI/MiniMax-M2.5",
+            "tensormesh/moonshotai/Kimi-K2.6",
+            "tensormesh/openai/gpt-oss-120b",
+            "tensormesh/openai/gpt-oss-20b",
+            "tensormesh/google/gemma-4-31B-it",
+        }
         for model in TENSORMESH_MODELS:
-            expected = model == "tensormesh/deepseek-ai/DeepSeek-V4-Flash"
-            assert litellm.supports_reasoning(model) is expected, model
+            assert litellm.supports_reasoning(model) is (model in reasoning_models), model
 
     def test_cost_is_wired_and_cache_reads_are_free(self):
         prompt_cost, completion_cost = litellm.cost_per_token(

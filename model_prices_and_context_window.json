@@ -41916,6 +41916,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   },
   "tensormesh/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8": {
@@ -41946,6 +41947,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   },
   "tensormesh/lukealonso/GLM-5.1-NVFP4-MTP": {
@@ -41961,6 +41963,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   },
   "tensormesh/deepseek-ai/DeepSeek-V4-Flash": {
@@ -41992,6 +41995,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   },
   "tensormesh/MiniMaxAI/MiniMax-M2.5": {
@@ -42007,6 +42011,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   },
   "tensormesh/google/gemma-4-31B-it": {
@@ -42022,6 +42027,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   },
   "tensormesh/openai/gpt-oss-120b": {
@@ -42037,6 +42043,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   },
   "tensormesh/openai/gpt-oss-20b": {
@@ -42052,6 +42059,7 @@
     "supports_response_schema": true,
     "supports_prompt_caching": true,
     "supports_system_messages": true,
+    "supports_reasoning": true,
     "source": "https://serverless.tensormesh.ai/v1/models/openrouter"
   }
  }
