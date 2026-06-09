@@ -4,7 +4,7 @@ import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
 import { listMCPTools, callMCPTool, getMCPOAuthUserCredentialStatus } from "../networking";
 import { isTokenValid, getToken, removeToken } from "@/utils/mcpTokenStore";
-import { sanitizeMcpAliasForHeader } from "@/utils/mcpHeaderUtils";
+import { sanitizeMcpAliasForHeader, buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import { useToolsOAuthFlow } from "@/hooks/useToolsOAuthFlow";
 import { useUserMcpOAuthFlow } from "@/hooks/useUserMcpOAuthFlow";
 import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
@@ -106,16 +106,7 @@ const MCPToolsViewer = ({
     // When no alias is available, fall back to x-mcp-auth (legacy but still supported).
     // Passthrough only: OBO/M2M tokens are attached server-side, not from the browser.
     if (isPassthrough && oauthToken) {
-      if (serverAlias) {
-        const safeAlias = sanitizeMcpAliasForHeader(serverAlias);
-        if (safeAlias) {
-          customHeaders[`x-mcp-${safeAlias}-authorization`] = `Bearer ${oauthToken}`;
-        } else {
-          customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-        }
-      } else {
-        customHeaders["x-mcp-auth"] = `Bearer ${oauthToken}`;
-      }
+      Object.assign(customHeaders, buildMcpPassthroughAuthHeader(serverAlias, oauthToken));
     }
 
     // Add passthrough headers with server-specific prefix
