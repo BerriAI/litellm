@@ -258,6 +258,23 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
+    def get_websocket_url(
+        self,
+        api_base: Optional[str],
+        litellm_params: dict,
+    ) -> str:
+        """
+        Return the wss:// URL for the provider's native Responses WebSocket endpoint.
+
+        Defaults to converting the HTTP URL from get_complete_url. Providers whose
+        WebSocket path differs from their HTTP path (e.g. Azure uses
+        /openai/v1/responses without api-version) should override this.
+        """
+        http_url = self.get_complete_url(
+            api_base=api_base, litellm_params=litellm_params
+        )
+        return http_url.replace("https://", "wss://").replace("http://", "ws://")
+
     #########################################################
     ########## CANCEL RESPONSE API TRANSFORMATION ##########
     #########################################################
