@@ -512,12 +512,13 @@ async def exchange_token_with_server(
     result = {
         "access_token": access_token,
         "token_type": token_response.get("token_type", "Bearer"),
-        "expires_in": token_response.get("expires_in", 3600),
     }
 
-    if "refresh_token" in token_response and token_response["refresh_token"]:
+    if token_response.get("expires_in") is not None:
+        result["expires_in"] = token_response["expires_in"]
+    if token_response.get("refresh_token"):
         result["refresh_token"] = token_response["refresh_token"]
-    if "scope" in token_response and token_response["scope"]:
+    if token_response.get("scope"):
         result["scope"] = token_response["scope"]
 
     # RFC 6749 §5.1: token responses must not be cached.
