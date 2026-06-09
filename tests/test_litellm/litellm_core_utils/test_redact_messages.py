@@ -398,9 +398,10 @@ class TestPerformRedaction:
         )
 
     def test_redacts_provider_specific_fields_on_object_choices(self):
-        """Anthropic reasoning content lives in both message.thinking_blocks
-        AND message.provider_specific_fields.thinking_blocks. The flat field
-        is scrubbed; ensure the duplicate is too (plus the signature blob)."""
+        """provider_specific_fields is a provider-native grab-bag carrying
+        output content (reasoning, citations, web-search/tool/code-interpreter
+        results, compaction). Redaction wholesale-clears it — every key gone,
+        including otherwise-benign metadata — so no content can slip through."""
         result = litellm.ModelResponse(
             choices=[
                 litellm.Choices(
@@ -420,6 +421,12 @@ class TestPerformRedaction:
                                     "signature": "RAW_SIGNATURE_BLOB",
                                 }
                             ],
+                            "citations": ["CANARY_CITATION"],
+                            "web_search_results": ["CANARY_SEARCH"],
+                            "tool_results": ["CANARY_TOOL"],
+                            "code_interpreter_results": ["CANARY_CODE"],
+                            "compaction_blocks": ["CANARY_COMPACTION"],
+                            "container": {"id": "benign-container-id"},
                         },
                     )
                 )
@@ -429,12 +436,15 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         psf = redacted.choices[0].message.provider_specific_fields
-        assert psf["reasoning_content"] == "redacted-by-litellm"
-        assert psf["thinking_blocks"] is None
+        assert psf == {}
+        assert "CANARY" not in str(psf)
+        assert "RAW_SIGNATURE_BLOB" not in str(psf)
 
-    def test_redacts_provider_specific_fields_bedrock_reasoning_content_blocks(self):
-        """Bedrock converse populates provider_specific_fields.reasoningContentBlocks.
-        Covered by code symmetry — assert it via the dict path."""
+    def test_redacts_provider_specific_fields_multi_provider_dict_path(self):
+        """The dict path (standard_logging_object) wholesale-clears the same
+        grab-bag across providers — Bedrock reasoning/citations, Gemini thought
+        signatures, MCP tool results, RAG search results — not just the old
+        reasoning keys."""
         details = {
             "standard_logging_object": {
                 "response": {
@@ -445,13 +455,13 @@ class TestPerformRedaction:
                                 "reasoning_content": "flat reasoning",
                                 "provider_specific_fields": {
                                     "reasoningContentBlocks": [
-                                        {
-                                            "reasoningText": {
-                                                "text": "BEDROCK_THOUGHT",
-                                                "signature": "sig",
-                                            }
-                                        }
+                                        {"reasoningText": {"text": "BEDROCK_THOUGHT"}}
                                     ],
+                                    "citationsContent": ["CANARY_BEDROCK_CITE"],
+                                    "thought_signatures": ["CANARY_SIGNATURE"],
+                                    "server_side_tool_invocations": ["CANARY_SSTI"],
+                                    "mcp_call_results": ["CANARY_MCP"],
+                                    "search_results": ["CANARY_RAG"],
                                 },
                             }
                         }
@@ -464,10 +474,14 @@ class TestPerformRedaction:
 
         choice = details["standard_logging_object"]["response"]["choices"][0]
         psf = choice["message"]["provider_specific_fields"]
-        assert psf["reasoningContentBlocks"] is None
+        assert psf == {}
+        assert "CANARY" not in str(psf)
+        assert "BEDROCK_THOUGHT" not in str(psf)
 
     def test_redacts_provider_specific_fields_on_dict_delta(self):
-        """Streaming-style dict path: choice['delta']['provider_specific_fields']."""
+        """Streaming-style dict path: choice['delta']['provider_specific_fields']
+        is wholesale-cleared too (streaming-only keys like compaction_delta
+        included)."""
         result = {
             "choices": [
                 {
@@ -480,6 +494,8 @@ class TestPerformRedaction:
                                 {"type": "thinking", "thinking": "STREAMED_THOUGHT"}
                             ],
                             "reasoning_content": "psf streamed reasoning",
+                            "compaction_delta": {"content": "CANARY_COMPACTION_DELTA"},
+                            "citation": {"text": "CANARY_CITATION_DELTA"},
                         },
                     }
                 }
@@ -489,8 +505,9 @@ class TestPerformRedaction:
         redacted = perform_redaction({}, result)
 
         psf = redacted["choices"][0]["delta"]["provider_specific_fields"]
-        assert psf["thinking_blocks"] is None
-        assert psf["reasoning_content"] == "redacted-by-litellm"
+        assert psf == {}
+        assert "CANARY" not in str(psf)
+        assert "STREAMED_THOUGHT" not in str(psf)
 
     def test_redact_provider_specific_fields_is_safe_when_absent(self):
         """Messages without provider_specific_fields (the common case) must

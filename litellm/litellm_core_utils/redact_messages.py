@@ -63,33 +63,26 @@ def _redact_choice_content(choice):
         )
 
 
-# Keys inside Message.provider_specific_fields that duplicate reasoning
-# content already covered by the flat-field scrub. Anthropic populates
-# "thinking_blocks" / "reasoning_content" (the latter also carries the
-# raw "signature" blob); Bedrock converse populates "reasoningContentBlocks".
-#
-# This is an intentional allowlist: we redact known reasoning-bearing keys
-# rather than wiping all of provider_specific_fields (which also carries
-# benign provider metadata). Any future provider field that embeds raw
-# reasoning or prompt content must be added here to be redacted.
-_PROVIDER_SPECIFIC_REASONING_KEYS = (
-    "reasoning_content",
-    "thinking_blocks",
-    "reasoningContentBlocks",
-)
+def _redact_provider_specific_fields(psf):
+    """Wholesale-clear a response Message/Delta ``provider_specific_fields`` dict.
 
-
-def _redact_provider_specific_fields(psf, redacted_str: str = "redacted-by-litellm"):
-    """Scrub reasoning-content duplicates inside Message.provider_specific_fields."""
+    This is a provider-NATIVE grab-bag. Beyond the reasoning duplicates
+    (``reasoning_content``/``thinking_blocks``/``reasoningContentBlocks``),
+    providers stash output-bearing content under ~20 other keys an allowlist can
+    never enumerate: Anthropic ``citations``/``web_search_results``/
+    ``tool_results``/``code_interpreter_results``/``compaction_blocks``, Bedrock
+    ``citationsContent``, Gemini ``thought_signatures``/
+    ``server_side_tool_invocations``, Cohere ``tool_plan``, MCP
+    ``mcp_call_results``, RAG ``search_results``, and so on — the same
+    unenumerable shape as the provider-native request body. Redaction only ever
+    runs on the logging copy, and no consumer reads a named key off that copy
+    (streaming reassembly and multi-turn replay read the untouched live response
+    / request history instead), so we clear the whole dict to close the class
+    instead of chasing keys one provider at a time.
+    """
     if not isinstance(psf, dict):
         return
-    for key in _PROVIDER_SPECIFIC_REASONING_KEYS:
-        if key not in psf:
-            continue
-        if key == "reasoning_content":
-            psf[key] = redacted_str
-        else:
-            psf[key] = None
+    psf.clear()
 
 
 def _redact_responses_api_output(output_items):
@@ -276,7 +269,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
                 _redact_provider_specific_fields(
-                    choice["message"].get("provider_specific_fields"), redacted_str
+                    choice["message"].get("provider_specific_fields")
                 )
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 choice["delta"]["content"] = redacted_str
@@ -287,7 +280,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
                 _redact_provider_specific_fields(
-                    choice["delta"].get("provider_specific_fields"), redacted_str
+                    choice["delta"].get("provider_specific_fields")
                 )
         else:
             _redact_choice_content(choice)
