@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.identity import build_user_api_key_auth_from_oauth2_response
@@ -43,11 +45,11 @@ def test_missing_fields_default_to_none():
     assert uak.team_id is None
 
 
-def test_unknown_idp_role_defaults_to_internal_user():
-    uak = build_user_api_key_auth_from_oauth2_response(
-        token="t", response_data={"sub": "u", "role": "definitely-not-a-role"}
-    )
-    assert uak.user_role == LitellmUserRoles.INTERNAL_USER
+def test_unknown_idp_role_rejected_fail_closed():
+    with pytest.raises(ValueError, match="Invalid OAuth2 role"):
+        build_user_api_key_auth_from_oauth2_response(
+            token="t", response_data={"sub": "u", "role": "definitely-not-a-role"}
+        )
 
 
 def test_known_idp_role_passes_through():

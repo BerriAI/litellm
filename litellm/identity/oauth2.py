@@ -43,8 +43,8 @@ def build_user_api_key_auth_from_oauth2_response(
     else:
         try:
             user_role = LitellmUserRoles(raw_role)
-        except ValueError:
-            user_role = LitellmUserRoles.INTERNAL_USER
+        except ValueError as e:
+            raise ValueError(f"Invalid OAuth2 role: {raw_role!r}") from e
 
     return UserAPIKeyAuth(
         api_key=token,
