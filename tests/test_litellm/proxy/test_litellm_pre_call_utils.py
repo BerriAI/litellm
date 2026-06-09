@@ -2256,11 +2256,40 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
+def test_add_litellm_metadata_from_request_headers_codex_turn_metadata():
+    """Codex x-codex-turn-metadata session_id is used for logging/session chaining."""
+    headers = {
+        "x-codex-turn-metadata": '{"session_id": "019ea92f-a0c5-7f53-8d6c-session"}'
+    }
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["metadata"]["trace_id"] == "019ea92f-a0c5-7f53-8d6c-session"
+    assert data["metadata"]["session_id"] == "019ea92f-a0c5-7f53-8d6c-session"
+    assert data["litellm_session_id"] == "019ea92f-a0c5-7f53-8d6c-session"
+    assert data["litellm_trace_id"] == "019ea92f-a0c5-7f53-8d6c-session"
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {
         "x-litellm-trace-id": "explicit-trace-id-value",
         "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
+    }
+    data = {"metadata": {}}
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers=headers, data=data, _metadata_variable_name="metadata"
+    )
+    assert data["litellm_session_id"] == "explicit-trace-id-value"
+    assert data["litellm_trace_id"] == "explicit-trace-id-value"
+
+
+def test_add_litellm_metadata_from_request_headers_explicit_header_beats_codex():
+    """Explicit x-litellm-trace-id wins over x-codex-turn-metadata."""
+    headers = {
+        "x-litellm-trace-id": "explicit-trace-id-value",
+        "x-codex-turn-metadata": '{"session_id": "019ea92f-a0c5-7f53-8d6c-session"}',
     }
     data = {"metadata": {}}
     LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
@@ -2293,6 +2322,34 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
         )
         == "explicit-id-value"
     )
+
+
+def test_get_chain_id_from_headers_codex_turn_metadata():
+    """get_chain_id_from_headers picks up Codex session_id and thread_id values."""
+    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
+
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-codex-turn-metadata": (
+                    '{"session_id": "019ea92f-a0c5-7f53-8d6c-session", '
+                    '"thread_id": "019ea92f-a0c5-7f53-8d6c-thread"}'
+                )
+            }
+        )
+        == "019ea92f-a0c5-7f53-8d6c-session"
+    )
+    assert (
+        get_chain_id_from_headers(
+            {
+                "x-codex-turn-metadata": (
+                    '{"thread_id": "019ea92f-a0c5-7f53-8d6c-thread"}'
+                )
+            }
+        )
+        == "019ea92f-a0c5-7f53-8d6c-thread"
+    )
+    assert get_chain_id_from_headers({"x-codex-turn-metadata": "{bad json"}) is None
 
 
 def test_get_internal_user_header_from_mapping_returns_expected_header():
