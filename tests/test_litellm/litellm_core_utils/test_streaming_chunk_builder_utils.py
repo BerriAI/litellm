@@ -11,6 +11,7 @@ sys.path.insert(
 from litellm import stream_chunk_builder
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Delta,
@@ -271,6 +272,10 @@ def test_cache_read_input_tokens_retained():
             ),
             cache_creation_input_tokens=4,
             cache_read_input_tokens=11775,
+            cache_creation=CacheCreationTokenDetails(
+                ephemeral_5m_input_tokens=1,
+                ephemeral_1h_input_tokens=3,
+            ),
         ),
     )
 
@@ -322,6 +327,12 @@ def test_cache_read_input_tokens_retained():
 
     assert usage.cache_creation_input_tokens == 4
     assert usage.cache_read_input_tokens == 11775
+    assert usage.cache_creation.ephemeral_5m_input_tokens == 1
+    assert usage.cache_creation.ephemeral_1h_input_tokens == 3
+    assert usage.model_dump()["cache_creation"] == {
+        "ephemeral_5m_input_tokens": 1,
+        "ephemeral_1h_input_tokens": 3,
+    }
     assert usage.prompt_tokens_details.cached_tokens == 11775
 
 
