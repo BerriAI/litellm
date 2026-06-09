@@ -45,7 +45,6 @@ def admin_client_and_mocks(monkeypatch):
     yield client, mock_prisma, mock_table
 
     app.dependency_overrides.clear()
-    monkeypatch.setattr(ps, "prisma_client", ps.prisma_client)
 
 
 @pytest.fixture
@@ -75,9 +74,7 @@ def client_and_mocks(monkeypatch):
 
     yield client, mock_prisma, mock_table
 
-    # teardown
     app.dependency_overrides.clear()
-    monkeypatch.setattr(ps, "prisma_client", ps.prisma_client)
 
 
 @pytest.mark.asyncio
@@ -302,17 +299,15 @@ async def test_new_budget_invalid_model_max_budget(client_and_mocks, monkeypatch
 async def test_info_budget_success(admin_client_and_mocks):
     client, _, mock_table = admin_client_and_mocks
 
-    mock_row = types.SimpleNamespace(
-        budget_id="budget-info-1",
-        max_budget=10.0,
-        budget_duration="30d",
-        dict=lambda: {
-            "budget_id": "budget-info-1",
-            "max_budget": 10.0,
-            "budget_duration": "30d",
-        },
+    mock_table.find_many = AsyncMock(
+        return_value=[
+            {
+                "budget_id": "budget-info-1",
+                "max_budget": 10.0,
+                "budget_duration": "30d",
+            }
+        ]
     )
-    mock_table.find_many = AsyncMock(return_value=[mock_row])
 
     resp = client.post("/budget/info", json={"budgets": ["budget-info-1"]})
     assert resp.status_code == 200, resp.text
@@ -429,6 +424,6 @@ async def test_delete_budget_rejects_non_admin(client_and_mocks):
         resp = client.post("/budget/delete", json={"id": "budget-delete-1"})
         assert resp.status_code == 400, resp.text
         assert CommonProxyErrors.not_allowed_access.value in str(resp.json()["detail"])
-        mock_table.delete.assert_not_awaited()
+        mock_table.delete.assert_not_called()
     finally:
         app.dependency_overrides.clear()

@@ -122,6 +122,7 @@ async def generate_key_with_budget_id(session, budget_id: str):
     headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
     data = {"budget_id": budget_id}
     async with session.post(url, headers=headers, json=data) as response:
+        assert response.status == 200, await response.text()
         return await response.json()
 
 
