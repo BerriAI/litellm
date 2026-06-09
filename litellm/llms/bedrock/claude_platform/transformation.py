@@ -17,6 +17,9 @@ class BedrockClaudePlatformConfig(BedrockClaudePlatformMixin, AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def validate_environment(
         self,
         headers: dict,

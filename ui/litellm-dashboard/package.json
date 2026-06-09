@@ -16,6 +16,8 @@
     "format:check": "prettier --check .",
     "e2e": "playwright test --config e2e_tests/playwright.config.ts",
     "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts",
+    "e2e:migration": "playwright test e2e_tests/tests/migration/migratedPages.spec.ts --config e2e_tests/playwright.config.ts",
+    "e2e:migration:root": "playwright test --config e2e_tests/migration.serverRootPath.config.ts",
     "knip": "knip",
     "knip:fix": "knip --fix",
     "gen:api": "node scripts/gen-api-types.mjs"
@@ -90,7 +92,7 @@
     "glob": "13.0.0",
     "minimatch": "10.2.4",
     "lodash": "4.18.1",
-    "ws": "8.19.0",
+    "ws": "8.20.1",
     "braces": "3.0.3",
     "axios": "1.13.6",
     "postcss": "8.5.13"
