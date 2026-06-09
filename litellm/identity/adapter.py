@@ -7,8 +7,6 @@ Invariants:
   Pydantic ``check_api_key`` validator does not re-hash it.
 """
 
-from typing import TYPE_CHECKING
-
 from litellm.constants import LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME
 from litellm.identity.context import AuditInfo, ClientInfo, IdentityContext, RequestIds
 from litellm.identity.jwt import parse_jwt_scopes
@@ -21,9 +19,7 @@ from litellm.identity.principal import (
     classify_principal_kind,
 )
 from litellm.identity.service_accounts import SERVICE_ACCOUNT_NAMES
-
-if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 
 def _principal_from_uak(uak: "UserAPIKeyAuth") -> Principal:
@@ -79,8 +75,6 @@ def user_api_key_auth_to_identity_context(
 def identity_context_to_user_api_key_auth(
     ctx: IdentityContext,
 ) -> "UserAPIKeyAuth":
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
     principal = ctx.principal
     kwargs: dict = {
         "end_user_id": ctx.end_user_id,

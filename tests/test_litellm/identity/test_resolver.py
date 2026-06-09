@@ -27,9 +27,7 @@ def _fake_request(headers=None, client_host=None):
 
 def _jwt(claims):
     def b(d):
-        return (
-            base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
-        )
+        return base64.urlsafe_b64encode(json.dumps(d).encode()).rstrip(b"=").decode()
 
     return f"{b({'alg':'HS256','typ':'JWT'})}.{b(claims)}.sig"
 
@@ -76,3 +74,28 @@ async def test_client_info_from_request():
     ctx = await resolve_identity(request=req)
     assert ctx.client.ip == "127.0.0.1"
     assert ctx.client.user_agent == "curl/8"
+
+
+@pytest.mark.asyncio
+async def test_resolve_user_api_key_auth_hashes_token_then_loads_identity():
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.identity.extractors.api_key import hash_principal_token
+    from litellm.identity.resolver import resolve_user_api_key_auth
+
+    sentinel = object()
+    with patch(
+        "litellm.identity.resolver.load_identity",
+        new=AsyncMock(return_value=sentinel),
+    ) as mock_load:
+        result = await resolve_user_api_key_auth(
+            api_key="sk-resolve-me",
+            prisma_client="prisma",  # type: ignore[arg-type]
+            identity_cache="idcache",  # type: ignore[arg-type]
+            user_api_key_cache="uakcache",  # type: ignore[arg-type]
+        )
+
+    assert result is sentinel
+    kwargs = mock_load.await_args.kwargs
+    assert kwargs["hashed_token"] == hash_principal_token("sk-resolve-me")
+    assert kwargs["cache"] == "idcache"

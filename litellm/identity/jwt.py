@@ -12,9 +12,10 @@ from typing import TYPE_CHECKING, Any, Optional, Tuple
 import jwt
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import JWTAuthBuilderResult, UserAPIKeyAuth
+    from litellm.proxy._types import JWTAuthBuilderResult
 
 
 def token_is_jwt(token: Optional[str]) -> bool:
@@ -82,8 +83,6 @@ def build_user_api_key_auth_from_jwt_result(
     because the auth_builder result reports it but the call site already
     branched on it; threading it through avoids re-checking.
     """
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-
     team_id = result["team_id"]
     team_object = result["team_object"]
     user_id = result["user_id"]

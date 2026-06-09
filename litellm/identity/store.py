@@ -7,15 +7,20 @@ carrier.
 
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import TYPE_CHECKING, Optional
-
-from fastapi import status
 
 from litellm.identity.principal import classify_principal_kind
 from litellm.integrations.otel.model.spans import SpanRole
 from litellm.integrations.otel.runtime import traced
-from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_UserTable,
+    ProxyErrorTypes,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.auth.auth_checks import (
+    _cache_key_object,
     _fetch_key_object_from_db_with_reconnect,
     get_object_permission,
     get_org_object,
@@ -174,7 +179,7 @@ async def load_identity(
             ),
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
-            code=status.HTTP_401_UNAUTHORIZED,
+            code=HTTPStatus.UNAUTHORIZED,
         )
 
     await cache.set(hashed_token, uak)
@@ -201,8 +206,6 @@ async def _populate_legacy_cache(
     populating it on every cold load preserves that fast path with no
     code change at the call site.
     """
-    from litellm.proxy.auth.auth_checks import _cache_key_object
-
     try:
         await _cache_key_object(
             hashed_token=hashed_token,
@@ -222,8 +225,6 @@ def _rehydrate_bundled_user(uak: "UserAPIKeyAuth") -> None:
     `metadata`, `user_role`, …) off the model, so we restore the typed
     form before handing the cached entry back.
     """
-    from litellm.proxy._types import LiteLLM_UserTable
-
     raw = getattr(uak, "user", None)
     if isinstance(raw, dict):
         try:

@@ -24,9 +24,7 @@ async def test_token_invalidation_drops_entry():
     await cache.set(uak.token, uak)
     assert await cache.get(uak.token) is not None
 
-    await invalidate_identity_for_token(
-        token_hash=uak.token, dual_cache=backend
-    )
+    await invalidate_identity_for_token(token_hash=uak.token, dual_cache=backend)
     assert await cache.get(uak.token) is None
 
 
@@ -37,9 +35,7 @@ async def test_team_invalidation_bumps_generation():
     uak = UserAPIKeyAuth(api_key="sk-x", user_id="u1", team_id="t-rotate")
     await cache.set(uak.token, uak)
 
-    await invalidate_identity_for_team(
-        team_id="t-rotate", dual_cache=backend
-    )
+    await invalidate_identity_for_team(team_id="t-rotate", dual_cache=backend)
     assert await cache.get(uak.token) is None
 
 
@@ -52,9 +48,7 @@ async def test_user_invalidation_is_scoped_to_user():
     await cache.set(uak_a.token, uak_a)
     await cache.set(uak_b.token, uak_b)
 
-    await invalidate_identity_for_user(
-        user_id="u-rotate", dual_cache=backend
-    )
+    await invalidate_identity_for_user(user_id="u-rotate", dual_cache=backend)
 
     assert await cache.get(uak_a.token) is None
     assert await cache.get(uak_b.token) is not None
@@ -67,7 +61,5 @@ async def test_org_invalidation_drops_org_scoped_entry():
     uak = UserAPIKeyAuth(api_key="sk-x", user_id="u1", org_id="org-rotate")
     await cache.set(uak.token, uak)
 
-    await invalidate_identity_for_org(
-        org_id="org-rotate", dual_cache=backend
-    )
+    await invalidate_identity_for_org(org_id="org-rotate", dual_cache=backend)
     assert await cache.get(uak.token) is None

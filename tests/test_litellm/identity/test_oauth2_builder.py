@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath("../.."))
 
 from litellm.identity import build_user_api_key_auth_from_oauth2_response
@@ -43,11 +45,11 @@ def test_missing_fields_default_to_none():
     assert uak.team_id is None
 
 
-def test_unknown_idp_role_defaults_to_internal_user():
-    uak = build_user_api_key_auth_from_oauth2_response(
-        token="t", response_data={"sub": "u", "role": "definitely-not-a-role"}
-    )
-    assert uak.user_role == LitellmUserRoles.INTERNAL_USER
+def test_unknown_idp_role_rejected_fail_closed():
+    with pytest.raises(ValueError, match="Invalid OAuth2 role"):
+        build_user_api_key_auth_from_oauth2_response(
+            token="t", response_data={"sub": "u", "role": "definitely-not-a-role"}
+        )
 
 
 def test_known_idp_role_passes_through():
@@ -62,6 +64,30 @@ def test_missing_role_field_stays_none():
         token="t", response_data={"sub": "u"}
     )
     assert uak.user_role is None
+
+
+def test_unknown_idp_role_uses_env_fallback_when_set(monkeypatch):
+    monkeypatch.setenv("LITELLM_OAUTH2_UNKNOWN_ROLE_DEFAULT", "internal_user")
+    uak = build_user_api_key_auth_from_oauth2_response(
+        token="t", response_data={"sub": "u", "role": "custom-idp-role"}
+    )
+    assert uak.user_role == LitellmUserRoles.INTERNAL_USER
+
+
+def test_unknown_idp_role_fallback_with_invalid_env_value_fails(monkeypatch):
+    monkeypatch.setenv("LITELLM_OAUTH2_UNKNOWN_ROLE_DEFAULT", "not-a-real-role")
+    with pytest.raises(ValueError):
+        build_user_api_key_auth_from_oauth2_response(
+            token="t", response_data={"sub": "u", "role": "custom-idp-role"}
+        )
+
+
+def test_known_idp_role_ignores_env_fallback(monkeypatch):
+    monkeypatch.setenv("LITELLM_OAUTH2_UNKNOWN_ROLE_DEFAULT", "internal_user")
+    uak = build_user_api_key_auth_from_oauth2_response(
+        token="t", response_data={"sub": "u", "role": "proxy_admin"}
+    )
+    assert uak.user_role == LitellmUserRoles.PROXY_ADMIN
 
 
 def test_token_is_hashed_into_token_field():
