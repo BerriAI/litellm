@@ -86,10 +86,10 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       // Create a stable key from the value to detect actual external changes
       const valueKey = value?.router_settings
         ? JSON.stringify({
-          routing_strategy: value.router_settings.routing_strategy,
-          fallbacks: value.router_settings.fallbacks,
-          enable_tag_filtering: value.router_settings.enable_tag_filtering,
-        })
+            routing_strategy: value.router_settings.routing_strategy,
+            fallbacks: value.router_settings.fallbacks,
+            enable_tag_filtering: value.router_settings.enable_tag_filtering,
+          })
         : null;
 
       // Skip if this is an internal update (from our own onChange) and the value hasn't actually changed
@@ -269,7 +269,10 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
               if (ttlElement?.value) {
                 routingStrategyArgs["ttl"] = Number(ttlElement.value);
               }
-              return ["routing_strategy_args", Object.keys(routingStrategyArgs).length > 0 ? routingStrategyArgs : null];
+              return [
+                "routing_strategy_args",
+                Object.keys(routingStrategyArgs).length > 0 ? routingStrategyArgs : null,
+              ];
             }
             return [key, value];
           })
@@ -369,7 +372,8 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
         </TabGroup>
       </div>
     );
-  });
+  },
+);
 
 RouterSettingsAccordion.displayName = "RouterSettingsAccordion";
 

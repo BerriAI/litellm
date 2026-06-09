@@ -1,8 +1,11 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import moment from "moment";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
+import { uiSpendLogsCall } from "../networking";
+import { useLogFilterLogic } from "./log_filter_logic";
 
 const mockHandleFilterResetFromHook = vi.fn();
 vi.mock("./log_filter_logic", async (importOriginal) => {
@@ -113,6 +116,65 @@ describe("SpendLogsTable", () => {
 
       expect(document.querySelector(".ant-spin")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Reset Filters" })).toBeInTheDocument();
+    });
+  });
+
+  describe("Quick Select time range", () => {
+    // uiSpendLogsCall fires from the real useLogFilterLogic query, so restore it here.
+    beforeEach(async () => {
+      const actual = await vi.importActual<typeof import("./log_filter_logic")>("./log_filter_logic");
+      vi.mocked(useLogFilterLogic).mockImplementation(actual.useLogFilterLogic);
+    });
+
+    const waitForWindowSeconds = async (minMinutes: number) => {
+      let diff = -1;
+      await waitFor(() => {
+        const lastCall = vi.mocked(uiSpendLogsCall).mock.calls.at(-1)?.[0];
+        if (!lastCall) throw new Error("uiSpendLogsCall was not called");
+        diff = moment
+          .utc(lastCall.end_date, "YYYY-MM-DD HH:mm:ss")
+          .diff(moment.utc(lastCall.start_date, "YYYY-MM-DD HH:mm:ss"), "seconds");
+        // start_date is rounded down to the minute boundary, end_date is the
+        // current wall-clock at queryFn time. The dropped sub-minute fraction
+        // on start_date can push the diff up to (minMinutes+1)*60 seconds
+        // exactly (e.g. click at HH:MM:59.9 → start floors to HH:MM:00 and
+        // queryFn fires just past HH:(MM+1):00), so allow equality on the
+        // upper bound.
+        expect(diff).toBeGreaterThanOrEqual(minMinutes * 60);
+        expect(diff).toBeLessThanOrEqual((minMinutes + 1) * 60);
+      });
+      return diff;
+    };
+
+    it("should pass a ~1-minute window to uiSpendLogsCall when 'Last Minute' is selected", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Last Minute" }));
+
+      await waitForWindowSeconds(1);
+    });
+
+    it("should pass a ~15-minute window to uiSpendLogsCall when 'Last 15 Minutes' is selected", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Last 15 Minutes" }));
+
+      await waitForWindowSeconds(15);
+    });
+
+    it("should update the time-range button label to 'Last Minute' after selecting it", async () => {
+      const user = userEvent.setup();
+      renderWithProviders(<SpendLogsTable {...defaultProps} />);
+
+      await user.click(screen.getByRole("button", { name: /Last 24 Hours/i }));
+      await user.click(await screen.findByRole("button", { name: "Last Minute" }));
+
+      expect(screen.getByRole("button", { name: "Last Minute" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Last 24 Hours/i })).not.toBeInTheDocument();
     });
   });
 });

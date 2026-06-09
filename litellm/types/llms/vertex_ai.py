@@ -20,6 +20,7 @@ class FunctionResponse(TypedDict, total=False):
     id: str
     name: Required[str]
     response: Optional[dict]
+    parts: List["FunctionResponsePartType"]
 
 
 class FunctionCall(TypedDict, total=False):
@@ -38,6 +39,11 @@ class FileDataType(TypedDict):
 class BlobType(TypedDict, total=False):
     mime_type: Required[str]
     data: Required[str]
+
+
+class FunctionResponsePartType(TypedDict, total=False):
+    inline_data: BlobType
+    file_data: FileDataType
 
 
 class PartType(TypedDict, total=False):
@@ -226,6 +232,7 @@ class VoiceConfig(TypedDict):
 
 class SpeechConfig(TypedDict, total=False):
     voiceConfig: VoiceConfig
+    languageCode: str
 
 
 class GenerationConfig(TypedDict, total=False):
@@ -240,6 +247,7 @@ class GenerationConfig(TypedDict, total=False):
     response_mime_type: Literal["text/plain", "application/json"]
     response_schema: dict
     response_json_schema: dict
+    responseFormat: dict
     seed: int
     responseLogprobs: bool
     logprobs: int
@@ -750,3 +758,12 @@ class VertexPartnerProvider(str, Enum):
     llama = "llama"
     ai21 = "ai21"
     claude = "claude"
+
+
+VERTEX_AI_PROVIDER_METADATA_FIELDS = (
+    "vertex_ai_grounding_metadata",
+    "vertex_ai_url_context_metadata",
+    "vertex_ai_safety_ratings",
+    "vertex_ai_safety_results",
+    "vertex_ai_citation_metadata",
+)

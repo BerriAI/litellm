@@ -14,6 +14,16 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.organization_repository import OrganizationRepository
+from litellm.repositories.table_repositories import (
+    EndUserRepository,
+    TagRepository,
+    TeamMembershipRepository,
+)
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.verification_token_repository import (
+    VerificationTokenRepository,
+)
 from litellm.types.services import ServiceTypes
 
 
@@ -159,7 +169,7 @@ class ResetBudgetJob:
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_teammembership,
+            table=TeamMembershipRepository(self.prisma_client).table,
             counter_key_fn=lambda m: f"spend:team_member:{m.user_id}:{m.team_id}",
             log_subject="team memberships",
             cache_key_fn=lambda m: f"{m.team_id}_{m.user_id}",
@@ -176,7 +186,7 @@ class ResetBudgetJob:
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_verificationtoken,
+            table=VerificationTokenRepository(self.prisma_client).table,
             counter_key_fn=lambda k: f"spend:key:{k.token}",
             log_subject="keys",
             extra_where={"budget_duration": None, "spend": {"gt": 0}},
@@ -191,7 +201,7 @@ class ResetBudgetJob:
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_organizationtable,
+            table=OrganizationRepository(self.prisma_client).table,
             counter_key_fn=lambda o: f"spend:org:{o.organization_id}",
             log_subject="orgs",
             extra_where={"spend": {"gt": 0}},
@@ -217,7 +227,7 @@ class ResetBudgetJob:
         """
         return await self._cascade_reset_spend_for_budget_link(
             budgets_to_reset=budgets_to_reset,
-            table=self.prisma_client.db.litellm_tagtable,
+            table=TagRepository(self.prisma_client).table,
             counter_key_fn=lambda t: f"spend:tag:{t.tag_name}",
             log_subject="tags",
             extra_where={"spend": {"gt": 0}},
@@ -406,7 +416,7 @@ class ResetBudgetJob:
         rely on the default budget (litellm.max_end_user_budget_id) applied
         in-memory during auth checks.
         """
-        rows = await self.prisma_client.db.litellm_endusertable.find_many(
+        rows = await EndUserRepository(self.prisma_client).table.find_many(
             where={
                 "budget_id": None,
                 "spend": {"gt": 0},
@@ -824,7 +834,7 @@ class ResetBudgetJob:
                     ):
                         changed = True
                 if changed:
-                    await self.prisma_client.db.litellm_verificationtoken.update(
+                    await VerificationTokenRepository(self.prisma_client).table.update(
                         where={"token": row["token"]},
                         data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
                     )
@@ -852,7 +862,7 @@ class ResetBudgetJob:
                     ):
                         changed = True
                 if changed:
-                    await self.prisma_client.db.litellm_teamtable.update(
+                    await TeamRepository(self.prisma_client).table.update(
                         where={"team_id": row["team_id"]},
                         data={"budget_limits": json.dumps(windows)},  # type: ignore[arg-type]
                     )

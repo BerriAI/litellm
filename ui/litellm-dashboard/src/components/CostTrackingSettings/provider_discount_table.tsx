@@ -44,9 +44,9 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       handleSaveEdit(provider);
-    } else if (e.key === 'Escape') {
+    } else if (e.key === "Escape") {
       handleCancelEdit();
     }
   };
@@ -149,4 +149,3 @@ const ProviderDiscountTable: React.FC<ProviderDiscountTableProps> = ({
 };
 
 export default ProviderDiscountTable;
-
