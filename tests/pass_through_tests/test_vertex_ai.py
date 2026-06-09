@@ -163,7 +163,13 @@ async def get_request_spend_log(
             if float(row.get("spend") or 0.0) <= 0:
                 continue
             row_start = _parse_spend_log_start_time(row.get("startTime"))
-            if row_start is not None and row_start >= after_time:
+            if row_start is None:
+                print(
+                    f"matching row has unparseable startTime {row.get('startTime')!r}",
+                    row,
+                )
+                continue
+            if row_start >= after_time:
                 print(f"found spend log (elapsed={elapsed}s)", row)
                 return row
     return None
