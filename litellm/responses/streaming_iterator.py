@@ -1398,7 +1398,11 @@ class ResponsesWebSocketStreaming:
             #   flat:   {"type": "response.create", "input": [...], ...}
             #   nested: {"type": "response.create", "response": {"input": [...], ...}}
             # Mask both so PII is never forwarded unmasked regardless of shape.
-            nested_response = msg_obj.get("response") if isinstance(msg_obj.get("response"), dict) else None
+            nested_response = (
+                msg_obj.get("response")
+                if isinstance(msg_obj.get("response"), dict)
+                else None
+            )
             input_containers: list[tuple[dict, str]] = []
             if "input" in msg_obj:
                 input_containers.append((msg_obj, "input"))

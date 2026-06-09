@@ -5654,9 +5654,7 @@ class BaseLLMHTTPHandler:
             if "model" not in _qs:
                 _qs["model"] = [model]
                 ws_url = urlunparse(
-                    _parsed._replace(
-                        query=urlencode({k: v[0] for k, v in _qs.items()})
-                    )
+                    _parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()}))
                 )
 
         try:
