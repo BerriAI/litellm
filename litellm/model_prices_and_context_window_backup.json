@@ -7064,6 +7064,43 @@
             "/v1/images/generations"
         ]
     },
+    "azure_ai/MAI-Image-2.5": {
+        "input_cost_per_image_token": 8e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.05,
+        "output_cost_per_image_token": 4.7e-05,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/new-mai-models-in-microsoft-foundry-across-text-image-voice-and-speech/4524632",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "azure_ai/MAI-Image-2.5-Flash": {
+        "input_cost_per_image_token": 1.75e-06,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.0338,
+        "output_cost_per_image_token": 3.3e-05,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/new-mai-models-in-microsoft-foundry-across-text-image-voice-and-speech/4524632",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ]
+    },
+    "azure_ai/MAI-Image-2e": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "azure_ai",
+        "mode": "image_generation",
+        "output_cost_per_image": 0.02,
+        "output_cost_per_image_token": 1.95e-05,
+        "source": "https://aka.ms/mai-image-2e-foundryblog",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "azure_ai/Llama-3.2-11B-Vision-Instruct": {
         "input_cost_per_token": 3.7e-07,
         "litellm_provider": "azure_ai",
