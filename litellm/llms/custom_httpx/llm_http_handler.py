@@ -5699,6 +5699,7 @@ class BaseLLMHTTPHandler:
                         and callable(
                             getattr(cb, "get_presidio_settings_from_request_data", None)
                         )
+                        and callable(getattr(cb, "_unmask_pii_text", None))
                         and getattr(cb, "output_parse_pii", False)
                     ]
                     _ws_output_guardrail_callbacks = [
