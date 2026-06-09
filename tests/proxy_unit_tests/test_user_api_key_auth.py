@@ -974,10 +974,17 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
         }
     ]
 
-    local_cache.set_cache(
-        key="litellm_jwt_auth_keys_my-fake-url",
-        value=keys,
-    )
+    import jwt as _jwt
+
+    def jwks_client_factory(jwks_url: str) -> "_jwt.PyJWKClient":
+        class _StaticJWKClient(_jwt.PyJWKClient):
+            def fetch_data(self) -> dict:
+                jwk_set = {"keys": keys}
+                if self.jwk_set_cache is not None:
+                    self.jwk_set_cache.put(jwk_set)
+                return jwk_set
+
+        return _StaticJWKClient(jwks_url, cache_jwk_set=True)
 
     litellm_jwtauth = LiteLLM_JWTAuth(
         **{
@@ -988,7 +995,7 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
         }
     )
 
-    jwt_handler = JWTHandler()
+    jwt_handler = JWTHandler(jwks_client_factory=jwks_client_factory)
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=local_cache,
