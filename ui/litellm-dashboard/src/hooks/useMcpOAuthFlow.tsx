@@ -341,6 +341,7 @@ export const useMcpOAuthFlow = ({
     setStatus("idle");
     setError(null);
     setTokenResponse(null);
+    processingRef.current = false;
   }, []);
 
   return {

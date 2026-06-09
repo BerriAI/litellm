@@ -67,7 +67,9 @@ vi.mock("./mcp_tool_configuration", () => ({
 }));
 
 vi.mock("./mcp_connection_status", () => ({
-  default: () => <div data-testid="mcp-connection-status" />,
+  default: ({ tools }: { tools?: any[] }) => (
+    <div data-testid="mcp-connection-status" data-tool-count={tools?.length ?? 0} />
+  ),
 }));
 
 vi.mock("./StdioConfiguration", () => ({
@@ -671,6 +673,51 @@ describe("CreateMCPServer", () => {
 
       // The previous server's token must never be replayed for the new session.
       expect(usedToken("stale-token-A")).toBe(false);
+    });
+
+    it("clears the tool list and form fields when a parent dismisses the modal", async () => {
+      vi.mocked(networking.testMCPToolsListRequest).mockResolvedValue({
+        tools: [{ name: "tool_a" }],
+        error: null,
+      });
+      const toolCount = () => screen.getByTestId("mcp-connection-status").getAttribute("data-tool-count");
+
+      const { rerender } = render(<CreateMCPServer {...defaultProps} />);
+
+      await selectAntOption("Transport Type", "Streamable HTTP");
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText("https://your-mcp-server.com")).toBeInTheDocument();
+      });
+      await selectAntOption("Authentication", "OAuth");
+      await waitFor(() => {
+        expect(screen.getByText("OAuth Flow Type")).toBeInTheDocument();
+      });
+
+      const urlInput = screen.getByPlaceholderText("https://your-mcp-server.com");
+      await act(async () => {
+        fireEvent.change(urlInput, { target: { value: "https://server-a.example.com/mcp" } });
+      });
+      await act(async () => {
+        oauthHook.onTokenReceived?.({ access_token: "stale-token-A", expires_in: 3600 });
+      });
+
+      // Precondition: a tool list is shown for server A.
+      await waitFor(() => {
+        expect(toolCount()).toBe("1");
+      });
+
+      // Parent dismisses the modal without routing through Cancel or create.
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={false} />);
+
+      // Stale tools are cleared even though neither handler ran.
+      await waitFor(() => {
+        expect(toolCount()).toBe("0");
+      });
+
+      // Reopening starts clean: the URL the prior server left in the Ant form store is gone.
+      rerender(<CreateMCPServer {...defaultProps} isModalVisible={true} />);
+      const reopenedUrlInput = screen.getByPlaceholderText("https://your-mcp-server.com") as HTMLInputElement;
+      expect(reopenedUrlInput.value).toBe("");
     });
   });
 
