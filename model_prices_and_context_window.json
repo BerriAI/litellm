@@ -31215,7 +31215,7 @@
         "supports_tool_choice": true
     },
     "sambanova/Meta-Llama-3.2-1B-Instruct": {
-         "deprecation_date": "2025-06-25",
+        "deprecation_date": "2025-06-25",
         "input_cost_per_token": 4e-08,
         "litellm_provider": "sambanova",
         "max_input_tokens": 16384,
