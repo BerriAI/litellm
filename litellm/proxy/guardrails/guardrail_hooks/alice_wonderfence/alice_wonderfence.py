@@ -25,7 +25,11 @@ from .chunked_evaluation import DEFAULT_MAX_CONCURRENCY, evaluate_segments
 from .client_cache import get_or_create_client, load_sdk
 from .credentials import resolve_credentials
 from .exceptions import WonderFenceBlockedError, WonderFenceMissingSecrets
-from .processing import apply_verdicts, build_analysis_context
+from .processing import (
+    apply_verdicts,
+    build_analysis_context,
+    tool_call_arg_segments,
+)
 
 if TYPE_CHECKING:
     from wonderfence_sdk.client import (  # type: ignore[import-untyped]
@@ -170,9 +174,10 @@ class WonderFenceGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         """Apply WonderFence guardrail using V2 client + per-request app_id."""
         texts = inputs.get("texts") or []
-        if not texts:
+        tool_indices, tool_segments = tool_call_arg_segments(inputs)
+        if not texts and not tool_segments:
             logger.debug(
-                "Alice WonderFence (apply_guardrail): no text to scan for %s",
+                "Alice WonderFence (apply_guardrail): no text or tool-call args to scan for %s",
                 input_type,
             )
             return inputs
@@ -208,24 +213,28 @@ class WonderFenceGuardrail(CustomGuardrail):
                         custom_fields=None,
                     )
 
+            segments = [*texts, *tool_segments]
             logger.debug(
-                "Alice WonderFence (apply_guardrail): evaluating %d segment(s) app_id=%s guardrail=%s input_type=%s",
+                "Alice WonderFence (apply_guardrail): evaluating %d text + %d tool-call segment(s) app_id=%s guardrail=%s input_type=%s",
                 len(texts),
+                len(tool_segments),
                 app_id,
                 self.guardrail_name,
                 input_type,
             )
             verdicts = await evaluate_segments(
-                texts,
+                segments,
                 evaluate,
                 max_concurrency=self._connection_pool_limit or DEFAULT_MAX_CONCURRENCY,
             )
             apply_verdicts(
                 inputs,
                 list(range(len(texts))),
-                verdicts,
+                verdicts[: len(texts)],
                 self.guardrail_name,
                 self.block_message,
+                tool_indices=tool_indices,
+                tool_verdicts=verdicts[len(texts) :],
             )
 
         except WonderFenceBlockedError as e:

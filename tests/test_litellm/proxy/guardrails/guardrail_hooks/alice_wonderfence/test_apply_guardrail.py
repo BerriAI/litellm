@@ -160,6 +160,128 @@ async def test_apply_guardrail_scans_non_user_role_segments(
     assert exc.value.detail["action"] == "BLOCK"
 
 
+def _tool_call(arguments, name="send_email"):
+    return {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_on_tool_call_arguments(
+    guardrail_and_client, make_request_data
+):
+    """Bypass regression: blocked content in tool_calls[].function.arguments must
+    BLOCK. tool_calls reach the model but were never scanned (texts-only)."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {
+        "texts": ["please run the tool"],
+        "tool_calls": [_tool_call('{"body": "DISALLOWED payload"}')],
+    }
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["action"] == "BLOCK"
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_masks_tool_call_arguments_in_place(
+    guardrail_and_client, make_request_data
+):
+    """MASK on a tool-call argument string rewrites
+    inputs['tool_calls'][i]['function']['arguments']."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "MASK" if "secret" in prompt else "NO_ACTION"
+        r.action_text = '{"body": "[REDACTED]"}'
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {
+        "texts": ["benign"],
+        "tool_calls": [_tool_call('{"body": "secret value"}')],
+    }
+    out = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=make_request_data(),
+        input_type="request",
+    )
+    assert out["tool_calls"][0]["function"]["arguments"] == '{"body": "[REDACTED]"}'
+    assert out["texts"] == ["benign"]
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_scans_tool_calls_when_no_texts(
+    guardrail_and_client, make_request_data
+):
+    """An assistant message can carry tool_calls with no text content, so texts
+    is empty; the hook must still scan the tool-call arguments (the old
+    empty-texts early return skipped them)."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in prompt else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [_tool_call('{"x": "DISALLOWED"}')]},
+            request_data=make_request_data(),
+            input_type="request",
+        )
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_blocks_on_response_tool_call_arguments(
+    guardrail_and_client, make_request_data
+):
+    """Model-generated tool-call arguments on the response side are scanned too."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(response, **kwargs):
+        r = Mock()
+        r.action = "BLOCK" if "DISALLOWED" in response else "NO_ACTION"
+        r.detections = []
+        r.correlation_id = None
+        return r
+
+    client.evaluate_response.side_effect = evaluate
+
+    with pytest.raises(HTTPException) as exc:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [_tool_call('{"x": "DISALLOWED"}')]},
+            request_data=make_request_data(),
+            input_type="response",
+        )
+    assert exc.value.status_code == 400
+
+
 @pytest.mark.asyncio
 async def test_apply_guardrail_mask_replaces_scanned_text_response(
     guardrail_and_client, make_request_data

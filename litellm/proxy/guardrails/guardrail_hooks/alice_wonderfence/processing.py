@@ -1,6 +1,6 @@
 """Pure transforms for Alice WonderFence: context build, user-text mapping, verdict apply."""
 
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -52,20 +52,47 @@ def build_analysis_context(
     )
 
 
+def tool_call_arg_segments(
+    inputs: GenericGuardrailAPIInputs,
+) -> Tuple[List[int], List[str]]:
+    """Return (indices, argument strings) for tool calls carrying string args.
+
+    ``inputs["tool_calls"]`` entries are dicts shaped
+    ``{"function": {"arguments": "<json string>"}}``; the argument string is the
+    caller- or model-controlled payload that reaches the model/client, so it is
+    scanned like any other segment.
+    """
+    tool_calls = inputs.get("tool_calls") or []
+    indices: List[int] = []
+    segments: List[str] = []
+    for i, tool_call in enumerate(tool_calls):
+        fn = tool_call.get("function") if isinstance(tool_call, dict) else None
+        args = fn.get("arguments") if isinstance(fn, dict) else None
+        if isinstance(args, str) and args.strip():
+            indices.append(i)
+            segments.append(args)
+    return indices, segments
+
+
 def apply_verdicts(
     inputs: GenericGuardrailAPIInputs,
     indices: List[int],
     verdicts: List[SegmentVerdict],
     guardrail_name: str,
     block_message: str,
+    tool_indices: Optional[List[int]] = None,
+    tool_verdicts: Optional[List[SegmentVerdict]] = None,
 ) -> GenericGuardrailAPIInputs:
-    """Apply per-segment verdicts back onto ``inputs["texts"]``.
+    """Apply per-segment verdicts back onto ``inputs["texts"]`` and tool-call args.
 
-    Any BLOCK raises ``WonderFenceBlockedError`` with detections/correlation ids
-    aggregated across all blocked segments. Otherwise each MASK verdict rewrites
-    its mapped ``texts`` index and DETECT is logged.
+    Any BLOCK across text or tool-call segments raises ``WonderFenceBlockedError``
+    with detections/correlation ids aggregated across all blocked segments.
+    Otherwise each MASK verdict rewrites its mapped ``texts`` index or
+    ``tool_calls[i]["function"]["arguments"]`` and DETECT is logged.
     """
-    blocked = [v for v in verdicts if v.action == "BLOCK"]
+    tool_indices = tool_indices or []
+    tool_verdicts = tool_verdicts or []
+    blocked = [v for v in (*verdicts, *tool_verdicts) if v.action == "BLOCK"]
     if blocked:
         detections: list = []
         correlation_ids: List[str] = []
@@ -106,4 +133,22 @@ def apply_verdicts(
                 verdict.correlation_ids[0] if verdict.correlation_ids else None,
             )
     inputs["texts"] = texts
+
+    tool_calls = inputs.get("tool_calls") or []
+    for idx, verdict in zip(tool_indices, tool_verdicts):
+        if verdict.action == "MASK":
+            tool_calls[idx]["function"]["arguments"] = (
+                verdict.masked_text if verdict.masked_text is not None else "[MASKED]"
+            )
+            logger.info(
+                "Alice WonderFence (apply_guardrail): MASK applied to tool_call args guardrail=%s correlation_id=%s",
+                guardrail_name,
+                verdict.correlation_ids[0] if verdict.correlation_ids else None,
+            )
+        elif verdict.action == "DETECT":
+            logger.warning(
+                "Alice WonderFence (apply_guardrail): DETECT tool_call args guardrail=%s correlation_id=%s",
+                guardrail_name,
+                verdict.correlation_ids[0] if verdict.correlation_ids else None,
+            )
     return inputs
