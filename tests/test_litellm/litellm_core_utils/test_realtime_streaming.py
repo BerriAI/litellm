@@ -2110,3 +2110,56 @@ async def test_deferred_setup_caps_non_audio_buffered_bytes(monkeypatch):
     assert (
         streaming._pending_messages_byte_total <= RealTimeStreaming._MAX_BUFFERED_BYTES
     )
+
+
+def test_collapse_buffered_audio_messages_applies_clear_semantics():
+    old = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
+    cleared = json.dumps({"type": "input_audio_buffer.clear"})
+    new = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
+    commit = json.dumps({"type": "input_audio_buffer.commit"})
+
+    collapsed = RealTimeStreaming._collapse_buffered_audio_messages(
+        [old, cleared, new, commit]
+    )
+
+    assert collapsed == [new, commit]
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_clear_drops_buffered_appends_on_flush():
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    old_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
+    clear_msg = json.dumps({"type": "input_audio_buffer.clear"})
+    new_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
+
+    streaming._pending_messages_until_setup = [old_audio, clear_msg, new_audio]
+    streaming._sync_pending_messages_byte_total()
+
+    streaming._send_to_backend = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+    await streaming._flush_pending_messages_until_setup()
+
+    assert streaming._send_to_backend.await_count == 1
+    assert streaming._send_to_backend.await_args_list[0].args[0] == new_audio
+
+
+@pytest.mark.asyncio
+async def test_deferred_setup_clear_drops_appends_when_buffered():
+    client_ws = MagicMock()
+    backend_ws = MagicMock()
+    logging_obj = MagicMock()
+    streaming = RealTimeStreaming(client_ws, backend_ws, logging_obj)
+
+    old_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "old"})
+    clear_msg = json.dumps({"type": "input_audio_buffer.clear"})
+    new_audio = json.dumps({"type": "input_audio_buffer.append", "audio": "new"})
+
+    streaming._buffer_pending_message_until_setup(old_audio)
+    streaming._buffer_pending_message_until_setup(clear_msg)
+    streaming._buffer_pending_message_until_setup(new_audio)
+
+    assert streaming._pending_messages_until_setup == [new_audio]
