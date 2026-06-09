@@ -188,6 +188,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
       }
     },
     onBeforeRedirect: persistCreateUiState,
+    flowSource: "create",
   });
 
   React.useEffect(() => {
@@ -1088,7 +1089,6 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
           <div className="mt-6">
             <MCPToolConfiguration
               accessToken={accessToken}
-              oauthAccessToken={oauthAccessToken}
               formValues={formValues}
               allowedTools={allowedTools}
               existingAllowedTools={null}
