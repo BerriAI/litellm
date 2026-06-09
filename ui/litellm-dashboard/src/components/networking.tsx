@@ -7144,11 +7144,12 @@ export const listMCPTools = async (
   accessToken: string,
   serverId: string,
   customHeaders?: Record<string, string>,
+  includeDisabledTools?: boolean,
 ) => {
-  // Construct base URL
-  let url = proxyBaseUrl
-    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-    : `/mcp-rest/tools/list?server_id=${serverId}`;
+  // Construct base URL. include_disabled_tools returns the full server catalog
+  // (admin-only, backend-enforced) so the settings UI can configure the allowlist.
+  const query = `server_id=${serverId}${includeDisabledTools ? "&include_disabled_tools=true" : ""}`;
+  let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/list?${query}` : `/mcp-rest/tools/list?${query}`;
 
   console.log("Fetching MCP tools from:", url);
 
