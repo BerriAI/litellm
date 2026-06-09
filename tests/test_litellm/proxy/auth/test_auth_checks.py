@@ -3714,3 +3714,31 @@ async def test_inference_route_still_enforces_team_budget():
             valid_token=UserAPIKeyAuth(token="test-token", team_id="test-team"),
             request=MagicMock(),
         )
+
+
+@pytest.mark.asyncio
+async def test_delete_cache_key_object_invalidates_identity_entry():
+    """Deleting a key's cache must also drop its identity-cache entry.
+
+    `_delete_cache_key_object` removes the legacy hashed-token key and then
+    calls `invalidate_identity_for_token`. The identity entry lives under a
+    different cache key (`identity:v1:<hash>`), so only the invalidation call
+    can remove it; this pins that wiring.
+    """
+    from litellm.identity.cache import IdentityCache
+    from litellm.proxy.auth.auth_checks import _delete_cache_key_object
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+
+    backend = UserApiKeyCache()
+    identity_cache = IdentityCache(dual_cache=backend)
+    uak = UserAPIKeyAuth(api_key="sk-delete-me", user_id="u1")
+    await identity_cache.set(uak.token, uak)
+    assert await identity_cache.get(uak.token) is not None
+
+    await _delete_cache_key_object(
+        hashed_token=uak.token,
+        user_api_key_cache=backend,
+        proxy_logging_obj=None,
+    )
+
+    assert await identity_cache.get(uak.token) is None

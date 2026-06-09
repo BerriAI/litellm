@@ -695,3 +695,107 @@ async def test_organization_member_delete_rejects_unauthorized_caller(
             user_api_key_dict=unauthorized_caller,
         )
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_invalidates_identity_for_each_org():
+    """Deleting organizations must bump the identity generation for each id."""
+    from litellm.proxy._types import (
+        DeleteOrganizationRequest,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints import organization_endpoints as org_mod
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin", api_key="sk-admin"
+    )
+
+    def _repo_with_async_table(**table_methods):
+        repo = MagicMock()
+        for name, ret in table_methods.items():
+            setattr(repo.table, name, AsyncMock(return_value=ret))
+        return MagicMock(return_value=repo)
+
+    invalidate = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch.object(
+            org_mod, "TeamRepository", _repo_with_async_table(delete_many=None)
+        ),
+        patch.object(
+            org_mod,
+            "OrganizationMembershipRepository",
+            _repo_with_async_table(delete_many=None),
+        ),
+        patch.object(
+            org_mod,
+            "VerificationTokenRepository",
+            _repo_with_async_table(delete_many=None),
+        ),
+        patch.object(
+            org_mod,
+            "OrganizationRepository",
+            _repo_with_async_table(delete=MagicMock(organization_id="org-del-1")),
+        ),
+        patch(
+            "litellm.identity.invalidation.invalidate_identity_for_org", new=invalidate
+        ),
+    ):
+        await org_mod.delete_organization(
+            data=DeleteOrganizationRequest(organization_ids=["org-del-1", "org-del-2"]),
+            user_api_key_dict=admin,
+        )
+
+    invalidated = sorted(c.kwargs["org_id"] for c in invalidate.await_args_list)
+    assert invalidated == ["org-del-1", "org-del-2"]
+
+
+@pytest.mark.asyncio
+async def test_update_organization_invalidates_identity_for_org():
+    """Updating an organization must bump its identity generation counter."""
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints as org_mod
+
+    admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin", api_key="sk-admin"
+    )
+
+    request = MagicMock(spec=Request)
+    request.json = AsyncMock(
+        return_value={"organization_id": "org-upd-9", "metadata": {"tier": "gold"}}
+    )
+
+    existing = MagicMock()
+    existing.metadata = {}
+    existing.budget_id = None
+
+    fake_prisma = MagicMock()
+    fake_prisma.jsonify_object = lambda d: d
+
+    org_repo = MagicMock()
+    org_repo.table.find_unique = AsyncMock(return_value=existing)
+    org_repo.table.update = AsyncMock(
+        return_value=MagicMock(organization_id="org-upd-9")
+    )
+
+    invalidate = AsyncMock()
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", fake_prisma),
+        patch.object(org_mod, "_verify_org_access", new=AsyncMock()),
+        patch.object(
+            org_mod, "OrganizationRepository", MagicMock(return_value=org_repo)
+        ),
+        patch(
+            "litellm.identity.invalidation.invalidate_identity_for_org", new=invalidate
+        ),
+    ):
+        await org_mod.update_organization(
+            request=request,
+            user_api_key_dict=admin,
+        )
+
+    assert invalidate.await_count == 1
+    assert invalidate.await_args.kwargs["org_id"] == "org-upd-9"
