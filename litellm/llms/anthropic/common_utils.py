@@ -272,8 +272,63 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
+    def _supports_model_capability(model: str, key: str) -> bool:
+        """Check a boolean capability ``key`` in the model map.
+
+        Strips bedrock/vertex prefixes so a provider-routed Claude still
+        resolves to the Anthropic model-map entry.
+        """
+        from litellm.utils import _supports_factory
+
+        try:
+            if _supports_factory(
+                model=model,
+                custom_llm_provider="anthropic",
+                key=key,
+            ):
+                return True
+        except Exception:
+            pass
+        candidates = [model]
+        for prefix in (
+            "bedrock/converse/",
+            "bedrock/invoke/",
+            "bedrock/",
+            "vertex_ai/",
+        ):
+            if model.startswith(prefix):
+                candidates.append(model[len(prefix) :])
+        try:
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            base = BedrockModelInfo.get_base_model(model)
+            if base:
+                candidates.append(base)
+                candidates.append(f"bedrock/{base}")
+        except Exception:
+            pass
+        try:
+            for cand in candidates:
+                if cand in litellm.model_cost and (
+                    litellm.model_cost[cand].get(key) is True
+                ):
+                    return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:
-        """Claude 4.6+ models use adaptive thinking with output_config effort."""
+        """Claude 4.6+ models use adaptive thinking with ``output_config.effort``.
+
+        Driven by the ``supports_adaptive_thinking`` flag in the model map; the
+        4.6/4.7 name checks remain only as a fallback for provider-routed ids
+        whose map entries predate the flag.
+        """
+        if AnthropicModelInfo._supports_model_capability(
+            model, "supports_adaptive_thinking"
+        ):
+            return True
         return AnthropicModelInfo._is_claude_4_6_model(
             model
         ) or AnthropicModelInfo._is_claude_4_7_model(model)
@@ -819,6 +874,49 @@ def strip_thinking_blocks_from_anthropic_messages_request_dict(
     if isinstance(msgs, list):
         data["messages"] = strip_thinking_blocks_from_anthropic_messages(msgs)
     data.pop("thinking", None)
+
+
+def strip_empty_text_blocks_from_anthropic_messages(
+    messages: List[Any],
+) -> List[Any]:
+    """
+    Return a new message list with empty or whitespace-only ``{"type": "text"}``
+    content blocks removed.
+
+    Anthropic's API rejects requests containing such blocks with
+    ``"messages: text content blocks must be non-empty"``, but assistant
+    messages from Anthropic routinely arrive with ``{"type": "text", "text": ""}``
+    alongside ``tool_use`` blocks (see anthropics/anthropic-sdk-python#461).
+    Multi-turn tool-use clients (e.g. Claude Code) loop these prior responses
+    back as conversation history, which then causes the next request to 400
+    on the unified ``/v1/messages`` path.  ``/v1/chat/completions`` already
+    handles this in ``anthropic_messages_pt``; this helper provides the
+    equivalent guarantee for the native Anthropic Messages path.
+
+    Messages whose content is a list and becomes empty after stripping are
+    omitted, matching :func:`strip_thinking_blocks_from_anthropic_messages`.
+    The caller's list and its content blocks are never mutated; modified
+    messages are returned as shallow copies with a fresh content list.
+    """
+    out: List[Any] = []
+    for m in messages:
+        if not isinstance(m, dict) or not isinstance(m.get("content"), list):
+            out.append(m)
+            continue
+        content = m["content"]
+        filtered = [b for b in content if not _is_empty_text_block(b)]
+        if len(filtered) == len(content):
+            out.append(m)
+        elif filtered:
+            out.append({**m, "content": filtered})
+    return out
+
+
+def _is_empty_text_block(block: Any) -> bool:
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return False
+    text = block.get("text")
+    return not isinstance(text, str) or not text.strip()
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

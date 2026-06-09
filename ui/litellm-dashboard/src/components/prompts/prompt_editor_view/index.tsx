@@ -46,27 +46,27 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   const [prompt, setPrompt] = useState<PromptType>(getInitialPrompt());
   const [editMode, setEditMode] = useState<boolean>(!!initialPromptData);
   const [showHistoryModal, setShowHistoryModal] = useState(false);
-  
+
   // Construct versioned ID from prompt_id and version field
   const getInitialVersionId = () => {
     if (!initialPromptData?.prompt_spec) return undefined;
     const baseId = initialPromptData.prompt_spec.prompt_id;
-    const version = initialPromptData.prompt_spec.version || 
-                   (initialPromptData.prompt_spec.litellm_params as any)?.prompt_id;
-    
+    const version =
+      initialPromptData.prompt_spec.version || (initialPromptData.prompt_spec.litellm_params as any)?.prompt_id;
+
     // If version is a number, construct versioned ID
-    if (typeof version === 'number') {
+    if (typeof version === "number") {
       return `${baseId}.v${version}`;
     }
-    
+
     // If version is a string with version suffix, use it
-    if (typeof version === 'string' && (version.includes('.v') || version.includes('_v'))) {
+    if (typeof version === "string" && (version.includes(".v") || version.includes("_v"))) {
       return version;
     }
-    
+
     return baseId;
   };
-  
+
   const [activeVersionId, setActiveVersionId] = useState<string | undefined>(getInitialVersionId());
 
   const [showToolModal, setShowToolModal] = useState(false);
@@ -244,11 +244,8 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
   // Extract template variables from prompt content for code examples
   const extractTemplateVariables = (): Record<string, string> => {
     const variables: Record<string, string> = {};
-    const allContent = [
-      prompt.developerMessage,
-      ...prompt.messages.map(m => m.content)
-    ].join(' ');
-    
+    const allContent = [prompt.developerMessage, ...prompt.messages.map((m) => m.content)].join(" ");
+
     const variableRegex = /\{\{(\w+)\}\}/g;
     let match;
     while ((match = variableRegex.exec(allContent)) !== null) {

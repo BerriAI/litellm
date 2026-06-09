@@ -48,9 +48,10 @@ model LiteLLM_CredentialsTable {
 // Models on proxy
 model LiteLLM_ProxyModelTable {
   model_id String @id @default(uuid())
-  model_name String 
+  model_name String
   litellm_params Json
-  model_info Json? 
+  model_info Json?
+  blocked Boolean @default(false)
   created_at    DateTime               @default(now()) @map("created_at")
   created_by String
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
@@ -310,6 +311,11 @@ model LiteLLM_MCPServerTable {
   tool_name_to_description   Json? @default("{}")
   extra_headers String[]    @default([])
   static_headers Json?        @default("{}")
+  // Admin-configured environment variables interpolated into static_headers
+  // via ${NAME} syntax. Stored as an array of
+  // {name, value, scope, description}. scope is "global" (value used as-is)
+  // or "user" (value supplied per-user via LiteLLM_MCPUserEnvVars).
+  env_vars     Json?          @default("[]")
   // Health check status
   status       String?        @default("unknown")
   last_health_check DateTime?
@@ -321,12 +327,16 @@ model LiteLLM_MCPServerTable {
   authorization_url  String?
   token_url          String?
   registration_url   String?
+  oauth2_flow        String?
   allow_all_keys Boolean @default(false)
   available_on_public_internet Boolean @default(true)
+  delegate_auth_to_upstream Boolean @default(false)
+  oauth_passthrough Boolean @default(false)
   is_byok               Boolean  @default(false)
   byok_description      String[] @default([])
   byok_api_key_help_url String?
   source_url            String?
+  timeout               Float?
   // BYOM submission lifecycle
   approval_status  String?   @default("active")
   submitted_by     String?
@@ -359,6 +369,21 @@ model LiteLLM_MCPUserCredentials {
   updated_at     DateTime @default(now()) @updatedAt @map("updated_at")
 
   @@unique([user_id, server_id])
+}
+
+// Per-user environment variable values for MCP servers.
+// values_b64 is an encrypted JSON object: {VAR_NAME: "value", ...}.
+model LiteLLM_MCPUserEnvVars {
+  id         String   @id @default(uuid())
+  user_id    String
+  server_id  String
+  values_b64 String
+  created_at DateTime @default(now())
+  updated_at DateTime @default(now()) @updatedAt
+
+  @@unique([user_id, server_id])
+  @@index([user_id])
+  @@index([server_id])
 }
 
 // Generate Tokens for Proxy
@@ -884,28 +909,32 @@ model LiteLLM_ManagedFileTable {
   storage_backend String? // Storage backend name (e.g., "azure_storage", "gcs", "default")
   storage_url String? // The actual storage URL where the file is stored
   created_at DateTime @default(now())
-  created_by String? 
+  created_by String?
+  team_id String? // Team that owns the resource; populated for service-account keys without a user_id so listings can isolate by team.
   updated_at DateTime @updatedAt
   updated_by String?
 
   @@index([unified_file_id])
+  @@index([team_id, created_at(sort: Desc)])
 }
 
-model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the 
+model LiteLLM_ManagedObjectTable { // for batches or finetuning jobs which use the
   id String @id @default(uuid())
   unified_object_id String @unique // The base64 encoded unified file ID
-  model_object_id String @unique // the id returned by the backend API provider 
+  model_object_id String @unique // the id returned by the backend API provider
   file_object Json // Stores the OpenAIFileObject
   file_purpose String // either 'batch' or 'fine-tune'
-  status String? // check if batch cost has been tracked  
+  status String? // check if batch cost has been tracked
   batch_processed Boolean @default(false) // set to true by CheckBatchCost after cost is computed
   created_at DateTime @default(now())
   created_by String?
+  team_id String?
   updated_at DateTime @updatedAt
-  updated_by String? 
+  updated_by String?
 
   @@index([unified_object_id])
   @@index([model_object_id])
+  @@index([team_id, created_at(sort: Desc)])
 }
 
 model LiteLLM_ManagedVectorStoreTable {
@@ -918,10 +947,12 @@ model LiteLLM_ManagedVectorStoreTable {
   storage_url String? // Storage URL (if applicable)
   created_at DateTime @default(now())
   created_by String?
+  team_id String?
   updated_at DateTime @updatedAt
   updated_by String?
 
   @@index([unified_resource_id])
+  @@index([team_id, created_at(sort: Desc)])
 }
 
 model LiteLLM_ManagedVectorStoresTable {

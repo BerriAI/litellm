@@ -70,9 +70,7 @@ describe("useMarginConfig", () => {
         await result.current.fetchMarginConfig();
       });
 
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        expect.stringMatching(/failed to fetch/i)
-      );
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/failed to fetch/i));
     });
   });
 
@@ -108,9 +106,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        expect.stringMatching(/0%.*1000%/i)
-      );
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/0%.*1000%/i));
     });
 
     it("should return false when the provider already has a margin configured", async () => {
@@ -138,9 +134,7 @@ describe("useMarginConfig", () => {
       });
 
       expect(success!).toBe(false);
-      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-        expect.stringMatching(/already exists/i)
-      );
+      expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(expect.stringMatching(/already exists/i));
     });
 
     it("should save a percentage margin and return true for a valid new provider", async () => {

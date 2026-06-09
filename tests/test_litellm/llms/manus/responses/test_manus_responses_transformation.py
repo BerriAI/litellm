@@ -58,3 +58,18 @@ def test_transform_responses_api_request_adds_manus_params():
     assert result["agent_profile"] == "manus-1.6"
     assert "input" in result
     assert "model" in result
+
+
+def test_get_response_request_encodes_response_id():
+    """Test response IDs are encoded before being appended to Manus URLs."""
+    config = ManusResponsesAPIConfig()
+
+    url, params = config.transform_get_response_api_request(
+        response_id="../../files?x=1#frag",
+        api_base="https://api.manus.im/v1/responses",
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert url == "https://api.manus.im/v1/responses/..%2F..%2Ffiles%3Fx%3D1%23frag"
+    assert params == {}

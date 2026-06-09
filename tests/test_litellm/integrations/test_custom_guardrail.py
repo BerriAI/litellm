@@ -500,6 +500,65 @@ class TestGuardrailLoggingAggregation:
         assert info[1]["guardrail_name"] == "test_guardrail"
 
 
+class TestGuardrailOtelSpanEmission:
+    """Recording a guardrail emits its otel span inline, so every guardrail
+    execution produces a span — including the pass-through allow path that never
+    reaches a post-call hook."""
+
+    def _make_guardrail(self):
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        return CustomGuardrail(
+            guardrail_name="emit_guard",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+    def _record(self, guardrail, request_data):
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            start_time=1.0,
+            end_time=2.0,
+            duration=1.0,
+        )
+
+    def test_emits_span_for_recorded_entry(self, monkeypatch):
+        captured = []
+        monkeypatch.setattr(
+            "litellm.integrations.otel.logger.emit_guardrail_span",
+            captured.append,
+        )
+
+        request_data = {"metadata": {}}
+        self._record(self._make_guardrail(), request_data)
+
+        assert len(captured) == 1
+        emitted = captured[0]
+        recorded = request_data["metadata"]["standard_logging_guardrail_information"][
+            -1
+        ]
+        assert emitted is recorded
+        assert emitted["guardrail_name"] == "emit_guard"
+        assert emitted["start_time"] == 1.0
+        assert emitted["end_time"] == 2.0
+
+    def test_span_emission_failure_does_not_break_recording(self, monkeypatch):
+        def _boom(_entry):
+            raise RuntimeError("otel exporter down")
+
+        monkeypatch.setattr(
+            "litellm.integrations.otel.logger.emit_guardrail_span", _boom
+        )
+
+        request_data = {"metadata": {}}
+        self._record(self._make_guardrail(), request_data)
+
+        info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(info) == 1
+        assert info[0]["guardrail_name"] == "emit_guard"
+
+
 class TestGuardrailSensitiveFieldStripping:
     """Tests that secret_fields is stripped from guardrail responses before logging.
 
@@ -929,6 +988,91 @@ class TestEventTypeLogging:
         assert len(logged_info) == 1
         assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.post_call
 
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_skips_auto_record_if_function_already_recorded(
+        self,
+    ):
+        """When a wrapped guardrail function records its own entry directly
+        (e.g. block_code_execution.apply_guardrail records a rich
+        ``[detections...]`` payload), the decorator must NOT also append its
+        own ``"allow"``/raw-response entry — otherwise every backend
+        (OTEL spans, Datadog, Langfuse, spend logs) double-records one
+        logical guardrail invocation."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-code",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, **kwargs):
+                self.add_standard_logging_guardrail_information_to_request_data(
+                    guardrail_json_response=[{"action_taken": "block"}],
+                    request_data=request_data,
+                    guardrail_status="success",
+                    event_type=GuardrailEventHooks.pre_call,
+                )
+                return inputs
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["x"]}, request_data=request_data
+        )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1, (
+            f"Decorator must not double-record when the wrapped function "
+            f"already appended its own entry; got {len(logged_info)} entries"
+        )
+        assert logged_info[0]["guardrail_response"] == [{"action_taken": "block"}]
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_skips_auto_record_on_exception_if_function_already_recorded(
+        self,
+    ):
+        """Same as above on the failure path: if the wrapped function
+        appended an entry in its ``finally`` block before re-raising, the
+        decorator must just re-raise without auto-recording on top."""
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="block-code",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def apply_guardrail(self, inputs, request_data, **kwargs):
+                try:
+                    raise ValueError("blocked")
+                finally:
+                    self.add_standard_logging_guardrail_information_to_request_data(
+                        guardrail_json_response=[{"action_taken": "block"}],
+                        request_data=request_data,
+                        guardrail_status="guardrail_intervened",
+                        event_type=GuardrailEventHooks.pre_call,
+                    )
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        with pytest.raises(ValueError, match="blocked"):
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["x"]}, request_data=request_data
+            )
+
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_status"] == "guardrail_intervened"
+
     def test_add_standard_logging_falls_back_to_event_hook_when_event_type_is_none(
         self,
     ):
@@ -1086,9 +1230,12 @@ class TestCustomGuardrailSpendLogMatchRedaction:
             ][0]["match"]
             == "[REDACTED]"
         )
-        assert raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "GG"
+        assert (
+            raw["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
+                "match"
+            ]
+            == "GG"
+        )
 
     def test_add_standard_logging_redacts_regex_field(self):
         cg = CustomGuardrail(guardrail_name="test-rail")
@@ -1102,3 +1249,47 @@ class TestCustomGuardrailSpendLogMatchRedaction:
         slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
         assert slg["guardrail_response"]["filters"][0]["regex"] == "[REDACTED]"
         assert raw["filters"][0]["regex"] == r"\d{3}-\d{2}-\d{4}"
+
+
+class TestGuardrailInterventionClassification:
+    """A routing decision is a deliberate guardrail intervention, not a failure."""
+
+    def test_sensitive_data_route_exception_is_intervention(self):
+        from litellm.exceptions import SensitiveDataRouteException
+
+        exc = SensitiveDataRouteException(
+            route_to_model="on-prem-model",
+            session_id="sess-1",
+            guardrail_name="pii-rail",
+        )
+        assert CustomGuardrail._is_guardrail_intervention(exc) is True
+
+    @pytest.mark.asyncio
+    async def test_routing_logged_as_intervened_not_failed(self):
+        from litellm.exceptions import SensitiveDataRouteException
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class RoutingGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="pii-rail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data, **kwargs):
+                raise SensitiveDataRouteException(
+                    route_to_model="on-prem-model",
+                    session_id="sess-1",
+                    guardrail_name=self.guardrail_name,
+                )
+
+        guardrail = RoutingGuardrail()
+        request_data: dict = {"metadata": {}}
+
+        with pytest.raises(SensitiveDataRouteException):
+            await guardrail.async_pre_call_hook(data=request_data)
+
+        slg = request_data["metadata"]["standard_logging_guardrail_information"][0]
+        assert slg["guardrail_status"] == "guardrail_intervened"

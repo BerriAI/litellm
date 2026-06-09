@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 from datetime import datetime
@@ -10,7 +11,12 @@ sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTable,
+    LitellmUserRoles,
+    UserAPIKeyAuth,
+)
 
 # Import proxy_server module first to ensure it's initialized
 import litellm.proxy.proxy_server as ps
@@ -603,3 +609,170 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
                     assert tool4["litellm_params"]["search_provider"] == "custom"
                 finally:
                     app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@contextlib.contextmanager
+def _mock_search_tool_backend(db_tools):
+    """Patch the DB registry, prisma client, and config so /search_tools/list
+    returns exactly ``db_tools`` (no config-defined tools)."""
+    mock_registry = MagicMock()
+    mock_registry.get_all_search_tools_from_db = AsyncMock(return_value=db_tools)
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.get_config = AsyncMock(return_value={})
+    mock_proxy_config.parse_search_tools = MagicMock(return_value=None)
+    with (
+        patch(
+            "litellm.proxy.search_endpoints.search_tool_management.SEARCH_TOOL_REGISTRY",
+            mock_registry,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+    ):
+        yield
+
+
+def _scoping_db_tools():
+    return [
+        {
+            "search_tool_id": "db-id-1",
+            "search_tool_name": "db-tool-1",
+            "litellm_params": {
+                "search_provider": "perplexity",
+                "api_key": "pplx-secret-1",
+                "api_base": "https://api.perplexity.ai",
+            },
+            "search_tool_info": {"description": "Perplexity"},
+            "created_at": datetime(2024, 1, 1),
+            "updated_at": datetime(2024, 1, 1),
+        },
+        {
+            "search_tool_id": "db-id-2",
+            "search_tool_name": "db-tool-2",
+            "litellm_params": {
+                "search_provider": "tavily",
+                "api_key": "tvly-secret-2",
+                "api_base": "https://api.tavily.com",
+            },
+            "search_tool_info": {"description": "Tavily"},
+            "created_at": datetime(2024, 1, 1),
+            "updated_at": datetime(2024, 1, 1),
+        },
+        {
+            "search_tool_id": "db-id-3",
+            "search_tool_name": "db-tool-3",
+            "litellm_params": {"search_provider": "exa", "api_key": "exa-secret-3"},
+            "search_tool_info": {"description": "Exa"},
+            "created_at": datetime(2024, 1, 1),
+            "updated_at": datetime(2024, 1, 1),
+        },
+    ]
+
+
+@contextlib.contextmanager
+def _override_auth(user):
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    app.dependency_overrides[user_api_key_auth] = lambda: user
+    try:
+        yield
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_scoped_to_key_object_permission():
+    """
+    Regression: an internal user whose key is restricted to specific search tools
+    must only see those tools. Before the fix /search_tools/list returned every
+    configured tool, leaking ids, api_base, and metadata for tools it cannot call.
+    """
+    restricted_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-key",
+            search_tools=["db-tool-1"],
+        ),
+    )
+
+    with (
+        _mock_search_tool_backend(_scoping_db_tools()),
+        _override_auth(restricted_user),
+    ):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 200
+    tools = response.json()["search_tools"]
+    assert [t["search_tool_name"] for t in tools] == ["db-tool-1"]
+    leaked = {t["litellm_params"].get("api_base") for t in tools}
+    assert "https://api.tavily.com" not in leaked
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_unrestricted_internal_user_sees_all():
+    """An internal user with no search_tools allowlist is unrestricted and sees every tool."""
+    unrestricted_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user"
+    )
+
+    with (
+        _mock_search_tool_backend(_scoping_db_tools()),
+        _override_auth(unrestricted_user),
+    ):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 200
+    names = {t["search_tool_name"] for t in response.json()["search_tools"]}
+    assert names == {"db-tool-1", "db-tool-2", "db-tool-3"}
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_scoped_to_team_object_permission():
+    """A team-level search_tools allowlist also scopes the listing for a non-admin caller."""
+    team_member = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="internal_user",
+        team_id="team-1",
+    )
+    team_object = LiteLLM_TeamTable(
+        team_id="team-1",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-team",
+            search_tools=["db-tool-2"],
+        ),
+    )
+
+    with (
+        _mock_search_tool_backend(_scoping_db_tools()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_team_object",
+            AsyncMock(return_value=team_object),
+        ),
+        _override_auth(team_member),
+    ):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 200
+    assert [t["search_tool_name"] for t in response.json()["search_tools"]] == [
+        "db-tool-2"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_search_tools_admin_with_restricted_key_still_sees_all():
+    """Proxy admins bypass search-tool scoping even if their key carries an allowlist."""
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-admin",
+            search_tools=["db-tool-1"],
+        ),
+    )
+
+    with _mock_search_tool_backend(_scoping_db_tools()), _override_auth(admin_user):
+        response = TestClient(app).get("/search_tools/list")
+
+    assert response.status_code == 200
+    names = {t["search_tool_name"] for t in response.json()["search_tools"]}
+    assert names == {"db-tool-1", "db-tool-2", "db-tool-3"}

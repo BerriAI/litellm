@@ -6,7 +6,8 @@ from typing import Any, Optional
 import httpx
 
 import litellm
-from litellm._logging import _redact_string, verbose_logger
+from litellm._logging import _ENABLE_SECRET_REDACTION, _redact_string, verbose_logger
+from litellm.litellm_core_utils.secret_redaction import redact_string
 from litellm.types.utils import LlmProviders
 
 from ..exceptions import (
@@ -86,6 +87,7 @@ class ExceptionCheckers:
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
+            "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
         ]
         for substring in known_exception_substrings:
@@ -261,10 +263,18 @@ def exception_type(  # type: ignore  # noqa: PLR0915
         original_exception=original_exception
     )
     try:
-        error_str = str(original_exception)
+        error_str = (
+            redact_string(str(original_exception))
+            if _ENABLE_SECRET_REDACTION
+            else str(original_exception)
+        )
         if model:
             if hasattr(original_exception, "message"):
-                error_str = str(original_exception.message)
+                error_str = (
+                    redact_string(str(original_exception.message))
+                    if _ENABLE_SECRET_REDACTION
+                    else str(original_exception.message)
+                )
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
@@ -645,7 +655,11 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 custom_llm_provider == "anthropic"
                 or custom_llm_provider == "anthropic_text"
             ):  # one of the anthropics
-                if "prompt is too long" in error_str or "prompt: length" in error_str:
+                if (
+                    "prompt is too long" in error_str
+                    or "prompt: length" in error_str
+                    or ExceptionCheckers.is_error_str_context_window_exceeded(error_str)
+                ):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message="AnthropicError - {}".format(error_str),
@@ -882,12 +896,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                         litellm_debug_info=extra_information,
                     )
-                elif "model's maximum context limit" in error_str:
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
                     exception_mapping_worked = True
                     raise ContextWindowExceededError(
                         message=f"{custom_llm_provider.capitalize()}Exception: Context Window Error - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
+                        response=getattr(original_exception, "response", None),
+                        litellm_debug_info=extra_information,
                     )
                 elif "token_quota_reached" in error_str:
                     exception_mapping_worked = True
@@ -2431,7 +2447,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
             else:
                 raise APIConnectionError(
                     message="{}\n{}".format(
-                        str(original_exception), _redact_string(traceback.format_exc())
+                        str(original_exception),
+                        _redact_string(traceback.format_exc()),
                     ),
                     llm_provider=custom_llm_provider,
                     model=model,
@@ -2461,7 +2478,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     raise e  # it's already mapped
             raised_exc = APIConnectionError(
                 message="{}\n{}".format(
-                    original_exception, _redact_string(traceback.format_exc())
+                    original_exception,
+                    _redact_string(traceback.format_exc()),
                 ),
                 llm_provider="",
                 model="",

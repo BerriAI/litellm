@@ -4,7 +4,11 @@ from typing import Any, Coroutine, Dict, Optional, Union
 import httpx
 
 import litellm
-from litellm.litellm_core_utils.url_utils import async_safe_get, safe_get
+from litellm.litellm_core_utils.url_utils import (
+    async_safe_get,
+    encode_url_path_segment,
+    safe_get,
+)
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -170,7 +174,8 @@ class VertexAIBatchPrediction(VertexLLM):
         )
 
         # Append batch_id to the URL
-        default_api_base = f"{default_api_base}/{batch_id}"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        default_api_base = f"{default_api_base}/{encoded_batch_id}"
 
         if len(default_api_base.split(":")) > 1:
             endpoint = default_api_base.split(":")[-1]
@@ -413,7 +418,8 @@ class VertexAIBatchPrediction(VertexLLM):
             vertex_project=vertex_project or project_id,
         )
 
-        retrieve_api_base_default = f"{default_api_base}/{batch_id}"
+        encoded_batch_id = encode_url_path_segment(batch_id, field_name="batch_id")
+        retrieve_api_base_default = f"{default_api_base}/{encoded_batch_id}"
         cancel_api_base_default = f"{retrieve_api_base_default}:cancel"
 
         _, api_base = self._check_custom_proxy(

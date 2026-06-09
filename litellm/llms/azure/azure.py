@@ -16,6 +16,7 @@ import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
+from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
@@ -42,7 +43,11 @@ from .common_utils import (
     process_azure_headers,
     select_azure_base_url_or_endpoint,
 )
-from .image_generation import get_azure_image_generation_config
+from .image_generation import (
+    AzureFoundryMAIImageGenerationConfig,
+    get_azure_image_generation_config,
+)
+from .image_generation.http_utils import azure_deployment_image_generation_json_body
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -237,7 +242,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 )
 
                 data = {"model": None, "messages": messages, **optional_params}
-            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            elif litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(
+                model=litellm_params.get("base_model") or model
+            ):
                 data = litellm.AzureOpenAIGPT5Config().transform_request(
                     model=model,
                     messages=messages,
@@ -792,6 +799,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     client=client,
                     litellm_params=litellm_params,
                     api_base=api_base,
+                    api_version=api_version,
                 )
             azure_client = self.get_azure_openai_client(
                 api_version=api_version,
@@ -898,6 +906,17 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 operation_location_url = response.headers["operation-location"]
             else:
                 raise AzureOpenAIError(status_code=500, message=response.text)
+            # Reject polling URLs that don't share an origin with ``api_base``.
+            # Without this an upstream-controlled or attacker-controlled
+            # value would receive the operator's Azure API key in the
+            # request headers below. VERIA-51.
+            try:
+                assert_same_origin(operation_location_url, api_base)
+            except SSRFError as ssrf_err:
+                raise AzureOpenAIError(
+                    status_code=502,
+                    message=f"Rejected polling URL: {ssrf_err}",
+                )
             response = await async_handler.get(
                 url=operation_location_url,
                 headers=headers,
@@ -908,8 +927,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
-                raise Exception(
-                    "Expected 'status' in response. Got={}".format(response.json())
+                # Don't reflect the raw response body — when the polling
+                # URL points at an internal JSON API (cloud metadata
+                # service etc.) reflecting it here turns Blind SSRF into
+                # Full-Read SSRF. VERIA-51.
+                raise AzureOpenAIError(
+                    status_code=502,
+                    message="Polling response missing 'status' field",
                 )
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
@@ -948,9 +972,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
+        request_json = azure_deployment_image_generation_json_body(api_base, data)
         return await async_handler.post(
             url=api_base,
-            json=data,
+            json=request_json,
             headers=headers,
         )
 
@@ -1009,6 +1034,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 operation_location_url = response.headers["operation-location"]
             else:
                 raise AzureOpenAIError(status_code=500, message=response.text)
+            try:
+                assert_same_origin(operation_location_url, api_base)
+            except SSRFError as ssrf_err:
+                raise AzureOpenAIError(
+                    status_code=502,
+                    message=f"Rejected polling URL: {ssrf_err}",
+                )
             response = sync_handler.get(
                 url=operation_location_url,
                 headers=headers,
@@ -1019,8 +1051,9 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             timeout_secs: int = AZURE_OPERATION_POLLING_TIMEOUT
             start_time = time.time()
             if "status" not in response.json():
-                raise Exception(
-                    "Expected 'status' in response. Got={}".format(response.json())
+                raise AzureOpenAIError(
+                    status_code=502,
+                    message="Polling response missing 'status' field",
                 )
             while response.json()["status"] not in ["succeeded", "failed"]:
                 if time.time() - start_time > timeout_secs:
@@ -1059,17 +1092,22 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 content=json.dumps(result).encode("utf-8"),
                 request=httpx.Request(method="POST", url="https://api.openai.com/v1"),
             )
+        request_json = azure_deployment_image_generation_json_body(api_base, data)
         return sync_handler.post(
             url=api_base,
-            json=data,
+            json=request_json,
             headers=headers,
         )
 
     def create_azure_base_url(
-        self, azure_client_params: dict, model: Optional[str]
+        self,
+        azure_client_params: dict,
+        model: Optional[str],
+        base_model: Optional[str] = None,
     ) -> str:
         from litellm.llms.azure_ai.image_generation import (
             AzureFoundryFluxImageGenerationConfig,
+            AzureFoundryMAIImageGenerationConfig,
         )
 
         api_base: str = azure_client_params.get(
@@ -1080,6 +1118,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
+
+        if AzureFoundryMAIImageGenerationConfig.is_mai_model(base_model or model):
+            return AzureFoundryMAIImageGenerationConfig.get_mai_image_generation_url(
+                api_base=api_base,
+                api_version=api_version,
+            )
 
         # Handle FLUX 2 models on Azure AI which use a different URL pattern
         # e.g., /providers/blackforestlabs/v1/flux-2-pro instead of /openai/deployments/{model}/images/generations
@@ -1122,10 +1166,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if api_base.endswith("/"):
                 api_base = api_base.rstrip("/")
             api_version: str = azure_client_params.get("api_version", "")
-            # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
                 azure_client_params=azure_client_params,
                 model=model or data.get("model", ""),
+                base_model=data.get("model", ""),
             )
 
             ## LOGGING
@@ -1254,9 +1298,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             if aimg_generation is True:
                 return self.aimage_generation(data=data, input=input, logging_obj=logging_obj, model_response=model_response, api_key=api_key, client=client, azure_client_params=azure_client_params, timeout=timeout, headers=headers, model=model)  # type: ignore
 
-            # Use the deployment name (model) for URL construction, not the base_model from data
             img_gen_api_base = self.create_azure_base_url(
-                azure_client_params=azure_client_params, model=model
+                azure_client_params=azure_client_params,
+                model=model,
+                base_model=base_model,
             )
 
             ## LOGGING
@@ -1278,6 +1323,21 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 data=data,
                 headers=headers,
             )
+            provider_config = get_azure_image_generation_config(
+                data.get("model", "dall-e-2")
+            )
+            if isinstance(provider_config, AzureFoundryMAIImageGenerationConfig):
+                return provider_config.transform_image_generation_response(
+                    model=data.get("model", "dall-e-2"),
+                    raw_response=httpx_response,
+                    model_response=model_response or ImageResponse(),
+                    logging_obj=logging_obj,
+                    request_data=data,
+                    optional_params=data,
+                    litellm_params=data,
+                    encoding=litellm.encoding,
+                )
+
             response = httpx_response.json()
 
             ## LOGGING

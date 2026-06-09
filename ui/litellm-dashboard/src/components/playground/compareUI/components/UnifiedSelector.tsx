@@ -14,13 +14,7 @@ interface UnifiedSelectorProps {
   onChange: (value: string) => void;
 }
 
-export function UnifiedSelector({
-  value,
-  options,
-  loading,
-  config,
-  onChange,
-}: UnifiedSelectorProps) {
+export function UnifiedSelector({ value, options, loading, config, onChange }: UnifiedSelectorProps) {
   return (
     <Select
       value={value || undefined}
@@ -28,9 +22,7 @@ export function UnifiedSelector({
       onChange={onChange}
       loading={loading}
       showSearch
-      filterOption={(input, option) =>
-        (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
-      }
+      filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}
       options={options}
       className="w-48 md:w-64 lg:w-72"
       notFoundContent={
@@ -45,4 +37,3 @@ export function UnifiedSelector({
     />
   );
 }
-

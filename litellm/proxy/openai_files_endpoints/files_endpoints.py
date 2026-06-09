@@ -21,6 +21,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+
 import litellm
 from litellm import CreateFileRequest, get_secret_str
 from litellm._logging import verbose_proxy_logger
@@ -37,15 +38,6 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
-from litellm.proxy.utils import ProxyLogging, is_known_model
-from litellm.router import Router
-from litellm.types.llms.openai import (
-    CREATE_FILE_REQUESTS_PURPOSE,
-    FileExpiresAfter,
-    OpenAIFileObject,
-    OpenAIFilesPurpose,
-)
-
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     encode_file_id_with_model,
@@ -53,6 +45,15 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_credentials_for_model,
     handle_model_based_routing,
     prepare_data_with_credentials,
+)
+from litellm.proxy.utils import ProxyLogging, is_known_model
+from litellm.repositories.table_repositories import ManagedFileRepository
+from litellm.router import Router
+from litellm.types.llms.openai import (
+    CREATE_FILE_REQUESTS_PURPOSE,
+    FileExpiresAfter,
+    OpenAIFileObject,
+    OpenAIFilesPurpose,
 )
 
 router = APIRouter()
@@ -666,7 +667,7 @@ async def get_file_content(  # noqa: PLR0915
                 managed_files_obj, "prisma_client", None
             ):
                 prisma_client = getattr(managed_files_obj, "prisma_client")
-                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
+                db_file = await ManagedFileRepository(prisma_client).table.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
@@ -774,6 +775,7 @@ async def get_file_content(  # noqa: PLR0915
                     data=data,
                     credentials=credentials,  # type: ignore
                     file_id=original_file_id,  # Use decoded file ID if from encoded ID
+                    include_internal_credentials=True,
                 )
                 response = await litellm.afile_content(
                     custom_llm_provider=credentials["custom_llm_provider"],  # type: ignore
@@ -949,6 +951,7 @@ async def get_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_retrieve(**data)  # type: ignore
@@ -1149,6 +1152,7 @@ async def delete_file(
                 data=data,
                 credentials=credentials,  # type: ignore
                 file_id=original_file_id,
+                include_internal_credentials=True,
             )
 
             response = await litellm.afile_delete(

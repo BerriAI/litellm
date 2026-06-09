@@ -35,7 +35,7 @@ export async function makeOpenAIChatCompletionRequest(
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal !== true) {
-    console.log = function () { };
+    console.log = function () {};
   }
   console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
@@ -187,7 +187,7 @@ export async function makeOpenAIChatCompletionRequest(
       // Check for MCP metadata in provider_specific_fields
       if (delta && delta.provider_specific_fields) {
         const providerFields = delta.provider_specific_fields;
-        
+
         // Merge MCP metadata cumulatively (don't overwrite)
         if (providerFields.mcp_list_tools && !mcpMetadata.mcp_list_tools) {
           mcpMetadata.mcp_list_tools = providerFields.mcp_list_tools;
@@ -211,15 +211,15 @@ export async function makeOpenAIChatCompletionRequest(
             console.log("MCP list_tools event sent:", toolsEvent);
           }
         }
-        
+
         if (providerFields.mcp_tool_calls) {
           mcpMetadata.mcp_tool_calls = providerFields.mcp_tool_calls;
         }
-        
+
         if (providerFields.mcp_call_results) {
           mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
         }
-        
+
         if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
           console.log("MCP metadata found in chunk:", {
             mcp_list_tools: providerFields.mcp_list_tools ? "present" : "absent",
@@ -263,9 +263,10 @@ export async function makeOpenAIChatCompletionRequest(
           const functionArgs = toolCall.function?.arguments || toolCall.arguments || "{}";
 
           // Find corresponding result
-          const result = mcpMetadata.mcp_call_results?.find(
-            (r: any) => r.tool_call_id === toolCall.id || r.tool_call_id === toolCall.call_id
-          ) || mcpMetadata.mcp_call_results?.[index];
+          const result =
+            mcpMetadata.mcp_call_results?.find(
+              (r: any) => r.tool_call_id === toolCall.id || r.tool_call_id === toolCall.call_id,
+            ) || mcpMetadata.mcp_call_results?.[index];
 
           const callEvent: MCPEvent = {
             type: "response.output_item.done",
@@ -273,7 +274,11 @@ export async function makeOpenAIChatCompletionRequest(
               type: "mcp_call",
               name: functionName,
               arguments: typeof functionArgs === "string" ? functionArgs : JSON.stringify(functionArgs),
-              output: result?.result ? (typeof result.result === "string" ? result.result : JSON.stringify(result.result)) : undefined,
+              output: result?.result
+                ? typeof result.result === "string"
+                  ? result.result
+                  : JSON.stringify(result.result)
+                : undefined,
             },
             item_id: toolCall.id || toolCall.call_id,
             timestamp: Date.now(),

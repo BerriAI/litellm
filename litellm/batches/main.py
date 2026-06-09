@@ -543,15 +543,17 @@ def _handle_retrieve_batch_providers_without_provider_config(
         )
     else:
         raise litellm.exceptions.BadRequestError(
-            message="LiteLLM doesn't support {} for 'create_batch'. Only 'openai' is supported.".format(
-                custom_llm_provider
-            ),
+            message=(
+                "LiteLLM doesn't support custom_llm_provider={} for 'retrieve_batch' without a `model` kwarg. "
+                "Supported via this path: 'openai', 'azure', 'vertex_ai', 'anthropic'. "
+                "'bedrock' is supported but requires `model` to be passed so the provider config can be loaded."
+            ).format(custom_llm_provider),
             model="n/a",
             llm_provider=custom_llm_provider,
             response=httpx.Response(
                 status_code=400,
                 content="Unsupported provider",
-                request=httpx.Request(method="create_thread", url="https://github.com/BerriAI/litellm"),  # type: ignore
+                request=httpx.Request(method="retrieve_batch", url="https://github.com/BerriAI/litellm"),  # type: ignore
             ),
         )
     return response
@@ -615,24 +617,35 @@ def retrieve_batch(
         _is_async = kwargs.pop("aretrieve_batch", False) is True
         client = kwargs.get("client", None)
 
-        # Check if this is an async invoke ARN (different from regular batch ARN)
-        # Async invoke ARNs have format: arn:aws(-[^:]+)?:bedrock:[a-z0-9-]{1,20}:[0-9]{12}:async-invoke/[a-z0-9]{12}
-        if (
-            batch_id.startswith("arn:aws")
-            and ":bedrock:" in batch_id
-            and ":async-invoke/" in batch_id
-        ):
-            # Handle async invoke status check
-            # Remove aws_region_name from kwargs to avoid duplicate parameter
-            async_kwargs = kwargs.copy()
-            async_kwargs.pop("aws_region_name", None)
+        # Bedrock has two distinct ARN families that need different APIs:
+        #   * async-invoke ARNs       (Twelve Labs Marengo embeddings)        -> bedrock-runtime data plane
+        #   * model-invocation-job ARNs (CreateModelInvocationJob batch)      -> bedrock control plane
+        # They live on different AWS service endpoints and can't share a handler.
+        # ARN shapes:
+        #   arn:aws(-[^:]+)?:bedrock:<region>:<account>:async-invoke/<id>
+        #   arn:aws(-[^:]+)?:bedrock:<region>:<account>:model-invocation-job/<id>
+        if batch_id.startswith("arn:aws") and ":bedrock:" in batch_id:
+            if ":async-invoke/" in batch_id:
+                # Remove aws_region_name from kwargs to avoid duplicate parameter
+                async_kwargs = kwargs.copy()
+                async_kwargs.pop("aws_region_name", None)
 
-            return BedrockBatchesHandler._handle_async_invoke_status(
-                batch_id=batch_id,
-                aws_region_name=kwargs.get("aws_region_name", "us-east-1"),
-                logging_obj=litellm_logging_obj,
-                **async_kwargs,
-            )
+                return BedrockBatchesHandler._handle_async_invoke_status(
+                    batch_id=batch_id,
+                    aws_region_name=kwargs.get("aws_region_name", "us-east-1"),
+                    logging_obj=litellm_logging_obj,
+                    **async_kwargs,
+                )
+            if ":model-invocation-job/" in batch_id:
+                mij_kwargs = kwargs.copy()
+                mij_kwargs.pop("aws_region_name", None)
+
+                return BedrockBatchesHandler._handle_model_invocation_job_status(
+                    batch_id=batch_id,
+                    aws_region_name=kwargs.get("aws_region_name"),
+                    logging_obj=litellm_logging_obj,
+                    **mij_kwargs,
+                )
 
         # Try to use provider config first (for providers like bedrock)
         model: Optional[str] = kwargs.get("model", None)

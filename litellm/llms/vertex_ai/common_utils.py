@@ -12,7 +12,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import PartType, Schema
+from litellm.types.llms.vertex_ai import (
+    VERTEX_AI_PROVIDER_METADATA_FIELDS,
+    PartType,
+    Schema,
+)
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
 
@@ -25,6 +29,94 @@ class VertexAIError(BaseLLMException):
         headers: Optional[Union[Dict, httpx.Headers]] = None,
     ):
         super().__init__(message=message, status_code=status_code, headers=headers)
+
+
+def redact_vertex_ai_metadata_from_logged_object(obj: Any) -> None:
+    if isinstance(obj, dict):
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            if field in obj:
+                obj[field] = []
+        hidden_params = obj.get("_hidden_params")
+        if isinstance(hidden_params, dict):
+            for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+                hidden_params.pop(field, None)
+        return
+
+    for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+        if hasattr(obj, field):
+            setattr(obj, field, [])
+    hidden_params = getattr(obj, "_hidden_params", None)
+    if isinstance(hidden_params, dict):
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
+
+
+def redact_vertex_ai_metadata_from_litellm_params(model_call_details: dict) -> None:
+    """
+    success_handler() merges response._hidden_params into
+    litellm_params.metadata['hidden_params'] before redaction runs, so the Vertex
+    metadata must be scrubbed from that copy too.
+    """
+    litellm_params = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return
+
+    for metadata_key in ("metadata", "litellm_metadata"):
+        metadata = litellm_params.get(metadata_key)
+        if not isinstance(metadata, dict):
+            continue
+        hidden_params = metadata.get("hidden_params")
+        if not isinstance(hidden_params, dict):
+            continue
+        for field in VERTEX_AI_PROVIDER_METADATA_FIELDS:
+            hidden_params.pop(field, None)
+
+
+def vertex_request_labels_from_litellm_params(
+    litellm_params: Optional[dict],
+) -> Optional[Dict[str, str]]:
+    """
+    Build Vertex/GCP billing labels from LiteLLM user metadata on ``litellm_params``:
+    ``metadata`` (``completion(..., metadata=...)``) or ``litellm_metadata``,
+    using ``requester_metadata`` string key-value pairs (same convention as Gemini).
+    ``metadata`` is tried first when both are present.
+    """
+    if not litellm_params:
+        return None
+    for key in ("metadata", "litellm_metadata"):
+        if key not in litellm_params:
+            continue
+        metadata = litellm_params[key]
+        if metadata is None or not isinstance(metadata, dict):
+            continue
+        if "requester_metadata" not in metadata:
+            continue
+        rm = metadata["requester_metadata"]
+        if not isinstance(rm, dict):
+            continue
+        labels = {k: v for k, v in rm.items() if isinstance(v, str)}
+        if labels:
+            return labels
+    return None
+
+
+def pop_vertex_request_labels(
+    optional_params: Optional[dict],
+    litellm_params: Optional[dict],
+) -> Optional[Dict[str, str]]:
+    """
+    Resolve labels from optional ``labels`` (Gemini-style) and/or
+    ``litellm_params["metadata"]`` / ``litellm_params["litellm_metadata"]``
+    (``requester_metadata``). Pops ``labels`` from optional_params when present.
+    """
+    labels: Optional[Dict[str, str]] = None
+    if optional_params is not None and "labels" in optional_params:
+        raw = optional_params.pop("labels")
+        if isinstance(raw, dict):
+            labels = {k: v for k, v in raw.items() if isinstance(v, str)}
+    if not labels:
+        labels = vertex_request_labels_from_litellm_params(litellm_params)
+    return labels if labels else None
 
 
 class VertexAIModelRoute(str, Enum):
@@ -50,7 +142,7 @@ def get_vertex_ai_model_route(
     Determine which handler to use for a Vertex AI model based on the model name.
 
     Args:
-        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "openai/gpt-oss-120b")
+        model: The model name (e.g., "llama3-405b", "gemini-pro", "gemma/gemma-3-12b-it", "xai/grok-4.1-fast-non-reasoning")
         litellm_params: Optional litellm parameters dict that may contain base_model for routing
 
     Returns:
@@ -66,7 +158,7 @@ def get_vertex_ai_model_route(
         >>> get_vertex_ai_model_route("gemma/gemma-3-12b-it")
         VertexAIModelRoute.GEMMA
 
-        >>> get_vertex_ai_model_route("openai/gpt-oss-120b")
+        >>> get_vertex_ai_model_route("xai/grok-4.1-fast-non-reasoning")
         VertexAIModelRoute.MODEL_GARDEN
 
         >>> get_vertex_ai_model_route("1234567890", {"api_base": "http://10.96.32.8"})
@@ -102,8 +194,11 @@ def get_vertex_ai_model_route(
     if "gemma/" in model:
         return VertexAIModelRoute.GEMMA
 
-    # Check for model garden openai models
-    if "openai" in model:
+    # Check for model garden OpenAI-compatible publisher models.
+    # Examples:
+    # - openai/gpt-oss-120b-maas
+    # - xai/grok-4.1-fast-non-reasoning
+    if "openai" in model or model.startswith("xai/"):
         return VertexAIModelRoute.MODEL_GARDEN
 
     # Check for gemini models
@@ -209,8 +304,8 @@ def get_vertex_base_model_name(model: str) -> str:
         >>> get_vertex_base_model_name("gemma/gemma-3-12b-it")
         "gemma-3-12b-it"
 
-        >>> get_vertex_base_model_name("openai/gpt-oss-120b")
-        "gpt-oss-120b"
+        >>> get_vertex_base_model_name("xai/grok-4.1-fast-non-reasoning")
+        "grok-4.1-fast-non-reasoning"
 
         >>> get_vertex_base_model_name("1234567890")
         "1234567890"
@@ -605,6 +700,8 @@ def process_items(schema, depth=0):
             and type_val.lower() == "array"
             and ("items" not in schema or schema.get("items") == {})
         ):
+            schema["items"] = {"type": "object"}
+        elif schema.get("type") == "array" and "items" not in schema:
             schema["items"] = {"type": "object"}
         for key, value in schema.items():
             if isinstance(value, dict):

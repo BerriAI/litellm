@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
@@ -42,27 +43,41 @@ from litellm.constants import (
 )
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.litellm_core_utils.url_utils import SSRFError, async_safe_get
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
+from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
+from litellm.proxy._experimental.mcp_server.elicitation_handler import (
+    MCP_ELICITATION_AVAILABLE,
+)
+from litellm.proxy._experimental.mcp_server.sampling_handler import (
+    MCP_SAMPLING_AVAILABLE,
+)
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import resolve_mcp_auth
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
+    MCPMissingUserEnvVarsError,
     add_server_prefix_to_name,
+    build_env_var_setup_url,
+    collect_env_var_references,
     compute_short_server_prefix,
     get_server_prefix,
+    interpolate_headers,
     is_short_mcp_tool_prefix_enabled,
     is_tool_name_prefixed,
     iter_known_server_prefixes,
     merge_mcp_headers,
     normalize_server_name,
+    parse_admin_env_vars,
     split_server_prefix_from_name,
     validate_mcp_server_name,
 )
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
     MCPAuthType,
+    MCPEnvVar,
     MCPTransport,
     MCPTransportType,
     UserAPIKeyAuth,
@@ -70,6 +85,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
 from litellm.proxy.utils import ProxyLogging
+from litellm.repositories.table_repositories import MCPServerRepository
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import MCPAuth, MCPStdioConfig
 from litellm.types.mcp_server.mcp_server_manager import (
@@ -115,6 +131,130 @@ _AZURE_ENTRA_HOSTS = {
     "login.chinacloudapi.cn",  # China
 }
 
+# Short-lived in-memory cache for per-user MCP env var values, mirroring the
+# BYOK credential cache. Keyed by (user_id, server_id); value is
+# (values_dict, monotonic_timestamp). Keeps the tool-call and tool-listing
+# paths off the DB on every request within the TTL window.
+_user_env_vars_cache: Dict[Tuple[str, str], Tuple[Dict[str, str], float]] = {}
+_USER_ENV_VARS_CACHE_TTL = 60  # seconds
+_USER_ENV_VARS_CACHE_MAX_SIZE = 4096  # cap to prevent unbounded growth
+
+
+def invalidate_user_env_vars_cache(user_id: str, server_id: str) -> None:
+    """Drop a cached entry after the user stores or clears their env var values
+    so the next request reads the fresh value instead of a stale one."""
+    _user_env_vars_cache.pop((user_id, server_id), None)
+
+
+def _write_user_env_vars_cache(
+    user_id: str, server_id: str, values: Dict[str, str]
+) -> None:
+    cache_key = (user_id, server_id)
+    # Re-insert at the tail so eviction drops the oldest-written entry, not a
+    # freshly refreshed one, and only sheds a single entry instead of wiping the
+    # whole cache (which would stampede the DB).
+    _user_env_vars_cache.pop(cache_key, None)
+    if len(_user_env_vars_cache) >= _USER_ENV_VARS_CACHE_MAX_SIZE:
+        _user_env_vars_cache.pop(next(iter(_user_env_vars_cache)), None)
+    _user_env_vars_cache[cache_key] = (values, time.monotonic())
+
+
+def _should_strip_caller_authorization(
+    mcp_server: MCPServer,
+    raw_headers: Optional[Dict[str, str]],
+    user_api_key_auth: Optional[UserAPIKeyAuth],
+) -> bool:
+    """Decide whether the caller's ``Authorization`` header must NOT be
+    forwarded upstream when populating ``extra_headers`` for an MCP server.
+
+    Centralized so ``_call_regular_mcp_tool`` (this module) and
+    ``_prepare_mcp_server_headers`` (``server.py``) cannot drift apart on
+    this security-sensitive decision.
+
+    Strip rules:
+    - **M2M (client_credentials) servers**: never forward the caller's
+      ``Authorization`` — the proxy fetches its own upstream token.
+    - **OAuth pass-through servers**: strip when the ``Authorization``
+      header is actually the LiteLLM API key — either because admission
+      validated it (``user_api_key_auth.api_key`` is set) and the caller
+      did NOT also supply ``x-litellm-api-key`` to disambiguate, or
+      because the legacy ``user_api_key_auth is None`` call sites did
+      not supply an explicit admission header.  In the anonymous /
+      pass-through cold-start case (RFC 9728) the bearer in
+      ``Authorization`` is the upstream OAuth token and must be
+      forwarded, so we keep it.
+    """
+    if mcp_server.has_client_credentials:
+        return True
+    if not mcp_server.is_oauth_passthrough:
+        return False
+
+    normalized_raw_headers = {
+        str(k).lower(): v for k, v in (raw_headers or {}).items() if isinstance(k, str)
+    }
+    has_explicit_litellm_admission_header = (
+        normalized_raw_headers.get("x-litellm-api-key") is not None
+    )
+    admission_consumed_authorization_as_litellm_key = (
+        user_api_key_auth is not None
+        and bool(getattr(user_api_key_auth, "api_key", None))
+        and not has_explicit_litellm_admission_header
+    )
+    return admission_consumed_authorization_as_litellm_key or (
+        user_api_key_auth is None and not has_explicit_litellm_admission_header
+    )
+
+
+def _extract_upstream_auth_failure(
+    exc: BaseException,
+) -> Optional[Tuple[int, Optional[str]]]:
+    """Walk the exception tree looking for an HTTP 401/403 response from the
+    upstream MCP server.
+
+    The MCP SDK wraps transport errors in anyio ``ExceptionGroup`` objects and
+    may chain through ``__cause__`` / ``__context__``. We inspect all of those
+    layers for an ``httpx.Response``-bearing exception (typically
+    ``httpx.HTTPStatusError``) and extract the status code and any upstream
+    ``WWW-Authenticate`` header.
+
+    Returns ``(status_code, www_authenticate)`` on match, else ``None``.
+    """
+    seen: Set[int] = set()
+    stack: List[BaseException] = [exc]
+    while stack:
+        current = stack.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+
+        response = getattr(current, "response", None)
+        if response is not None:
+            status_code = getattr(response, "status_code", None)
+            if isinstance(status_code, int) and status_code in (401, 403):
+                www_authenticate: Optional[str] = None
+                headers = getattr(response, "headers", None)
+                if headers is not None:
+                    try:
+                        www_authenticate = headers.get("www-authenticate")
+                    except Exception:
+                        www_authenticate = None
+                return status_code, www_authenticate
+
+        # anyio / PEP 654 ExceptionGroup
+        sub_exceptions = getattr(current, "exceptions", None)
+        if sub_exceptions:
+            stack.extend(sub_exceptions)
+
+        if current.__cause__ is not None:
+            stack.append(current.__cause__)
+        if (
+            current.__context__ is not None
+            and current.__context__ is not current.__cause__
+        ):
+            stack.append(current.__context__)
+
+    return None
+
 
 def _warn_on_server_name_fields(
     *,
@@ -144,6 +284,30 @@ def _warn_on_server_name_fields(
     _warn("server_name", server_name)
 
 
+def _warn_internal_delegate_pkce_if_applicable(
+    server: MCPServer, *, source: str
+) -> None:
+    """Surface internal + upstream PKCE delegate in logs for operators."""
+    if server.auth_type != MCPAuth.oauth2:
+        return
+    if getattr(server, "delegate_auth_to_upstream", False) is not True:
+        return
+    if getattr(server, "available_on_public_internet", True):
+        return
+    if server.has_client_credentials:
+        return
+    label = get_server_prefix(server)
+    verbose_logger.warning(
+        "MCP server %r (id=%s, source=%s): internal-only (available_on_public_internet=false) "
+        "with delegate_auth_to_upstream=true. Anonymous callers can reach the upstream OAuth2 "
+        "/authorize flow and complete PKCE without a LiteLLM API key session; ensure the "
+        "upstream IdP and network enforce your access policy.",
+        label,
+        server.server_id,
+        source,
+    )
+
+
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
     """
     Deserialize optional JSON mappings stored in the database.
@@ -165,8 +329,140 @@ def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
         return data
 
 
+def _deserialize_json_list(data: Any) -> Optional[List[Dict[str, Any]]]:
+    """Deserialize a JSON array stored in the DB (``env_vars`` and friends).
+
+    Returns ``None`` for empty / null / unparseable input. Accepts strings
+    (raw JSON), already-materialized lists of dicts, and lists of Pydantic
+    models (Prisma may hydrate a JSON column such as ``env_vars`` into
+    ``MCPEnvVar`` objects); model entries are normalized to plain dicts so
+    downstream consumers expecting ``List[Dict[str, Any]]`` validate.
+    """
+    if data is None or data == "" or data == []:
+        return None
+    if isinstance(data, str):
+        try:
+            parsed = json.loads(data)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        data = parsed
+    if not isinstance(data, list):
+        return None
+    return [
+        item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+        for item in data
+    ]
+
+
+def _create_sampling_callback(user_api_key_auth: Optional[Any] = None):
+    """
+    Create a sampling callback for MCP ClientSession.
+    Returns a callable that handles sampling/createMessage requests from
+    upstream MCP servers by routing them through litellm.acompletion().
+    """
+    if not MCP_SAMPLING_AVAILABLE:
+        return None
+
+    async def _sampling_callback(context, params):
+        from litellm.proxy._experimental.mcp_server.sampling_handler import (
+            handle_sampling_create_message,
+        )
+        import litellm
+        from litellm.proxy._experimental.mcp_server.server import (
+            get_active_auth_context,
+        )
+
+        auth_context = get_active_auth_context()
+        resolved_auth = user_api_key_auth or (
+            auth_context.user_api_key_auth if auth_context else None
+        )
+        # Forward original HTTP headers and client IP so that
+        # header-dependent guardrails, tag-based routing, trace
+        # correlation, and forward_llm_provider_auth_headers work
+        # correctly for sampling sub-calls.
+        _raw_headers = getattr(auth_context, "raw_headers", None)
+        _client_ip = getattr(auth_context, "client_ip", None)
+
+        return await handle_sampling_create_message(
+            context=context,
+            params=params,
+            default_model=getattr(litellm, "default_mcp_sampling_model", None),
+            user_api_key_auth=resolved_auth,
+            raw_headers=_raw_headers,
+            client_ip=_client_ip,
+        )
+
+    return _sampling_callback
+
+
+def _create_elicitation_callback():
+    """
+    Create an elicitation callback for MCP ClientSession.
+    Returns a callable that handles elicitation/create requests from
+    upstream MCP servers. In gateway mode, this relays to the downstream
+    client; in tool bridge mode, it returns a decline response.
+    """
+    if not MCP_ELICITATION_AVAILABLE:
+        return None
+
+    async def _elicitation_callback(context, params):
+        from litellm.proxy._experimental.mcp_server.elicitation_handler import (
+            handle_elicitation_request,
+        )
+        from litellm.proxy._experimental.mcp_server.server import get_active_mcp_session
+
+        # In Gateway mode, we relay the elicitation request to the downstream client
+        # that triggered the current operation.
+        downstream_session = get_active_mcp_session()
+        downstream_capabilities = (
+            getattr(downstream_session, "capabilities", None)
+            if downstream_session
+            else None
+        )
+
+        return await handle_elicitation_request(
+            context=context,
+            params=params,
+            downstream_session=downstream_session,
+            downstream_capabilities=downstream_capabilities,
+        )
+
+    return _elicitation_callback
+
+
 class MCPServerManager:
     _STDIO_ENV_TEMPLATE_PATTERN = re.compile(r"^\$\{(X-[^}]+)\}$")
+
+    @staticmethod
+    def _resolve_oauth2_flow(
+        *,
+        auth_type: Optional[MCPAuthType],
+        oauth2_flow: Optional[str],
+        token_url: Optional[str],
+        authorization_url: Optional[str],
+        client_id: Optional[str],
+        client_secret: Optional[str],
+    ) -> Optional[Literal["client_credentials", "authorization_code"]]:
+        """Infer oauth2_flow for legacy records that omit the field.
+
+        DB rows created before oauth2_flow support may have OAuth2 client
+        credentials + token_url but a null oauth2_flow. Treat these as M2M,
+        unless authorization_url is present (interactive OAuth).
+        """
+        if oauth2_flow in ("client_credentials", "authorization_code"):
+            return cast(
+                Literal["client_credentials", "authorization_code"], oauth2_flow
+            )
+        if oauth2_flow:
+            # Ignore unknown/untyped values and continue legacy inference.
+            return None
+        if auth_type != MCPAuth.oauth2:
+            return None
+        if authorization_url:
+            return None
+        if token_url and client_id and client_secret:
+            return "client_credentials"
+        return None
 
     def __init__(self):
         self.registry: Dict[str, MCPServer] = {}
@@ -194,6 +490,10 @@ class MCPServerManager:
         }
         """
         self._upstream_initialize_instructions_by_server_id: Dict[str, str] = {}
+        # Per-server monotonic timestamp of last upstream prefetch attempt (success,
+        # empty result, or failure). Used to throttle re-probes for servers that do
+        # not return instructions, and to apply a short cooldown after failures.
+        self._upstream_initialize_instructions_probed_at: Dict[str, float] = {}
 
     def _remember_upstream_initialize_instructions(
         self, server: MCPServer, client: MCPClient
@@ -203,6 +503,88 @@ class MCPServerManager:
             self._upstream_initialize_instructions_by_server_id[server.server_id] = str(
                 raw
             ).strip()
+
+    async def _ensure_upstream_initialize_instructions_cached(
+        self, server: MCPServer
+    ) -> None:
+        """
+        Open one upstream session and cache InitializeResult.instructions if missing.
+
+        No-op when:
+          - YAML/DB instructions are set on the server record,
+          - server is OpenAPI (spec_path),
+          - non-empty upstream instructions are already cached,
+          - auth preconditions match health_check_server's skip rules
+            (per-user auth / missing static auth token / static headers that
+            reference a per-user env var),
+          - a prior probe attempt for this server is within
+            MCP_HEALTH_CHECK_TIMEOUT seconds (the probe is a health-check-shaped
+            op and already uses this knob for its inner call timeout; reusing it
+            as the cooldown avoids reconnecting on every gateway initialize when
+            upstream returns empty or fails).
+        """
+        if server.spec_path:
+            return
+        if server.instructions and server.instructions.strip():
+            return
+        if self._upstream_initialize_instructions_by_server_id.get(server.server_id):
+            return
+        if server.requires_per_user_auth:
+            return
+        if self._references_per_user_env_var(server):
+            return
+        if (
+            server.auth_type
+            and server.auth_type != MCPAuth.none
+            and server.auth_type != MCPAuth.aws_sigv4
+            and not server.authentication_token
+        ):
+            return
+
+        last_probed_at = self._upstream_initialize_instructions_probed_at.get(
+            server.server_id
+        )
+        if (
+            last_probed_at is not None
+            and (time.monotonic() - last_probed_at) < MCP_HEALTH_CHECK_TIMEOUT
+        ):
+            return
+
+        # Record the attempt up-front so that a failure / empty response does not
+        # cause every subsequent initialize request to re-open the upstream session.
+        self._upstream_initialize_instructions_probed_at[server.server_id] = (
+            time.monotonic()
+        )
+
+        try:
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server=server,
+                user_api_key_auth=None,
+                raise_on_missing=False,
+            )
+            extra_headers: Optional[Dict[str, str]] = (
+                dict(resolved_static_headers) if resolved_static_headers else None
+            )
+            client = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=None,
+                extra_headers=extra_headers,
+                stdio_env=None,
+            )
+
+            async def _noop(_session):
+                return "ok"
+
+            await asyncio.wait_for(
+                client.run_with_session(_noop), timeout=MCP_HEALTH_CHECK_TIMEOUT
+            )
+            self._remember_upstream_initialize_instructions(server, client)
+        except Exception as e:
+            verbose_logger.debug(
+                "Upstream initialize instructions prefetch failed for %s: %s",
+                server.name,
+                e,
+            )
 
     def get_registry(self) -> Dict[str, MCPServer]:
         """
@@ -224,6 +606,7 @@ class MCPServerManager:
         """
         verbose_logger.debug("Loading MCP Servers from config-----")
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_instructions_probed_at.clear()
 
         # Track which aliases have been used to ensure only first occurrence is used
         used_aliases = set()
@@ -238,32 +621,6 @@ class MCPServerManager:
                 mcp_info["server_name"] = server_name
             if "description" not in mcp_info and server_config.get("description"):
                 mcp_info["description"] = server_config.get("description")
-
-            # Use alias for name if present, else server_name
-            alias = server_config.get("alias", None)
-
-            # Apply mcp_aliases mapping if provided
-            if mcp_aliases and alias is None:
-                # Check if this server_name has an alias in mcp_aliases
-                for alias_name, target_server_name in mcp_aliases.items():
-                    if (
-                        target_server_name == server_name
-                        and alias_name not in used_aliases
-                    ):
-                        alias = alias_name
-                        used_aliases.add(alias_name)
-                        verbose_logger.debug(
-                            f"Mapped alias '{alias_name}' to server '{server_name}'"
-                        )
-                        break
-
-            # Create a temporary server object to use with get_server_prefix utility
-            temp_server = type(
-                "TempServer",
-                (),
-                {"alias": alias, "server_name": server_name, "server_id": None},
-            )()
-            name_for_prefix = get_server_prefix(temp_server)
 
             # Use alias for name if present, else server_name
             alias = server_config.get("alias", None)
@@ -341,7 +698,14 @@ class MCPServerManager:
                 # oauth specific fields
                 client_id=server_config.get("client_id", None),
                 client_secret=server_config.get("client_secret", None),
-                oauth2_flow=server_config.get("oauth2_flow", None),
+                oauth2_flow=self._resolve_oauth2_flow(
+                    auth_type=auth_type,
+                    oauth2_flow=server_config.get("oauth2_flow", None),
+                    token_url=resolved_token_url,
+                    authorization_url=resolved_authorization_url,
+                    client_id=server_config.get("client_id", None),
+                    client_secret=server_config.get("client_secret", None),
+                ),
                 scopes=resolved_scopes,
                 authorization_url=resolved_authorization_url,
                 token_url=resolved_token_url,
@@ -359,10 +723,15 @@ class MCPServerManager:
                 allowed_params=server_config.get("allowed_params", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
+                env_vars=server_config.get("env_vars", None),
                 allow_all_keys=bool(server_config.get("allow_all_keys", False)),
                 available_on_public_internet=bool(
                     server_config.get("available_on_public_internet", True)
                 ),
+                delegate_auth_to_upstream=bool(
+                    server_config.get("delegate_auth_to_upstream", False)
+                ),
+                oauth_passthrough=bool(server_config.get("oauth_passthrough", False)),
                 # AWS SigV4 fields
                 aws_access_key_id=server_config.get("aws_access_key_id", None),
                 aws_secret_access_key=server_config.get("aws_secret_access_key", None),
@@ -372,8 +741,21 @@ class MCPServerManager:
                 aws_role_name=server_config.get("aws_role_name", None),
                 aws_session_name=server_config.get("aws_session_name", None),
                 instructions=server_config.get("instructions", None),
+                # Token Exchange (OBO) fields
+                token_exchange_endpoint=server_config.get(
+                    "token_exchange_endpoint", None
+                ),
+                audience=server_config.get("audience", None),
+                subject_token_type=server_config.get(
+                    "subject_token_type",
+                    "urn:ietf:params:oauth:token-type:access_token",
+                ),
+                allow_sampling=bool(server_config.get("allow_sampling", False)),
+                allow_elicitation=bool(server_config.get("allow_elicitation", False)),
+                timeout=server_config.get("timeout", None),
             )
             self._assign_unique_short_prefix(new_server)
+            _warn_internal_delegate_pkce_if_applicable(new_server, source="config")
             self.config_mcp_servers[server_id] = new_server
 
             # Check if this is an OpenAPI-based server
@@ -458,7 +840,8 @@ class MCPServerManager:
             # Add any static headers from server config.
             #
             # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
-            # from the client request (not available in this OpenAPI tool generation step).
+            # from each client MCP request; values are applied at call time via
+            # `_request_extra_headers` in server.py (not baked in here).
             # `static_headers` is a dict of concrete headers to always send.
             headers = (
                 merge_mcp_headers(
@@ -469,8 +852,7 @@ class MCPServerManager:
             )
 
             verbose_logger.debug(
-                f"Using headers for OpenAPI tools (excluding sensitive values): "
-                f"{list(headers.keys())}"
+                f"Using headers for OpenAPI tools (excluding sensitive values): {list(headers.keys())}"
             )
 
             # Extract and register tools from OpenAPI paths
@@ -550,31 +932,96 @@ class MCPServerManager:
             )
             raise e
 
+    def _cleanup_server_tool_routing_artifacts(self, server: MCPServer) -> None:
+        """Drop OpenAPI global tools and name-mapping rows owned by ``server``.
+
+        When a server leaves ``self.registry`` (eviction, ``remove_server``, etc.),
+        OpenAPI tools remain in ``global_mcp_tool_registry`` and
+        ``tool_name_to_mcp_server_name_mapping`` unless removed here. Stale
+        mappings make ``_get_mcp_server_from_tool_name`` resolve to a prefix that
+        no longer exists in the live registry.
+        """
+        from litellm.proxy._experimental.mcp_server.tool_registry import (
+            global_mcp_tool_registry,
+        )
+
+        prefix_root = normalize_server_name(get_server_prefix(server))
+        if server.spec_path and prefix_root:
+            openapi_key_prefix = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
+            global_mcp_tool_registry.unregister_tools_with_prefix(openapi_key_prefix)
+
+        owned_raw: Set[str] = set()
+        for p in iter_known_server_prefixes(server):
+            if p:
+                owned_raw.add(p)
+        if server.name:
+            owned_raw.add(server.name)
+
+        owned_normalized = {normalize_server_name(x) for x in owned_raw}
+
+        stale_mapping_keys: List[str] = []
+        for tool_name, mapped_server in list(
+            self.tool_name_to_mcp_server_name_mapping.items()
+        ):
+            if mapped_server in owned_raw:
+                stale_mapping_keys.append(tool_name)
+            elif normalize_server_name(str(mapped_server)) in owned_normalized:
+                stale_mapping_keys.append(tool_name)
+
+        for key in stale_mapping_keys:
+            del self.tool_name_to_mcp_server_name_mapping[key]
+
     def remove_server(self, mcp_server: LiteLLM_MCPServerTable):
         """
         Remove a server from the registry
         """
-        if mcp_server.server_name in self.get_registry():
-            del self.registry[mcp_server.server_name]
-            verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_name}")
-        elif mcp_server.server_id in self.get_registry():
-            del self.registry[mcp_server.server_id]
-            verbose_logger.debug(f"Removed MCP Server: {mcp_server.server_id}")
+        evicted: Optional[MCPServer] = self.registry.pop(mcp_server.server_id, None)
+        if evicted is None and mcp_server.server_name:
+            evicted = self.registry.pop(mcp_server.server_name, None)
+        if evicted is not None:
+            verbose_logger.debug(
+                "Removed MCP Server: %s", mcp_server.server_id or mcp_server.server_name
+            )
+            self._cleanup_server_tool_routing_artifacts(evicted)
         else:
             verbose_logger.warning(
                 f"Server ID {mcp_server.server_id} not found in registry"
             )
+
+    def _resolve_env_vars_list(
+        self,
+        mcp_server: LiteLLM_MCPServerTable,
+        *,
+        env_vars_are_encrypted: bool,
+    ) -> Optional[List[Dict[str, Any]]]:
+        env_vars_list = _deserialize_json_list(getattr(mcp_server, "env_vars", None))
+        if env_vars_are_encrypted:
+            from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+                decrypt_global_env_var_values,
+            )
+
+            decrypt_global_env_var_values(env_vars_list)
+        return env_vars_list
 
     async def build_mcp_server_from_table(
         self,
         mcp_server: LiteLLM_MCPServerTable,
         *,
         credentials_are_encrypted: bool = True,
+        env_vars_are_encrypted: Optional[bool] = None,
     ) -> MCPServer:
         _mcp_info: MCPInfo = mcp_server.mcp_info or {}
         env_dict = _deserialize_json_dict(getattr(mcp_server, "env", None))
         static_headers_dict = _deserialize_json_dict(
             getattr(mcp_server, "static_headers", None)
+        )
+        env_vars_list = self._resolve_env_vars_list(
+            mcp_server,
+            env_vars_are_encrypted=(
+                credentials_are_encrypted
+                if env_vars_are_encrypted is None
+                else env_vars_are_encrypted
+            ),
         )
         credentials_dict = _deserialize_json_dict(
             getattr(mcp_server, "credentials", None)
@@ -675,10 +1122,21 @@ class MCPServerManager:
             mcp_info=mcp_info,
             extra_headers=getattr(mcp_server, "extra_headers", None),
             static_headers=static_headers_dict,
+            env_vars=env_vars_list,
             client_id=client_id_value or getattr(mcp_server, "client_id", None),
             client_secret=client_secret_value
             or getattr(mcp_server, "client_secret", None),
-            oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+            oauth2_flow=self._resolve_oauth2_flow(
+                auth_type=auth_type,
+                oauth2_flow=getattr(mcp_server, "oauth2_flow", None),
+                token_url=mcp_server.token_url
+                or getattr(mcp_oauth_metadata, "token_url", None),
+                authorization_url=mcp_server.authorization_url
+                or getattr(mcp_oauth_metadata, "authorization_url", None),
+                client_id=client_id_value or getattr(mcp_server, "client_id", None),
+                client_secret=client_secret_value
+                or getattr(mcp_server, "client_secret", None),
+            ),
             scopes=resolved_scopes,
             authorization_url=mcp_server.authorization_url
             or getattr(mcp_oauth_metadata, "authorization_url", None),
@@ -696,6 +1154,10 @@ class MCPServerManager:
             available_on_public_internet=bool(
                 getattr(mcp_server, "available_on_public_internet", True)
             ),
+            delegate_auth_to_upstream=bool(
+                getattr(mcp_server, "delegate_auth_to_upstream", False)
+            ),
+            oauth_passthrough=bool(getattr(mcp_server, "oauth_passthrough", False)),
             created_at=getattr(mcp_server, "created_at", None),
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(
@@ -707,6 +1169,7 @@ class MCPServerManager:
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
+            source_url=getattr(mcp_server, "source_url", None),
             # AWS SigV4 fields
             aws_access_key_id=aws_creds.get("aws_access_key_id"),
             aws_secret_access_key=aws_creds.get("aws_secret_access_key"),
@@ -716,10 +1179,25 @@ class MCPServerManager:
             aws_role_name=aws_creds.get("aws_role_name"),
             aws_session_name=aws_creds.get("aws_session_name"),
             instructions=mcp_server.instructions,
+            # Token Exchange (OBO) fields — read from credentials JSON blob
+            token_exchange_endpoint=(
+                credentials_dict.get("token_exchange_endpoint")
+                if credentials_dict
+                else None
+            ),
+            audience=(credentials_dict.get("audience") if credentials_dict else None),
+            subject_token_type=(
+                credentials_dict.get("subject_token_type") if credentials_dict else None
+            )
+            or "urn:ietf:params:oauth:token-type:access_token",
+            timeout=getattr(mcp_server, "timeout", None),
         )
+        _warn_internal_delegate_pkce_if_applicable(new_server, source="database")
         return new_server
 
-    async def _maybe_register_openapi_tools(self, server: MCPServer):
+    async def _maybe_register_openapi_tools(
+        self, server: MCPServer, *, initialize_mapping: bool = True
+    ):
         """Register OpenAPI tools if the server has a spec_path configured."""
         if server.spec_path:
             verbose_logger.info(
@@ -730,12 +1208,27 @@ class MCPServerManager:
                 server=server,
                 base_url=server.url or "",
             )
-            self.initialize_tool_name_to_mcp_server_name_mapping()
+            if initialize_mapping:
+                self.initialize_tool_name_to_mcp_server_name_mapping()
 
     async def add_server(self, mcp_server: LiteLLM_MCPServerTable):
+        # The runtime registry is the allowlist for tool calls and health
+        # probes (which spawn the underlying transport, including stdio
+        # subprocesses). Match the eligibility set used by the bulk DB
+        # filter in reload_servers_from_database() — NULL is legacy and
+        # "approved" is a legacy alias for "active".
+        if mcp_server.approval_status not in (None, "active", "approved"):
+            return
         try:
             if mcp_server.server_id not in self.registry:
-                new_server = await self.build_mcp_server_from_table(mcp_server)
+                # Callers hand us a record returned by the db.py read/write
+                # helpers, which already decrypt global env var values (the
+                # `credentials` field is the only one still encrypted here).
+                # Re-decrypting plaintext would zero the values, so build with
+                # env_vars_are_encrypted=False.
+                new_server = await self.build_mcp_server_from_table(
+                    mcp_server, env_vars_are_encrypted=False
+                )
                 self._assign_unique_short_prefix(new_server)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
@@ -746,9 +1239,23 @@ class MCPServerManager:
             raise e
 
     async def update_server(self, mcp_server: LiteLLM_MCPServerTable):
+        # If a previously-active server has been moved out of the active
+        # state, evict any stale registry entry so subsequent tool calls and
+        # health probes can't reach it.
+        if mcp_server.approval_status not in (None, "active", "approved"):
+            evicted = self.registry.pop(mcp_server.server_id, None)
+            if evicted is None and mcp_server.server_name:
+                evicted = self.registry.pop(mcp_server.server_name, None)
+            if evicted is not None:
+                self._cleanup_server_tool_routing_artifacts(evicted)
+            return
         try:
             if mcp_server.server_id in self.registry:
-                new_server = await self.build_mcp_server_from_table(mcp_server)
+                # See add_server: db.py helpers already decrypted env var
+                # values, so don't decrypt them a second time here.
+                new_server = await self.build_mcp_server_from_table(
+                    mcp_server, env_vars_are_encrypted=False
+                )
                 # Carry the previously-resolved short prefix across so the
                 # tool names stay stable for clients holding cached lists.
                 existing_prefix = self.registry[mcp_server.server_id].short_prefix
@@ -835,6 +1342,31 @@ class MCPServerManager:
             in_toolset_scope = _mcp_active_toolset_id.get() is not None
             if not in_toolset_scope:
                 combined_servers.update(allow_all_server_ids)
+
+            # For anonymous callers (no user_id, no role), also surface any
+            # servers the operator has opted into upstream-delegated auth.
+            # These servers handle their own auth at the upstream level, so
+            # LiteLLM granting access here does not bypass any security gate.
+            is_anonymous = not (
+                user_api_key_auth
+                and (
+                    getattr(user_api_key_auth, "user_id", None)
+                    or getattr(user_api_key_auth, "user_role", None)
+                    or getattr(user_api_key_auth, "api_key", None)
+                )
+            )
+            if is_anonymous:
+                delegate_server_ids = [
+                    server.server_id
+                    for server in self.get_registry().values()
+                    if getattr(server, "auth_type", None) == MCPAuth.oauth2
+                    and getattr(server, "delegate_auth_to_upstream", False) is True
+                    # M2M servers must not be exposed anonymously: an
+                    # unauthenticated caller would get LiteLLM to proxy tool
+                    # calls using its stored client_credentials.
+                    and not server.has_client_credentials
+                ]
+                combined_servers.update(delegate_server_ids)
 
             if len(combined_servers) == 0:
                 verbose_logger.debug(
@@ -1050,11 +1582,17 @@ class MCPServerManager:
                 return []
 
             # Get server-specific auth header if available
-            server_auth_header = None
-            if mcp_server_auth_headers and server.alias:
-                server_auth_header = mcp_server_auth_headers.get(server.alias)
-            elif mcp_server_auth_headers and server.server_name:
-                server_auth_header = mcp_server_auth_headers.get(server.server_name)
+            server_auth_header: Optional[Union[str, Dict[str, str]]] = None
+            if mcp_server_auth_headers:
+                from litellm.proxy._experimental.mcp_server.utils import (
+                    lookup_mcp_server_auth_in_headers,
+                )
+
+                server_auth_header = lookup_mcp_server_auth_in_headers(
+                    mcp_server_auth_headers,
+                    alias=server.alias,
+                    server_name=server.server_name,
+                )
 
             # Fall back to deprecated mcp_auth_header if no server-specific header found
             if server_auth_header is None:
@@ -1064,6 +1602,7 @@ class MCPServerManager:
                 tools = await self._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
+                    user_api_key_auth=user_api_key_auth,
                 )
                 return tools
             except Exception as e:
@@ -1087,6 +1626,29 @@ class MCPServerManager:
     #########################################################
     # Methods that call the upstream MCP servers
     #########################################################
+    @staticmethod
+    def _extract_bearer_token(
+        oauth2_headers: Optional[Dict[str, str]],
+        raw_headers: Optional[Dict[str, str]],
+    ) -> Optional[str]:
+        """Extract the bare Bearer token from oauth2_headers or raw_headers.
+
+        Returns the token string without the ``Bearer `` prefix, or ``None``
+        if no Authorization header is found.
+        """
+        auth_value: Optional[str] = None
+        if oauth2_headers and "Authorization" in oauth2_headers:
+            auth_value = oauth2_headers["Authorization"]
+        elif raw_headers:
+            # raw_headers may have lowercase keys depending on the ASGI server
+            normalized = {k.lower(): v for k, v in raw_headers.items()}
+            auth_value = normalized.get("authorization")
+        if auth_value:
+            if auth_value.startswith("Bearer "):
+                return auth_value[len("Bearer ") :]
+            return auth_value
+        return None
+
     def _build_stdio_env(
         self,
         server: MCPServer,
@@ -1114,51 +1676,253 @@ class MCPServerManager:
 
         return resolved_env
 
+    def _references_per_user_env_var(self, server: MCPServer) -> bool:
+        """True when ``server.static_headers`` reference a per-user ``${NAME}`` env var.
+
+        Such placeholders can only be filled from a calling user's stored values,
+        so a userless probe (health check / instructions prefetch) would forward
+        the literal ``${NAME}`` upstream and get rejected. Callers skip the probe
+        and report ``unknown`` instead of a misleading ``unhealthy``.
+        """
+        static_headers = server.static_headers
+        env_vars = getattr(server, "env_vars", None)
+        if not static_headers or not env_vars:
+            return False
+        _global_values, user_specs = parse_admin_env_vars(env_vars)
+        user_var_names = {spec["name"] for spec in user_specs}
+        if not user_var_names:
+            return False
+        referenced = collect_env_var_references(strings=static_headers.values())
+        return bool(referenced & user_var_names)
+
+    async def _resolve_static_headers_with_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        *,
+        raise_on_missing: bool = True,
+    ) -> Optional[Dict[str, str]]:
+        """Return server.static_headers with ``${NAME}`` interpolated.
+
+        Globals come from ``server.env_vars`` entries with ``scope=="global"``.
+        Per-user values come from the ``LiteLLM_MCPUserEnvVars`` row for the
+        calling user.
+
+        When ``raise_on_missing`` is ``True`` (the tool-*call* path), raises
+        ``MCPMissingUserEnvVarsError`` if ``static_headers`` reference a per-user
+        variable the calling user has not yet supplied — converted into a
+        user-facing 412 by the REST layer.
+
+        When ``raise_on_missing`` is ``False`` (the tool-*list* path), missing
+        per-user vars are non-blocking: we interpolate whatever is available and
+        leave unfilled ``${NAME}`` references untouched, so the server's tools
+        still appear in the listing. The user only hits the friendly error when
+        they actually invoke a tool that needs the missing value.
+        """
+        static_headers = server.static_headers
+        env_vars = getattr(server, "env_vars", None)
+        if not static_headers and not env_vars:
+            return static_headers
+
+        global_values, user_specs = parse_admin_env_vars(env_vars)
+        # An empty-valued global is treated as unset: it must not mask a per-user
+        # var the user still has to supply, nor override a value the user did
+        # supply. The unresolved ${NAME} is then left untouched, like any other
+        # undefined reference.
+        global_values = {name: value for name, value in global_values.items() if value}
+        user_var_names = {spec["name"] for spec in user_specs}
+
+        # If no env vars are configured, return static_headers as-is.
+        if not global_values and not user_specs:
+            return static_headers
+
+        # Figure out which user-scoped vars are actually referenced. A var that
+        # also carries a global value is always covered by that global (globals
+        # win in the merge below), so it can never be genuinely "missing" even if
+        # the user hasn't filled it in -- only vars without a global fallback do.
+        referenced = collect_env_var_references(strings=(static_headers or {}).values())
+        referenced_user_vars = referenced & user_var_names
+        required_user_vars = {
+            name for name in referenced_user_vars if name not in global_values
+        }
+
+        user_values: Dict[str, str] = {}
+        if required_user_vars:
+            try:
+                user_values = await self._load_user_env_vars(server, user_api_key_auth)
+            except Exception as exc:
+                # On the tool-call path a DB failure must surface as a real
+                # server error, not a misleading "set up your credentials" 412.
+                # On the listing path we stay best-effort and leave the
+                # unfilled ${NAME} references untouched so tools still appear.
+                if raise_on_missing:
+                    raise
+                verbose_logger.warning(
+                    "MCPServerManager: best-effort user env var load failed for "
+                    "server=%s: %s",
+                    server.server_id,
+                    exc,
+                )
+
+            if raise_on_missing:
+                missing = sorted(
+                    name for name in required_user_vars if not user_values.get(name)
+                )
+                if missing:
+                    # A cached negative must never produce a 412: cache
+                    # invalidation is process-local, so a user who just stored
+                    # values on another worker would otherwise be told their
+                    # credentials are missing until the entry expires. Confirm
+                    # against the DB before raising.
+                    user_values = await self._load_user_env_vars(
+                        server, user_api_key_auth, force_refresh=True
+                    )
+                    missing = sorted(
+                        name for name in required_user_vars if not user_values.get(name)
+                    )
+                if missing:
+                    raise MCPMissingUserEnvVarsError(
+                        server_id=server.server_id,
+                        server_name=server.server_name or server.name,
+                        missing=missing,
+                        setup_url=build_env_var_setup_url(server.server_id),
+                    )
+
+        # Only honor stored user values for currently user-scoped vars, and let
+        # admin globals win, so a stale row from when a var was user-scoped can
+        # never override the global value the admin set after switching it.
+        scoped_user_values = {
+            name: value for name, value in user_values.items() if name in user_var_names
+        }
+        merged_vars: Dict[str, str] = {**scoped_user_values, **global_values}
+        if not static_headers:
+            return static_headers
+        return interpolate_headers(static_headers, merged_vars)
+
+    async def _load_user_env_vars(
+        self,
+        server: MCPServer,
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+        *,
+        force_refresh: bool = False,
+    ) -> Dict[str, str]:
+        """Look up the calling user's env var values for ``server``.
+
+        Returns an empty dict when no user is available. Results are cached in a
+        short-lived in-memory map keyed by (user_id, server_id) so the tool-call
+        and tool-listing paths avoid a DB round-trip per request within the TTL
+        window; the cache is invalidated when the user stores or clears values.
+        Pass ``force_refresh`` to bypass the cache read and re-fetch from the DB
+        (used before raising a "missing credentials" error so a process-local
+        stale entry cannot mask values stored on another worker). A missing DB
+        connection and any other DB error propagate so the caller can decide
+        between failing the request (tool-call path) and staying best-effort
+        (listing path); they must never be mistaken for "user has no values",
+        which would send the user a misleading "set up your credentials" 412.
+        """
+        if user_api_key_auth is None:
+            return {}
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        if not user_id:
+            return {}
+
+        cache_key = (user_id, server.server_id)
+        if not force_refresh:
+            cached = _user_env_vars_cache.get(cache_key)
+            if cached is not None:
+                values, ts = cached
+                if time.monotonic() - ts < _USER_ENV_VARS_CACHE_TTL:
+                    return values
+
+        from litellm.proxy.proxy_server import prisma_client  # noqa: PLC0415
+
+        if prisma_client is None:
+            raise RuntimeError(
+                "MCP per-user env vars require a database connection, but none "
+                "is configured. Connect a database to your proxy to use per-user "
+                "MCP env vars."
+            )
+        from litellm.proxy._experimental.mcp_server.db import (  # noqa: PLC0415
+            get_user_env_vars,
+        )
+
+        values = await get_user_env_vars(prisma_client, user_id, server.server_id)
+        _write_user_env_vars_cache(user_id, server.server_id, values)
+        return values
+
     async def _create_mcp_client(
         self,
         server: MCPServer,
         mcp_auth_header: Optional[Union[str, Dict[str, str]]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         stdio_env: Optional[Dict[str, str]] = None,
+        subject_token: Optional[str] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
 
         Auth resolution (single place for all auth logic):
         1. ``mcp_auth_header`` — per-request/per-user override
-        2. OAuth2 client_credentials token — auto-fetched and cached
-        3. ``server.authentication_token`` — static token from config/DB
+        2. OAuth2 Token Exchange (OBO) — exchange user token for scoped token
+        3. OAuth2 client_credentials token — auto-fetched and cached
+        4. ``server.authentication_token`` — static token from config/DB
 
         Args:
             server: The server configuration.
             mcp_auth_header: Optional per-request auth override.
             extra_headers: Additional headers to forward.
             stdio_env: Environment variables for stdio transport.
+            subject_token: Optional user JWT for token exchange (OBO) flow.
+            user_api_key_auth: Optional auth context for sampling callbacks.
 
         Returns:
             Configured MCP client instance.
         """
-        auth_value = await resolve_mcp_auth(server, mcp_auth_header)
+        auth_value = await resolve_mcp_auth(
+            server, mcp_auth_header, subject_token=subject_token
+        )
 
         transport = server.transport or MCPTransport.sse
+
+        # Create sampling and elicitation callbacks for this client
+        sampling_cb = (
+            _create_sampling_callback(user_api_key_auth=user_api_key_auth)
+            if server.allow_sampling
+            else None
+        )
+        elicitation_cb = (
+            _create_elicitation_callback() if server.allow_elicitation else None
+        )
 
         # Handle stdio transport
         if transport == MCPTransport.stdio:
             resolved_env = (
-                stdio_env if stdio_env is not None else dict(server.env or {})
+                stdio_env
+                if stdio_env is not None
+                else (dict(server.env) if server.env is not None else None)
             )
 
             # Ensure npm-based STDIO MCP servers have a writable cache dir.
             # In containers the default (~/.npm or /app/.npm) may not exist
             # or be read-only, causing npx to fail with ENOENT.
-            if "NPM_CONFIG_CACHE" not in resolved_env:
+            if resolved_env is not None and "NPM_CONFIG_CACHE" not in resolved_env:
                 resolved_env["NPM_CONFIG_CACHE"] = MCP_NPM_CACHE_DIR
             # Defense-in-depth: block commands not in the allowlist.
             # The Pydantic validator blocks new servers; this catches legacy
             # config/DB records predating the allowlist.
             if server.command:
                 base_command = os.path.basename(server.command)
-                if base_command not in MCP_STDIO_ALLOWED_COMMANDS:
+                # Strip .exe/.cmd/.bat/.com suffix for Windows compatibility
+                base_command_no_ext = base_command.lower()
+                for ext in [".exe", ".cmd", ".bat", ".com"]:
+                    if base_command.lower().endswith(ext):
+                        base_command_no_ext = base_command[: -len(ext)].lower()
+                        break
+                if (
+                    base_command.lower() not in MCP_STDIO_ALLOWED_COMMANDS
+                    and base_command_no_ext not in MCP_STDIO_ALLOWED_COMMANDS
+                ):
                     raise HTTPException(
                         status_code=403,
                         detail=f"MCP stdio command '{server.command}' is not in the allowlist ({sorted(MCP_STDIO_ALLOWED_COMMANDS)}). "
@@ -1178,9 +1942,13 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=MCP_CLIENT_TIMEOUT,
+                timeout=(
+                    server.timeout if server.timeout is not None else MCP_CLIENT_TIMEOUT
+                ),
                 stdio_config=stdio_config,
                 extra_headers=extra_headers,
+                sampling_callback=sampling_cb,
+                elicitation_callback=elicitation_cb,
             )
         else:
             # For HTTP/SSE transports
@@ -1204,9 +1972,13 @@ class MCPServerManager:
                 transport_type=transport,
                 auth_type=server.auth_type,
                 auth_value=auth_value,
-                timeout=MCP_CLIENT_TIMEOUT,
+                timeout=(
+                    server.timeout if server.timeout is not None else MCP_CLIENT_TIMEOUT
+                ),
                 extra_headers=extra_headers,
                 aws_auth=aws_auth,
+                sampling_callback=sampling_cb,
+                elicitation_callback=elicitation_cb,
             )
 
     async def _get_tools_from_server(
@@ -1216,6 +1988,7 @@ class MCPServerManager:
         extra_headers: Optional[Dict[str, str]] = None,
         add_prefix: bool = True,
         raw_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -1237,10 +2010,57 @@ class MCPServerManager:
         client = None
 
         try:
-            if server.static_headers:
+            # Tool *listing* must not be blocked by missing per-user env vars —
+            # the server's tools should still appear so the client connects. The
+            # friendly "missing vars" error is raised only on the tool-*call*
+            # path (see _call_regular_mcp_tool).
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server, user_api_key_auth, raise_on_missing=False
+            )
+            if resolved_static_headers:
                 if extra_headers is None:
                     extra_headers = {}
-                extra_headers.update(server.static_headers)
+                extra_headers.update(resolved_static_headers)
+
+            # MCPJWTSigner: inject signed JWT for tools/list (list path skips pre_call_hook).
+            # Skip entirely when the signer is not configured (avoid an unnecessary
+            # dict copy on every list call), when the server has its own static
+            # Authorization header, when a per-user mcp_auth_header has already
+            # been resolved, or when the caller already supplied an Authorization
+            # entry in extra_headers (e.g. a per-user OAuth token resolved
+            # upstream) — admin-configured static auth and per-user OAuth must
+            # take precedence so the signer doesn't silently overwrite e.g. an
+            # upstream API key or a user's OAuth token (MCPClient._get_auth_headers
+            # applies extra_headers after writing Authorization from auth_value, so
+            # an injected JWT would otherwise clobber the per-user token).
+            if user_api_key_auth is not None and not server.spec_path:
+                from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (
+                    get_mcp_jwt_signer,
+                    inject_mcp_jwt_headers_for_upstream,
+                )
+
+                static_headers = server.static_headers or {}
+                has_static_authorization = any(
+                    isinstance(k, str) and k.lower() == "authorization"
+                    for k in static_headers.keys()
+                )
+                has_extra_authorization = bool(extra_headers) and any(
+                    isinstance(k, str) and k.lower() == "authorization"
+                    for k in (extra_headers or {}).keys()
+                )
+
+                if (
+                    get_mcp_jwt_signer() is not None
+                    and not has_static_authorization
+                    and not mcp_auth_header
+                    and not has_extra_authorization
+                ):
+                    extra_headers = await inject_mcp_jwt_headers_for_upstream(
+                        user_api_key_dict=user_api_key_auth,
+                        extra_headers=extra_headers,
+                        raw_headers=raw_headers,
+                        for_list_tools=True,
+                    )
 
             stdio_env = self._build_stdio_env(server, raw_headers)
 
@@ -1249,6 +2069,7 @@ class MCPServerManager:
                 mcp_auth_header=mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
+                user_api_key_auth=user_api_key_auth,
             )
 
             ## HANDLE OPENAPI TOOLS
@@ -1280,7 +2101,9 @@ class MCPServerManager:
                     ]
                 return tools
             else:
-                tools = await self._fetch_tools_with_timeout(client, server.name)
+                tools = await self._fetch_tools_with_timeout(
+                    client, server.name, server=server
+                )
                 self._remember_upstream_initialize_instructions(server, client)
 
             prefixed_or_original_tools = self._create_prefixed_tools(
@@ -1289,6 +2112,11 @@ class MCPServerManager:
 
             return prefixed_or_original_tools
 
+        except MCPUpstreamAuthError:
+            # Pass-through 401 must surface to single-server routes so the
+            # client triggers the upstream OAuth flow. The multi-server
+            # aggregator catches this explicitly to keep absorbing.
+            raise
         except Exception as e:
             verbose_logger.warning(
                 f"Failed to get tools from server {server.name}: {str(e)}"
@@ -1499,6 +2327,47 @@ class MCPServerManager:
         )
         return await client.get_prompt(get_prompt_request_params)
 
+    @staticmethod
+    def _is_same_authority_metadata_url(url: str, server_url: str) -> bool:
+        """
+        Whether ``url`` shares scheme, host, and port with ``server_url``.
+
+        Same-authority metadata URLs are produced by our well-known discovery
+        construction and by resource servers that publish protected-resource
+        metadata on the resource origin. These must keep working for
+        administrator-configured internal MCP servers, so they are fetched
+        directly. Cross-origin URLs are fetched through ``async_safe_get``.
+        """
+        try:
+            target = urlparse(url)
+            base = urlparse(server_url)
+        except Exception:
+            return False
+
+        if target.scheme not in ("http", "https") or not target.hostname:
+            return False
+
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        base_port = base.port or (443 if base.scheme == "https" else 80)
+        return (
+            base.scheme == target.scheme
+            and (base.hostname or "").lower() == target.hostname.lower()
+            and base_port == target_port
+        )
+
+    async def _fetch_oauth_discovery_url(self, url: str, server_url: str) -> Any:
+        client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.MCP,
+            params={"timeout": MCP_METADATA_TIMEOUT},
+        )
+        if self._is_same_authority_metadata_url(url, server_url):
+            # Same-authority URLs may point at administrator-configured
+            # internal MCP servers. Do not run them through user URL
+            # validation, but also do not follow redirects because the
+            # redirect target would not inherit the same-authority guarantee.
+            return await client.get(url, follow_redirects=False)
+        return await async_safe_get(client, url)
+
     async def _descovery_metadata(
         self,
         server_url: str,
@@ -1514,7 +2383,7 @@ class MCPServerManager:
                 resource_scopes,
             ) = await self._attempt_well_known_discovery(server_url)
             metadata = await self._fetch_authorization_server_metadata(
-                authorization_servers
+                authorization_servers, server_url
             )
             if (
                 metadata is None
@@ -1555,7 +2424,7 @@ class MCPServerManager:
                     authorization_servers,
                     resource_scopes,
                 ) = await self._fetch_oauth_metadata_from_resource(
-                    resource_metadata_url
+                    resource_metadata_url, server_url
                 )
             else:
                 (
@@ -1576,7 +2445,7 @@ class MCPServerManager:
 
             if authorization_servers:
                 metadata = await self._fetch_authorization_server_metadata(
-                    authorization_servers
+                    authorization_servers, server_url
                 )
 
             preferred_scopes = scopes or resource_scopes
@@ -1616,19 +2485,26 @@ class MCPServerManager:
         return resource_metadata_url, scopes
 
     async def _fetch_oauth_metadata_from_resource(
-        self, resource_metadata_url: str
+        self, resource_metadata_url: str, server_url: str
     ) -> Tuple[List[str], Optional[List[str]]]:
         if not resource_metadata_url:
             return [], None
 
         try:
-            client = get_async_httpx_client(
-                llm_provider=httpxSpecialProvider.MCP,
-                params={"timeout": MCP_METADATA_TIMEOUT},
+            response = await self._fetch_oauth_discovery_url(
+                resource_metadata_url, server_url
             )
-            response = await client.get(resource_metadata_url)
             response.raise_for_status()
             data = response.json()
+        except SSRFError as exc:
+            verbose_logger.warning(
+                "MCP OAuth discovery: refusing to fetch resource metadata from %s "
+                "(rejected by SSRF guard for server %s): %s",
+                resource_metadata_url,
+                server_url,
+                exc,
+            )
+            return [], None
         except Exception as exc:  # pragma: no cover - network issues
             verbose_logger.debug(
                 "Failed to fetch MCP OAuth metadata from %s: %s",
@@ -1677,23 +2553,25 @@ class MCPServerManager:
             (
                 authorization_servers,
                 scopes,
-            ) = await self._fetch_oauth_metadata_from_resource(url)
+            ) = await self._fetch_oauth_metadata_from_resource(url, server_url)
             if authorization_servers:
                 return authorization_servers, scopes
 
         return [], None
 
     async def _fetch_authorization_server_metadata(
-        self, authorization_servers: List[str]
+        self, authorization_servers: List[str], server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         for issuer in authorization_servers:
-            metadata = await self._fetch_single_authorization_server_metadata(issuer)
+            metadata = await self._fetch_single_authorization_server_metadata(
+                issuer, server_url
+            )
             if metadata is not None:
                 return metadata
         return None
 
     async def _fetch_single_authorization_server_metadata(
-        self, issuer_url: str
+        self, issuer_url: str, server_url: str
     ) -> Optional[MCPOAuthMetadata]:
         try:
             parsed = urlparse(issuer_url)
@@ -1721,13 +2599,18 @@ class MCPServerManager:
 
         for url in candidate_urls:
             try:
-                client = get_async_httpx_client(
-                    llm_provider=httpxSpecialProvider.MCP,
-                    params={"timeout": MCP_METADATA_TIMEOUT},
-                )
-                response = await client.get(url)
+                response = await self._fetch_oauth_discovery_url(url, server_url)
                 response.raise_for_status()
                 data = response.json()
+            except SSRFError as exc:
+                verbose_logger.warning(
+                    "MCP OAuth discovery: refusing to fetch authorization-server "
+                    "metadata from %s (rejected by SSRF guard for server %s): %s",
+                    url,
+                    server_url,
+                    exc,
+                )
+                continue
             except Exception as exc:  # pragma: no cover - network issues
                 verbose_logger.debug(
                     "Failed to fetch authorization metadata from %s: %s",
@@ -1835,7 +2718,10 @@ class MCPServerManager:
         return None
 
     async def _fetch_tools_with_timeout(
-        self, client: MCPClient, server_name: str
+        self,
+        client: MCPClient,
+        server_name: str,
+        server: Optional[MCPServer] = None,
     ) -> List[MCPTool]:
         """
         Fetch tools from MCP client with timeout and error handling.
@@ -1843,16 +2729,28 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
+        For pass-through MCP servers (``MCPServer.is_oauth_passthrough``) an
+        upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
+        instead of being swallowed to an empty tool list. That lets the
+        single-server HTTP routes surface a proper 401 + ``WWW-Authenticate``
+        challenge so standards-compliant MCP clients trigger the upstream
+        OAuth flow. Non-pass-through servers keep today's swallow-and-log
+        behaviour so the multi-server ``/mcp`` aggregator doesn't get
+        tainted by a single bad server.
+
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
+            server: Optional MCPServer; when pass-through, auth errors are
+                re-raised as :class:`MCPUpstreamAuthError`.
 
         Returns:
             List of tools from the server
         """
+        is_passthrough = bool(server is not None and server.is_oauth_passthrough)
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools()
+                tools = await client.list_tools(raise_on_error=is_passthrough)
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -1869,12 +2767,29 @@ class MCPServerManager:
             )
             return []
         except Exception as e:
+            if is_passthrough:
+                auth_info = _extract_upstream_auth_failure(e)
+                if auth_info is not None:
+                    status_code, www_authenticate = auth_info
+                    verbose_logger.info(
+                        f"Upstream auth failure from pass-through MCP server "
+                        f"{server_name}: HTTP {status_code}"
+                    )
+                    raise MCPUpstreamAuthError(
+                        status_code=status_code,
+                        www_authenticate=www_authenticate,
+                        server_name=server_name,
+                    ) from e
             verbose_logger.warning(f"Error listing tools from {server_name}: {str(e)}")
             return []
 
     _SHORT_PREFIX_MAX_REHASH_ATTEMPTS = 1024
 
-    def _assign_unique_short_prefix(self, server: MCPServer) -> None:
+    def _assign_unique_short_prefix(
+        self,
+        server: MCPServer,
+        registry: Optional[Dict[str, MCPServer]] = None,
+    ) -> None:
         """Resolve and cache a collision-free short tool prefix on ``server``.
 
         Called at registration time for every MCP server entering the
@@ -1898,7 +2813,8 @@ class MCPServerManager:
             return
 
         used: Dict[str, str] = {}
-        for other in self.get_registry().values():
+        registry_for_collision_check = registry or self.get_registry()
+        for other in registry_for_collision_check.values():
             if other.server_id == server.server_id:
                 continue
             if other.short_prefix:
@@ -2050,7 +2966,13 @@ class MCPServerManager:
         """
         Check if the tool is allowed or banned for the given server
         """
-        if server.allowed_tools:
+        from litellm.proxy._experimental.mcp_server.utils import (
+            server_applies_tool_allowlist,
+        )
+
+        if server_applies_tool_allowlist(server):
+            if not server.allowed_tools:
+                return False
             return (
                 tool_name in server.allowed_tools
                 or f"{server.name}-{tool_name}" in server.allowed_tools
@@ -2265,6 +3187,9 @@ class MCPServerManager:
             "name": name,
             "arguments": arguments,
             "server_name": server_name,
+            "mcp_rate_limit_server_name": server.alias
+            or server.server_name
+            or server.name,
             "user_api_key_auth": user_api_key_auth,
             "user_api_key_user_id": (
                 getattr(user_api_key_auth, "user_id", None)
@@ -2370,7 +3295,7 @@ class MCPServerManager:
             )
         )
 
-    async def _call_regular_mcp_tool(
+    async def _call_regular_mcp_tool(  # noqa: PLR0915
         self,
         mcp_server: MCPServer,
         original_tool_name: str,
@@ -2383,6 +3308,7 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging],
         host_progress_callback: Optional[Callable] = None,
         hook_extra_headers: Optional[Dict[str, str]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -2415,25 +3341,31 @@ class MCPServerManager:
         server_auth_header: Optional[Union[Dict[str, str], str]] = None
         if mcp_server_auth_headers:
             # Normalize keys for case-insensitive lookup
-            normalized_headers = {
-                k.lower(): v for k, v in mcp_server_auth_headers.items()
-            }
+            from litellm.proxy._experimental.mcp_server.utils import (
+                lookup_mcp_server_auth_in_headers,
+            )
 
-            if mcp_server.alias:
-                server_auth_header = normalized_headers.get(mcp_server.alias.lower())
-            if server_auth_header is None and mcp_server.server_name:
-                server_auth_header = normalized_headers.get(
-                    mcp_server.server_name.lower()
-                )
+            server_auth_header = lookup_mcp_server_auth_in_headers(
+                mcp_server_auth_headers,
+                alias=mcp_server.alias,
+                server_name=mcp_server.server_name,
+            )
 
         # Fall back to deprecated mcp_auth_header if no server-specific header found
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
 
-        # oauth2 headers
+        # Extract subject token for OAuth2 Token Exchange (OBO) flow
+        subject_token: Optional[str] = None
         extra_headers: Optional[Dict[str, str]] = None
-        if mcp_server.auth_type == MCPAuth.oauth2:
-            extra_headers = oauth2_headers
+        if mcp_server.auth_type == MCPAuth.oauth2_token_exchange:
+            subject_token = self._extract_bearer_token(oauth2_headers, raw_headers)
+        elif mcp_server.auth_type == MCPAuth.oauth2:
+            if mcp_server.has_client_credentials:
+                # For M2M OAuth servers, Authorization must come from token fetch.
+                extra_headers = None
+            else:
+                extra_headers = oauth2_headers
 
         if mcp_server.extra_headers and raw_headers:
             if extra_headers is None:
@@ -2442,18 +3374,33 @@ class MCPServerManager:
             normalized_raw_headers = {
                 str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
             }
+            strip_caller_authorization = _should_strip_caller_authorization(
+                mcp_server=mcp_server,
+                raw_headers=raw_headers,
+                user_api_key_auth=user_api_key_auth,
+            )
+
             for header in mcp_server.extra_headers:
                 if not isinstance(header, str):
+                    continue
+                if header.lower() == "authorization" and strip_caller_authorization:
                     continue
                 header_value = normalized_raw_headers.get(header.lower())
                 if header_value is None:
                     continue
                 extra_headers[header] = header_value
 
-        if mcp_server.static_headers:
+        # Interpolate env vars into static_headers. Raises
+        # MCPMissingUserEnvVarsError when the calling user has not filled in
+        # a required per-user variable — the REST layer converts that into
+        # a friendly 412 with a setup URL.
+        resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+            mcp_server, user_api_key_auth
+        )
+        if resolved_static_headers:
             if extra_headers is None:
                 extra_headers = {}
-            extra_headers.update(mcp_server.static_headers)
+            extra_headers.update(resolved_static_headers)
 
         if hook_extra_headers:
             if extra_headers is None:
@@ -2480,6 +3427,10 @@ class MCPServerManager:
                     )
             extra_headers.update(hook_extra_headers)
 
+        # Reset to None if no headers were actually added
+        if extra_headers is not None and len(extra_headers) == 0:
+            extra_headers = None
+
         stdio_env = self._build_stdio_env(mcp_server, raw_headers)
 
         client = await self._create_mcp_client(
@@ -2487,6 +3438,8 @@ class MCPServerManager:
             mcp_auth_header=server_auth_header,
             extra_headers=extra_headers,
             stdio_env=stdio_env,
+            subject_token=subject_token,
+            user_api_key_auth=user_api_key_auth,
         )
 
         call_tool_params = MCPCallToolRequestParams(
@@ -2503,14 +3456,26 @@ class MCPServerManager:
             asyncio.create_task(_call_tool_via_client(client, call_tool_params))
         )
 
+        _timeout = (
+            mcp_server.timeout if mcp_server.timeout is not None else MCP_CLIENT_TIMEOUT
+        )
         try:
-            mcp_responses = await asyncio.gather(*tasks)
+            mcp_responses = await asyncio.wait_for(
+                asyncio.gather(*tasks), timeout=_timeout
+            )
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail={
+                    "error": "timeout",
+                    "message": f"MCP tool call timed out after {_timeout}s",
+                },
+            )
         except (
             BlockedPiiEntityError,
             GuardrailRaisedException,
             HTTPException,
         ) as e:
-            # Re-raise guardrail exceptions to properly fail the MCP call
             verbose_logger.error(
                 f"Guardrail blocked MCP tool call during result check: {str(e)}"
             )
@@ -2523,6 +3488,112 @@ class MCPServerManager:
         self._remember_upstream_initialize_instructions(mcp_server, client)
 
         return cast(CallToolResult, result)
+
+    def _resolve_mcp_server_for_tool_call(
+        self,
+        server_name: str,
+        name: str,
+    ) -> MCPServer:
+        """Resolve MCP server for call_tool (prefixed name, registry, fallback)."""
+        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
+        mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
+        resolved_by_server_name_only = False
+        normalized_server_name = normalize_server_name(server_name)
+
+        def _candidate_matches_server_name(candidate: MCPServer) -> bool:
+            for identifier in (
+                candidate.alias,
+                candidate.server_name,
+                candidate.name,
+            ):
+                if identifier and normalize_server_name(identifier) == (
+                    normalized_server_name
+                ):
+                    return True
+            return False
+
+        if mcp_server is None:
+            for candidate in self.get_registry().values():
+                if _candidate_matches_server_name(candidate):
+                    mcp_server = candidate
+                    resolved_by_server_name_only = True
+                    break
+        if mcp_server is None:
+            fallback = self._get_mcp_server_from_tool_name(name)
+            if fallback is not None and (
+                not server_name or _candidate_matches_server_name(fallback)
+            ):
+                mcp_server = fallback
+        if mcp_server is None:
+            raise ValueError(f"Tool {name} not found")
+
+        if resolved_by_server_name_only:
+            tool_known = (
+                name in self.tool_name_to_mcp_server_name_mapping
+                or prefixed_tool_name in self.tool_name_to_mcp_server_name_mapping
+            )
+            if not tool_known:
+                raise ValueError(f"Tool {name} not found")
+
+        return mcp_server
+
+    async def _resolve_oauth2_headers_for_tool_call(
+        self,
+        mcp_server: MCPServer,
+        oauth2_headers: Optional[Dict[str, str]],
+        user_api_key_auth: Optional[UserAPIKeyAuth],
+    ) -> Optional[Dict[str, str]]:
+        """Look up per-user OAuth headers when the client did not supply a token."""
+        if (
+            not mcp_server.needs_user_oauth_token
+            or oauth2_headers
+            or user_api_key_auth is None
+        ):
+            return oauth2_headers
+
+        user_id = getattr(user_api_key_auth, "user_id", None)
+        if not user_id:
+            return oauth2_headers
+
+        try:
+            from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
+                _get_user_oauth_extra_headers_from_db,
+            )
+
+            stored_headers = await _get_user_oauth_extra_headers_from_db(
+                server=mcp_server,
+                user_api_key_auth=user_api_key_auth,
+            )
+            if stored_headers:
+                return stored_headers
+        except Exception as _lookup_exc:
+            verbose_logger.debug(
+                "call_tool: per-user token lookup failed for " "user=%s server=%s: %s",
+                user_id,
+                mcp_server.server_id,
+                _lookup_exc,
+            )
+        return oauth2_headers
+
+    async def _gather_openapi_tool_tasks(
+        self,
+        tasks: List[Any],
+        proxy_logging_obj: Optional[ProxyLogging],
+    ) -> CallToolResult:
+        """Await OpenAPI tool tasks and return the tool call result."""
+        try:
+            mcp_responses = await asyncio.gather(*tasks)
+            result_index = 1 if proxy_logging_obj else 0
+            return cast(CallToolResult, mcp_responses[result_index])
+        except (
+            BlockedPiiEntityError,
+            GuardrailRaisedException,
+            HTTPException,
+        ) as e:
+            verbose_logger.error(
+                f"Guardrail blocked MCP tool call during result check: {str(e)}"
+            )
+            raise e
 
     async def call_tool(
         self,
@@ -2554,12 +3625,7 @@ class MCPServerManager:
             CallToolResult from the MCP server
         """
         start_time = datetime.datetime.now()
-
-        # Get the MCP server
-        prefixed_tool_name = add_server_prefix_to_name(name, server_name)
-        mcp_server = self._get_mcp_server_from_tool_name(prefixed_tool_name)
-        if mcp_server is None:
-            raise ValueError(f"Tool {name} not found")
+        mcp_server = self._resolve_mcp_server_for_tool_call(server_name, name)
 
         #########################################################
         # Pre MCP Tool Call Hook
@@ -2593,36 +3659,9 @@ class MCPServerManager:
             )
             tasks.append(during_hook_task)
 
-        # For per-user OAuth servers: if the client didn't supply a token in
-        # oauth2_headers, look up the stored token from Redis / DB.  This is the
-        # call_tool equivalent of _get_user_oauth_extra_headers_from_db used in
-        # list_tools.
-        if (
-            mcp_server.needs_user_oauth_token
-            and not oauth2_headers
-            and user_api_key_auth is not None
-        ):
-            user_id = getattr(user_api_key_auth, "user_id", None)
-            if user_id:
-                try:
-                    from litellm.proxy._experimental.mcp_server.server import (  # noqa: PLC0415
-                        _get_user_oauth_extra_headers_from_db,
-                    )
-
-                    stored_headers = await _get_user_oauth_extra_headers_from_db(
-                        server=mcp_server,
-                        user_api_key_auth=user_api_key_auth,
-                    )
-                    if stored_headers:
-                        oauth2_headers = stored_headers
-                except Exception as _lookup_exc:
-                    verbose_logger.debug(
-                        "call_tool: per-user token lookup failed for "
-                        "user=%s server=%s: %s",
-                        user_id,
-                        mcp_server.server_id,
-                        _lookup_exc,
-                    )
+        oauth2_headers = await self._resolve_oauth2_headers_for_tool_call(
+            mcp_server, oauth2_headers, user_api_key_auth
+        )
 
         # For OpenAPI servers, call the tool handler directly instead of via MCP client
         if mcp_server.spec_path:
@@ -2643,7 +3682,6 @@ class MCPServerManager:
                 )
             )
         else:
-            # For regular MCP servers, use the MCP client
             return await self._call_regular_mcp_tool(
                 mcp_server=mcp_server,
                 original_tool_name=name,
@@ -2656,28 +3694,10 @@ class MCPServerManager:
                 proxy_logging_obj=proxy_logging_obj,
                 host_progress_callback=host_progress_callback,
                 hook_extra_headers=hook_result.get("extra_headers"),
+                user_api_key_auth=user_api_key_auth,
             )
 
-        # For OpenAPI tools, await outside the client context
-        try:
-            mcp_responses = await asyncio.gather(*tasks)
-
-            # If proxy_logging_obj is None, the tool call result is at index 0
-            # If proxy_logging_obj is not None, the tool call result is at index 1 (after the during hook task)
-            result_index = 1 if proxy_logging_obj else 0
-            result = mcp_responses[result_index]
-
-            return cast(CallToolResult, result)
-        except (
-            BlockedPiiEntityError,
-            GuardrailRaisedException,
-            HTTPException,
-        ) as e:
-            # Re-raise guardrail exceptions to properly fail the MCP call
-            verbose_logger.error(
-                f"Guardrail blocked MCP tool call during result check: {str(e)}"
-            )
-            raise e
+        return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)
 
     #########################################################
     # End of Methods that call the upstream MCP servers
@@ -2706,7 +3726,23 @@ class MCPServerManager:
             if server.needs_user_oauth_token:
                 # Skip OAuth2 servers that rely on user-provided tokens
                 continue
-            tools = await self._get_tools_from_server(server)
+            try:
+                tools = await self._get_tools_from_server(server)
+            except MCPUpstreamAuthError as e:
+                # Pass-through servers expect a user-supplied bearer token;
+                # at startup we have none, so an upstream 401 is normal.
+                # Swallow it so we keep mapping the remaining servers.
+                verbose_logger.debug(
+                    f"Skipping tool name mapping for server {server.name} "
+                    f"due to upstream auth error: {str(e)}"
+                )
+                continue
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Failed to get tools from server {server.name} during "
+                    f"tool name mapping initialization: {str(e)}"
+                )
+                continue
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
@@ -2772,6 +3808,7 @@ class MCPServerManager:
 
         verbose_logger.debug("Loading MCP servers from database into registry...")
         self._upstream_initialize_instructions_by_server_id.clear()
+        self._upstream_initialize_instructions_probed_at.clear()
 
         # perform authz check to filter the mcp servers user has access to
         prisma_client = get_prisma_client_or_throw(
@@ -2781,7 +3818,7 @@ class MCPServerManager:
         # Pending/rejected servers are excluded at the DB level so we never load them.
         from litellm.proxy._experimental.mcp_server.db import LiteLLM_MCPServerTable
 
-        raw_rows = await prisma_client.db.litellm_mcpservertable.find_many(
+        raw_rows = await MCPServerRepository(prisma_client).table.find_many(
             where={
                 "OR": [
                     {"approval_status": None},
@@ -2799,46 +3836,78 @@ class MCPServerManager:
         # against the *full* set so dedup is deterministic regardless of
         # iteration order.
         for server in db_mcp_servers:
-            existing_server = previous_registry.get(server.server_id)
+            try:
+                existing_server = previous_registry.get(server.server_id)
 
-            if (
-                existing_server is not None
-                and existing_server.updated_at is not None
-                and server.updated_at is not None
-                and existing_server.updated_at == server.updated_at
-            ):
-                # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
-                # which can perform network discovery for OAuth2 servers.
-                new_registry[server.server_id] = existing_server
-                continue
+                if (
+                    existing_server is not None
+                    and existing_server.updated_at is not None
+                    and server.updated_at is not None
+                    and existing_server.updated_at == server.updated_at
+                ):
+                    # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
+                    # which can perform network discovery for OAuth2 servers.
+                    new_registry[server.server_id] = existing_server
+                    continue
 
-            _warn_on_server_name_fields(
-                server_id=server.server_id,
-                alias=getattr(server, "alias", None),
-                server_name=getattr(server, "server_name", None),
-            )
-            verbose_logger.debug(
-                f"Building server from DB: {server.server_id} ({server.server_name})"
-            )
-            new_server = await self.build_mcp_server_from_table(server)
-            # Carry the cached short_prefix from the previous registry entry
-            # (if any) so the prefix is stable across reloads.
-            if existing_server is not None and existing_server.short_prefix:
-                new_server.short_prefix = existing_server.short_prefix
-            new_registry[server.server_id] = new_server
+                _warn_on_server_name_fields(
+                    server_id=server.server_id,
+                    alias=getattr(server, "alias", None),
+                    server_name=getattr(server, "server_name", None),
+                )
+                verbose_logger.debug(
+                    f"Building server from DB: {server.server_id} ({server.server_name})"
+                )
+                # raw_rows come straight from the DB, so their global env var
+                # values (like credentials) are still encrypted here, unlike the
+                # already-decrypted records add_server/update_server are handed.
+                # Decrypt them while building the registry entry.
+                new_server = await self.build_mcp_server_from_table(
+                    server, env_vars_are_encrypted=True
+                )
+                # Carry the cached short_prefix from the previous registry entry
+                # (if any) so the prefix is stable across reloads.
+                if existing_server is not None and existing_server.short_prefix:
+                    new_server.short_prefix = existing_server.short_prefix
+                new_registry[server.server_id] = new_server
+            except Exception as e:
+                verbose_logger.exception(
+                    "Skipping MCP server %s (%s) during DB reload: %s",
+                    server.server_id,
+                    getattr(server, "alias", None),
+                    e,
+                )
 
-        # Swap in the new registry first so _assign_unique_short_prefix
-        # sees the complete set when checking for collisions.
-        self.registry = new_registry
-        for new_server in new_registry.values():
-            self._assign_unique_short_prefix(new_server)
-            # Register OpenAPI tools *after* the final short prefix is assigned
-            # so the tools are stored in the global registry under the same
-            # prefix that lookups will use.
-            await self._maybe_register_openapi_tools(new_server)
+        # Assign short prefixes against the full candidate set without
+        # publishing the staged registry to concurrent callers.
+        registered_registry: Dict[str, MCPServer] = {}
+        registered_openapi_tools = False
+        for server_id, new_server in new_registry.items():
+            try:
+                self._assign_unique_short_prefix(new_server, registry=new_registry)
+                # Register OpenAPI tools *after* the final short prefix is assigned
+                # so the tools are stored in the global registry under the same
+                # prefix that lookups will use.
+                await self._maybe_register_openapi_tools(
+                    new_server, initialize_mapping=False
+                )
+                registered_registry[server_id] = new_server
+                if new_server.spec_path:
+                    registered_openapi_tools = True
+            except Exception as e:
+                verbose_logger.exception(
+                    "Skipping MCP server %s (%s) during DB reload: %s",
+                    new_server.server_id,
+                    getattr(new_server, "alias", None),
+                    e,
+                )
+
+        self.registry = registered_registry
+        if registered_openapi_tools:
+            self.initialize_tool_name_to_mcp_server_name_mapping()
 
         verbose_logger.debug(
-            "MCP registry refreshed (%s servers in registry)", len(new_registry)
+            "MCP registry refreshed (%s servers in registry)", len(registered_registry)
         )
 
     def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
@@ -2898,15 +3967,37 @@ class MCPServerManager:
 
     def get_public_mcp_servers(self) -> List[MCPServer]:
         """
-        Get the public MCP servers (available_on_public_internet=True flag on server).
-        Also includes servers from litellm.public_mcp_servers for backwards compat.
+        Return the MCP servers published to the AI Hub via /v1/mcp/make_public.
+
+        Default (litellm.public_mcp_hub_strict_whitelist=True): mirrors
+        /public/model_hub and /public/agent_hub — gates strictly on the
+        litellm.public_mcp_servers whitelist. Returns an empty list when no
+        servers have been published. The per-server available_on_public_internet
+        flag is unrelated — it governs IP-based access in
+        _is_server_accessible_from_ip, not hub visibility.
+
+        Legacy (litellm.public_mcp_hub_strict_whitelist=False): preserves the
+        pre-fix behavior where any server with available_on_public_internet=True
+        is also included. Intended as a one-release migration window for
+        deployments that relied on the OR-with-default semantics; will be
+        removed in a future release.
         """
-        servers: List[MCPServer] = []
+        if litellm.public_mcp_hub_strict_whitelist:
+            if litellm.public_mcp_servers is None:
+                return []
+            public_ids = set(litellm.public_mcp_servers)
+            return [
+                server
+                for server in self.get_registry().values()
+                if server.server_id in public_ids
+            ]
+
         public_ids = set(litellm.public_mcp_servers or [])
-        for server in self.get_registry().values():
-            if server.available_on_public_internet or server.server_id in public_ids:
-                servers.append(server)
-        return servers
+        return [
+            server
+            for server in self.get_registry().values()
+            if server.available_on_public_internet or server.server_id in public_ids
+        ]
 
     def expand_permission_list(self, identifiers: List[str]) -> List[str]:
         """
@@ -3113,11 +4204,21 @@ class MCPServerManager:
             and not server.authentication_token
         ):
             should_skip_health_check = True
+        # Skip if static_headers reference a per-user env var: a userless probe
+        # can't fill ${NAME} and would forward the literal placeholder upstream,
+        # flipping the server to unhealthy even though real user calls succeed.
+        elif self._references_per_user_env_var(server):
+            should_skip_health_check = True
 
         if not should_skip_health_check:
-            extra_headers = {}
-            if server.static_headers:
-                extra_headers.update(server.static_headers)
+            resolved_static_headers = await self._resolve_static_headers_with_env_vars(
+                server=server,
+                user_api_key_auth=None,
+                raise_on_missing=False,
+            )
+            extra_headers = (
+                dict(resolved_static_headers) if resolved_static_headers else {}
+            )
 
             client = await self._create_mcp_client(
                 server=server,
@@ -3167,6 +4268,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
+            env_vars=self._env_vars_to_models(server.env_vars),
             status=status,
             last_health_check=datetime.now(),
             health_check_error=health_check_error,
@@ -3178,6 +4280,7 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             instructions=server.instructions,
+            timeout=server.timeout,
         )
 
     async def get_all_mcp_servers_with_health_and_teams(
@@ -3239,6 +4342,14 @@ class MCPServerManager:
 
         return list_mcp_servers
 
+    @staticmethod
+    def _env_vars_to_models(
+        env_vars: Optional[List[Dict[str, Any]]],
+    ) -> Optional[List[MCPEnvVar]]:
+        if env_vars is None:
+            return None
+        return [MCPEnvVar.model_validate(env_var) for env_var in env_vars]
+
     def _build_mcp_server_table(self, server: MCPServer) -> LiteLLM_MCPServerTable:
         return LiteLLM_MCPServerTable(
             server_id=server.server_id,
@@ -3259,6 +4370,7 @@ class MCPServerManager:
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
+            env_vars=self._env_vars_to_models(server.env_vars),
             status=None,  # No health check performed
             last_health_check=None,  # No health check performed
             health_check_error=None,
@@ -3270,10 +4382,14 @@ class MCPServerManager:
             registration_url=server.registration_url,
             allow_all_keys=server.allow_all_keys,
             available_on_public_internet=server.available_on_public_internet,
+            delegate_auth_to_upstream=server.delegate_auth_to_upstream,
+            oauth_passthrough=getattr(server, "oauth_passthrough", False),
             is_byok=server.is_byok,
             byok_description=server.byok_description,
             byok_api_key_help_url=server.byok_api_key_help_url,
+            source_url=server.source_url,
             instructions=server.instructions,
+            timeout=server.timeout,
         )
 
     async def get_all_mcp_servers_unfiltered(self) -> List[LiteLLM_MCPServerTable]:

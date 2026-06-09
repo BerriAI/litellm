@@ -6,10 +6,18 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import ProviderMarginTable from "./provider_margin_table";
 
 vi.mock("@heroicons/react/outline", () => ({
-  TrashIcon: function TrashIcon() { return null; },
-  PencilAltIcon: function PencilAltIcon() { return null; },
-  CheckIcon: function CheckIcon() { return null; },
-  XIcon: function XIcon() { return null; },
+  TrashIcon: function TrashIcon() {
+    return null;
+  },
+  PencilAltIcon: function PencilAltIcon() {
+    return null;
+  },
+  CheckIcon: function CheckIcon() {
+    return null;
+  },
+  XIcon: function XIcon() {
+    return null;
+  },
 }));
 
 vi.mock("@tremor/react", () => ({
@@ -58,7 +66,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByRole("table")).toBeInTheDocument();
   });
@@ -69,7 +77,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("Provider")).toBeInTheDocument();
     expect(screen.getByText("Margin")).toBeInTheDocument();
@@ -82,7 +90,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
   });
@@ -93,7 +101,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ global: 0.05 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("Global (All Providers)")).toBeInTheDocument();
   });
@@ -104,7 +112,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("10.0%")).toBeInTheDocument();
   });
@@ -115,7 +123,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: { fixed_amount: 0.001 } }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText("$0.001000")).toBeInTheDocument();
   });
@@ -126,7 +134,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: { percentage: 0.1, fixed_amount: 0.001 } }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
     expect(screen.getByText(/10\.0%.*\$0\.001000/)).toBeInTheDocument();
   });
@@ -138,7 +146,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -154,7 +162,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -175,7 +183,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));
@@ -192,7 +200,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ openai: 0.1 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
@@ -207,7 +215,7 @@ describe("ProviderMarginTable", () => {
         marginConfig={{ global: 0.05 }}
         onMarginChange={onMarginChange}
         onRemoveProvider={onRemoveProvider}
-      />
+      />,
     );
 
     await user.click(screen.getByRole("button", { name: /TrashIcon/i }));
@@ -223,7 +231,7 @@ describe("ProviderMarginTable", () => {
           marginConfig={{ openai: 0.1 }}
           onMarginChange={onMarginChange}
           onRemoveProvider={onRemoveProvider}
-        />
+        />,
       );
 
       await user.click(screen.getByRole("button", { name: /PencilAltIcon/i }));

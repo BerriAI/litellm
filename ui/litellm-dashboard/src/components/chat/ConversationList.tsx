@@ -1,15 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import {
-  Button,
-  Input,
-  Modal,
-  Popconfirm,
-  Tooltip,
-  Avatar,
-  Typography,
-} from "antd";
+import { Button, Input, Modal, Popconfirm, Tooltip, Avatar, Typography } from "antd";
 import {
   EditOutlined,
   DeleteOutlined,
@@ -78,13 +70,7 @@ interface ConversationRowProps {
   onRename: (id: string, newTitle: string) => void;
 }
 
-const ConversationRow: React.FC<ConversationRowProps> = ({
-  conv,
-  isActive,
-  onSelect,
-  onDelete,
-  onRename,
-}) => {
+const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSelect, onDelete, onRename }) => {
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(conv.title);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -125,8 +111,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({
     }
   };
 
-  const truncatedTitle =
-    conv.title.length > 40 ? conv.title.slice(0, 40) + "…" : conv.title;
+  const truncatedTitle = conv.title.length > 40 ? conv.title.slice(0, 40) + "…" : conv.title;
 
   return (
     <div
@@ -238,12 +223,7 @@ interface SearchModalProps {
   onClose: () => void;
 }
 
-const SearchModal: React.FC<SearchModalProps> = ({
-  open,
-  conversations,
-  onSelect,
-  onClose,
-}) => {
+const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect, onClose }) => {
   const [query, setQuery] = useState("");
 
   useEffect(() => {
@@ -251,9 +231,7 @@ const SearchModal: React.FC<SearchModalProps> = ({
   }, [open]);
 
   const filtered = query.trim()
-    ? conversations.filter((c) =>
-        c.title.toLowerCase().includes(query.trim().toLowerCase())
-      )
+    ? conversations.filter((c) => c.title.toLowerCase().includes(query.trim().toLowerCase()))
     : conversations;
 
   const handleSelect = (id: string) => {
@@ -282,13 +260,10 @@ const SearchModal: React.FC<SearchModalProps> = ({
 
       <div style={{ maxHeight: 320, overflowY: "auto" }}>
         {filtered.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "#999" }}>
-            No conversations found
-          </div>
+          <div style={{ textAlign: "center", padding: "24px 0", color: "#999" }}>No conversations found</div>
         ) : (
           filtered.map((conv) => {
-            const truncated =
-              conv.title.length > 55 ? conv.title.slice(0, 55) + "…" : conv.title;
+            const truncated = conv.title.length > 55 ? conv.title.slice(0, 55) + "…" : conv.title;
             return (
               <div
                 key={conv.id}
@@ -311,10 +286,7 @@ const SearchModal: React.FC<SearchModalProps> = ({
               >
                 <MessageOutlined style={{ color: "#999", flexShrink: 0 }} />
                 <Text style={{ fontSize: 13 }}>{truncated}</Text>
-                <Text
-                  type="secondary"
-                  style={{ fontSize: 11, marginLeft: "auto", flexShrink: 0 }}
-                >
+                <Text type="secondary" style={{ fontSize: 11, marginLeft: "auto", flexShrink: 0 }}>
                   {dayjs(conv.updatedAt).format("MMM D")}
                 </Text>
               </div>
@@ -377,12 +349,7 @@ const ConversationList: React.FC<Props> = ({
             title="Chats are saved locally in this browser. All requests are logged in Spend → Logs."
             placement="right"
           >
-            <Button
-              type="primary"
-              icon={<PlusOutlined />}
-              onClick={onNewChat}
-              style={{ width: "100%" }}
-            >
+            <Button type="primary" icon={<PlusOutlined />} onClick={onNewChat} style={{ width: "100%" }}>
               New Chat
             </Button>
           </Tooltip>

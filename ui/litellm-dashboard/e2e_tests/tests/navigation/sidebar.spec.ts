@@ -6,15 +6,7 @@ import { menuLabelToPage } from "../../fixtures/menuMappings";
 import { navigateToPage } from "../../helpers/navigation";
 
 const sidebarButtons = {
-  [Role.ProxyAdmin]: [
-    "Virtual Keys",
-    "Playground",
-    "Models",
-    "Usage",
-    "Teams",
-    "Internal Users",
-    "AI Hub",
-  ],
+  [Role.ProxyAdmin]: ["Virtual Keys", "Playground", "Models", "Usage", "Teams", "Internal Users", "AI Hub"],
 };
 
 const roles = [{ role: Role.ProxyAdmin, storage: ADMIN_STORAGE_PATH }];

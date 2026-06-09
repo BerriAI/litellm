@@ -8,6 +8,7 @@ from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES, request
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.realtime import (
     RealtimeClientSecretRequest,
@@ -383,7 +384,9 @@ async def _arealtime(  # noqa: PLR0915
             or "https://api.x.ai/v1"
         )
         # set API KEY
-        api_key = dynamic_api_key or litellm.api_key or get_secret_str("XAI_API_KEY")
+        api_key = XAIModelInfo.get_api_key(
+            dynamic_api_key, legacy_generic_before_env=True
+        )
 
         await xai_realtime.async_realtime(
             model=model,

@@ -13,9 +13,13 @@ from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.types.router import GenericLiteLLMParams
 
 from ....vertex_llm_base import VertexBase
+from ..output_params_utils import sanitize_vertex_anthropic_output_params
 
 
 class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, VertexBase):
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def validate_anthropic_messages_environment(
         self,
         headers: dict,
@@ -158,12 +162,6 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             "model", None
         )  # do not pass model in request body to vertex ai
 
-        anthropic_messages_request.pop(
-            "output_format", None
-        )  # do not pass output_format in request body to vertex ai - vertex ai does not support output_format as yet
-
-        anthropic_messages_request.pop(
-            "output_config", None
-        )  # do not pass output_config in request body to vertex ai - vertex ai does not support output_config
+        sanitize_vertex_anthropic_output_params(anthropic_messages_request, model)
 
         return anthropic_messages_request

@@ -481,3 +481,66 @@ class TestSetObjectMetadataField:
         ):
             _set_object_metadata_field(team, "model_rpm_limit", {"x": 1})
         assert team.metadata == {"model_rpm_limit": {"x": 1}}
+
+    def test_mcp_rpm_limit_is_hoisted_into_metadata(self):
+        """
+        Per-MCP-server rpm limits are stored in the metadata JSON column, not a
+        dedicated DB column. The key/team management endpoints rely on
+        LiteLLM_ManagementEndpoint_MetadataFields to move the request field into
+        metadata; this regression guards that mcp_rpm_limit is in that list and
+        round-trips through the same loop the endpoints use.
+        """
+        from litellm.proxy._types import LiteLLM_ManagementEndpoint_MetadataFields
+
+        assert "mcp_rpm_limit" in LiteLLM_ManagementEndpoint_MetadataFields
+
+        from types import SimpleNamespace
+
+        team = LiteLLM_TeamTable(team_id="t1", metadata={})
+        mcp_rpm_limit = {"github": 100}
+        data = SimpleNamespace(mcp_rpm_limit=mcp_rpm_limit)
+
+        with patch(
+            "litellm.proxy.management_endpoints.common_utils._premium_user_check"
+        ):
+            for field in LiteLLM_ManagementEndpoint_MetadataFields:
+                if getattr(data, field, None) is not None:
+                    _set_object_metadata_field(team, field, getattr(data, field))
+
+        assert team.metadata["mcp_rpm_limit"] == mcp_rpm_limit
+
+
+class TestRequireCallerUserIdForNonAdmin:
+    """
+    Security regression: service-account keys (user_id=None) must not bypass
+    the non-admin scoping branch on analytics endpoints.
+    """
+
+    def test_returns_user_id_when_present(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            require_caller_user_id_for_non_admin,
+        )
+
+        key_dict = UserAPIKeyAuth(
+            user_id="user-abc",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        assert require_caller_user_id_for_non_admin(key_dict) == "user-abc"
+
+    def test_raises_403_when_user_id_is_none(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            require_caller_user_id_for_non_admin,
+        )
+
+        # Simulates a service-account key (user_id forced to None at key creation)
+        service_account_key = UserAPIKeyAuth(
+            user_id=None,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            require_caller_user_id_for_non_admin(service_account_key)
+
+        assert exc_info.value.status_code == 403
+        assert "Service-account keys" in str(exc_info.value.detail)
