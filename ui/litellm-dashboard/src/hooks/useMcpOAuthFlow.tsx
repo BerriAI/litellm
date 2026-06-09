@@ -28,6 +28,11 @@ interface UseMcpOAuthFlowOptions {
   getTemporaryPayload: () => Record<string, any> | null;
   onTokenReceived: (tokenResponse: Record<string, any>) => void;
   onBeforeRedirect?: () => void;
+  // Distinguishes which form started the flow (e.g. "create" vs "edit"). Both forms
+  // mount this hook with shared storage keys, so the return handler only processes a
+  // callback whose stored flowSource matches, preventing one form from grabbing the
+  // other's OAuth result.
+  flowSource: string;
 }
 
 interface UseMcpOAuthFlowResult {
@@ -43,6 +48,7 @@ export const useMcpOAuthFlow = ({
   getTemporaryPayload,
   onTokenReceived,
   onBeforeRedirect,
+  flowSource,
 }: UseMcpOAuthFlowOptions): UseMcpOAuthFlowResult => {
   const [status, setStatus] = useState<McpOAuthStatus>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -60,6 +66,7 @@ export const useMcpOAuthFlow = ({
     clientSecret?: string;
     serverId: string;
     redirectUri: string;
+    flowSource?: string;
   };
 
   const setStorageItem = (key: string, value: string) => {
@@ -179,6 +186,7 @@ export const useMcpOAuthFlow = ({
         clientSecret: registeredClient.clientSecret || credentials.client_secret,
         serverId,
         redirectUri: callbackUrl(),
+        flowSource,
       };
 
       if (typeof window === "undefined") {
@@ -253,6 +261,16 @@ export const useMcpOAuthFlow = ({
     }
 
     if (!payload) {
+      processingRef.current = false;
+      return;
+    }
+
+    // Only the form that started this redirect should consume the result. The create
+    // form and the edit form both mount this hook with shared storage keys, so without
+    // this another instance (e.g. the always-mounted create form) would grab and handle
+    // an edit-page authorization. Bail out without clearing RESULT_KEY so the matching
+    // instance can still process it.
+    if (flowState?.flowSource !== flowSource) {
       processingRef.current = false;
       return;
     }
