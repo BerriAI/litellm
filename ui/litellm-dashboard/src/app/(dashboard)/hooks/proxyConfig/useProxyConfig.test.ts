@@ -130,7 +130,6 @@ describe("useProxyConfig", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     fetchSpy = vi.fn();
@@ -218,7 +217,6 @@ describe("useProxyConfig", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useProxyConfig(ConfigType.GENERAL_SETTINGS), { wrapper });
@@ -301,7 +299,6 @@ describe("useDeleteProxyConfigField", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     fetchSpy = vi.fn();
@@ -388,7 +385,6 @@ describe("useDeleteProxyConfigField", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useDeleteProxyConfigField(), { wrapper });

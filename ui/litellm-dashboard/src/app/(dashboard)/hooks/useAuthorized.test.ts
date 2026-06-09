@@ -126,7 +126,6 @@ describe("useAuthorized", () => {
     expect(result.current.userRole).toBe("Admin");
     expect(result.current.premiumUser).toBe(true);
     expect(result.current.disabledPersonalKeyCreation).toBe(false);
-    expect(result.current.showSSOBanner).toBe(true);
     expect(replaceMock).not.toHaveBeenCalled();
     expect(clearTokenCookiesMock).not.toHaveBeenCalled();
   });
@@ -163,9 +162,15 @@ describe("useAuthorized", () => {
     expect(clearTokenCookiesMock).toHaveBeenCalled();
     expect(result.current.isAuthorized).toBe(false);
     expect(result.current.token).toBeNull();
-    expect(result.current.accessToken).toBe("api-key-123");
-    expect(result.current.userId).toBe("user-1");
-    expect(result.current.userEmail).toBe("user@example.com");
+
+    // clearAuth must reset the context, not just the cookie, so no consumer
+    // can keep acting on the revoked session until a hard reload.
+    await waitFor(() => {
+      expect(result.current.accessToken).toBeNull();
+    });
+    expect(result.current.userId).toBeNull();
+    expect(result.current.userEmail).toBeNull();
+    expect(result.current.userRole).toBe("Undefined Role");
   });
 
   it("should redirect when token is missing", async () => {

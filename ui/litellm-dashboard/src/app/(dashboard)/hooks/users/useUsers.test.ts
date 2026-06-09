@@ -33,7 +33,6 @@ const DEFAULT_AUTH = {
   userEmail: "test@example.com",
   premiumUser: false,
   disabledPersonalKeyCreation: null,
-  showSSOBanner: false,
 };
 
 const buildUserListResponse = (page: number, totalPages: number, userCount = 2): UserListResponse => ({

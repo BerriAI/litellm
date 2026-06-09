@@ -51,7 +51,6 @@ describe("useGuardrails", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -114,7 +113,6 @@ describe("useGuardrails", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useGuardrails(), { wrapper });
@@ -138,7 +136,6 @@ describe("useGuardrails", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useGuardrails(), { wrapper });
@@ -162,7 +159,6 @@ describe("useGuardrails", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useGuardrails(), { wrapper });
@@ -186,7 +182,6 @@ describe("useGuardrails", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useGuardrails(), { wrapper });

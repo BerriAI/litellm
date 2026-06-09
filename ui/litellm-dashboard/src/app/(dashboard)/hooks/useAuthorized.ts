@@ -1,7 +1,6 @@
 "use client";
 
 import { getProxyBaseUrl } from "@/components/networking";
-import { clearTokenCookies } from "@/utils/cookieUtils";
 import { buildLoginUrlWithReturn, storeReturnUrl } from "@/utils/returnUrlUtils";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect } from "react";
@@ -30,7 +29,7 @@ const useAuthorized = () => {
     accessToken,
     premiumUser,
     disabledPersonalKeyCreation,
-    showSSOBanner,
+    clearAuth,
   } = useAuth();
 
   const isLoading = authLoading || isUIConfigLoading;
@@ -47,11 +46,11 @@ const useAuthorized = () => {
 
     if (!isAuthorized) {
       if (token) {
-        clearTokenCookies();
+        clearAuth();
       }
       redirectToLogin();
     }
-  }, [isLoading, isAuthorized, token, redirectToLogin]);
+  }, [isLoading, isAuthorized, token, clearAuth, redirectToLogin]);
 
   return {
     isLoading,
@@ -63,7 +62,6 @@ const useAuthorized = () => {
     userRole,
     premiumUser: premiumUser as LegacyDecodedField,
     disabledPersonalKeyCreation: disabledPersonalKeyCreation as LegacyDecodedField,
-    showSSOBanner,
   };
 };
 

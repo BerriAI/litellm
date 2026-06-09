@@ -83,7 +83,6 @@ describe("useCustomers", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -146,7 +145,6 @@ describe("useCustomers", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCustomers(), { wrapper });
@@ -170,7 +168,6 @@ describe("useCustomers", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCustomers(), { wrapper });
@@ -194,7 +191,6 @@ describe("useCustomers", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCustomers(), { wrapper });
@@ -218,7 +214,6 @@ describe("useCustomers", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCustomers(), { wrapper });
@@ -242,7 +237,6 @@ describe("useCustomers", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCustomers(), { wrapper });
@@ -285,7 +279,6 @@ describe("useCustomers", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useCustomers(), { wrapper });

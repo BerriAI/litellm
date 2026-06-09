@@ -44,7 +44,6 @@ describe("useEditSSOSettings", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
   });
 
@@ -113,7 +112,6 @@ describe("useEditSSOSettings", () => {
       userEmail: "test@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: null,
-      showSSOBanner: false,
     });
 
     const { result } = renderHook(() => useEditSSOSettings(), { wrapper });

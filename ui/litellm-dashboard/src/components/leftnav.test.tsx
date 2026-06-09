@@ -23,7 +23,6 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
     userEmail: "test@example.com",
     premiumUser: false,
     disabledPersonalKeyCreation: false,
-    showSSOBanner: false,
   }));
 
   const mockUseOrganizations = vi.fn(() => ({
@@ -148,7 +147,6 @@ describe("Sidebar (leftnav)", () => {
       userEmail: "viewer@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
     };
 
     it("hides Playground from Admin Viewer (cost-incurring action)", () => {
@@ -192,7 +190,6 @@ describe("Sidebar (leftnav)", () => {
       userEmail: "orgadmin@example.com",
       premiumUser: false,
       disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
     });
 
     mockUseOrganizations.mockReturnValueOnce({

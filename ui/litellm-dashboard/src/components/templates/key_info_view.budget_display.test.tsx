@@ -102,7 +102,6 @@ const baseAuthorized = {
   token: "test-token",
   userEmail: null,
   disabledPersonalKeyCreation: null,
-  showSSOBanner: false,
 };
 
 describe("KeyInfoView overview budget display (LIT-2845)", () => {

@@ -1,18 +1,11 @@
 "use client";
 
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { jwtDecode } from "jwt-decode";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { formatUserRole } from "@/utils/roles";
 import { getUiConfig, setGlobalLitellmHeaderName } from "@/components/networking";
-
-function deleteCookie(name: string, path = "/") {
-  document.cookie = `${name}=; Max-Age=0; Path=${path}`;
-  if (name === "token") {
-    clearTokenCookies();
-  }
-}
 
 type AuthContextValue = {
   authLoading: boolean;
@@ -23,8 +16,8 @@ type AuthContextValue = {
   accessToken: string | null;
   premiumUser: boolean;
   disabledPersonalKeyCreation: boolean;
-  showSSOBanner: boolean;
 
+  clearAuth: () => void;
   setUserRole: React.Dispatch<React.SetStateAction<string>>;
   setUserEmail: React.Dispatch<React.SetStateAction<string | null>>;
 };
@@ -34,13 +27,22 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [token, setToken] = useState<string | null>(null);
-  const [userID, setUserID] = useState<string | null>(null);
   const [userRole, setUserRole] = useState(formatUserRole(""));
   const [userEmail, setUserEmail] = useState<string | null>(null);
-  const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [premiumUser, setPremiumUser] = useState(false);
-  const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
-  const [showSSOBanner, setShowSSOBanner] = useState(false);
+
+  const decoded = useMemo<{ [k: string]: any } | null>(() => {
+    if (!token || isJwtExpired(token)) return null;
+    try {
+      return jwtDecode(token);
+    } catch {
+      return null;
+    }
+  }, [token]);
+
+  const clearAuth = useCallback(() => {
+    clearTokenCookies();
+    setToken(null);
+  }, []);
 
   // Load runtime UI config (populates proxyBaseUrl etc.) before clearing
   // authLoading, so any consumer that builds proxy-rooted URLs from authLoading=false
@@ -63,7 +65,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       // Clear expired/invalid token so downstream code doesn't keep trying to use it.
       if (raw && !valid) {
-        deleteCookie("token", "/");
+        clearTokenCookies();
       }
 
       setToken(valid);
@@ -75,32 +77,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Decode JWT and populate derived auth state whenever the token changes.
+  // Side effects of a token change: drop tokens that fail to decode, sync the
+  // mutable user fields, and apply any custom auth header. The reset branch runs
+  // after any commit that nulls the token, so user fields cannot survive clearAuth
+  // even if a stale sync was queued in the same commit.
   useEffect(() => {
-    if (!token) {
+    if (token && !decoded) {
+      clearAuth();
       return;
     }
-
-    if (isJwtExpired(token)) {
-      deleteCookie("token", "/");
-      setToken(null);
+    if (!decoded) {
+      setUserRole(formatUserRole(""));
+      setUserEmail(null);
       return;
     }
-
-    let decoded: { [k: string]: any } | null = null;
-    try {
-      decoded = jwtDecode(token);
-    } catch {
-      deleteCookie("token", "/");
-      setToken(null);
-      return;
-    }
-
-    if (!decoded) return;
-
-    setAccessToken(decoded.key);
-    setDisabledPersonalKeyCreation(decoded.disabled_non_admin_personal_key_creation);
-    setShowSSOBanner(decoded.login_method === "username_password");
 
     if (decoded.user_role) {
       setUserRole(formatUserRole(decoded.user_role));
@@ -108,27 +98,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (decoded.user_email) {
       setUserEmail(decoded.user_email);
     }
-    if (decoded.premium_user) {
-      setPremiumUser(decoded.premium_user);
-    }
     if (decoded.auth_header_name) {
       setGlobalLitellmHeaderName(decoded.auth_header_name);
     }
-    if (decoded.user_id) {
-      setUserID(decoded.user_id);
-    }
-  }, [token]);
+  }, [token, decoded, clearAuth]);
 
   const value: AuthContextValue = {
     authLoading,
     token,
-    userID,
+    userID: decoded?.user_id ?? null,
     userRole,
     userEmail,
-    accessToken,
-    premiumUser,
-    disabledPersonalKeyCreation,
-    showSSOBanner,
+    accessToken: decoded?.key ?? null,
+    premiumUser: !!decoded?.premium_user,
+    disabledPersonalKeyCreation: !!decoded?.disabled_non_admin_personal_key_creation,
+    clearAuth,
     setUserRole,
     setUserEmail,
   };

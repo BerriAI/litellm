@@ -119,7 +119,6 @@ describe("AllModelsTab", () => {
     userRole: "Admin",
     premiumUser: true,
     disabledPersonalKeyCreation: false,
-    showSSOBanner: false,
   };
 
   beforeEach(() => {

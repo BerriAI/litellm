@@ -147,7 +147,6 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
     userRole: "Admin",
     premiumUser: false,
     disabledPersonalKeyCreation: null,
-    showSSOBanner: false,
   }),
 }));
 

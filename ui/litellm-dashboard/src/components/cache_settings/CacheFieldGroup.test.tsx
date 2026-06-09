@@ -12,7 +12,6 @@ describe("CacheFieldGroup", () => {
       userRole: "Admin",
       premiumUser: false,
       disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
     }),
   }));
 

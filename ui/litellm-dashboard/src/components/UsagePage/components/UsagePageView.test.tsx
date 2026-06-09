@@ -517,7 +517,6 @@ describe("UsagePage", () => {
       userRole: "Admin",
       premiumUser: true,
       disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
     });
     mockUseCurrentUser.mockReturnValue({
       data: {
@@ -651,7 +650,6 @@ describe("UsagePage", () => {
       userRole: "internal_user",
       premiumUser: true,
       disabledPersonalKeyCreation: false,
-      showSSOBanner: false,
     });
 
     renderWithProviders(<UsagePage {...defaultProps} />);
@@ -839,7 +837,6 @@ describe("UsagePage", () => {
         userRole: "Internal User",
         premiumUser: false,
         disabledPersonalKeyCreation: false,
-        showSSOBanner: false,
       });
 
       renderWithProviders(<UsagePage {...defaultProps} />);
@@ -865,7 +862,6 @@ describe("UsagePage", () => {
         userRole: "Internal User",
         premiumUser: false,
         disabledPersonalKeyCreation: false,
-        showSSOBanner: false,
       });
 
       renderWithProviders(<UsagePage {...defaultProps} />);
