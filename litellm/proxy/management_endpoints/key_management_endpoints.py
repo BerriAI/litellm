@@ -3936,11 +3936,19 @@ async def delete_verification_tokens(
         verbose_proxy_logger.debug(traceback.format_exc())
         raise e
 
+    from litellm.identity.invalidation import invalidate_identity_for_token
+
     for key in tokens:
         user_api_key_cache.delete_cache(key)
         # remove hash token from cache
         hashed_token = hash_token(cast(str, key))
         user_api_key_cache.delete_cache(hashed_token)
+        # `tokens` are already hashed (see `_hash_token_if_needed` above), so
+        # `key` is the same hash the identity cache is keyed under. Without this
+        # the `identity:v1:<hash>` entry outlives the deleted key until its TTL.
+        await invalidate_identity_for_token(
+            token_hash=key, dual_cache=user_api_key_cache
+        )
 
     return {
         "deleted_keys": deleted_tokens,
