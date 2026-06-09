@@ -64,7 +64,7 @@ ensure_label() {
 # ---------------------------------------------------------------------------
 if [ "$HAS_AUTOMERGE_TOKEN" != "true" ]; then
   log "SYNC_AUTOMERGE_TOKEN not set — autopilot dormant (merging without it would skip the infra build). Add the PAT to activate."
-  summary "### 🛩️ Sync PR Autopilot — _$REPO_"
+  summary "### 🛩️ Sync PR Autopilot — _${REPO}_"
   summary "**Dormant** — \`SYNC_AUTOMERGE_TOKEN\` is not configured. Add the PAT to activate."
   emit outcome "dormant"
   exit 0
@@ -81,7 +81,7 @@ PR_NUM="$(jq -r --arg p "$HEAD_PREFIX" \
 
 if [ -z "$PR_NUM" ]; then
   log "No open sync PR (prefix '$HEAD_PREFIX', base '$BASE_BRANCH'). Nothing to do."
-  summary "### 🛩️ Sync PR Autopilot — _$REPO_"
+  summary "### 🛩️ Sync PR Autopilot — _${REPO}_"
   summary "No open \`${HEAD_PREFIX}*\` PR. Nothing to do."
   emit outcome "noop"
   exit 0
@@ -102,7 +102,7 @@ hold() { # $1 = human reason, $2 = slack/comment detail
   gh pr edit "$PR_NUM" --repo "$REPO" --add-label "sync-held" >/dev/null 2>&1 || true
   gh pr comment "$PR_NUM" --repo "$REPO" --body "🟡 **Sync autopilot: held** — $2" >/dev/null 2>&1 || true
   notify_slack ":warning: *Sync autopilot — HELD* <$URL|#$PR_NUM> \`$REPO\`: $1"
-  summary "### 🛩️ Sync PR Autopilot — _$REPO_"
+  summary "### 🛩️ Sync PR Autopilot — _${REPO}_"
   summary "**HELD** — [#$PR_NUM]($URL): $1"
   emit outcome "held"
 }
@@ -187,7 +187,7 @@ if [ "$FAILURE" -gt 0 ]; then
   if [ "$rerun_any" = true ]; then
     log "Re-ran failed CI (attempt $next/$MAX_RERUNS)."
     notify_slack ":arrows_counterclockwise: *Sync autopilot* <$URL|#$PR_NUM> \`$REPO\`: CI red, re-running failed jobs (attempt $next/$MAX_RERUNS)."
-    summary "### 🛩️ Sync PR Autopilot — _$REPO_"
+    summary "### 🛩️ Sync PR Autopilot — _${REPO}_"
     summary "Re-running failed CI on [#$PR_NUM]($URL) — attempt $next/$MAX_RERUNS."
     emit outcome "rerun"
   else
@@ -201,7 +201,7 @@ fi
 # ---------------------------------------------------------------------------
 if [ "$DRY_RUN" = "true" ]; then
   log "DRY_RUN: PR #$PR_NUM is green and would be merged (--$MERGE_METHOD)."
-  summary "### 🛩️ Sync PR Autopilot — _$REPO_"
+  summary "### 🛩️ Sync PR Autopilot — _${REPO}_"
   summary "DRY_RUN: [#$PR_NUM]($URL) is green — would merge (\`--$MERGE_METHOD\`)."
   emit outcome "would-merge"
   exit 0
@@ -217,6 +217,6 @@ log "Merged sync PR #$PR_NUM."
 notify_slack ":white_check_mark: *Sync autopilot — MERGED* <$URL|#$PR_NUM> \"$TITLE\" \`$REPO\` (green CI). Infra build dispatch follows."
 gh pr comment "$PR_NUM" --repo "$REPO" \
   --body "✅ **Sync autopilot: merged** — all CI green, merged via \`$MERGE_METHOD\`. The infra build dispatch (\`dispatch-infra-build.yml\`) fires on this merge." >/dev/null 2>&1 || true
-summary "### 🛩️ Sync PR Autopilot — _$REPO_"
+summary "### 🛩️ Sync PR Autopilot — _${REPO}_"
 summary "**MERGED** [#$PR_NUM]($URL) — \"$TITLE\" (green CI). Infra build dispatch follows."
 emit outcome "merged"
