@@ -7738,6 +7738,39 @@ class Router:
 
         return hash_object.hexdigest()
 
+    @staticmethod
+    def _inherit_builtin_cache_pricing(
+        model_info: dict, backend_model: str, custom_llm_provider: Optional[str]
+    ) -> None:
+        """Fill missing cache pricing on a custom-priced deployment entry from
+        the backend model's built-in cost map entry, so a deployment that
+        only spells out ``input_cost_per_token``/``output_cost_per_token``
+        does not silently bill cache_read/cache_creation at 0.
+
+        User-specified cache fields always win; only ``None``/missing entries
+        are inherited. No-op when the backend model has no canonical entry.
+        """
+        cache_fields = (
+            "cache_creation_input_token_cost",
+            "cache_creation_input_token_cost_above_1hr",
+            "cache_creation_input_token_cost_above_200k_tokens",
+            "cache_read_input_token_cost",
+            "cache_read_input_token_cost_above_200k_tokens",
+        )
+        if all(model_info.get(f) is not None for f in cache_fields):
+            return
+        try:
+            backend_info = litellm.get_model_info(
+                model=backend_model, custom_llm_provider=custom_llm_provider
+            )
+        except Exception:
+            return
+        for field in cache_fields:
+            if model_info.get(field) is None:
+                backend_value = backend_info.get(field)
+                if backend_value is not None:
+                    model_info[field] = backend_value
+
     def _create_deployment(
         self,
         deployment_info: dict,
@@ -7765,6 +7798,13 @@ class Router:
             for field in CustomPricingLiteLLMParams.model_fields.keys():
                 if deployment.litellm_params.get(field) is not None:
                     _model_info[field] = deployment.litellm_params[field]
+
+            if _model_info.get("input_cost_per_token") is not None:
+                Router._inherit_builtin_cache_pricing(
+                    model_info=_model_info,
+                    backend_model=deployment.litellm_params.model,
+                    custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+                )
 
             ## REGISTER MODEL INFO IN LITELLM MODEL COST MAP
             model_id = deployment.model_info.id
@@ -8504,6 +8544,13 @@ class Router:
             field_value = deployment.litellm_params.get(field)
             if field_value is not None:
                 _model_info_dict[field] = field_value
+
+        if _model_info_dict.get("input_cost_per_token") is not None:
+            Router._inherit_builtin_cache_pricing(
+                model_info=_model_info_dict,
+                backend_model=deployment.litellm_params.model,
+                custom_llm_provider=deployment.litellm_params.custom_llm_provider,
+            )
 
         # Register custom pricing in litellm.model_cost.
         # Mirrors _create_deployment() logic to ensure dynamically-added deployments
