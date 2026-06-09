@@ -1099,13 +1099,24 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for file_attr in ["output_file_id", "error_file_id"]:
                     file_id_value = getattr(response, file_attr, None)
                     if file_id_value and model_id:
-                        original_file_id = file_id_value
-                        unified_file_id = self.get_unified_output_file_id(
-                            output_file_id=original_file_id,
-                            model_id=model_id,
-                            model_name=resolved_model_name,
+                        decoded_unified_file_id = _is_base64_encoded_unified_file_id(
+                            file_id_value
                         )
-                        setattr(response, file_attr, unified_file_id)
+                        if decoded_unified_file_id:
+                            provider_file_id = (
+                                self.get_output_file_id_from_unified_file_id(
+                                    decoded_unified_file_id
+                                )
+                            )
+                            unified_file_id = file_id_value
+                        else:
+                            provider_file_id = file_id_value
+                            unified_file_id = self.get_unified_output_file_id(
+                                output_file_id=provider_file_id,
+                                model_id=model_id,
+                                model_name=resolved_model_name,
+                            )
+                            setattr(response, file_attr, unified_file_id)
 
                         # Use llm_router credentials when available. Without credentials,
                         # Azure and other auth-required providers return 500/401.
@@ -1125,27 +1136,27 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                                     or {}
                                 )
                                 file_object = await litellm.afile_retrieve(
-                                    file_id=original_file_id,
+                                    file_id=provider_file_id,
                                     **_creds,
                                 )
                             else:
                                 file_object = await litellm.afile_retrieve(
                                     custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",  # type: ignore[arg-type]
-                                    file_id=original_file_id,
+                                    file_id=provider_file_id,
                                 )
                             verbose_logger.debug(
-                                f"Successfully retrieved file object for {file_attr}={original_file_id}"
+                                f"Successfully retrieved file object for {file_attr}={provider_file_id}"
                             )
                         except Exception as e:
                             verbose_logger.warning(
-                                f"Failed to retrieve file object for {file_attr}={original_file_id}: {str(e)}. Storing with None and will fetch on-demand."
+                                f"Failed to retrieve file object for {file_attr}={provider_file_id}: {str(e)}. Storing with None and will fetch on-demand."
                             )
 
                         await self.store_unified_file_id(
                             file_id=unified_file_id,
                             file_object=file_object,
                             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
-                            model_mappings={model_id: original_file_id},
+                            model_mappings={model_id: provider_file_id},
                             user_api_key_dict=user_api_key_dict,
                         )
             await self.store_unified_object_id(
