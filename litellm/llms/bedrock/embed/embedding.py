@@ -481,6 +481,7 @@ class BedrockEmbedding(BaseAWSLLM):
                                 "amazon.titan-embed-image-v1",
                                 "amazon.titan-embed-text-v1",
                                 "amazon.titan-embed-text-v2:0",
+                                "amazon.titan-embed-g1-text-02"
                             ],
                         )
                     )
