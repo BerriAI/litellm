@@ -8,6 +8,15 @@
 import { getProxyBaseUrl, serverRootPath } from "@/components/networking";
 
 /**
+ * sessionStorage key used to restore the MCP server detail view on the Tools
+ * tab after a full-page OAuth redirect. The OBO authorize flow redirects to the
+ * IdP and back to the MCP Servers page; without this the user lands on the
+ * server list and useUserMcpOAuthFlow never re-mounts to persist the credential.
+ * Mirrors the admin edit flow's EDIT_OAUTH_UI_STATE_KEY.
+ */
+export const TOOLS_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-tools-state";
+
+/**
  * Build the OAuth callback URL for the current UI deployment.
  *
  * In the browser, derive the `/ui` prefix from the current pathname so the

@@ -21,6 +21,7 @@ import MCPNetworkSettings from "./MCPNetworkSettings";
 import MCPDiscovery from "./mcp_discovery";
 import { ByokCredentialModal } from "./ByokCredentialModal";
 import { getSecureItem } from "@/utils/secureStorage";
+import { TOOLS_OAUTH_UI_STATE_KEY } from "@/hooks/mcpOAuthUtils";
 import UserEnvVarsModal from "./UserEnvVarsModal";
 import { listMCPUserEnvVarStatus } from "../networking";
 
@@ -71,6 +72,23 @@ const compareServers = (a: MCPServer, b: MCPServer, sort: SortKey): number => {
 const { Text: AntdText, Title: AntdTitle } = Typography;
 const EDIT_OAUTH_UI_STATE_KEY = "litellm-mcp-oauth-edit-state";
 
+// Server id stashed by the Tools tab before an OBO OAuth redirect, read once at
+// mount so the redirect returns straight to that server's Tools tab.
+const readToolsOAuthServerId = (): string | null => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const stored = getSecureItem(TOOLS_OAUTH_UI_STATE_KEY);
+    if (!stored) {
+      return null;
+    }
+    return JSON.parse(stored)?.serverId ?? null;
+  } catch {
+    return null;
+  }
+};
+
 const { Option } = Select;
 
 const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID }) => {
@@ -103,7 +121,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   // state
   const [serverIdToDelete, setServerToDelete] = useState<string | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
-  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  // Server whose Tools tab should be reopened after an OBO OAuth redirect; read
+  // once from sessionStorage so the restored server selection is correct on the
+  // first render. Cleared when the user navigates back to the list (handleBack)
+  // so a later visit to the same server defaults to Overview, not the Tools tab.
+  const [toolsTabServerId, setToolsTabServerId] = useState<string | null>(readToolsOAuthServerId);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(toolsTabServerId);
   const [editServer, setEditServer] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState<string>("all");
   const [selectedMcpAccessGroup, setSelectedMcpAccessGroup] = useState<string>("all");
@@ -175,6 +198,19 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       }
     } catch (err) {
       console.error("Failed to restore MCP edit view state", err);
+    }
+  }, []);
+
+  // The restored server id was consumed by the initializer above; remove the
+  // one-shot sessionStorage key so a full page reload doesn't reopen the Tools
+  // tab (removeItem only, no setState).
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      try {
+        window.sessionStorage.removeItem(TOOLS_OAUTH_UI_STATE_KEY);
+      } catch {
+        // ignore storage errors
+      }
     }
   }, []);
 
@@ -338,6 +374,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
   const handleBack = React.useCallback(() => {
     setEditServer(false);
     setSelectedServerId(null);
+    // Drop the post-redirect one-shot so re-selecting that server opens Overview.
+    setToolsTabServerId(null);
     refetch();
   }, [refetch]);
 
@@ -483,6 +521,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
                 userID={userID}
                 userRole={userRole}
                 availableAccessGroups={uniqueMcpAccessGroups}
+                initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
             ) : (
               <div className="w-full h-full">
