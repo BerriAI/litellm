@@ -117,22 +117,29 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         continue_final_message=True to properly continue the assistant's response.
         Without this, vLLM treats the prefill as a completed turn and starts fresh.
         """
-        # First apply the base OpenAI transformation
+        # Detect prefix:true marker BEFORE super() processes messages.
+        # super() (OpenAIGPTConfig) strips prefix from messages to prevent
+        # leaking to non-vLLM backends, so we must capture the flag first.
+        has_prefix = (
+            messages
+            and isinstance(messages[-1], dict)
+            and messages[-1].get("role") == "assistant"
+            and messages[-1].get("prefix") is True
+        )
+
+        # Apply the base OpenAI transformation
         request = super().transform_request(
             model, messages, optional_params, litellm_params, headers
         )
 
-        # Detect prefix:true marker (LiteLLM's unified prefill API from #4881)
-        # Auto-stamp for trailing assistant messages from Anthropic /v1/messages adapter
-        messages = request.get("messages", [])
-        if messages and isinstance(messages[-1], dict):
-            last_msg = messages[-1]
-            if last_msg.get("role") == "assistant" and last_msg.get("prefix") is True:
-                eb = request.setdefault("extra_body", {})
-                eb.setdefault("continue_final_message", True)
-                eb.setdefault("add_generation_prompt", False)
-                # Remove the marker so it doesn't leak to the backend
-                last_msg.pop("prefix", None)
+        if has_prefix:
+            eb = request.setdefault("extra_body", {})
+            eb.setdefault("continue_final_message", True)
+            eb.setdefault("add_generation_prompt", False)
+            # Clean up any remaining prefix markers
+            for msg in request.get("messages", []):
+                if isinstance(msg, dict) and "prefix" in msg:
+                    msg.pop("prefix", None)
 
         return request
 
