@@ -1228,17 +1228,49 @@ class TestToolTransformation:
         )
         assert result_tool["function"]["parameters"] == namespace_tool["parameters"]
 
-    def test_transform_namespace_tools_without_schema_raises(self):
-        """Name-only namespace tools cannot be converted into usable functions."""
+    def test_transform_namespace_tools_without_schema_skips(self):
+        """Name-only namespace tools are skipped instead of becoming hollow functions."""
         namespace_tool = {
             "type": "namespace",
             "name": "mcp__node_repl",
         }
 
-        with pytest.raises(ValueError, match="Namespace tools require description"):
-            LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
-                tools=[namespace_tool]
-            )
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[namespace_tool]
+        )
+
+        assert result_tools == []
+        assert web_search_options is None
+
+    def test_transform_namespace_tools_without_schema_keeps_other_tools(self):
+        """Skipping name-only namespace tools should not abort the whole request."""
+        function_tool = {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string"}},
+            },
+        }
+        namespace_tool = {
+            "type": "namespace",
+            "name": "mcp__node_repl",
+        }
+
+        (
+            result_tools,
+            web_search_options,
+        ) = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=[namespace_tool, function_tool]
+        )
+
+        assert web_search_options is None
+        assert len(result_tools) == 1
+        assert result_tools[0]["function"]["name"] == "get_weather"
 
     def test_transform_code_execution_tools(self):
         """Test that code_execution tools are passed through as-is"""

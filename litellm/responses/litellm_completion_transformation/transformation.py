@@ -1392,9 +1392,7 @@ class LiteLLMCompletionResponsesConfig:
                     not typed_tool.get("description")
                     or not typed_tool.get("parameters")
                 ):
-                    raise ValueError(
-                        "Namespace tools require description and parameters"
-                    )
+                    continue
                 # Ensure parameters has "type": "object" as required by providers like Anthropic
                 parameters = dict(typed_tool.get("parameters", {}) or {})
                 if not parameters or "type" not in parameters:

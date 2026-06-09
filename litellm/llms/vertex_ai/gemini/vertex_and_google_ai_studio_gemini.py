@@ -683,7 +683,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif tool.get("type") == "namespace" and (
                 not tool.get("description") or not tool.get("parameters")
             ):
-                raise ValueError("Namespace tools require description and parameters")
+                verbose_logger.warning(
+                    "Skipping namespace tool without description or parameters: %s",
+                    tool.get("name"),
+                )
+                continue
             # Handle tools with 'type' field (OpenAI spec compliance) Ignore this field -> https://github.com/BerriAI/litellm/issues/14644#issuecomment-3342061838
             elif "type" in tool:
                 tool = {k: tool[k] for k in tool if k != "type"}
