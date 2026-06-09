@@ -2543,8 +2543,9 @@ def completion(  # type: ignore # noqa: PLR0915
                 stream=stream,
             )
         elif custom_llm_provider == "cometapi":
+            cometapi_request_api_key = api_key
             api_key = require_cometapi_api_key(api_key or litellm.cometapi_key)
-            api_base = get_cometapi_api_base(api_base)
+            api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
 
             ## COMPLETION CALL
             response = base_llm_http_handler.completion(
@@ -5826,8 +5827,9 @@ def embedding(  # noqa: PLR0915
                 litellm_params={},
             )
         elif custom_llm_provider == "cometapi":
+            cometapi_request_api_key = api_key
             api_key = require_cometapi_api_key(api_key or litellm.cometapi_key)
-            api_base = get_cometapi_api_base(api_base)
+            api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
             response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
@@ -6415,10 +6417,14 @@ def moderation(
         pass
 
     if custom_llm_provider == "cometapi":
+        cometapi_request_api_key = api_key or _dynamic_api_key
+        cometapi_request_api_base = api_base or _dynamic_api_base
         api_key = require_cometapi_api_key(
-            api_key or _dynamic_api_key or litellm.cometapi_key
+            cometapi_request_api_key or litellm.cometapi_key
         )
-        api_base = get_cometapi_api_base(api_base or _dynamic_api_base)
+        api_base = get_cometapi_api_base(
+            cometapi_request_api_base, api_key=cometapi_request_api_key
+        )
     else:
         api_key = (
             api_key
@@ -6481,10 +6487,14 @@ async def amoderation(
         pass
 
     if custom_llm_provider == "cometapi":
+        cometapi_request_api_key = api_key or _dynamic_api_key
+        cometapi_request_api_base = optional_params.api_base or _dynamic_api_base
         api_key = require_cometapi_api_key(
-            api_key or _dynamic_api_key or litellm.cometapi_key
+            cometapi_request_api_key or litellm.cometapi_key
         )
-        api_base = get_cometapi_api_base(optional_params.api_base or _dynamic_api_base)
+        api_base = get_cometapi_api_base(
+            cometapi_request_api_base, api_key=cometapi_request_api_key
+        )
     else:
         api_key = (
             api_key
@@ -6743,8 +6753,9 @@ def transcription(  # noqa: PLR0915
             litellm_params=litellm_params_dict,
         )
     elif custom_llm_provider == "cometapi":
+        cometapi_request_api_key = api_key
         api_key = require_cometapi_api_key(api_key or litellm.cometapi_key)
-        api_base = get_cometapi_api_base(api_base)
+        api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
         response = openai_audio_transcriptions.audio_transcriptions(
             model=model,
             audio_file=file,
@@ -6994,10 +7005,11 @@ def speech(  # noqa: PLR0915
                 model=model,
                 llm_provider=custom_llm_provider,
             )
+        cometapi_request_api_key = api_key or dynamic_api_key
         api_key = require_cometapi_api_key(
-            api_key or dynamic_api_key or litellm.cometapi_key
+            cometapi_request_api_key or litellm.cometapi_key
         )
-        api_base = get_cometapi_api_base(api_base)
+        api_base = get_cometapi_api_base(api_base, api_key=cometapi_request_api_key)
         headers = headers or litellm.headers
         response = openai_chat_completions.audio_speech(
             model=model,

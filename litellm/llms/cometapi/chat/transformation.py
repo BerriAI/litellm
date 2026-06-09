@@ -62,7 +62,7 @@ class CometAPIConfig(OpenAIGPTConfig):
         Returns:
             str: The complete URL for the API call.
         """
-        return get_cometapi_complete_url(api_base, "chat/completions")
+        return get_cometapi_complete_url(api_base, "chat/completions", api_key=api_key)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

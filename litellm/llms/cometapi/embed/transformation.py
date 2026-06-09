@@ -42,7 +42,7 @@ class CometAPIEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for the CometAPI embedding endpoint.
         """
-        return get_cometapi_complete_url(api_base, "embeddings")
+        return get_cometapi_complete_url(api_base, "embeddings", api_key=api_key)
 
     def validate_environment(
         self,

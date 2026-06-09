@@ -18,7 +18,12 @@ def get_cometapi_api_key(api_key: Optional[str] = None) -> Optional[str]:
     )
 
 
-def get_cometapi_api_base(api_base: Optional[str] = None) -> str:
+def get_cometapi_api_base(
+    api_base: Optional[str] = None, api_key: Optional[str] = None
+) -> str:
+    if api_base and not api_key:
+        raise ValueError("CometAPI api_base requires an explicit api_key")
+
     return (
         api_base
         or get_secret_str("COMETAPI_BASE_URL")
@@ -27,8 +32,10 @@ def get_cometapi_api_base(api_base: Optional[str] = None) -> str:
     )
 
 
-def get_cometapi_complete_url(api_base: Optional[str], endpoint: str) -> str:
-    base_url = get_cometapi_api_base(api_base).rstrip("/")
+def get_cometapi_complete_url(
+    api_base: Optional[str], endpoint: str, api_key: Optional[str] = None
+) -> str:
+    base_url = get_cometapi_api_base(api_base, api_key=api_key).rstrip("/")
     normalized_endpoint = endpoint.strip("/")
     parsed_endpoint = urlsplit(normalized_endpoint)
     if (

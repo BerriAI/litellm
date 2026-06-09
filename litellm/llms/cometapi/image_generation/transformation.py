@@ -104,7 +104,9 @@ class CometAPIImageGenerationConfig(BaseImageGenerationConfig):
         """
         Get the complete url for the request
         """
-        return get_cometapi_complete_url(api_base, "images/generations")
+        return get_cometapi_complete_url(
+            api_base, "images/generations", api_key=api_key
+        )
 
     def validate_environment(
         self,

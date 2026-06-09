@@ -216,7 +216,7 @@ class TestCometAPIConfig:
         assert (
             config.get_complete_url(
                 api_base="https://api.cometapi.com/v1",
-                api_key=None,
+                api_key="comet-explicit-key",
                 model="gpt-5.5",
                 optional_params={},
                 litellm_params={},
