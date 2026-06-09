@@ -895,6 +895,20 @@ async def pass_through_request(
 
         url_identifier = url_path or url_host
 
+        # Inject upstream URL model tag for observability (Langfuse / Spend Logs)
+        # This MUST happen before pre_call_hook so that budget enforcement sees the tag
+        if url_identifier:
+            tag = f"{url_provider}_model:{url_identifier}"
+            if _parsed_body is None:
+                _parsed_body = {}
+            litellm_metadata = _parsed_body.setdefault("litellm_metadata", {})
+            if isinstance(litellm_metadata, dict):
+                tags_list = litellm_metadata.setdefault("tags", [])
+                if isinstance(tags_list, list) and tag not in tags_list:
+                    tags_list.append(tag)
+                # also set the provider specific model tag
+                litellm_metadata[f"{url_provider}_model"] = url_identifier
+
         passthrough_model = (
             _parsed_body.get("model") if isinstance(_parsed_body, dict) else None
         ) or url_identifier or "unknown"
@@ -943,16 +957,6 @@ async def pass_through_request(
             request=request,
             logging_obj=logging_obj,
         )
-
-        # Inject upstream URL model tag for observability (Langfuse / Spend Logs)
-        if url_identifier:
-            tag = f"{url_provider}_model:{url_identifier}"
-            litellm_params_dict = kwargs.setdefault("litellm_params", {})
-            metadata_dict = litellm_params_dict.setdefault("metadata", {})
-            metadata_dict[f"{url_provider}_model"] = url_identifier
-            tags_list = metadata_dict.setdefault("tags", [])
-            if isinstance(tags_list, list) and tag not in tags_list:
-                tags_list.append(tag)
 
         # Store custom_llm_provider in kwargs and logging object if provided
         if custom_llm_provider:
