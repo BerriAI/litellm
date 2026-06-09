@@ -504,7 +504,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if retrieve_file_id
                 else False
             )
-            if potential_file_id:
+            if potential_file_id and "llm_output_file_id," in potential_file_id:
                 model_id = self.get_model_id_from_unified_file_id(potential_file_id)
                 if model_id:
                     data["model"] = model_id
@@ -1058,7 +1058,12 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return file_id.split("llm_output_file_model_id,")[1].split(";")[0]
 
     def get_output_file_id_from_unified_file_id(self, file_id: str) -> str:
-        return file_id.split("llm_output_file_id,")[1].split(";")[0]
+        marker = "llm_output_file_id,"
+        if marker not in file_id:
+            raise ValueError(
+                f"Unified id does not contain {marker!r}: {file_id[:80]!r}"
+            )
+        return file_id.split(marker, 1)[1].split(";")[0]
 
     async def async_post_call_success_hook(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth, response: LLMResponseTypes
@@ -1102,13 +1107,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         decoded_unified_file_id = _is_base64_encoded_unified_file_id(
                             file_id_value
                         )
-                        if decoded_unified_file_id:
+                        if (
+                            decoded_unified_file_id
+                            and "llm_output_file_id," in decoded_unified_file_id
+                        ):
                             provider_file_id = (
                                 self.get_output_file_id_from_unified_file_id(
                                     decoded_unified_file_id
                                 )
                             )
                             unified_file_id = file_id_value
+                        elif decoded_unified_file_id:
+                            verbose_logger.warning(
+                                f"Skipping {file_attr}={file_id_value!r}: "
+                                "unified id is not a managed file output id"
+                            )
+                            continue
                         else:
                             provider_file_id = file_id_value
                             unified_file_id = self.get_unified_output_file_id(
