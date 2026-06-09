@@ -1612,6 +1612,7 @@ async def test_team_model_add_delete_refresh_team_cache(endpoint_name):
             "litellm.proxy.management_endpoints.team_endpoints._cache_team_object"
         ) as mock_cache_team,
     ):
+        mock_cache.async_increment_cache = AsyncMock()
         mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
             return_value=existing_team
         )
@@ -1706,6 +1707,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
         ) as mock_upsert_budget,
     ):
+        mock_cache.async_increment_cache = AsyncMock()
         # Setup mock prisma client
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
@@ -2139,6 +2141,7 @@ async def test_update_team_with_team_member_budget_duration():
             "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
         ) as mock_upsert_budget,
     ):
+        mock_cache.async_increment_cache = AsyncMock()
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
             "team_id": "test_team_id",
@@ -4778,6 +4781,7 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit():
         mock_cache.async_set_cache = (
             AsyncMock()
         )  # Mock cache set for _cache_team_object
+        mock_cache.async_increment_cache = AsyncMock()
 
         # Mock team update
         mock_updated_team = MagicMock()
@@ -4881,6 +4885,7 @@ async def test_update_team_org_scoped_models_bypasses_user_limit():
         mock_cache.async_set_cache = (
             AsyncMock()
         )  # Mock cache set for _cache_team_object
+        mock_cache.async_increment_cache = AsyncMock()
 
         # Mock team update
         mock_updated_team = MagicMock()
@@ -5072,6 +5077,7 @@ async def test_update_team_org_scoped_models_with_all_proxy_models():
         mock_cache.async_set_cache = (
             AsyncMock()
         )  # Mock cache set for _cache_team_object
+        mock_cache.async_increment_cache = AsyncMock()
 
         # Mock team update
         mock_updated_team = MagicMock()
@@ -5755,6 +5761,7 @@ async def test_update_team_org_scoped_tpm_rpm_bypasses_user_limit():
             return_value=mock_existing_team
         )
         mock_cache.async_set_cache = AsyncMock()
+        mock_cache.async_increment_cache = AsyncMock()
 
         # Mock team update
         mock_updated_team = MagicMock(spec=LiteLLM_TeamTable)
@@ -5926,6 +5933,7 @@ async def test_update_team_guardrails_with_org_id():
         # async_get_cache must be an AsyncMock so `await` in get_org_object works
         mock_cache.async_get_cache = AsyncMock(return_value=None)
         mock_cache.async_set_cache = AsyncMock()
+        mock_cache.async_increment_cache = AsyncMock()
 
         # Mock llm_router
         mock_router = MagicMock()
@@ -6687,6 +6695,7 @@ async def test_update_team_soft_budget_validation(
         mock_cache.async_set_cache = (
             AsyncMock()
         )  # Mock cache set for _cache_team_object
+        mock_cache.async_increment_cache = AsyncMock()
 
         if should_succeed:
             # Should NOT raise an exception
@@ -8306,6 +8315,8 @@ async def test_new_team_encrypts_callback_vars(
     assert cv["langfuse_secret_key"] != "sk-real"
     recovered = decrypt_callback_vars(metadata)["logging"][0]["callback_vars"]
     assert recovered["langfuse_secret_key"] == "sk-real"
+
+
 def _non_admin_auth():
     return UserAPIKeyAuth(
         user_id="u-team-admin", user_role=LitellmUserRoles.INTERNAL_USER
