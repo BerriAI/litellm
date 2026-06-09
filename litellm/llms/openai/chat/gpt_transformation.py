@@ -449,6 +449,13 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
         optional_params.pop("max_retries", None)
 
+        # Strip prefix marker from assistant messages to prevent leaking to
+        # backends that don't support it (Bug #28580 fix).  HostedVLLMChatConfig
+        # detects prefix BEFORE calling super() and handles it separately.
+        for msg in messages:
+            if isinstance(msg, dict) and "prefix" in msg:
+                msg.pop("prefix", None)
+
         return {
             "model": model,
             "messages": messages,
