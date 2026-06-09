@@ -1234,6 +1234,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         result_lines: List[str] = []
         for line in text.split("\n"):
+            line = line.rstrip("\r")
             if line.startswith("data: ") and line != "data: [DONE]":
                 raw_json = line[6:]
                 try:
@@ -1250,7 +1251,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                         )
                         if unmasked != delta["text"]:
                             event["delta"]["text"] = unmasked
-                            line = "data: " + json.dumps(event)
+                            line = "data: " + json.dumps(event, ensure_ascii=False)
                 except (json.JSONDecodeError, KeyError, TypeError):
                     pass
             result_lines.append(line)

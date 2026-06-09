@@ -2551,6 +2551,46 @@ def test_unmask_sse_bytes_chunk_handles_unicode_decode_error():
     assert result == chunk
 
 
+def test_unmask_sse_bytes_chunk_non_ascii_pii_not_escaped():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "José"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hello <PERSON_1>!"},
+    }
+    chunk = ("data: " + json.dumps(event) + "\n\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(chunk, pii_tokens)
+
+    decoded = result.decode("utf-8")
+    assert "Jos\\u" not in decoded
+    parsed = json.loads(decoded.split("data: ", 1)[1].strip())
+    assert parsed["delta"]["text"] == "Hello José!"
+
+
+def test_unmask_sse_bytes_chunk_handles_crlf_line_endings():
+    import json
+
+    pii_tokens = {"<PERSON_1>": "Bobby"}
+    event = {
+        "type": "content_block_delta",
+        "index": 0,
+        "delta": {"type": "text_delta", "text": "Hi <PERSON_1>!"},
+    }
+    crlf_chunk = ("data: " + json.dumps(event) + "\r\ndata: [DONE]\r\n").encode("utf-8")
+
+    result = _OPTIONAL_PresidioPIIMasking._unmask_sse_bytes_chunk(
+        crlf_chunk, pii_tokens
+    )
+
+    decoded = result.decode("utf-8")
+    parsed = json.loads(decoded.split("data: ", 1)[1].split("\n")[0].strip())
+    assert parsed["delta"]["text"] == "Hi Bobby!"
+    assert "data: [DONE]" in decoded
+
+
 @pytest.mark.asyncio
 async def test_stream_pii_unmasking_unmaskes_bytes_chunks(mock_user_api_key):
     import json
