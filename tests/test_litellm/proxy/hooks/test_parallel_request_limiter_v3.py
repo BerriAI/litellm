@@ -6,6 +6,7 @@ import asyncio
 import os
 import sys
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
@@ -3135,6 +3136,36 @@ async def _seed_max_parallel_requests_counter(
     )
 
 
+async def _build_seeded_limiter():
+    """Build a v3 limiter whose api-key counter already holds the pre-call +1."""
+    api_key = hash_token("sk-disconnect")
+    cache = DualCache()
+    limiter = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    counter_key = f"{{api_key:{api_key}}}:max_parallel_requests"
+    await _seed_max_parallel_requests_counter(cache, counter_key, limiter.window_size)
+    user_api_key_dict = UserAPIKeyAuth(api_key=api_key, max_parallel_requests=2)
+    return limiter, cache, counter_key, user_api_key_dict
+
+
+@contextmanager
+def _override_litellm_callbacks(new_callbacks):
+    """Swap litellm.callbacks so _callback_capabilities recomputes deterministically."""
+    saved = litellm.callbacks
+    litellm.callbacks = new_callbacks
+    try:
+        yield
+    finally:
+        litellm.callbacks = saved
+
+
+async def _drain_release_task():
+    # The disconnect release is scheduled fire-and-forget via create_task.
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+
 @pytest.mark.asyncio
 async def test_release_max_parallel_requests_on_disconnect_v3():
     """
@@ -3187,84 +3218,147 @@ async def test_release_max_parallel_requests_on_disconnect_noop_v3():
     assert await local_cache.async_get_cache(key=counter_key) is None
 
 
+@pytest.mark.parametrize("disconnect", ["cancel", "aclose"])
 @pytest.mark.asyncio
-async def test_streaming_iterator_hook_releases_counter_on_cancel_v3():
+async def test_async_streaming_data_generator_releases_counter_on_disconnect_v3(
+    disconnect,
+):
     """
-    End-to-end regression for issue #27955. When the client cancels a stream
-    mid-flight, async_post_call_streaming_iterator_hook must release the
-    api-key max_parallel_requests reservation and re-raise the CancelledError.
-    Before the fix the counter stayed at +1 because the cancellation slipped
-    past the hook's post-loop cleanup.
+    Regression for issue #27955 on the outer SSE generator (used by /v1/messages
+    and other event-stream routes). A client that disconnects mid-stream raises
+    GeneratorExit (aclose) or CancelledError into async_streaming_data_generator;
+    both are BaseException and bypass the success/failure logging callbacks, so
+    the generator itself must refund the pre-call max_parallel_requests +1.
+    Releasing inside the nested iterator hook does not work because that
+    generator is only closed on garbage collection, which is non-deterministic.
     """
-    _api_key = hash_token("sk-12345")
-    limiter_cache = DualCache()
-    limiter = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(limiter_cache)
-    )
-    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
-    await _seed_max_parallel_requests_counter(
-        limiter_cache, counter_key, limiter.window_size
-    )
-    assert await limiter_cache.async_get_cache(key=counter_key) == 1
+    from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+    limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
+    assert await cache.async_get_cache(key=counter_key) == 1
 
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
 
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
-
-    async def cancelling_stream():
+    async def upstream():
         yield ModelResponse()
-        raise asyncio.CancelledError()
-
-    with pytest.raises(asyncio.CancelledError):
-        async for _ in proxy_logging_obj.async_post_call_streaming_iterator_hook(
-            response=cancelling_stream(),
-            user_api_key_dict=user_api_key_dict,
-            request_data={},
-        ):
-            pass
-
-    # The release is scheduled fire-and-forget via create_task; let it run.
-    for _ in range(5):
-        await asyncio.sleep(0)
-    assert await limiter_cache.async_get_cache(key=counter_key) == 0
-
-
-@pytest.mark.asyncio
-async def test_streaming_iterator_hook_releases_counter_on_aclose_v3():
-    """
-    Companion to the cancel test for issue #27955. When the client disconnects,
-    the nested streaming generators are closed, which throws GeneratorExit (not
-    CancelledError) into the iterator hook. That path must also release the
-    api-key max_parallel_requests reservation.
-    """
-    _api_key = hash_token("sk-12345")
-    limiter_cache = DualCache()
-    limiter = _PROXY_MaxParallelRequestsHandler(
-        internal_usage_cache=InternalUsageCache(limiter_cache)
-    )
-    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
-    await _seed_max_parallel_requests_counter(
-        limiter_cache, counter_key, limiter.window_size
-    )
-
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
-    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
-
-    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
-
-    async def open_stream():
+        if disconnect == "cancel":
+            raise asyncio.CancelledError()
         while True:
             yield ModelResponse()
 
-    hook_iter = proxy_logging_obj.async_post_call_streaming_iterator_hook(
-        response=open_stream(),
-        user_api_key_dict=user_api_key_dict,
-        request_data={},
-    )
-    await hook_iter.__anext__()
-    await hook_iter.aclose()
+    with _override_litellm_callbacks([]):
+        gen = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=upstream(),
+            user_api_key_dict=user_api_key_dict,
+            request_data={"model": "claude-test"},
+            proxy_logging_obj=proxy_logging_obj,
+        )
+        await gen.__anext__()
+        if disconnect == "cancel":
+            with pytest.raises(asyncio.CancelledError):
+                await gen.__anext__()
+        else:
+            await gen.aclose()
+        await _drain_release_task()
 
-    for _ in range(5):
-        await asyncio.sleep(0)
-    assert await limiter_cache.async_get_cache(key=counter_key) == 0
+    assert await cache.async_get_cache(key=counter_key) == 0
+
+
+@pytest.mark.parametrize("disconnect", ["cancel", "aclose"])
+@pytest.mark.asyncio
+async def test_async_data_generator_releases_counter_on_disconnect_v3(disconnect):
+    """
+    Regression for issue #27955 on the chat-completions outer generator
+    (proxy_server.async_data_generator). With only the v3 parallel limiter
+    enabled, needs_iterator_wrap() is False, so this generator iterates the
+    upstream response directly and the iterator hook is bypassed entirely -- the
+    gap that let a disconnect leak the slot in the default limiter-only config.
+    A mid-stream disconnect must still refund the pre-call +1.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+
+    limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
+    proxy_logging_obj = proxy_server.proxy_logging_obj
+    saved_hook = proxy_logging_obj.proxy_hook_mapping.get("parallel_request_limiter")
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    async def upstream():
+        yield ModelResponse()
+        if disconnect == "cancel":
+            raise asyncio.CancelledError()
+        while True:
+            yield ModelResponse()
+
+    try:
+        with _override_litellm_callbacks([]):
+            assert proxy_logging_obj.needs_iterator_wrap() is False
+            gen = proxy_server.async_data_generator(
+                response=upstream(),
+                user_api_key_dict=user_api_key_dict,
+                request_data={"model": "gpt-test"},
+            )
+            await gen.__anext__()
+            if disconnect == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await gen.__anext__()
+            else:
+                await gen.aclose()
+            await _drain_release_task()
+        assert await cache.async_get_cache(key=counter_key) == 0
+    finally:
+        if saved_hook is not None:
+            proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = (
+                saved_hook
+            )
+        else:
+            proxy_logging_obj.proxy_hook_mapping.pop("parallel_request_limiter", None)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_releases_counter_when_wrapped_v3():
+    """
+    Companion to the no-wrap case for issue #27955. With an iterator-override
+    callback active, needs_iterator_wrap() is True and async_data_generator
+    drives the chained iterator hook. The refund must still fire exactly once
+    from the outer generator: the counter returns to 0 (not -1), proving the
+    nested hook does not also refund and there is no double decrement.
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+    import litellm.proxy.proxy_server as proxy_server
+
+    class _PassthroughIteratorOverride(CustomLogger):
+        async def async_post_call_streaming_iterator_hook(
+            self, user_api_key_dict, response, request_data
+        ):
+            async for chunk in response:
+                yield chunk
+
+    limiter, cache, counter_key, user_api_key_dict = await _build_seeded_limiter()
+    proxy_logging_obj = proxy_server.proxy_logging_obj
+    saved_hook = proxy_logging_obj.proxy_hook_mapping.get("parallel_request_limiter")
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    async def upstream():
+        while True:
+            yield ModelResponse()
+
+    try:
+        with _override_litellm_callbacks([_PassthroughIteratorOverride()]):
+            assert proxy_logging_obj.needs_iterator_wrap() is True
+            gen = proxy_server.async_data_generator(
+                response=upstream(),
+                user_api_key_dict=user_api_key_dict,
+                request_data={"model": "gpt-test"},
+            )
+            await gen.__anext__()
+            await gen.aclose()
+            await _drain_release_task()
+        assert await cache.async_get_cache(key=counter_key) == 0
+    finally:
+        if saved_hook is not None:
+            proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = (
+                saved_hook
+            )
+        else:
+            proxy_logging_obj.proxy_hook_mapping.pop("parallel_request_limiter", None)

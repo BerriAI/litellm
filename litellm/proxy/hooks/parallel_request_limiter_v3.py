@@ -2963,6 +2963,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         rate_limit_type="max_parallel_requests",
                     ),
                     increment_value=-1,
+                    # Refresh the window TTL on the decrement, matching the
+                    # failure path. max_parallel_requests is a concurrency
+                    # gauge, not a rolling-window count, so the key must
+                    # outlive in-flight requests rather than expire mid-stream.
                     ttl=self.window_size,
                 )
             ],

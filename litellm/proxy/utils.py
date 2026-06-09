@@ -2616,12 +2616,8 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides:
-            try:
-                async for chunk in response:
-                    yield chunk
-            except (asyncio.CancelledError, GeneratorExit):
-                self._release_max_parallel_requests_on_disconnect(user_api_key_dict)
-                raise
+            async for chunk in response:
+                yield chunk
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
 
@@ -2665,12 +2661,8 @@ class ProxyLogging:
                 )
 
         # Actually iterate through the chained async generator and yield chunks
-        try:
-            async for chunk in current_response:
-                yield chunk
-        except (asyncio.CancelledError, GeneratorExit):
-            self._release_max_parallel_requests_on_disconnect(user_api_key_dict)
-            raise
+        async for chunk in current_response:
+            yield chunk
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
         # completed.  unified_guardrail writes guardrail_information during
@@ -2706,7 +2698,14 @@ class ProxyLogging:
         response is cancelled mid-flight (client disconnect). Neither the
         success nor failure logging callback fires on the resulting
         CancelledError / GeneratorExit, so the pre-call +1 would otherwise
-        leak. Scheduled fire-and-forget (no await) because awaiting is not
+        leak.
+
+        Must be called from the outermost streaming generator (the one
+        Starlette drives and closes on disconnect). A nested iterator-hook
+        generator only receives GeneratorExit when it is garbage collected,
+        which is non-deterministic, so the refund cannot live there.
+
+        Scheduled fire-and-forget (no await) because awaiting is not
         permitted while unwinding a GeneratorExit.
         """
         limiter = self.get_proxy_hook("parallel_request_limiter")
@@ -2719,7 +2718,13 @@ class ProxyLogging:
                 )
             )
         except RuntimeError:
-            pass
+            # No running event loop (e.g. interpreter/loop shutdown); the
+            # counter's window TTL will reclaim the slot.
+            verbose_proxy_logger.warning(
+                "parallel_request_limiter_v3: could not schedule "
+                "max_parallel_requests release on disconnect; no running "
+                "event loop. Slot will be reclaimed when its window TTL expires"
+            )
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """
