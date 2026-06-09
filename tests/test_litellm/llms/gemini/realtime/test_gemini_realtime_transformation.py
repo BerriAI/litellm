@@ -1312,6 +1312,16 @@ def test_gemini_input_audio_buffer_end_maps_to_audio_stream_end():
     assert json.loads(messages[0]) == {"realtimeInput": {"audioStreamEnd": True}}
 
 
+def test_gemini_input_audio_buffer_clear_is_local_noop():
+    config = GeminiRealtimeConfig()
+    messages = config.transform_realtime_request(
+        json.dumps({"type": "input_audio_buffer.clear"}),
+        "gemini-live-2.5-flash-native-audio",
+        session_configuration_request=None,
+    )
+    assert messages == []
+
+
 def test_gemini_input_audio_buffer_commit_maps_to_activity_end_when_manual_vad():
     config = GeminiRealtimeConfig()
     setup = {

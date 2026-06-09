@@ -697,6 +697,13 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 session_configuration_request
             )
 
+        if msg_type == "input_audio_buffer.clear":
+            # Local OpenAI buffer op — nothing to forward to Gemini Live.
+            verbose_logger.debug(
+                "Gemini Realtime: input_audio_buffer.clear is a local buffer op"
+            )
+            return []
+
         # Unknown/unsupported OpenAI event type — drop silently rather than
         # forwarding raw JSON as text input to the model.
         return []
