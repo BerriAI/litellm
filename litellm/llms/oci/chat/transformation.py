@@ -25,6 +25,7 @@ from typing import (
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -450,6 +451,13 @@ class OCIChatConfig(BaseConfig):
                 selected_params[target] = optional_params[openai_key]  # type: ignore[index]
             elif oci_alias in optional_params:
                 selected_params[target] = optional_params[oci_alias]  # type: ignore[index]
+
+        # OCI's server-side default token cap is tiny (~20 tokens), so an
+        # omitted max_tokens silently truncates the response mid-string. Most
+        # callers never send a limit (MLflow judges among them), so inject a
+        # sane default when one is absent, mirroring litellm's Anthropic config.
+        if max_tokens_key not in selected_params:
+            selected_params[max_tokens_key] = DEFAULT_OCI_CHAT_MAX_TOKENS
 
         # OCI expects uppercase reasoning levels (LOW/MEDIUM/HIGH/NONE); OpenAI
         # clients send lowercase. OpenAI's "disable" maps to OCI's "NONE".
