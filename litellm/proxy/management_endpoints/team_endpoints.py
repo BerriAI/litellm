@@ -3470,6 +3470,9 @@ async def team_info(
     team_id: str = fastapi.Query(
         default=None, description="Team ID in the request parameters"
     ),
+    key_limit: int = fastapi.Query(
+        default=None, description="Limit the number of keys returned"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -3525,6 +3528,7 @@ async def team_info(
             table_name="key",
             query_type="find_all",
             expires=datetime.now(),
+            limit=key_limit,
         )
 
         if keys is None:
