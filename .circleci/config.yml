@@ -2683,6 +2683,43 @@ jobs:
             LITELLM_LICENSE="$LITELLM_LICENSE" \
               npx playwright test --config e2e_tests/playwright.config.ts
           no_output_timeout: 10m
+      - run:
+          name: Reboot proxy under a server root path
+          environment:
+            LITELLM_MASTER_KEY: "sk-1234"
+            MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
+            DISABLE_SCHEMA_UPDATE: "true"
+            SERVER_ROOT_PATH: "/litellm"
+          command: |
+            pkill -f "litellm.proxy.proxy_cli" || true
+            sleep 3
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              uv run --no-sync python -m litellm.proxy.proxy_cli \
+                --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
+                --port 4000
+          background: true
+      - run:
+          name: Wait for prefixed proxy to be ready
+          command: |
+            for i in $(seq 1 60); do
+              content=$(curl -sL --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/ui/ 2>/dev/null || true)
+              if echo "$content" | grep -qE "(<!DOCTYPE|<html|<head)"; then
+                echo "Prefixed proxy is serving the UI"
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "Prefixed proxy failed to serve /litellm/ui/"
+            exit 1
+      - run:
+          name: Run migration smoke under SERVER_ROOT_PATH
+          environment:
+            SERVER_ROOT_PATH: "/litellm"
+          command: |
+            cd ui/litellm-dashboard
+            LITELLM_LICENSE="$LITELLM_LICENSE" \
+              npx playwright test --config e2e_tests/migration.serverRootPath.config.ts
+          no_output_timeout: 10m
       - store_artifacts:
           path: ui/litellm-dashboard/test-results
           destination: e2e-test-results
