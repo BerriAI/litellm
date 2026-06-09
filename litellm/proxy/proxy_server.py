@@ -7018,6 +7018,16 @@ def _format_streaming_sse_chunk(chunk: Union[str, bytes]) -> Union[str, bytes]:
 # Must be a unique object (not a string) since real chunks can be strings.
 _STREAM_KEEPALIVE = object()
 
+# Bounds for the client-supplied ``keepalive_seconds`` request field. A
+# malicious or buggy caller could otherwise pass a tiny positive value (e.g.
+# ``1e-9``) which would make ``_iter_with_keepalive`` emit ``: ping`` in a
+# tight loop on any stalled stream, consuming event-loop time and bandwidth
+# (denial-of-service). The maximum simply caps absurdly long intervals that
+# would defeat the purpose of the heartbeat. Values outside the band are
+# clamped (rather than rejected) so existing callers don't break.
+_KEEPALIVE_MIN_SECONDS = 1.0
+_KEEPALIVE_MAX_SECONDS = 300.0
+
 
 async def _iter_with_keepalive(aiter, keepalive_seconds: float):
     """Yield items from ``aiter``, optionally emitting keepalive heartbeats.
@@ -7056,6 +7066,18 @@ async def _iter_with_keepalive(aiter, keepalive_seconds: float):
     finally:
         if pending is not None and not pending.done():
             pending.cancel()
+            # Drain the cancellation so the Task fully transitions to
+            # ``cancelled`` before this generator returns; otherwise the loop
+            # may log "Task was destroyed but it is pending" warnings on early
+            # client disconnect. ``await`` inside an async-generator ``finally``
+            # is supported (PEP 525). Swallow the propagated ``CancelledError``
+            # — it is the expected outcome of the cancel — and also swallow any
+            # ``StopAsyncIteration`` / upstream exception raised by the wrapped
+            # coroutine while it unwinds; we are already in cleanup.
+            try:
+                await pending
+            except BaseException:
+                pass
 
 
 async def async_data_generator(  # noqa: PLR0915
@@ -7106,8 +7128,23 @@ async def async_data_generator(  # noqa: PLR0915
         except (TypeError, ValueError):
             _ka_secs = 0.0
         if _ka_secs > 0:
+            # Clamp to ``[_KEEPALIVE_MIN_SECONDS, _KEEPALIVE_MAX_SECONDS]``
+            # so a hostile/buggy caller cannot busy-loop heartbeats with a
+            # tiny interval, and cannot disable the heartbeat semantically
+            # via an unreasonably long interval.
+            _ka_clamped = max(
+                _KEEPALIVE_MIN_SECONDS, min(_ka_secs, _KEEPALIVE_MAX_SECONDS)
+            )
+            if _ka_clamped != _ka_secs:
+                verbose_proxy_logger.info(
+                    "keepalive_seconds=%s clamped to %s [min=%s, max=%s]",
+                    _ka_secs,
+                    _ka_clamped,
+                    _KEEPALIVE_MIN_SECONDS,
+                    _KEEPALIVE_MAX_SECONDS,
+                )
             stream_iterator = _iter_with_keepalive(
-                stream_iterator.__aiter__(), _ka_secs
+                stream_iterator.__aiter__(), _ka_clamped
             )
 
         async for chunk in stream_iterator:

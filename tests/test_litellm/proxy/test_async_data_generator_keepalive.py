@@ -87,6 +87,10 @@ def test_keepalive_emits_ping_when_upstream_stalls():
             "_fire_deferred_stream_logging",
             return_value=None,
         ),
+        # Lower the server-side minimum so this test can run sub-second.
+        # Production deployments enforce a 1.0s floor (see
+        # ``_KEEPALIVE_MIN_SECONDS``).
+        patch.object(proxy_server_module, "_KEEPALIVE_MIN_SECONDS", 0.05),
     ):
         emitted = _run(
             _collect(
@@ -314,3 +318,121 @@ def test_iter_with_keepalive_cancels_pending_task_on_early_close():
         )
 
     _run(_run_test())
+
+
+def test_keepalive_seconds_below_minimum_is_clamped_up():
+    """A hostile/buggy client could send ``keepalive_seconds=1e-9`` to force
+    ``_iter_with_keepalive`` into a tight ``: ping`` busy-loop on any stalled
+    stream (denial-of-service). The server must clamp such values up to
+    ``_KEEPALIVE_MIN_SECONDS`` so the heartbeat rate stays bounded.
+
+    Verified by passing a tiny ``keepalive_seconds``, stalling the upstream
+    for less than the clamped floor, and asserting NO pings are emitted —
+    if the un-clamped value had been honoured, hundreds of pings would
+    appear during the stall window."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    # 0.05s stall, but we'll set the floor to 0.5s. If the unclamped 1e-9
+    # interval were honoured we'd see ~50,000,000 pings; if clamping works,
+    # we see zero (no full keepalive interval elapses before the stall ends).
+    upstream = _slow_chunk_stream(
+        chunks=["first", "second"],
+        stall_before_index=1,
+        stall_seconds=0.05,
+    )
+    request_data = _make_request_data(keepalive_seconds=1e-9)
+    user_api_key_dict = MagicMock(name="user_api_key_dict")
+
+    fake_logging = MagicMock(name="proxy_logging_obj")
+    fake_logging.needs_iterator_wrap.return_value = False
+    fake_logging.needs_per_chunk_streaming_hook.return_value = False
+
+    with (
+        patch.object(proxy_server_module, "proxy_logging_obj", fake_logging),
+        patch.object(
+            proxy_server_module,
+            "_get_client_requested_model_for_streaming",
+            return_value=None,
+        ),
+        patch.object(
+            proxy_server_module.ProxyLogging,
+            "_fire_deferred_stream_logging",
+            return_value=None,
+        ),
+        # Set the floor explicitly so the test is self-contained and not
+        # coupled to whatever the production default happens to be.
+        patch.object(proxy_server_module, "_KEEPALIVE_MIN_SECONDS", 0.5),
+    ):
+        emitted = _run(
+            _collect(
+                proxy_server_module.async_data_generator(
+                    response=upstream,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
+            )
+        )
+
+    pings = [e for e in emitted if e == ": ping\n\n"]
+    assert pings == [], (
+        f"keepalive_seconds=1e-9 must be clamped up to the server-side "
+        f"minimum; un-clamped, the 0.05s stall would emit a flood of pings. "
+        f"got {len(pings)} pings: {emitted!r}"
+    )
+    data_lines = [e for e in emitted if isinstance(e, str) and e.startswith("data: ")]
+    assert data_lines == ["data: first\n\n", "data: second\n\n", "data: [DONE]\n\n"]
+
+
+def test_keepalive_seconds_above_maximum_is_clamped_down():
+    """An interval longer than ``_KEEPALIVE_MAX_SECONDS`` would defeat the
+    heartbeat (the intermediary proxy times out before our first ping).
+    Verify that the server clamps such values down — exercising the
+    other side of the clamp expression for branch coverage."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    # Force the upper bound to a tiny value so the stall (0.15s) exceeds it
+    # and we get a measurable number of pings if clamping worked. Without
+    # the clamp, the request's 999999s interval would suppress every ping.
+    upstream = _slow_chunk_stream(
+        chunks=["first", "second"],
+        stall_before_index=1,
+        stall_seconds=0.15,
+    )
+    request_data = _make_request_data(keepalive_seconds=999999.0)
+    user_api_key_dict = MagicMock(name="user_api_key_dict")
+
+    fake_logging = MagicMock(name="proxy_logging_obj")
+    fake_logging.needs_iterator_wrap.return_value = False
+    fake_logging.needs_per_chunk_streaming_hook.return_value = False
+
+    with (
+        patch.object(proxy_server_module, "proxy_logging_obj", fake_logging),
+        patch.object(
+            proxy_server_module,
+            "_get_client_requested_model_for_streaming",
+            return_value=None,
+        ),
+        patch.object(
+            proxy_server_module.ProxyLogging,
+            "_fire_deferred_stream_logging",
+            return_value=None,
+        ),
+        patch.object(proxy_server_module, "_KEEPALIVE_MIN_SECONDS", 0.0),
+        patch.object(proxy_server_module, "_KEEPALIVE_MAX_SECONDS", 0.05),
+    ):
+        emitted = _run(
+            _collect(
+                proxy_server_module.async_data_generator(
+                    response=upstream,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
+            )
+        )
+
+    pings = [e for e in emitted if e == ": ping\n\n"]
+    assert len(pings) >= 1, (
+        f"keepalive_seconds=999999 must be clamped down to the server-side "
+        f"maximum; un-clamped, the 0.15s stall would emit zero pings. "
+        f"got {len(pings)} pings: {emitted!r}"
+    )
