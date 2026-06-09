@@ -194,3 +194,14 @@ def test_decode_unverified_claims_returns_none_for_non_jwt():
     assert decode_unverified_claims("sk-1234567890") is None
     assert decode_unverified_claims("") is None
     assert decode_unverified_claims(None) is None
+
+
+def test_decode_unverified_claims_logs_on_decode_failure(caplog):
+    import logging
+
+    caplog.set_level(logging.DEBUG, logger="LiteLLM Proxy")
+    assert decode_unverified_claims("not-base64.payload.sig") is None
+    assert any(
+        "Failed to decode unverified JWT claims for routing" in record.getMessage()
+        for record in caplog.records
+    )

@@ -11,18 +11,24 @@ from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 import jwt
 
+from litellm._logging import verbose_proxy_logger
+
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
 
 
 def token_is_jwt(token: Optional[str]) -> bool:
-    """Return True if ``token`` is JWT-shaped (its header decodes via PyJWT)."""
+    """Return True if ``token`` is JWT-shaped (its header decodes via PyJWT).
+
+    Runs on every request before an auth path is chosen, so any parse
+    failure degrades to "not a JWT" rather than raising into the auth chain.
+    """
     if not token:
         return False
     try:
         jwt.get_unverified_header(token)
         return True
-    except jwt.PyJWTError:
+    except Exception:
         return False
 
 
@@ -37,7 +43,10 @@ def decode_unverified_claims(token: Optional[str]) -> Optional[dict]:
         return None
     try:
         return jwt.decode(token, options={"verify_signature": False})
-    except jwt.PyJWTError:
+    except Exception as e:
+        verbose_proxy_logger.debug(
+            "Failed to decode unverified JWT claims for routing: %s", e
+        )
         return None
 
 
