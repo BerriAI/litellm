@@ -3,6 +3,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 import pytest
+import jwt
+from jwt import PyJWKClient
+from jwt.exceptions import PyJWKClientConnectionError
 
 from litellm.proxy._types import (
     JWTLiteLLMRoleMap,
@@ -16,6 +19,8 @@ from litellm.proxy._types import (
     ProxyException,
 )
 from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
+
+from litellm.caching import DualCache
 
 
 @pytest.mark.asyncio
@@ -3358,12 +3363,11 @@ def _make_static_jwks_client_factory(
     incremented per network fetch so tests can assert the cache prevents
     refetching.
     """
-    import jwt as _jwt
 
-    def factory(jwks_url: str) -> "_jwt.PyJWKClient":
+    def factory(jwks_url: str) -> "jwt.PyJWKClient":
         keys = keys_by_url[jwks_url]
 
-        class _StaticJWKClient(_jwt.PyJWKClient):
+        class _StaticJWKClient(jwt.PyJWKClient):
             def fetch_data(self) -> dict:
                 if fetch_counter is not None:
                     fetch_counter[jwks_url] = fetch_counter.get(jwks_url, 0) + 1
@@ -3396,7 +3400,6 @@ async def test_auth_jwt_tries_next_jwks_url_when_kid_missing(monkeypatch):
     """Comma-separated JWT_PUBLIC_KEY_URL must fall through to the next URL when
     the first JWKS has no key matching the token's kid.
     """
-    from litellm.caching.dual_cache import DualCache
 
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     first_jwks_url = "https://first.example.com/keys"
@@ -4015,7 +4018,6 @@ async def test_handle_jwt_pyjwkclient_validates_rs256_jwt(monkeypatch):
     """A correctly signed RS256 token validates through PyJWKClient using only
     the JWKS served at JWT_PUBLIC_KEY_URL plus the token's kid.
     """
-    from litellm.caching.dual_cache import DualCache
 
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     jwks_url = "https://idp.example.com/keys"
@@ -4050,7 +4052,6 @@ async def test_handle_jwt_pyjwkclient_rejects_wrong_signature(monkeypatch):
     rejected. PyJWKClient resolves the advertised key; jwt.decode then fails
     the signature check, surfaced as a "Validation fails" error.
     """
-    from litellm.caching.dual_cache import DualCache
 
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     jwks_url = "https://idp.example.com/keys"
@@ -4087,7 +4088,6 @@ async def test_handle_jwt_pyjwkclient_caches_jwks_calls(monkeypatch):
     PyJWKClient's in-process JWK-set cache serves the key. The request-counting
     fake at the HTTP (fetch) layer must record exactly one fetch.
     """
-    from litellm.caching.dual_cache import DualCache
 
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     jwks_url = "https://idp.example.com/keys"
@@ -4144,9 +4144,6 @@ def test_build_jwks_client_enables_caching_with_configured_ttl():
     the configured public-key TTL, so a multi-process deploy caches JWKS for the
     intended duration instead of refetching on every token.
     """
-    from jwt import PyJWKClient
-
-    from litellm.caching import DualCache
 
     jwks_url = "https://idp.example.com/jwks.json"
     jwt_handler = JWTHandler()
@@ -4170,7 +4167,6 @@ async def test_auth_jwt_rejects_token_when_no_jwks_url_has_matching_key(monkeypa
     kid, auth_jwt must reject the token rather than fall through to decoding with
     a missing signing key.
     """
-    from litellm.caching import DualCache
 
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     first_jwks_url = "https://first.example.com/keys"
@@ -4208,7 +4204,6 @@ def test_update_environment_rebuilds_jwks_clients_with_new_ttl():
     through update_environment changes public_key_ttl, so cached clients must be
     dropped; otherwise the new TTL never reaches the JWKS cache.
     """
-    from litellm.caching import DualCache
 
     jwks_url = "https://idp.example.com/jwks.json"
     jwt_handler = JWTHandler()
@@ -4238,10 +4233,6 @@ async def test_auth_jwt_surfaces_jwks_endpoint_unreachable_distinctly(monkeypatc
     connectivity failure rather than the generic "Invalid JWT Submitted" a
     bad-kid token produces, so operators can tell an outage from an attack.
     """
-    import jwt as _jwt
-    from jwt.exceptions import PyJWKClientConnectionError
-
-    from litellm.caching import DualCache
 
     monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     jwks_url = "https://idp.example.com/keys"
@@ -4249,8 +4240,8 @@ async def test_auth_jwt_surfaces_jwks_endpoint_unreachable_distinctly(monkeypatc
 
     private_key, _ = _get_rsa_key_and_jwk(kid="rs256-key")
 
-    def unreachable_factory(url: str) -> "_jwt.PyJWKClient":
-        class _UnreachableJWKClient(_jwt.PyJWKClient):
+    def unreachable_factory(url: str) -> "jwt.PyJWKClient":
+        class _UnreachableJWKClient(jwt.PyJWKClient):
             def fetch_data(self) -> dict:
                 raise PyJWKClientConnectionError(
                     "Fail to fetch data from the url, err: connection refused"

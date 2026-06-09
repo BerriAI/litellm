@@ -13,6 +13,7 @@ sys.path.insert(
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock, patch, AsyncMock
 
+import jwt
 import pytest
 from starlette.datastructures import URL
 from litellm._logging import verbose_proxy_logger
@@ -974,10 +975,8 @@ async def test_jwt_user_api_key_auth_builder_enforce_rbac(enforce_rbac, monkeypa
         }
     ]
 
-    import jwt as _jwt
-
-    def jwks_client_factory(jwks_url: str) -> "_jwt.PyJWKClient":
-        class _StaticJWKClient(_jwt.PyJWKClient):
+    def jwks_client_factory(jwks_url: str) -> "jwt.PyJWKClient":
+        class _StaticJWKClient(jwt.PyJWKClient):
             def fetch_data(self) -> dict:
                 jwk_set = {"keys": keys}
                 if self.jwk_set_cache is not None:
