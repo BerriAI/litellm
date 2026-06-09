@@ -93,6 +93,16 @@ class TestGoogleParseError:
         assert result.category == ErrorCategory.CLIENT
         assert result.message == "Invalid argument"
 
+    def test_body_permission_denied(self):
+        """PERMISSION_DENIED should map to AUTH."""
+        result = google_parse_error({"error": {"status": "PERMISSION_DENIED"}}, 200)
+        assert result.category == ErrorCategory.AUTH
+
+    def test_body_deadline_exceeded(self):
+        """DEADLINE_EXCEEDED should map to SERVER (retryable)."""
+        result = google_parse_error({"error": {"status": "DEADLINE_EXCEEDED"}}, 200)
+        assert result.category == ErrorCategory.SERVER
+
 
 class TestCategorizeException:
     """Integration: extract ErrorCategory from existing LiteLLM exceptions."""
@@ -166,6 +176,25 @@ class TestCategorizeException:
         exc = Exception()
         exc.status_code = 404  # type: ignore[attr-defined]
         assert categorize_exception(exc) == ErrorCategory.CLIENT
+
+    def test_exception_with_status_code_408_timeout(self):
+        """408 Request Timeout should be SERVER (retryable), not CLIENT."""
+        exc = Exception()
+        exc.status_code = 408  # type: ignore[attr-defined]
+        assert categorize_exception(exc) == ErrorCategory.SERVER
+
+    def test_exception_with_string_status_code(self):
+        """String status_code should be converted to int."""
+        exc = Exception()
+        exc.status_code = "503"  # type: ignore[attr-defined]
+        assert categorize_exception(exc) == ErrorCategory.SERVER
+
+    def test_exception_with_invalid_status_code(self):
+        """Invalid status_code should fall through to name heuristics."""
+        exc = Exception()
+        exc.status_code = "invalid"  # type: ignore[attr-defined]
+        # Falls through to None since no name match
+        assert categorize_exception(exc) is None
 
     def test_unknown_returns_none(self):
         assert categorize_exception(ValueError("unexpected")) is None

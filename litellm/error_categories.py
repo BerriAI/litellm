@@ -86,14 +86,18 @@ def google_parse_error(data: dict, status: int) -> ParsedError:
     """Google Generative AI / Vertex AI error parser.
 
     Google returns error status strings in the response body (e.g.
-    'UNAUTHENTICATED', 'RESOURCE_EXHAUSTED', 'UNAVAILABLE') that
-    override HTTP status for categorization.
+    'UNAUTHENTICATED', 'PERMISSION_DENIED', 'RESOURCE_EXHAUSTED',
+    'UNAVAILABLE', 'DEADLINE_EXCEEDED') that override HTTP status
+    for categorization.
     """
     err = _extract_error_body(data)
     message = err.get("message")
     google_status = err.get("status", "").upper()
 
-    if status in (401, 403) or google_status == "UNAUTHENTICATED":
+    if status in (401, 403) or google_status in (
+        "UNAUTHENTICATED",
+        "PERMISSION_DENIED",
+    ):
         return ParsedError(
             category=ErrorCategory.AUTH, message=message, status_code=status
         )
@@ -101,7 +105,11 @@ def google_parse_error(data: dict, status: int) -> ParsedError:
         return ParsedError(
             category=ErrorCategory.RATE_LIMIT, message=message, status_code=status
         )
-    if status >= 500 or google_status in ("UNAVAILABLE", "INTERNAL"):
+    if status >= 500 or google_status in (
+        "UNAVAILABLE",
+        "INTERNAL",
+        "DEADLINE_EXCEEDED",
+    ):
         return ParsedError(
             category=ErrorCategory.SERVER,
             message=message or "Server error",
@@ -128,24 +136,58 @@ def categorize_exception(exc: Exception) -> Optional[ErrorCategory]:
     if isinstance(category, ErrorCategory):
         return category
 
-    # Fall back to status-code-based inference for existing exception types.
+    # Try status-code-based inference
     status = getattr(exc, "status_code", None)
     if status is not None:
-        if status in (401, 403):
-            return ErrorCategory.AUTH
-        if status == 429:
-            return ErrorCategory.RATE_LIMIT
-        if status >= 500:
-            return ErrorCategory.SERVER
-        if 400 <= status < 500:
-            return ErrorCategory.CLIENT
+        category_from_status = _categorize_by_status_code(status)
+        if category_from_status is not None:
+            return category_from_status
 
-    # Type-name heuristics for exceptions that lack a status_code attribute.
+    # Fall back to type-name heuristics
+    return _categorize_by_exception_name(exc)
+
+
+def _categorize_by_status_code(status: any) -> Optional[ErrorCategory]:
+    """Categorize error by HTTP status code.
+
+    Handles both integer and string status codes.
+    """
+    # Normalize to integer
+    if not isinstance(status, int):
+        try:
+            status = int(status)
+        except (ValueError, TypeError):
+            return None
+
+    # Auth errors
+    if status in (401, 403):
+        return ErrorCategory.AUTH
+
+    # Rate limiting
+    if status == 429:
+        return ErrorCategory.RATE_LIMIT
+
+    # Server errors (including 408 Request Timeout which should be retryable)
+    if status == 408 or status >= 500:
+        return ErrorCategory.SERVER
+
+    # Client errors (4xx except auth and rate limit)
+    if 400 <= status < 500:
+        return ErrorCategory.CLIENT
+
+    return None
+
+
+def _categorize_by_exception_name(exc: Exception) -> Optional[ErrorCategory]:
+    """Categorize error by exception class name patterns."""
     name = type(exc).__name__.lower()
+
     if "auth" in name:
         return ErrorCategory.AUTH
+
     if "rate" in name or "throttl" in name:
         return ErrorCategory.RATE_LIMIT
+
     if "server" in name or "service" in name or "timeout" in name:
         return ErrorCategory.SERVER
 
