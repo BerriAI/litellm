@@ -18,7 +18,7 @@ from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Uni
 import jwt
 from fastapi import HTTPException, status
 from jwt import PyJWK, PyJWKClient
-from jwt.exceptions import PyJWKClientError
+from jwt.exceptions import PyJWKClientConnectionError, PyJWKClientError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
@@ -961,16 +961,26 @@ class JWTHandler:
         keys_url_list = [url.strip() for url in keys_url.split(",") if url.strip()]
 
         signing_key: Optional[PyJWK] = None
+        unreachable_jwks_error: Optional[PyJWKClientConnectionError] = None
         for key_url in keys_url_list:
             try:
                 signing_key = await self._get_signing_key(jwks_url=key_url, token=token)
                 break
+            except PyJWKClientConnectionError as e:
+                unreachable_jwks_error = e
+                verbose_proxy_logger.warning(
+                    "JWT Auth: could not reach JWKS endpoint %s: %s", key_url, e
+                )
             except PyJWKClientError as e:
                 verbose_proxy_logger.debug(
                     "JWT Auth: no matching signing key at %s: %s", key_url, e
                 )
 
         if signing_key is None:
+            if unreachable_jwks_error is not None:
+                raise Exception(
+                    f"JWT Auth: could not reach any configured JWKS endpoint: {unreachable_jwks_error}"
+                )
             raise Exception("Invalid JWT Submitted")
 
         try:

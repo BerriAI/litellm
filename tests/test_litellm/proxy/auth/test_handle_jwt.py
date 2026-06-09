@@ -4229,3 +4229,48 @@ def test_update_environment_rebuilds_jwks_clients_with_new_ttl():
 
     assert second_client is not first_client
     assert second_client.jwk_set_cache.lifespan == 222
+
+
+@pytest.mark.asyncio
+async def test_auth_jwt_surfaces_jwks_endpoint_unreachable_distinctly(monkeypatch):
+    """A JWKS endpoint outage must not be reported as a forged token. When every
+    configured URL is unreachable, auth_jwt raises an error naming the
+    connectivity failure rather than the generic "Invalid JWT Submitted" a
+    bad-kid token produces, so operators can tell an outage from an attack.
+    """
+    import jwt as _jwt
+    from jwt.exceptions import PyJWKClientConnectionError
+
+    from litellm.caching import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    jwks_url = "https://idp.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    private_key, _ = _get_rsa_key_and_jwk(kid="rs256-key")
+
+    def unreachable_factory(url: str) -> "_jwt.PyJWKClient":
+        class _UnreachableJWKClient(_jwt.PyJWKClient):
+            def fetch_data(self) -> dict:
+                raise PyJWKClientConnectionError(
+                    "Fail to fetch data from the url, err: connection refused"
+                )
+
+        return _UnreachableJWKClient(url, cache_jwk_set=False)
+
+    jwt_handler = JWTHandler(jwks_client_factory=unreachable_factory)
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://idp.example.com",
+        audience="my-audience",
+        kid="rs256-key",
+    )
+
+    with pytest.raises(Exception, match="could not reach any configured JWKS endpoint"):
+        await jwt_handler.auth_jwt(token=token)
