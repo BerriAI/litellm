@@ -5651,8 +5651,14 @@ class BaseLLMHTTPHandler:
                         if isinstance(cb, _OPTIONAL_PresidioPIIMasking)
                         and getattr(cb, "apply_to_output", False)
                     ]
-                except Exception:
+                except ImportError:
                     pass
+                except Exception as _guardrail_exc:
+                    verbose_logger.warning(
+                        "Responses WebSocket: failed to collect Presidio guardrail "
+                        "callbacks — PII masking will be skipped. Error: %s",
+                        _guardrail_exc,
+                    )
 
                 streaming = ResponsesWebSocketStreaming(
                     websocket=websocket,
