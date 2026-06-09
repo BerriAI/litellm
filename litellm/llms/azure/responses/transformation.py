@@ -201,14 +201,19 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if api_base is None:
             raise ValueError("api_base is required for Azure WebSocket")
 
-        base = api_base.rstrip("/")
+        parsed_url = httpx.URL(api_base)
+        path = parsed_url.path.rstrip("/")
         # Strip existing /openai/responses path if the api_base already contains it
         for suffix in ("/openai/v1/responses", "/openai/responses"):
-            if base.endswith(suffix):
-                base = base[: -len(suffix)]
+            if path.endswith(suffix):
+                path = path[: -len(suffix)]
                 break
-        ws_url = base.replace("https://", "wss://").replace("http://", "ws://")
-        return f"{ws_url}/openai/v1/responses"
+        scheme = "wss" if parsed_url.scheme == "https" else "ws"
+        return str(
+            parsed_url.copy_with(
+                scheme=scheme, path=f"{path}/openai/v1/responses", query=None
+            )
+        )
 
     def model_in_websocket_url(self) -> bool:
         # Azure sends the model in the response.create body, not the URL

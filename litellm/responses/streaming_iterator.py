@@ -1385,16 +1385,16 @@ class ResponsesWebSocketStreaming:
         if not self.authorized_model:
             return False
         modified = False
-        if "model" in msg_obj and msg_obj["model"] != self.authorized_model:
-            msg_obj["model"] = self.authorized_model
-            modified = True
         nested = msg_obj.get("response")
-        if (
-            isinstance(nested, dict)
-            and "model" in nested
-            and nested["model"] != self.authorized_model
-        ):
-            nested["model"] = self.authorized_model
+        if isinstance(nested, dict):
+            if nested.get("model") != self.authorized_model:
+                nested["model"] = self.authorized_model
+                modified = True
+            if "model" in msg_obj and msg_obj["model"] != self.authorized_model:
+                msg_obj["model"] = self.authorized_model
+                modified = True
+        elif msg_obj.get("model") != self.authorized_model:
+            msg_obj["model"] = self.authorized_model
             modified = True
         return modified
 
@@ -1534,9 +1534,16 @@ class ResponsesWebSocketStreaming:
 
         if event_type == "response.completed":
             modified = False
-            response_obj = evt_obj.get("response", {})
-            for output_item in response_obj.get("output", []):
-                for content_block in output_item.get("content", []):
+            response_obj = evt_obj.get("response") or {}
+            if not isinstance(response_obj, dict):
+                return response_str
+            for output_item in response_obj.get("output") or []:
+                if not isinstance(output_item, dict):
+                    continue
+                content = output_item.get("content") or []
+                if not isinstance(content, list):
+                    continue
+                for content_block in content:
                     if not isinstance(content_block, dict):
                         continue
                     text = content_block.get("text")
@@ -1587,9 +1594,16 @@ class ResponsesWebSocketStreaming:
             )
 
             if event_type == "response.completed":
-                response_obj = evt_obj.get("response", {})
-                for output_item in response_obj.get("output", []):
-                    for content_block in output_item.get("content", []):
+                response_obj = evt_obj.get("response") or {}
+                if not isinstance(response_obj, dict):
+                    continue
+                for output_item in response_obj.get("output") or []:
+                    if not isinstance(output_item, dict):
+                        continue
+                    content = output_item.get("content") or []
+                    if not isinstance(content, list):
+                        continue
+                    for content_block in content:
                         if not isinstance(content_block, dict):
                             continue
                         text = content_block.get("text")
