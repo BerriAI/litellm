@@ -1,6 +1,6 @@
 # Docker Image Security Guide
 
-LiteLLM signs every Docker image published to GHCR with [cosign](https://docs.sigstore.dev/cosign/overview/) starting from **v1.83.0**. This page covers how to verify signatures, enforce verification in CI/CD, and follow recommended deployment patterns.
+LiteLLM signs every Docker image published to GHCR with [cosign](https://docs.sigstore.dev/quickstart/quickstart-cosign/) starting from **v1.83.0**. This page covers how to verify signatures, enforce verification in CI/CD, and follow recommended deployment patterns.
 
 ## Signed images
 
@@ -190,5 +190,5 @@ Avoid `latest` in production. This rolling tag points to the most recent build a
 
 - [CI/CD v2 announcement](https://docs.litellm.ai/blog/ci-cd-v2-improvements) — background on LiteLLM's signing infrastructure
 - [Docker deployment guide](./deploy.md) — full Docker, Helm, and Terraform setup
-- [cosign documentation](https://docs.sigstore.dev/cosign/overview/) — cosign usage and key management
+- [cosign documentation](https://docs.sigstore.dev/quickstart/quickstart-cosign/) — cosign usage and key management
 - [Sigstore Policy Controller](https://docs.sigstore.dev/policy-controller/overview/) — Kubernetes admission control
