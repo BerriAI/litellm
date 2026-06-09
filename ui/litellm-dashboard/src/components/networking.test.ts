@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import * as Networking from "./networking";
+import { migratedHref } from "@/utils/migratedPages";
 
 vi.mock("@/utils/cookieUtils", () => ({
   clearTokenCookies: vi.fn(),
@@ -348,6 +349,20 @@ describe("UI config and public endpoints", () => {
       (call[0] as string).includes("/litellm/.well-known/litellm-ui-config"),
     );
     expect(configCall).toBeDefined();
+  });
+
+  it("updates serverRootPath so path-based nav links carry the root path", async () => {
+    const uiConfig = {
+      server_root_path: "/litellm",
+      proxy_base_url: "https://example.com",
+    };
+
+    setupMockFetch([{ url: "/litellm/.well-known/litellm-ui-config", data: uiConfig }]);
+
+    await Networking.getUiConfig();
+
+    expect(Networking.serverRootPath).toBe("/litellm");
+    expect(migratedHref("api-reference")).toBe("/litellm/ui/api-reference");
   });
 });
 
