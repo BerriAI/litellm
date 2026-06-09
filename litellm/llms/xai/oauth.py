@@ -16,13 +16,8 @@ import httpx
 
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
-from litellm.exceptions import AuthenticationError
 from litellm.llms.custom_httpx.http_handler import HTTPHandler, _get_httpx_client
-from litellm.llms.xai.chat.transformation import XAIChatConfig
-from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
 
 XAI_OAUTH_ISSUER = "https://auth.x.ai"
 XAI_OAUTH_DISCOVERY_URL = f"{XAI_OAUTH_ISSUER}/.well-known/openid-configuration"
@@ -422,68 +417,5 @@ class XAIOAuthAuthenticator:
         return refreshed
 
 
-class XAIOAuthChatConfig(XAIChatConfig):
-    def __init__(self) -> None:
-        super().__init__()
-        self.authenticator = XAIOAuthAuthenticator()
-
-    @property
-    def custom_llm_provider(self) -> Optional[str]:
-        return "xai_oauth"
-
-    def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
-    ) -> Tuple[Optional[str], Optional[str]]:
-        using_stored_oauth_token = not api_key
-        try:
-            dynamic_api_key = api_key or self.authenticator.get_access_token()
-        except XAIOAuthError as exc:
-            raise AuthenticationError(
-                model="",
-                llm_provider=self.custom_llm_provider or "xai_oauth",
-                message=str(exc),
-            ) from exc
-        return (
-            (
-                self.authenticator.get_api_base()
-                if using_stored_oauth_token
-                else api_base or self.authenticator.get_api_base()
-            ),
-            dynamic_api_key,
-        )
-
-
-class XAIOAuthResponsesAPIConfig(XAIResponsesAPIConfig):
-    def __init__(self) -> None:
-        super().__init__()
-        self.authenticator = XAIOAuthAuthenticator()
-
-    @property
-    def custom_llm_provider(self) -> LlmProviders:
-        return LlmProviders.XAI_OAUTH
-
-    def validate_environment(
-        self, headers: dict, model: str, litellm_params: Optional[GenericLiteLLMParams]
-    ) -> dict:
-        litellm_params = litellm_params or GenericLiteLLMParams()
-        try:
-            api_key = litellm_params.api_key or self.authenticator.get_access_token()
-        except XAIOAuthError as exc:
-            raise AuthenticationError(
-                model=model,
-                llm_provider=self.custom_llm_provider.value,
-                message=str(exc),
-            ) from exc
-        headers.update({"Authorization": f"Bearer {api_key}"})
-        return headers
-
-    def get_complete_url(
-        self,
-        api_base: Optional[str],
-        litellm_params: dict,
-    ) -> str:
-        if not litellm_params.get("api_key"):
-            api_base = self.authenticator.get_api_base()
-        else:
-            api_base = api_base or self.authenticator.get_api_base()
-        return f"{api_base.rstrip('/')}/responses"
+def should_use_xai_oauth(litellm_params: Optional[Dict[str, Any]]) -> bool:
+    return bool((litellm_params or {}).get("use_xai_oauth"))

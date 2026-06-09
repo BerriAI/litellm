@@ -1638,6 +1638,7 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
+            use_xai_oauth=kwargs.get("use_xai_oauth", False),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -2286,7 +2287,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     additional_args={"headers": headers},
                 )
                 raise e
-        elif custom_llm_provider == "xai" or custom_llm_provider == "xai_oauth":
+        elif custom_llm_provider == "xai":
             ## COMPLETION CALL
             try:
                 response = base_llm_http_handler.completion(

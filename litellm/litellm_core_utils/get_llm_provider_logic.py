@@ -824,13 +824,6 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
-    elif custom_llm_provider == "xai_oauth":
-        from litellm.llms.xai.oauth import XAIOAuthChatConfig
-
-        (
-            api_base,
-            dynamic_api_key,
-        ) = XAIOAuthChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "zai":
         (
             api_base,

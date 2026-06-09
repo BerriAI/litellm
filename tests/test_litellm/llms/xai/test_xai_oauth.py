@@ -19,17 +19,12 @@ from litellm.llms.xai.oauth import (
     XAI_OAUTH_SCOPE,
     XAIOAuthError,
     XAIOAuthAuthenticator,
-    XAIOAuthChatConfig,
     XAIOAuthLoginRequiredError,
-    XAIOAuthResponsesAPIConfig,
 )
+from litellm.llms.xai.chat.transformation import XAIChatConfig
+from litellm.llms.xai.responses.transformation import XAIResponsesAPIConfig
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import LlmProviders
-from litellm.utils import (
-    ProviderConfigManager,
-    get_optional_params,
-    validate_environment,
-)
+from litellm.utils import get_optional_params, validate_environment
 
 
 def _write_auth_file(tmp_path, payload):
@@ -549,160 +544,172 @@ def test_build_authorize_url_contains_xai_oauth_parameters():
     assert params["nonce"] == ["nonce-value"]
 
 
-def test_get_llm_provider_resolves_xai_oauth(tmp_path, monkeypatch):
-    token_dir, _ = _write_auth_file(
-        tmp_path,
-        {
-            "access_token": "provider-token",
-            "refresh_token": "refresh-token",
-            "expires_at": time.time() + 3600,
-        },
-    )
-    monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(token_dir))
+def test_get_llm_provider_uses_single_xai_provider(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "api-key")
 
-    model, provider, api_key, api_base = get_llm_provider("xai_oauth/grok-4")
+    model, provider, api_key, api_base = get_llm_provider("xai/grok-4")
 
     assert model == "grok-4"
-    assert provider == "xai_oauth"
-    assert api_key == "provider-token"
+    assert provider == "xai"
+    assert api_key == "api-key"
     assert api_base == "https://api.x.ai/v1"
 
 
-def test_chat_config_wraps_oauth_errors_as_authentication_error(tmp_path, monkeypatch):
+def test_xai_oauth_alias_is_not_a_provider():
+    with pytest.raises(Exception):
+        get_llm_provider("xai_oauth/grok-4")
+
+
+def test_chat_config_wraps_flagged_oauth_errors_as_authentication_error(
+    tmp_path, monkeypatch
+):
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(tmp_path / "missing"))
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:
-        XAIOAuthChatConfig()._get_openai_compatible_provider_info(None, None)
+        XAIChatConfig().validate_environment(
+            headers={},
+            model="grok-4",
+            messages=[],
+            optional_params={},
+            litellm_params={"use_xai_oauth": True},
+            api_key=None,
+        )
 
-    assert exc_info.value.llm_provider == "xai_oauth"
+    assert exc_info.value.llm_provider == "xai"
     assert "litellm xai-oauth login" in str(exc_info.value)
 
 
-def test_chat_config_uses_attached_authenticator():
-    config = XAIOAuthChatConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_access_token.return_value = "chat-token"
-    config.authenticator.get_api_base.return_value = "https://xai.example.com/v1"
-
-    api_base, api_key = config._get_openai_compatible_provider_info(None, None)
-
-    assert api_base == "https://xai.example.com/v1"
-    assert api_key == "chat-token"
-
-
-def test_chat_config_ignores_api_base_override_for_stored_oauth_token():
-    config = XAIOAuthChatConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_access_token.return_value = "stored-oauth-token"
-    config.authenticator.get_api_base.return_value = "https://api.x.ai/v1"
-
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        "https://attacker.example.com/v1", None
-    )
-
-    assert api_base == "https://api.x.ai/v1"
-    assert api_key == "stored-oauth-token"
-
-
-def test_chat_config_treats_blank_api_key_as_stored_oauth_token():
-    config = XAIOAuthChatConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_access_token.return_value = "stored-oauth-token"
-    config.authenticator.get_api_base.return_value = "https://api.x.ai/v1"
-
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        "https://attacker.example.com/v1", ""
-    )
-
-    assert api_base == "https://api.x.ai/v1"
-    assert api_key == "stored-oauth-token"
-
-
-def test_chat_config_allows_api_base_override_with_caller_api_key():
-    config = XAIOAuthChatConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = "https://api.x.ai/v1"
-
-    api_base, api_key = config._get_openai_compatible_provider_info(
-        "https://custom.example.com/v1", "caller-api-key"
-    )
-
-    assert api_base == "https://custom.example.com/v1"
-    assert api_key == "caller-api-key"
-    config.authenticator.get_access_token.assert_not_called()
-
-
-def test_get_model_info_reuses_xai_metadata_for_xai_oauth():
-    xai_info = litellm.get_model_info("xai/grok-4")
-    oauth_info = litellm.get_model_info("xai_oauth/grok-4")
-
-    assert oauth_info["litellm_provider"] == "xai_oauth"
-    assert oauth_info["max_input_tokens"] == xai_info["max_input_tokens"]
-    assert oauth_info["input_cost_per_token"] == xai_info["input_cost_per_token"]
-
-
-def test_validate_environment_reads_xai_oauth_auth_file(tmp_path, monkeypatch):
+def test_chat_config_injects_flagged_oauth_token(tmp_path, monkeypatch):
     token_dir, _ = _write_auth_file(
         tmp_path,
         {
-            "access_token": "env-token",
+            "access_token": "chat-token",
             "refresh_token": "refresh-token",
             "expires_at": time.time() + 3600,
         },
     )
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(token_dir))
-    monkeypatch.setattr(
-        "litellm.utils.get_llm_provider",
-        lambda model: ("grok-4", "xai_oauth", None, None),
+
+    headers = XAIChatConfig().validate_environment(
+        headers={},
+        model="grok-4",
+        messages=[],
+        optional_params={},
+        litellm_params={"use_xai_oauth": True},
+        api_key=None,
     )
 
-    assert validate_environment("xai_oauth/grok-4") == {
+    assert headers["Authorization"] == "Bearer chat-token"
+
+
+def test_chat_config_ignores_api_base_override_for_flagged_oauth(monkeypatch):
+    monkeypatch.setenv("XAI_OAUTH_API_BASE", "https://api.x.ai/v1")
+
+    url = XAIChatConfig().get_complete_url(
+        api_base="https://attacker.example.com/v1",
+        api_key=None,
+        model="grok-4",
+        optional_params={},
+        litellm_params={"use_xai_oauth": True},
+    )
+
+    assert url == "https://api.x.ai/v1/chat/completions"
+
+
+def test_chat_config_treats_blank_api_key_as_absent_for_flagged_oauth(
+    tmp_path, monkeypatch
+):
+    token_dir, _ = _write_auth_file(
+        tmp_path,
+        {
+            "access_token": "stored-oauth-token",
+            "refresh_token": "refresh-token",
+            "expires_at": time.time() + 3600,
+        },
+    )
+    monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(token_dir))
+
+    headers = XAIChatConfig().validate_environment(
+        headers={},
+        model="grok-4",
+        messages=[],
+        optional_params={},
+        litellm_params={"use_xai_oauth": True},
+        api_key="",
+    )
+
+    assert headers["Authorization"] == "Bearer stored-oauth-token"
+
+
+def test_chat_config_allows_api_base_override_with_caller_api_key():
+    headers = XAIChatConfig().validate_environment(
+        headers={},
+        model="grok-4",
+        messages=[],
+        optional_params={},
+        litellm_params={"use_xai_oauth": True},
+        api_key="caller-api-key",
+    )
+    url = XAIChatConfig().get_complete_url(
+        api_base="https://custom.example.com/v1",
+        api_key="caller-api-key",
+        model="grok-4",
+        optional_params={},
+        litellm_params={"use_xai_oauth": True},
+    )
+
+    assert headers["Authorization"] == "Bearer caller-api-key"
+    assert url == "https://custom.example.com/v1/chat/completions"
+
+
+def test_chat_config_prioritizes_env_api_key_over_oauth_flag(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "env-api-key")
+
+    headers = XAIChatConfig().validate_environment(
+        headers={},
+        model="grok-4",
+        messages=[],
+        optional_params={},
+        litellm_params={"use_xai_oauth": True},
+        api_key=None,
+    )
+    url = XAIChatConfig().get_complete_url(
+        api_base="https://custom.example.com/v1",
+        api_key=None,
+        model="grok-4",
+        optional_params={},
+        litellm_params={"use_xai_oauth": True},
+    )
+
+    assert headers["Authorization"] == "Bearer env-api-key"
+    assert url == "https://custom.example.com/v1/chat/completions"
+
+
+def test_validate_environment_still_reports_xai_api_key(monkeypatch):
+    monkeypatch.setenv("XAI_API_KEY", "env-api-key")
+
+    assert validate_environment("xai/grok-4") == {
         "keys_in_environment": True,
         "missing_keys": [],
     }
 
 
-def test_validate_environment_reports_missing_xai_oauth_credentials(
-    tmp_path, monkeypatch
-):
-    monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(tmp_path / "missing"))
-    monkeypatch.setattr(
-        "litellm.utils.get_llm_provider",
-        lambda model: ("grok-4", "xai_oauth", None, None),
-    )
-
-    assert validate_environment("xai_oauth/grok-4") == {
-        "keys_in_environment": False,
-        "missing_keys": ["XAI OAuth credentials"],
-    }
-
-
-def test_xai_oauth_uses_xai_optional_param_mapping():
+def test_xai_oauth_flag_uses_xai_optional_param_mapping():
+    litellm_params = GenericLiteLLMParams(use_xai_oauth=True)
     optional_params = get_optional_params(
         model="grok-4",
-        custom_llm_provider="xai_oauth",
+        custom_llm_provider="xai",
         temperature=0.2,
         max_tokens=8,
     )
 
     assert optional_params["temperature"] == 0.2
     assert optional_params["max_tokens"] == 8
+    assert litellm_params.use_xai_oauth is True
+    assert "use_xai_oauth" not in optional_params
 
 
-def test_provider_config_manager_returns_xai_oauth_configs():
-    chat_config = ProviderConfigManager.get_provider_chat_config(
-        model="grok-4",
-        provider=LlmProviders.XAI_OAUTH,
-    )
-    responses_config = ProviderConfigManager.get_provider_responses_api_config(
-        provider=LlmProviders.XAI_OAUTH
-    )
-
-    assert isinstance(chat_config, XAIOAuthChatConfig)
-    assert isinstance(responses_config, XAIOAuthResponsesAPIConfig)
-
-
-def test_responses_config_injects_oauth_bearer_token(tmp_path, monkeypatch):
+def test_responses_config_injects_flagged_oauth_bearer_token(tmp_path, monkeypatch):
     token_dir, _ = _write_auth_file(
         tmp_path,
         {
@@ -713,33 +720,33 @@ def test_responses_config_injects_oauth_bearer_token(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(token_dir))
 
-    headers = XAIOAuthResponsesAPIConfig().validate_environment(
+    headers = XAIResponsesAPIConfig().validate_environment(
         headers={},
         model="grok-4",
-        litellm_params=GenericLiteLLMParams(),
+        litellm_params=GenericLiteLLMParams(use_xai_oauth=True),
     )
 
     assert headers["Authorization"] == "Bearer responses-token"
 
 
-def test_responses_config_endpoint_url_uses_oauth_authenticator():
-    config = XAIOAuthResponsesAPIConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = "https://xai.example.com/v1/"
+def test_responses_config_endpoint_url_uses_oauth_authenticator(monkeypatch):
+    monkeypatch.setenv("XAI_OAUTH_API_BASE", "https://xai.example.com/v1/")
+    config = XAIResponsesAPIConfig()
 
-    assert config.get_complete_url(api_base=None, litellm_params={}) == (
-        "https://xai.example.com/v1/responses"
-    )
+    assert config.get_complete_url(
+        api_base=None, litellm_params={"use_xai_oauth": True}
+    ) == ("https://xai.example.com/v1/responses")
     assert (
         config.get_complete_url(
-            api_base="https://custom.example.com/v1/", litellm_params={}
+            api_base="https://custom.example.com/v1/",
+            litellm_params={"use_xai_oauth": True},
         )
         == "https://xai.example.com/v1/responses"
     )
     assert (
         config.get_complete_url(
             api_base="https://custom.example.com/v1/",
-            litellm_params={"api_key": ""},
+            litellm_params={"api_key": "", "use_xai_oauth": True},
         )
         == "https://xai.example.com/v1/responses"
     )
@@ -752,20 +759,20 @@ def test_responses_config_endpoint_url_uses_oauth_authenticator():
     )
 
 
-def test_responses_config_wraps_oauth_errors_as_authentication_error(
+def test_responses_config_wraps_flagged_oauth_errors_as_authentication_error(
     tmp_path, monkeypatch
 ):
     monkeypatch.setenv("XAI_OAUTH_TOKEN_DIR", str(tmp_path / "missing"))
 
     with pytest.raises(litellm.AuthenticationError) as exc_info:
-        XAIOAuthResponsesAPIConfig().validate_environment(
+        XAIResponsesAPIConfig().validate_environment(
             headers={},
             model="grok-4",
-            litellm_params=GenericLiteLLMParams(),
+            litellm_params=GenericLiteLLMParams(use_xai_oauth=True),
         )
 
-    assert XAIOAuthResponsesAPIConfig().custom_llm_provider == LlmProviders.XAI_OAUTH
-    assert exc_info.value.llm_provider == "xai_oauth"
+    assert XAIResponsesAPIConfig().custom_llm_provider.value == "xai"
+    assert exc_info.value.llm_provider == "xai"
 
 
 def test_proxy_cli_xai_oauth_login_uses_single_authenticator(monkeypatch):

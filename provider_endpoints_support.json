@@ -2396,25 +2396,6 @@
         "realtime": true
       }
     },
-    "xai_oauth": {
-      "display_name": "xAI OAuth (`xai_oauth`)",
-      "url": "https://docs.litellm.ai/docs/providers/xai_oauth",
-      "endpoints": {
-        "chat_completions": true,
-        "messages": true,
-        "responses": true,
-        "embeddings": false,
-        "image_generations": false,
-        "audio_transcriptions": false,
-        "audio_speech": false,
-        "moderations": false,
-        "batches": false,
-        "rerank": false,
-        "a2a": true,
-        "interactions": true,
-        "realtime": false
-      }
-    },
     "xinference": {
       "display_name": "Xinference (`xinference`)",
       "url": "https://docs.litellm.ai/docs/providers/xinference",
