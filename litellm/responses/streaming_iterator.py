@@ -1483,14 +1483,14 @@ class ResponsesWebSocketStreaming:
         try:
             if self.first_message is not None:
                 masked_first = await self._mask_response_create(self.first_message)
-                self._store_input(self.first_message)
+                self._store_input(masked_first)
                 self._store_event(masked_first)
                 await self.backend_ws.send(masked_first)  # type: ignore[union-attr]
 
             while True:
                 message = await self.websocket.receive_text()
                 masked = await self._mask_response_create(message)
-                self._store_input(message)
+                self._store_input(masked)
                 self._store_event(masked)
                 await self.backend_ws.send(masked)  # type: ignore[union-attr]
 

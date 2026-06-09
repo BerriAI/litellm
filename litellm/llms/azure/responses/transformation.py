@@ -210,6 +210,10 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         ws_url = base.replace("https://", "wss://").replace("http://", "ws://")
         return f"{ws_url}/openai/v1/responses"
 
+    def model_in_websocket_url(self) -> bool:
+        # Azure sends the model in the response.create body, not the URL
+        return False
+
     #########################################################
     ########## DELETE RESPONSE API TRANSFORMATION ##############
     #########################################################

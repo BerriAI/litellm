@@ -5593,16 +5593,18 @@ class BaseLLMHTTPHandler:
             litellm_params=dict(litellm_params),
         )
         # Some providers (e.g. OpenAI) require ?model= in the WebSocket URL.
-        # Providers that encode the model differently (e.g. Azure sends it in the
-        # response.create body) return a URL that already has no model param —
-        # we only add it when not already present.
-        _parsed = urlparse(ws_url)
-        _qs = parse_qs(_parsed.query)
-        if "model" not in _qs:
-            _qs["model"] = [model]
-            ws_url = urlunparse(
-                _parsed._replace(query=urlencode({k: v[0] for k, v in _qs.items()}))
-            )
+        # Providers that send the model in the request body (e.g. Azure) set
+        # model_in_websocket_url() to False to suppress this append.
+        if responses_api_provider_config.model_in_websocket_url():
+            _parsed = urlparse(ws_url)
+            _qs = parse_qs(_parsed.query)
+            if "model" not in _qs:
+                _qs["model"] = [model]
+                ws_url = urlunparse(
+                    _parsed._replace(
+                        query=urlencode({k: v[0] for k, v in _qs.items()})
+                    )
+                )
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
