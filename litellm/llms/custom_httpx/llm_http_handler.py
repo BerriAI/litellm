@@ -5635,27 +5635,31 @@ class BaseLLMHTTPHandler:
                 _ws_output_guardrail_callbacks: list = []
                 try:
                     import litellm as _litellm
-                    from litellm.proxy.guardrails.guardrail_hooks.presidio import (
-                        _OPTIONAL_PresidioPIIMasking,
-                    )
 
+                    # Use duck-typing so any guardrail that exposes the PII
+                    # masking interface works, not just _OPTIONAL_PresidioPIIMasking.
+                    # This avoids a layering violation (SDK importing from proxy).
                     _ws_guardrail_callbacks = [
                         cb
                         for cb in _litellm.callbacks
-                        if isinstance(cb, _OPTIONAL_PresidioPIIMasking)
+                        if callable(getattr(cb, "check_pii", None))
+                        and callable(
+                            getattr(cb, "get_presidio_settings_from_request_data", None)
+                        )
                         and getattr(cb, "output_parse_pii", False)
                     ]
                     _ws_output_guardrail_callbacks = [
                         cb
                         for cb in _litellm.callbacks
-                        if isinstance(cb, _OPTIONAL_PresidioPIIMasking)
+                        if callable(getattr(cb, "check_pii", None))
+                        and callable(
+                            getattr(cb, "get_presidio_settings_from_request_data", None)
+                        )
                         and getattr(cb, "apply_to_output", False)
                     ]
-                except ImportError:
-                    pass
                 except Exception as _guardrail_exc:
                     verbose_logger.warning(
-                        "Responses WebSocket: failed to collect Presidio guardrail "
+                        "Responses WebSocket: failed to collect guardrail "
                         "callbacks — PII masking will be skipped. Error: %s",
                         _guardrail_exc,
                     )
@@ -5669,6 +5673,7 @@ class BaseLLMHTTPHandler:
                     first_message=first_message,
                     guardrail_callbacks=_ws_guardrail_callbacks,
                     output_guardrail_callbacks=_ws_output_guardrail_callbacks,
+                    authorized_model=model,
                 )
                 await streaming.bidirectional_forward()
 
