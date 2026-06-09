@@ -6496,7 +6496,9 @@ async def test_reset_key_spend_success(monkeypatch):
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
         ) as mock_delete_cache,
-        patch("litellm.proxy.proxy_server._invalidate_spend_counter") as mock_invalidate,
+        patch(
+            "litellm.proxy.proxy_server._invalidate_spend_counter"
+        ) as mock_invalidate,
     ):
         mock_hash_token.return_value = hashed_key
         mock_check_admin.return_value = None
@@ -6529,13 +6531,15 @@ async def test_update_key_spend_invalidates_counter(monkeypatch):
     """
     Test that updating a key's spend via update_key_fn immediately invalidates the spend counter.
     """
-    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
 
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = AsyncMock()
     mock_proxy_logging_obj = MagicMock()
 
-    hashed_key = "hashed-test-key"
+    hashed_key = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
     key_in_db = LiteLLM_VerificationToken(
         token=hashed_key,
         user_id="test-user",
@@ -6545,7 +6549,7 @@ async def test_update_key_spend_invalidates_counter(monkeypatch):
     )
 
     mock_prisma_client.get_data = AsyncMock(return_value=key_in_db)
-    mock_prisma_client.update_data = AsyncMock(return_value={"spend": 0.0})
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {"spend": 0.0}})
     mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
         return_value=key_in_db
     )
@@ -6561,16 +6565,13 @@ async def test_update_key_spend_invalidates_counter(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     monkeypatch.setattr("litellm.store_audit_logs", False)
 
-    async def mock_hash_token(token):
-        return hashed_key
-
-    monkeypatch.setattr("litellm.proxy.proxy_server.hash_token", mock_hash_token)
-
     with (
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
         ) as mock_delete_cache,
-        patch("litellm.proxy.proxy_server._invalidate_spend_counter") as mock_invalidate,
+        patch(
+            "litellm.proxy.proxy_server._invalidate_spend_counter"
+        ) as mock_invalidate,
     ):
         mock_delete_cache.return_value = None
 
