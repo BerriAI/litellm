@@ -2691,17 +2691,26 @@ jobs:
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: "/litellm"
           command: |
-            pkill -f "litellm.proxy.proxy_cli" || true
-            sleep 3
+            pkill -9 -f "litellm.proxy.proxy_cli" || true
+            for i in $(seq 1 15); do
+              curl -s -o /dev/null --max-time 2 http://127.0.0.1:4000/health 2>/dev/null || break
+              sleep 1
+            done
             LITELLM_LICENSE="$LITELLM_LICENSE" \
               uv run --no-sync python -m litellm.proxy.proxy_cli \
                 --config ui/litellm-dashboard/e2e_tests/fixtures/config.yml \
-                --port 4000
+                --port 4000 > /tmp/proxy_root.log 2>&1
           background: true
       - run:
           name: Wait for prefixed proxy to be ready
           command: |
-            for i in $(seq 1 60); do
+            live=""
+            for i in $(seq 1 90); do
+              code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/health 2>/dev/null || true)
+              if [ "$code" = "200" ]; then live="yes"; echo "Prefixed proxy live after ${i} tries"; break; fi
+              sleep 2
+            done
+            for i in $(seq 1 30); do
               content=$(curl -sL --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/ui/ 2>/dev/null || true)
               if echo "$content" | grep -qE "(<!DOCTYPE|<html|<head)"; then
                 echo "Prefixed proxy is serving the UI"
@@ -2709,7 +2718,13 @@ jobs:
               fi
               sleep 2
             done
-            echo "Prefixed proxy failed to serve /litellm/ui/"
+            echo "=== Prefixed proxy did not serve /litellm/ui/ (health_live=${live:-no}) ==="
+            echo "--- curl -v /litellm/health ---"
+            curl -sv --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/health 2>&1 | tail -20
+            echo "--- curl -v /litellm/ui/ ---"
+            curl -sv --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/ui/ 2>&1 | tail -30
+            echo "--- proxy boot log tail ---"
+            tail -100 /tmp/proxy_root.log 2>/dev/null || echo "(no proxy log)"
             exit 1
       - run:
           name: Run migration smoke under SERVER_ROOT_PATH
