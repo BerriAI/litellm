@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict, Optional
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
@@ -500,6 +501,7 @@ class TestListToolsRestAPI:
             raw_headers=None,
             user_api_key_auth=None,
             extra_headers=None,
+            apply_tool_filters=True,
         ):
             captured["called"] = True
             captured["server"] = server
@@ -544,6 +546,150 @@ class TestListToolsRestAPI:
         assert result["error"] is None
         assert result["message"] == "Successfully retrieved tools"
 
+    async def test_include_disabled_tools_is_admin_only(self, monkeypatch):
+        """include_disabled_tools skips the allowlist filter only for PROXY_ADMIN;
+        a non-admin passing it stays filtered so the REST endpoint can't be used
+        to enumerate deliberately-disabled tools."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "stub"
+            allowed_tools = ["tool1"]
+            mcp_info = {"server_name": "stub"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+        captured = {}
+
+        async def fake_get_tools(
+            server, server_auth_header, *args, apply_tool_filters=True, **kwargs
+        ):
+            captured["apply_tool_filters"] = apply_tool_filters
+            return ["tool-1"]
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+
+        await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            include_disabled_tools=True,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+        assert captured["apply_tool_filters"] is False
+
+        await rest_endpoints.list_tool_rest_api(
+            request,
+            server_id="server-1",
+            include_disabled_tools=True,
+            user_api_key_dict=UserAPIKeyAuth(),
+        )
+        assert captured["apply_tool_filters"] is True
+
+    @pytest.mark.parametrize("upstream_status", [401, 403])
+    async def test_upstream_auth_failure_surfaces_status_and_challenge(
+        self, monkeypatch, upstream_status
+    ):
+        """A single-server pass-through request whose upstream rejects the token
+        must surface the upstream status (401 or 403) plus its WWW-Authenticate
+        challenge, not collapse into a 200 ``unexpected_error`` body."""
+        from litellm.proxy._experimental.mcp_server.exceptions import (
+            MCPUpstreamAuthError,
+        )
+
+        class StubServer:
+            alias = "server-1"
+            server_name = "server-1"
+            name = "passthrough"
+            allowed_tools = None
+            mcp_info = {"server_name": "passthrough"}
+            available_on_public_internet = True
+
+        stub_server = StubServer()
+
+        async def fake_contexts(user_api_key_auth):
+            return [user_api_key_auth]
+
+        async def fake_get_allowed_mcp_servers(*args, **kwargs):
+            return ["server-1"]
+
+        challenge = 'Bearer resource_metadata="https://upstream/.well-known"'
+
+        async def fake_get_tools(*args, **kwargs):
+            raise MCPUpstreamAuthError(
+                status_code=upstream_status,
+                www_authenticate=challenge,
+                server_name="passthrough",
+            )
+
+        monkeypatch.setattr(
+            rest_endpoints,
+            "build_effective_auth_contexts",
+            fake_contexts,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_allowed_mcp_servers",
+            fake_get_allowed_mcp_servers,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "get_mcp_server_by_id",
+            lambda server_id: stub_server if server_id == "server-1" else None,
+            raising=False,
+        )
+        monkeypatch.setattr(
+            rest_endpoints,
+            "_get_tools_for_single_server",
+            fake_get_tools,
+            raising=False,
+        )
+
+        request = _build_request(path="/mcp-rest/tools/list", method="GET")
+        with pytest.raises(HTTPException) as exc_info:
+            await rest_endpoints.list_tool_rest_api(
+                request,
+                server_id="server-1",
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+        assert exc_info.value.status_code == upstream_status
+        assert exc_info.value.headers == {"www-authenticate": challenge}
+
     async def test_name_resolution_finds_server_by_uuid(self, monkeypatch):
         """When server_id is a name string, it should be resolved to its UUID
         and used for the tools lookup when the UUID is in allowed_server_ids."""
@@ -576,6 +722,7 @@ class TestListToolsRestAPI:
             raw_headers=None,
             user_api_key_auth=None,
             extra_headers=None,
+            apply_tool_filters=True,
         ):
             captured["called"] = True
             captured["server_arg"] = server
@@ -719,6 +866,7 @@ class TestListToolsRestAPI:
             raw_headers=None,
             user_api_key_auth=None,
             extra_headers=None,
+            apply_tool_filters=True,
         ):
             captured["server"] = server
             captured["auth_header"] = server_auth_header
@@ -1211,6 +1359,56 @@ class TestGetToolsForSingleServer:
         assert "tool1" not in tool_names
         assert "tool4" not in tool_names
 
+    async def test_apply_tool_filters_false_returns_full_catalog(self, monkeypatch):
+        """apply_tool_filters=False returns the raw catalog without the server
+        allowed_tools gate, so the config UI can render disabled tools as off."""
+        from litellm.proxy._experimental.mcp_server.server import MCPServer
+        from litellm.types.mcp import MCPTransport
+
+        class MockTool:
+            def __init__(self, name):
+                self.name = name
+                self.description = name
+                self.inputSchema = {}
+
+        mock_tools = [MockTool("tool1"), MockTool("tool2"), MockTool("tool3")]
+
+        async def fake_get_tools_from_server(**kwargs):
+            return mock_tools
+
+        monkeypatch.setattr(
+            rest_endpoints.global_mcp_server_manager,
+            "_get_tools_from_server",
+            fake_get_tools_from_server,
+            raising=False,
+        )
+
+        # Server enforces an allowlist of just tool1.
+        server = MCPServer(
+            server_id="test-server-id",
+            name="test-server",
+            transport=MCPTransport.sse,
+            allowed_tools=["tool1"],
+        )
+        user_api_key_dict = UserAPIKeyAuth(api_key="test-key", object_permission=None)
+
+        # Runtime default: only the allowed tool comes back.
+        filtered = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+        )
+        assert [t.name for t in filtered] == ["tool1"]
+
+        # Config view: full catalog, including the disabled tools.
+        full = await rest_endpoints._get_tools_for_single_server(
+            server=server,
+            server_auth_header=None,
+            user_api_key_auth=user_api_key_dict,
+            apply_tool_filters=False,
+        )
+        assert {t.name for t in full} == {"tool1", "tool2", "tool3"}
+
 
 class TestStdioCommandAllowlist:
     """Tests for MCP stdio command allowlist validation."""
@@ -1557,3 +1755,48 @@ class TestPreviewOpenAPITools:
             "order is out of sync, so collision suffixes (_2, _3, ...) "
             "land on different operations"
         )
+
+
+class TestConnectionErrorMessage:
+    """The test-connection endpoints turn raw transport errors into messages.
+
+    The message is returned to an admin in an API response, so it must explain
+    the failure without echoing the raw header value, which can carry a secret
+    (e.g. ``Authorization: Bearer <token>``).
+    """
+
+    def test_local_protocol_error_is_actionable_and_redacted(self):
+        secret = "Bearer sk-super-secret-token"
+        exc = httpx.LocalProtocolError(f"Illegal header value b' {secret}'")
+
+        message = rest_endpoints._connection_error_message(exc)
+
+        assert "header" in message.lower()
+        assert secret not in message
+
+    def test_connect_error_points_at_reachability(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectError("All connection attempts failed")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_timeout_error_message(self):
+        message = rest_endpoints._connection_error_message(
+            httpx.ConnectTimeout("timed out")
+        )
+        assert "unreachable" in message.lower()
+
+    def test_http_status_error_includes_status_code(self):
+        response = httpx.Response(status_code=503)
+        exc = httpx.HTTPStatusError(
+            "server error",
+            request=httpx.Request("POST", "http://x/"),
+            response=response,
+        )
+        message = rest_endpoints._connection_error_message(exc)
+        assert "503" in message
+
+    def test_unknown_error_falls_back_to_generic(self):
+        message = rest_endpoints._connection_error_message(RuntimeError("weird"))
+        assert "weird" not in message
+        assert "proxy logs" in message.lower()

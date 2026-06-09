@@ -263,6 +263,61 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_handle_async_request_empty_body_sends_no_data():
+    """
+    A bodyless request (e.g. DELETE /responses/{id}) must reach aiohttp with
+    data=None. Passing the empty `b""` httpx content makes aiohttp attach a
+    `Content-Type: application/octet-stream` header, which providers like
+    OpenAI reject with `unsupported_content_type`.
+    """
+    captured = {}
+
+    class FakeSession:
+        def __init__(self):
+            self.closed = False
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, *args, **kwargs):
+            captured["data"] = kwargs.get("data")
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+
+    empty_request = httpx.Request("DELETE", "http://example.com/responses/resp_123")
+    await transport.handle_async_request(empty_request)
+    assert captured["data"] is None
+
+    body_request = httpx.Request(
+        "POST", "http://example.com/responses", json={"input": "ping"}
+    )
+    await transport.handle_async_request(body_request)
+    assert captured["data"] == body_request.content
+    assert captured["data"]
+
+
+@pytest.mark.asyncio
 async def test_handle_async_request_uses_env_proxy_per_url(monkeypatch):
     """Aiohttp transport should honor HTTP(S)_PROXY env vars unless NO_PROXY matches"""
     proxy_url = "http://proxy.local:3128"

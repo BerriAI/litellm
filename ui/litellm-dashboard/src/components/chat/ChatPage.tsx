@@ -109,7 +109,12 @@ async function streamToModel(
       undefined, // tags
       signal,
       undefined, // onReasoningContent
-      undefined, undefined, undefined, undefined, undefined, undefined, // positions 8-13
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined, // positions 8-13
       mcpServers.length > 0 ? mcpServers : undefined, // position 14: selectedMCPServers
     );
   } catch (err: unknown) {
@@ -128,9 +133,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("id");
   const { data: uiConfig } = useUIConfig();
-  const uiRoot = uiConfig?.server_root_path && uiConfig.server_root_path !== "/"
-    ? uiConfig.server_root_path.replace(/\/+$/, "")
-    : "";
+  const uiRoot =
+    uiConfig?.server_root_path && uiConfig.server_root_path !== "/"
+      ? uiConfig.server_root_path.replace(/\/+$/, "")
+      : "";
   const logoSrc = `${getProxyBaseUrl()}/get_image`;
 
   const [selectedModels, setSelectedModels] = useState<string[]>([]);
@@ -147,7 +153,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const _oauthReturn = searchParams?.get("mcpOauthReturn");
   const [sidebarView, setSidebarView] = useState<"chats" | "apps" | "credentials">(
-    _oauthReturn === "apps" ? "apps" : "chats"
+    _oauthReturn === "apps" ? "apps" : "chats",
   );
   const [storageBannerDismissed, setStorageBannerDismissed] = useState(false);
 
@@ -281,17 +287,16 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       // On the very first turn (no session yet), we send the full history.
       const previousResponseId = historyOverride ? null : responsesSessionId;
 
-      const history: Array<{ role: "user" | "assistant"; content: string }> =
-        historyOverride
-          ? [...historyOverride, { role: "user" as const, content: trimmed }]
-          : previousResponseId
+      const history: Array<{ role: "user" | "assistant"; content: string }> = historyOverride
+        ? [...historyOverride, { role: "user" as const, content: trimmed }]
+        : previousResponseId
           ? [{ role: "user" as const, content: trimmed }]
           : [
               // Explicitly filter to only user/assistant roles — tool messages
               // lack a required tool_call_id and would cause API errors.
               ...(activeConversation?.messages ?? [])
-                .filter((m): m is typeof m & { role: "user" | "assistant" } =>
-                  m.role === "user" || m.role === "assistant"
+                .filter(
+                  (m): m is typeof m & { role: "user" | "assistant" } => m.role === "user" || m.role === "assistant",
                 )
                 .map((m) => ({ role: m.role, content: m.content })),
               { role: "user" as const, content: trimmed },
@@ -320,7 +325,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             accumulatedReasoning += rc;
             updateLastAssistantMessage(convId!, { reasoningContent: accumulatedReasoning });
           },
-          undefined, undefined, undefined, undefined, undefined, undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
           selectedMCPServers.length > 0 ? selectedMCPServers : undefined,
           previousResponseId,
           (id: string) => setResponsesSessionId(id),
@@ -351,8 +361,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         abortControllerRef.current = null;
       }
     },
-    [activeConversationId, activeConversation, selectedModels, selectedMCPServers, accessToken,
-      createConversation, appendMessage, updateLastAssistantMessage, router, isStreaming, responsesSessionId],
+    [
+      activeConversationId,
+      activeConversation,
+      selectedModels,
+      selectedMCPServers,
+      accessToken,
+      createConversation,
+      appendMessage,
+      updateLastAssistantMessage,
+      router,
+      isStreaming,
+      responsesSessionId,
+    ],
   );
 
   const handleSendComparison = useCallback(
@@ -368,7 +389,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       setComparisonStreamingSet(new Set(selectedModels));
 
       const controllers: Record<string, AbortController> = {};
-      selectedModels.forEach((m) => { controllers[m] = new AbortController(); });
+      selectedModels.forEach((m) => {
+        controllers[m] = new AbortController();
+      });
       comparisonAbortControllersRef.current = controllers;
 
       // Launch all model streams simultaneously — Promise.allSettled ensures they run in parallel
@@ -389,14 +412,20 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             accessToken,
             selectedMCPServers,
             controllers[model].signal,
-            (m, chunk) => setComparisonExchanges((prev) => {
-              const updated = [...prev];
-              const ex = { ...updated[newExchangeIdx] };
-              ex.responses = { ...ex.responses, [m]: (ex.responses[m] ?? "") + chunk };
-              updated[newExchangeIdx] = ex;
-              return updated;
-            }),
-            (m) => setComparisonStreamingSet((prev) => { const next = new Set(prev); next.delete(m); return next; }),
+            (m, chunk) =>
+              setComparisonExchanges((prev) => {
+                const updated = [...prev];
+                const ex = { ...updated[newExchangeIdx] };
+                ex.responses = { ...ex.responses, [m]: (ex.responses[m] ?? "") + chunk };
+                updated[newExchangeIdx] = ex;
+                return updated;
+              }),
+            (m) =>
+              setComparisonStreamingSet((prev) => {
+                const next = new Set(prev);
+                next.delete(m);
+                return next;
+              }),
           );
         }),
       );
@@ -498,16 +527,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   }, [activeConversation?.messages]);
 
   const showBlankState = !isComparisonMode
-    ? (!activeConversation || activeConversation.messages.length === 0)
+    ? !activeConversation || activeConversation.messages.length === 0
     : comparisonExchanges.length === 0;
   const displayName = userEmail?.split("@")[0] ?? userId ?? "";
   const greeting = displayName ? `${getGreeting()}, ${displayName}` : getGreeting();
   const dashboardUrl = getDashboardUrl(uiRoot);
 
   // Filtered models: selected ones float to the top, then alphabetical
-  const filteredModels = (modelSearchText
-    ? models.filter((m) => m.toLowerCase().includes(modelSearchText.toLowerCase()))
-    : models
+  const filteredModels = (
+    modelSearchText ? models.filter((m) => m.toLowerCase().includes(modelSearchText.toLowerCase())) : models
   ).sort((a, b) => {
     const aSelected = selectedModels.includes(a);
     const bSelected = selectedModels.includes(b);
@@ -566,20 +594,43 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 borderRadius: 4,
               }}
             >
-              <span style={{
-                width: 16, height: 16, borderRadius: 3, border: `1.5px solid ${checked ? "#1677ff" : "#d1d5db"}`,
-                background: checked ? "#1677ff" : "#fff",
-                display: "flex", alignItems: "center", justifyContent: "center",
-                flexShrink: 0, transition: "all 0.1s",
-              }}>
+              <span
+                style={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: 3,
+                  border: `1.5px solid ${checked ? "#1677ff" : "#d1d5db"}`,
+                  background: checked ? "#1677ff" : "#fff",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                  transition: "all 0.1s",
+                }}
+              >
                 {checked && <CheckOutlined style={{ fontSize: 10, color: "#fff" }} />}
               </span>
               {logo ? (
-                <img src={logo} alt="" style={{ width: 16, height: 16, objectFit: "contain", flexShrink: 0 }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
+                <img
+                  src={logo}
+                  alt=""
+                  style={{ width: 16, height: 16, objectFit: "contain", flexShrink: 0 }}
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display = "none";
+                  }}
+                />
               ) : (
                 <span style={{ width: 16, flexShrink: 0 }} />
               )}
-              <span style={{ fontSize: 13, color: "#111827", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              <span
+                style={{
+                  fontSize: 13,
+                  color: "#111827",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
                 {m}
               </span>
             </button>
@@ -590,13 +641,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   );
 
   // ---- Sidebar nav item renderer ----
-  const sidebarNavItem = (
-    icon: React.ReactNode,
-    label: string,
-    onClick: () => void,
-    active = false,
-    kbd?: string,
-  ) => (
+  const sidebarNavItem = (icon: React.ReactNode, label: string, onClick: () => void, active = false, kbd?: string) => (
     <Tooltip title={sidebarCollapsed ? label : undefined} placement="right" key={label}>
       <button
         onClick={onClick}
@@ -640,7 +685,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   ) : (
     <Popover
       open={modelSelectorOpen}
-      onOpenChange={(open) => { setModelSelectorOpen(open); if (!open) setModelSearchText(""); }}
+      onOpenChange={(open) => {
+        setModelSelectorOpen(open);
+        if (!open) setModelSearchText("");
+      }}
       content={modelSelectorContent}
       trigger="click"
       placement="bottomLeft"
@@ -661,8 +709,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           maxWidth: 480,
           overflow: "hidden",
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "#f5f5f5"; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+        onMouseEnter={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.background = "#f5f5f5";
+        }}
+        onMouseLeave={(e) => {
+          (e.currentTarget as HTMLButtonElement).style.background = "transparent";
+        }}
       >
         {selectedModels.length === 0 ? (
           <span style={{ color: "#9ca3af" }}>Select model</span>
@@ -671,7 +723,16 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             {(() => {
               const provider = getProviderFromModelName(selectedModels[0]);
               const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
-              return logo ? <img src={logo} alt="" style={{ width: 18, height: 18, objectFit: "contain", flexShrink: 0 }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} /> : null;
+              return logo ? (
+                <img
+                  src={logo}
+                  alt=""
+                  style={{ width: 18, height: 18, objectFit: "contain", flexShrink: 0 }}
+                  onError={(e) => {
+                    (e.currentTarget as HTMLImageElement).style.display = "none";
+                  }}
+                />
+              ) : null;
             })()}
             <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 240 }}>
               {selectedModels[0]}
@@ -683,13 +744,34 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               const provider = getProviderFromModelName(m);
               const { logo } = provider ? getProviderLogoAndName(provider) : { logo: "" };
               return (
-                <span key={m} style={{
-                  display: "inline-flex", alignItems: "center", gap: 4,
-                  padding: "2px 8px", background: "#f0f4ff", borderRadius: 10,
-                  fontSize: 12, color: "#1677ff", fontWeight: 500, flexShrink: 0,
-                }}>
-                  {logo && <img src={logo} alt="" style={{ width: 13, height: 13, objectFit: "contain" }} onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />}
-                  <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m}</span>
+                <span
+                  key={m}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "2px 8px",
+                    background: "#f0f4ff",
+                    borderRadius: 10,
+                    fontSize: 12,
+                    color: "#1677ff",
+                    fontWeight: 500,
+                    flexShrink: 0,
+                  }}
+                >
+                  {logo && (
+                    <img
+                      src={logo}
+                      alt=""
+                      style={{ width: 13, height: 13, objectFit: "contain" }}
+                      onError={(e) => {
+                        (e.currentTarget as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                  )}
+                  <span style={{ maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                    {m}
+                  </span>
                 </span>
               );
             })}
@@ -702,13 +784,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
   // ---- Shared input bar ----
   const inputBar = (inConversation: boolean) => (
-    <div style={{
-      background: "#fff",
-      borderRadius: 12,
-      border: "1px solid #e5e7eb",
-      boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
-      overflow: "hidden",
-    }}>
+    <div
+      style={{
+        background: "#fff",
+        borderRadius: 12,
+        border: "1px solid #e5e7eb",
+        boxShadow: "0 1px 6px rgba(0,0,0,0.06)",
+        overflow: "hidden",
+      }}
+    >
       <textarea
         ref={textareaRef}
         value={inputText}
@@ -729,13 +813,15 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           boxSizing: "border-box",
         }}
       />
-      <div style={{
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: inConversation ? "4px 12px 10px" : "8px 12px 12px",
-        borderTop: "1px solid #f3f4f6",
-      }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: inConversation ? "4px 12px 10px" : "8px 12px 12px",
+          borderTop: "1px solid #f3f4f6",
+        }}
+      >
         <Popover
           open={mcpPopoverOpen}
           onOpenChange={setMcpPopoverOpen}
@@ -749,38 +835,69 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           trigger="click"
           placement="topLeft"
         >
-          <button style={{
-            background: "none", border: "1px solid #d1d5db",
-            borderRadius: 6, padding: "5px 10px",
-            cursor: "pointer", fontSize: 14, color: "#6b7280",
-            display: "flex", alignItems: "center", gap: 4,
-          }}>
+          <button
+            style={{
+              background: "none",
+              border: "1px solid #d1d5db",
+              borderRadius: 6,
+              padding: "5px 10px",
+              cursor: "pointer",
+              fontSize: 14,
+              color: "#6b7280",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
             <PlusOutlined />
             {selectedMCPServers.length > 0 && (
-              <span style={{ fontSize: 12, color: "#1677ff", fontWeight: 500 }}>
-                {selectedMCPServers.length}
-              </span>
+              <span style={{ fontSize: 12, color: "#1677ff", fontWeight: 500 }}>{selectedMCPServers.length}</span>
             )}
           </button>
         </Popover>
 
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {!isComparisonMode && (
-            <span style={{ fontSize: 12, color: "#9ca3af", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span
+              style={{
+                fontSize: 12,
+                color: "#9ca3af",
+                maxWidth: 160,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
               {inConversation
-                ? (selectedMCPServers.length > 0 ? `${selectedMCPServers.length} tool${selectedMCPServers.length > 1 ? "s" : ""} connected` : "")
-                : (selectedModels[0] || "No model")}
+                ? selectedMCPServers.length > 0
+                  ? `${selectedMCPServers.length} tool${selectedMCPServers.length > 1 ? "s" : ""} connected`
+                  : ""
+                : selectedModels[0] || "No model"}
             </span>
           )}
           {isAnyStreaming ? (
-            <button onClick={handleStop} style={{
-              background: "none", border: "1.5px solid #d1d5db", borderRadius: "50%",
-              width: 32, height: 32, cursor: "pointer", color: "#374151",
-              display: "flex", alignItems: "center", justifyContent: "center",
-              flexShrink: 0, transition: "border-color 0.15s",
-            }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#9ca3af"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.borderColor = "#d1d5db"; }}
+            <button
+              onClick={handleStop}
+              style={{
+                background: "none",
+                border: "1.5px solid #d1d5db",
+                borderRadius: "50%",
+                width: 32,
+                height: 32,
+                cursor: "pointer",
+                color: "#374151",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                transition: "border-color 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.borderColor = "#9ca3af";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLButtonElement).style.borderColor = "#d1d5db";
+              }}
             >
               <div style={{ width: 10, height: 10, background: "#374151", borderRadius: 2 }} />
             </button>
@@ -790,11 +907,13 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               disabled={!inputText.trim() || isLoadingModels || selectedModels.length === 0}
               style={{
                 background: inputText.trim() && selectedModels.length > 0 ? "#1677ff" : "#f3f4f6",
-                border: "none", borderRadius: 7,
+                border: "none",
+                borderRadius: 7,
                 padding: "7px 16px",
                 cursor: inputText.trim() && selectedModels.length > 0 ? "pointer" : "not-allowed",
                 color: inputText.trim() && selectedModels.length > 0 ? "#fff" : "#9ca3af",
-                fontSize: 14, fontWeight: 500,
+                fontSize: 14,
+                fontWeight: 500,
                 transition: "background 0.15s",
               }}
             >
@@ -807,35 +926,39 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
   );
 
   return (
-    <div style={{
-      display: "flex",
-      height: "100vh",
-      width: "100vw",
-      background: "#ffffff",
-      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      overflow: "hidden",
-    }}>
-
-      {/* ===== LEFT SIDEBAR ===== */}
-      <div style={{
-        width: sidebarCollapsed ? 56 : 260,
-        flexShrink: 0,
-        background: "#f9fafb",
-        borderRight: "1px solid #e5e7eb",
+    <div
+      style={{
         display: "flex",
-        flexDirection: "column",
+        height: "100vh",
+        width: "100vw",
+        background: "#ffffff",
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
         overflow: "hidden",
-        transition: "width 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
-      }}>
-
-        {/* Sidebar header: logo + collapse button */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          padding: "12px 10px",
-          justifyContent: sidebarCollapsed ? "center" : "space-between",
+      }}
+    >
+      {/* ===== LEFT SIDEBAR ===== */}
+      <div
+        style={{
+          width: sidebarCollapsed ? 56 : 260,
           flexShrink: 0,
-        }}>
+          background: "#f9fafb",
+          borderRight: "1px solid #e5e7eb",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          transition: "width 0.2s cubic-bezier(0.4, 0, 0.2, 1)",
+        }}
+      >
+        {/* Sidebar header: logo + collapse button */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            padding: "12px 10px",
+            justifyContent: sidebarCollapsed ? "center" : "space-between",
+            flexShrink: 0,
+          }}
+        >
           {!sidebarCollapsed && (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <img
@@ -843,18 +966,22 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 alt="LiteLLM"
                 style={{ height: 28, maxWidth: 120, objectFit: "contain", flexShrink: 0 }}
               />
-              <span style={{ fontWeight: 700, fontSize: 15, color: "#111827", letterSpacing: "-0.01em" }}>
-                LiteLLM
-              </span>
+              <span style={{ fontWeight: 700, fontSize: 15, color: "#111827", letterSpacing: "-0.01em" }}>LiteLLM</span>
             </div>
           )}
           <Tooltip title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} placement="right">
             <button
               onClick={() => setSidebarCollapsed((v) => !v)}
               style={{
-                background: "none", border: "none", cursor: "pointer",
-                padding: 6, borderRadius: 7, color: "#6b7280", fontSize: 16,
-                display: "flex", alignItems: "center",
+                background: "none",
+                border: "none",
+                cursor: "pointer",
+                padding: 6,
+                borderRadius: 7,
+                color: "#6b7280",
+                fontSize: 16,
+                display: "flex",
+                alignItems: "center",
               }}
             >
               {sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
@@ -874,7 +1001,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         <div style={{ padding: "4px 8px", flexShrink: 0 }}>
           {sidebarNavItem(<MessageOutlined />, "Chats", () => setSidebarView("chats"), sidebarView === "chats")}
           {sidebarNavItem(<AppstoreOutlined />, "Apps", () => setSidebarView("apps"), sidebarView === "apps")}
-          {sidebarNavItem(<KeyOutlined />, "Credentials", () => setSidebarView("credentials"), sidebarView === "credentials")}
+          {sidebarNavItem(
+            <KeyOutlined />,
+            "Credentials",
+            () => setSidebarView("credentials"),
+            sidebarView === "credentials",
+          )}
           <Tooltip title={sidebarCollapsed ? "Back to Developer Console UI" : undefined} placement="right">
             <a
               href={dashboardUrl}
@@ -899,9 +1031,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               }}
             >
               <ArrowLeftOutlined style={{ fontSize: 16, flexShrink: 0 }} />
-              {!sidebarCollapsed && (
-                <span>Back to Developer Console UI</span>
-              )}
+              {!sidebarCollapsed && <span>Back to Developer Console UI</span>}
             </a>
           </Tooltip>
         </div>
@@ -921,23 +1051,23 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             />
           </div>
         )}
-
       </div>
 
       {/* ===== MAIN AREA ===== */}
       <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", minWidth: 0 }}>
-
         {/* Top bar */}
-        <div style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "8px 16px",
-          flexShrink: 0,
-          borderBottom: "1px solid #f0f0f0",
-          background: "#fff",
-          height: 48,
-        }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "8px 16px",
+            flexShrink: 0,
+            borderBottom: "1px solid #f0f0f0",
+            background: "#fff",
+            height: 48,
+          }}
+        >
           {/* Left: model selector */}
           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1 }}>
             {modelSelectorTrigger}
@@ -946,11 +1076,19 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           {/* Right: settings */}
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
             <Tooltip title="Settings">
-              <button style={{
-                background: "none", border: "none", cursor: "pointer",
-                padding: 7, borderRadius: 7, color: "#6b7280", fontSize: 16,
-                display: "flex", alignItems: "center",
-              }}>
+              <button
+                style={{
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                  padding: 7,
+                  borderRadius: 7,
+                  color: "#6b7280",
+                  fontSize: 16,
+                  display: "flex",
+                  alignItems: "center",
+                }}
+              >
                 <SettingOutlined />
               </button>
             </Tooltip>
@@ -959,61 +1097,98 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
         {/* Storage warning banner */}
         {storageUnavailable && !storageBannerDismissed && (
-          <div style={{
-            background: "#fffbe6", borderBottom: "1px solid #ffe58f",
-            padding: "6px 20px", fontSize: 13, color: "#874d00",
-            display: "flex", justifyContent: "space-between", alignItems: "center",
-          }}>
+          <div
+            style={{
+              background: "#fffbe6",
+              borderBottom: "1px solid #ffe58f",
+              padding: "6px 20px",
+              fontSize: 13,
+              color: "#874d00",
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
             <span>Chat history won&apos;t be saved in this browser session.</span>
-            <button onClick={() => setStorageBannerDismissed(true)}
-              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#874d00" }}>
+            <button
+              onClick={() => setStorageBannerDismissed(true)}
+              style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#874d00" }}
+            >
               ×
             </button>
           </div>
         )}
 
         {/* Content area */}
-        <div style={{ flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column", background: "#fff" }}>
-
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflow: "hidden",
+            display: "flex",
+            flexDirection: "column",
+            background: "#fff",
+          }}
+        >
           {/* ---- Apps page view ---- */}
           {sidebarView === "apps" ? (
-            <div style={{ flex: 1, minHeight: 0, overflow: "auto", maxWidth: 800, margin: "0 auto", width: "100%", padding: "32px 24px" }}>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: "auto",
+                maxWidth: 800,
+                margin: "0 auto",
+                width: "100%",
+                padding: "32px 24px",
+              }}
+            >
               <MCPAppsPanel
                 accessToken={accessToken}
                 selectedServers={selectedMCPServers}
                 onChange={setSelectedMCPServers}
               />
             </div>
-
           ) : sidebarView === "credentials" ? (
             /* ---- Credentials view ---- */
-            <div style={{ flex: 1, minHeight: 0, overflow: "auto", maxWidth: 800, margin: "0 auto", width: "100%", padding: "32px 24px" }}>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                overflow: "auto",
+                maxWidth: 800,
+                margin: "0 auto",
+                width: "100%",
+                padding: "32px 24px",
+              }}
+            >
               <MCPCredentialsTab accessToken={accessToken} />
             </div>
-
           ) : showBlankState ? (
             /* ---- Blank state ---- */
-            <div style={{
-              flex: 1,
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              justifyContent: "center",
-              padding: "0 24px 80px",
-            }}>
+            <div
+              style={{
+                flex: 1,
+                display: "flex",
+                flexDirection: "column",
+                alignItems: "center",
+                justifyContent: "center",
+                padding: "0 24px 80px",
+              }}
+            >
               {/* Greeting */}
-              <h1 style={{
-                margin: "0 0 32px",
-                fontSize: 28,
-                fontWeight: 600,
-                color: "#111827",
-                fontFamily: "inherit",
-                letterSpacing: "-0.01em",
-                textAlign: "center",
-              }}>
-                {isComparisonMode
-                  ? `Compare ${selectedModels.length} models`
-                  : greeting}
+              <h1
+                style={{
+                  margin: "0 0 32px",
+                  fontSize: 28,
+                  fontWeight: 600,
+                  color: "#111827",
+                  fontFamily: "inherit",
+                  letterSpacing: "-0.01em",
+                  textAlign: "center",
+                }}
+              >
+                {isComparisonMode ? `Compare ${selectedModels.length} models` : greeting}
               </h1>
 
               {isComparisonMode ? (
@@ -1021,11 +1196,28 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                   Send a message to see responses side-by-side
                 </p>
               ) : (
-                <p style={{ margin: "-16px 0 28px", fontSize: 14, color: "#6b7280", textAlign: "center", maxWidth: 520, lineHeight: 1.6 }}>
+                <p
+                  style={{
+                    margin: "-16px 0 28px",
+                    fontSize: 14,
+                    color: "#6b7280",
+                    textAlign: "center",
+                    maxWidth: 520,
+                    lineHeight: 1.6,
+                  }}
+                >
                   Chat with 100+ LLMs + MCP tools — authenticate once, use them here.{" "}
                   <button
                     onClick={() => setSidebarView("apps")}
-                    style={{ background: "none", border: "none", cursor: "pointer", color: "#1677ff", fontSize: 14, padding: 0, fontWeight: 500 }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      cursor: "pointer",
+                      color: "#1677ff",
+                      fontSize: 14,
+                      padding: 0,
+                      fontWeight: 500,
+                    }}
                   >
                     Open Apps →
                   </button>
@@ -1033,9 +1225,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               )}
 
               {/* Input card */}
-              <div style={{ width: "100%", maxWidth: 680 }}>
-                {inputBar(false)}
-              </div>
+              <div style={{ width: "100%", maxWidth: 680 }}>{inputBar(false)}</div>
 
               {/* Suggestion chips — only in single-model mode */}
               {!isComparisonMode && (
@@ -1065,16 +1255,26 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                   ))}
                 </div>
               )}
-
             </div>
           ) : (
             /* ---- Active conversation (single-model or comparison) ---- */
-            <div style={{
-              flex: 1, minHeight: 0, display: "flex", flexDirection: "column",
-              maxWidth: isComparisonMode ? (selectedModels.length >= 3 ? 1200 : 960) : 760,
-              margin: "0 auto", width: "100%", padding: "0 24px", position: "relative",
-            }}>
-              <div ref={messagesScrollRef} style={{ flex: 1, minHeight: 0, overflow: "auto", paddingTop: 24, overflowAnchor: "none" }}>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                display: "flex",
+                flexDirection: "column",
+                maxWidth: isComparisonMode ? (selectedModels.length >= 3 ? 1200 : 960) : 760,
+                margin: "0 auto",
+                width: "100%",
+                padding: "0 24px",
+                position: "relative",
+              }}
+            >
+              <div
+                ref={messagesScrollRef}
+                style={{ flex: 1, minHeight: 0, overflow: "auto", paddingTop: 24, overflowAnchor: "none" }}
+              >
                 {isComparisonMode ? (
                   /* Comparison: multi-turn exchanges, each with user bubble + side-by-side response cards */
                   <div style={{ paddingBottom: 8 }}>
@@ -1084,15 +1284,17 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                         <div key={exchangeIdx} style={{ marginBottom: 32 }}>
                           {/* User message bubble */}
                           <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 20 }}>
-                            <div style={{
-                              background: "#f3f4f6",
-                              borderRadius: 16,
-                              padding: "10px 16px",
-                              maxWidth: "75%",
-                              fontSize: 14,
-                              color: "#111827",
-                              lineHeight: 1.5,
-                            }}>
+                            <div
+                              style={{
+                                background: "#f3f4f6",
+                                borderRadius: 16,
+                                padding: "10px 16px",
+                                maxWidth: "75%",
+                                fontSize: 14,
+                                color: "#111827",
+                                lineHeight: 1.5,
+                              }}
+                            >
                               {exchange.userMessage}
                             </div>
                           </div>
@@ -1105,41 +1307,62 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                               const responseText = exchange.responses[model] ?? "";
                               const isModelStreaming = isLastExchange && comparisonStreamingSet.has(model);
                               return (
-                                <div key={model} style={{
-                                  flex: 1,
-                                  border: "1px solid #e5e7eb",
-                                  borderRadius: 12,
-                                  overflow: "hidden",
-                                  minWidth: 0,
-                                }}>
+                                <div
+                                  key={model}
+                                  style={{
+                                    flex: 1,
+                                    border: "1px solid #e5e7eb",
+                                    borderRadius: 12,
+                                    overflow: "hidden",
+                                    minWidth: 0,
+                                  }}
+                                >
                                   {/* Card header — only show on first exchange */}
                                   {exchangeIdx === 0 && (
-                                    <div style={{
-                                      padding: "10px 14px",
-                                      borderBottom: "1px solid #f0f0f0",
-                                      display: "flex",
-                                      alignItems: "center",
-                                      gap: 8,
-                                      background: "#fafafa",
-                                    }}>
+                                    <div
+                                      style={{
+                                        padding: "10px 14px",
+                                        borderBottom: "1px solid #f0f0f0",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: 8,
+                                        background: "#fafafa",
+                                      }}
+                                    >
                                       {logo ? (
                                         <img
                                           src={logo}
                                           alt=""
                                           style={{ width: 18, height: 18, objectFit: "contain", flexShrink: 0 }}
-                                          onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                                          onError={(e) => {
+                                            (e.currentTarget as HTMLImageElement).style.display = "none";
+                                          }}
                                         />
                                       ) : (
-                                        <div style={{ width: 18, height: 18, borderRadius: "50%", background: "#e5e7eb", flexShrink: 0 }} />
+                                        <div
+                                          style={{
+                                            width: 18,
+                                            height: 18,
+                                            borderRadius: "50%",
+                                            background: "#e5e7eb",
+                                            flexShrink: 0,
+                                          }}
+                                        />
                                       )}
                                       <span style={{ fontWeight: 600, fontSize: 12, color: "#374151" }}>
                                         Response {idx + 1}
                                       </span>
-                                      <span style={{
-                                        fontSize: 11, color: "#9ca3af",
-                                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                                        flex: 1, minWidth: 0,
-                                      }}>
+                                      <span
+                                        style={{
+                                          fontSize: 11,
+                                          color: "#9ca3af",
+                                          overflow: "hidden",
+                                          textOverflow: "ellipsis",
+                                          whiteSpace: "nowrap",
+                                          flex: 1,
+                                          minWidth: 0,
+                                        }}
+                                      >
                                         {model}
                                       </span>
                                     </div>
@@ -1147,26 +1370,64 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                                   {/* Card body */}
                                   <div style={{ padding: "14px 16px", minHeight: 60, position: "relative" }}>
                                     {isModelStreaming && (
-                                      <span style={{
-                                        position: "absolute", top: 10, right: 12,
-                                        fontSize: 9, color: "#1677ff",
-                                      }}>●</span>
+                                      <span
+                                        style={{
+                                          position: "absolute",
+                                          top: 10,
+                                          right: 12,
+                                          fontSize: 9,
+                                          color: "#1677ff",
+                                        }}
+                                      >
+                                        ●
+                                      </span>
                                     )}
                                     {responseText ? (
                                       <ReactMarkdown
                                         remarkPlugins={[remarkGfm]}
                                         components={{
-                                          p: ({ children }) => <p style={{ margin: "0 0 10px", lineHeight: 1.6, fontSize: 14, color: "#111827" }}>{children}</p>,
+                                          p: ({ children }) => (
+                                            <p
+                                              style={{
+                                                margin: "0 0 10px",
+                                                lineHeight: 1.6,
+                                                fontSize: 14,
+                                                color: "#111827",
+                                              }}
+                                            >
+                                              {children}
+                                            </p>
+                                          ),
                                           code: ({ className, children }) => {
                                             const isBlock = /language-(\w+)/.exec(className || "");
                                             if (isBlock) {
                                               return (
-                                                <pre style={{ background: "#f8f9fa", padding: "10px 12px", borderRadius: 6, overflow: "auto", fontSize: 13, margin: "8px 0" }}>
+                                                <pre
+                                                  style={{
+                                                    background: "#f8f9fa",
+                                                    padding: "10px 12px",
+                                                    borderRadius: 6,
+                                                    overflow: "auto",
+                                                    fontSize: 13,
+                                                    margin: "8px 0",
+                                                  }}
+                                                >
                                                   <code>{children}</code>
                                                 </pre>
                                               );
                                             }
-                                            return <code style={{ background: "#f3f4f6", padding: "2px 5px", borderRadius: 3, fontSize: 13 }}>{children}</code>;
+                                            return (
+                                              <code
+                                                style={{
+                                                  background: "#f3f4f6",
+                                                  padding: "2px 5px",
+                                                  borderRadius: 3,
+                                                  fontSize: 13,
+                                                }}
+                                              >
+                                                {children}
+                                              </code>
+                                            );
                                           },
                                         }}
                                       >
@@ -1226,8 +1487,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                     zIndex: 10,
                     transition: "background 0.15s",
                   }}
-                  onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.95)"; }}
-                  onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.75)"; }}
+                  onMouseEnter={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.95)";
+                  }}
+                  onMouseLeave={(e) => {
+                    (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.75)";
+                  }}
                   aria-label="Scroll to bottom"
                 >
                   <DownOutlined style={{ fontSize: 12 }} />
@@ -1235,9 +1500,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               )}
 
               {/* Input bar (in conversation) */}
-              <div style={{ padding: "12px 0 24px" }}>
-                {inputBar(true)}
-              </div>
+              <div style={{ padding: "12px 0 24px" }}>{inputBar(true)}</div>
             </div>
           )}
         </div>

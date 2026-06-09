@@ -53,8 +53,7 @@ export const useTestMCPConnection = ({
   const [hasShownSuccessMessage, setHasShownSuccessMessage] = useState(false);
 
   // Check if we have the minimum required fields to fetch tools
-  const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2
-    && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
+  const isM2MOAuth = formValues.auth_type === AUTH_TYPE.OAUTH2 && formValues.oauth_flow_type === OAUTH_FLOW.M2M;
   const requiresOAuthToken = formValues.auth_type === AUTH_TYPE.OAUTH2 && !isM2MOAuth;
   const isOpenAPITransport = formValues.transport === TRANSPORT.OPENAPI;
   const hasEndpoint = isOpenAPITransport ? !!formValues.spec_path : !!formValues.url;
@@ -98,40 +97,36 @@ export const useTestMCPConnection = ({
             acc[header] = entry?.value != null ? String(entry.value) : "";
             return acc;
           }, {})
-        : !Array.isArray(formValues.static_headers) && formValues.static_headers && typeof formValues.static_headers === "object"
-          ? Object.entries(formValues.static_headers).reduce(
-              (acc: Record<string, string>, [header, value]) => {
-                if (!header) {
-                  return acc;
-                }
-                acc[header] = value != null ? String(value) : "";
+        : !Array.isArray(formValues.static_headers) &&
+            formValues.static_headers &&
+            typeof formValues.static_headers === "object"
+          ? Object.entries(formValues.static_headers).reduce((acc: Record<string, string>, [header, value]) => {
+              if (!header) {
                 return acc;
-              },
-              {},
-            )
-          : {} as Record<string, string>;
+              }
+              acc[header] = value != null ? String(value) : "";
+              return acc;
+            }, {})
+          : ({} as Record<string, string>);
 
       const credentials =
         formValues.credentials && typeof formValues.credentials === "object"
-          ? Object.entries(formValues.credentials).reduce(
-              (acc: Record<string, any>, [key, value]) => {
-                if (value === undefined || value === null || value === "") {
-                  return acc;
-                }
-                if (key === "scopes") {
-                  if (Array.isArray(value)) {
-                    const normalizedScopes = value.filter((scope) => scope != null && scope !== "");
-                    if (normalizedScopes.length > 0) {
-                      acc[key] = normalizedScopes;
-                    }
-                  }
-                } else {
-                  acc[key] = value;
-                }
+          ? Object.entries(formValues.credentials).reduce((acc: Record<string, any>, [key, value]) => {
+              if (value === undefined || value === null || value === "") {
                 return acc;
-              },
-              {},
-            )
+              }
+              if (key === "scopes") {
+                if (Array.isArray(value)) {
+                  const normalizedScopes = value.filter((scope) => scope != null && scope !== "");
+                  if (normalizedScopes.length > 0) {
+                    acc[key] = normalizedScopes;
+                  }
+                }
+              } else {
+                acc[key] = value;
+              }
+              return acc;
+            }, {})
           : undefined;
 
       // For OpenAPI transport, map to "http" for backend compatibility

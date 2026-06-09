@@ -23,8 +23,6 @@ from typing import (
     cast,
 )
 
-from fastapi import HTTPException
-
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
@@ -34,9 +32,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.proxy.common_utils.proxy_rate_limit_error import (
+    ProxyRateLimitError,
+    map_v3_rate_limit_type,
+)
+from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import CallTypes, ModelResponse, Usage
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -207,6 +210,11 @@ REDIS_NODE_HASHTAG_NAME = "all_keys"
 # *some* output budget; these define that fallback estimate.
 DEFAULT_MAX_TOKENS_ESTIMATE = 4096
 DEFAULT_CHARS_PER_TOKEN = 4
+# Fraction of the available output budget reserved as the upfront floor when
+# the request omits max_tokens. Applied to both DEFAULT_MAX_TOKENS_ESTIMATE
+# (baseline floor) and to the smallest configured TPM limit (capped floor for
+# small per-tenant TPM caps).
+_TPM_FLOOR_FRACTION = 4
 # Stash for the reserved-token count on the request data dict so success/
 # failure callbacks can reconcile against the upfront reservation.
 TPM_RESERVED_TOKENS_KEY = "_litellm_tpm_reserved_tokens"
@@ -340,10 +348,26 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """Return the current time for rate limiting calculations."""
         return self._time_provider()
 
+    @staticmethod
+    def _no_max_tokens_output_floor(
+        min_configured_tpm_limit: Optional[int],
+    ) -> int:
+        """Output-budget floor used when the request omits max_tokens.
+
+        Capped at a fraction of the smallest configured TPM limit so a small
+        per-tenant cap can't be tripped by the floor alone. Returns the
+        baseline floor when no limit is provided.
+        """
+        baseline = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+        if min_configured_tpm_limit is None:
+            return baseline
+        return min(baseline, max(1, min_configured_tpm_limit // _TPM_FLOOR_FRACTION))
+
     def _estimate_tokens_for_request(
         self,
         data: dict,
         model: Optional[str] = None,
+        min_configured_tpm_limit: Optional[int] = None,
     ) -> int:
         """
         Estimate total tokens this request will consume so we can reserve them
@@ -351,6 +375,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         estimated = input_tokens + max_tokens.
 
         Supports chat (messages), completions (prompt), and embeddings (input).
+
+        ``min_configured_tpm_limit`` is the smallest ``tokens_per_unit`` among
+        the TPM-bearing descriptors this request will be charged against. When
+        provided, the no-``max_tokens`` output-budget floor is capped at a
+        fraction of that limit so small TPM caps remain usable. Omit to
+        preserve the unconstrained floor.
         """
         messages = data.get("messages")
         prompt = data.get("prompt")
@@ -394,11 +424,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             case _:
                 # No max_tokens specified — reserve at least the input size with a
                 # conservative floor so a stream of small concurrent requests can't
-                # collectively bypass the limit.
-                max_tokens_estimate = max(
-                    estimated_input_tokens,
-                    DEFAULT_MAX_TOKENS_ESTIMATE // 4,
+                # collectively bypass the limit. Cap the floor by a fraction of
+                # the smallest TPM limit this request will be charged against,
+                # so a small per-tenant TPM cap can't be tripped by the floor
+                # alone.
+                output_floor = self._no_max_tokens_output_floor(
+                    min_configured_tpm_limit
                 )
+                max_tokens_estimate = max(estimated_input_tokens, output_floor)
 
         total_estimated = estimated_input_tokens + max_tokens_estimate
 
@@ -1345,6 +1378,79 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         )
 
+    def _add_mcp_per_key_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the API key, if a limit is
+        configured for the server being called.
+
+        MCP tool calls have no token usage, so only requests_per_unit is set;
+        tokens_per_unit stays None so the TPM reservation path is never engaged.
+        """
+        from litellm.proxy.auth.auth_utils import get_key_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.api_key:
+            return
+
+        mcp_rpm_limit = get_key_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_key",
+                value=f"{user_api_key_dict.api_key}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
+    def _add_mcp_per_team_rate_limit_descriptor(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        mcp_server_name: Optional[str],
+        descriptors: List[RateLimitDescriptor],
+    ) -> None:
+        """
+        Add a per-MCP-server rpm descriptor for the team, if a limit is
+        configured for the server being called.
+        """
+        from litellm.proxy.auth.auth_utils import get_team_mcp_rpm_limit
+
+        if not mcp_server_name or not user_api_key_dict.team_id:
+            return
+
+        mcp_rpm_limit = get_team_mcp_rpm_limit(user_api_key_dict)
+        if not mcp_rpm_limit:
+            return
+
+        server_rpm_limit = mcp_rpm_limit.get(mcp_server_name)
+        if server_rpm_limit is None:
+            return
+
+        descriptors.append(
+            RateLimitDescriptor(
+                key="mcp_per_team",
+                value=f"{user_api_key_dict.team_id}:{mcp_server_name}",
+                rate_limit={
+                    "requests_per_unit": server_rpm_limit,
+                    "tokens_per_unit": None,
+                    "window_size": self.window_size,
+                },
+            )
+        )
+
     def _should_enforce_rate_limit(
         self,
         limit_type: Optional[str],
@@ -1503,6 +1609,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         rpm_limit_type: Optional[str],
         tpm_limit_type: Optional[str],
         model_has_failures: bool,
+        call_type: Optional[str] = None,
     ) -> List[RateLimitDescriptor]:
         """
         Create all rate limit descriptors for the request.
@@ -1622,6 +1729,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             requested_model=requested_model,
             descriptors=descriptors,
         )
+
+        # REST MCP calls pass the raw body through this hook before server
+        # resolution; only the later synthetic hook payload may carry this key.
+        if call_type == CallTypes.call_mcp_tool.value and "server_id" not in data:
+            mcp_server_name = data.get("mcp_server_name", None)
+            self._add_mcp_per_key_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
+            self._add_mcp_per_team_rate_limit_descriptor(
+                user_api_key_dict=user_api_key_dict,
+                mcp_server_name=mcp_server_name,
+                descriptors=descriptors,
+            )
 
         if (
             get_team_model_rpm_limit(user_api_key_dict) is not None
@@ -1848,8 +1970,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         self,
         response: RateLimitResponse,
         descriptors: List[RateLimitDescriptor],
+        requested_model: Optional[str] = None,
     ) -> None:
-        """Handle rate limit exceeded error by raising HTTPException."""
+        """Handle rate limit exceeded by raising :class:`ProxyRateLimitError` (a 429)."""
         for status in response["statuses"]:
             if status["code"] == "OVER_LIMIT":
                 descriptor_key = status["descriptor_key"]
@@ -1880,14 +2003,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"Limit resets at: {reset_time_formatted}"
                 )
 
-                raise HTTPException(
-                    status_code=429,
+                resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(
+                    requested_model
+                )
+                raise ProxyRateLimitError(
                     detail=detail,
                     headers={
                         "retry-after": str(self.window_size),
                         "rate_limit_type": str(status["rate_limit_type"]),
                         "reset_at": reset_time_formatted,
                     },
+                    rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
+                    model=resolved_model,
+                    llm_provider=llm_provider,
                 )
 
     async def async_pre_call_hook(
@@ -1953,6 +2081,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             rpm_limit_type=rpm_limit_type,
             tpm_limit_type=tpm_limit_type,
             model_has_failures=model_has_failures,
+            call_type=call_type,
         )
 
         # Add team model rate limits from team_metadata
@@ -1995,6 +2124,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 self._handle_rate_limit_error(
                     response=response,
                     descriptors=descriptors,
+                    requested_model=requested_model,
                 )
             else:
                 # add descriptors to request headers
@@ -2009,12 +2139,39 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             # in-memory check otherwise — single-worker protection still holds
             # even without Redis.
             # ----------------------------------------------------------------
-            has_tpm_limits = any(
-                (d.get("rate_limit") or {}).get("tokens_per_unit") is not None
+            configured_tpm_limits = [
+                int(v)
                 for d in descriptors
-            )
+                for v in [(d.get("rate_limit") or {}).get("tokens_per_unit")]
+                if v is not None
+            ]
+            has_tpm_limits = bool(configured_tpm_limits)
 
             if has_tpm_limits:
+                min_configured_tpm_limit = min(configured_tpm_limits)
+
+                # When the configured TPM cap is small enough to constrain the
+                # no-max_tokens floor, also hard-cap the model output via
+                # data["max_tokens"] so concurrent unbounded generations can't
+                # spend past the limit before post-call reconciliation runs.
+                # Skip when the request already sets max_tokens or has no
+                # generation budget at all (embeddings).
+                capped_floor = self._no_max_tokens_output_floor(
+                    min_configured_tpm_limit
+                )
+                baseline_floor = DEFAULT_MAX_TOKENS_ESTIMATE // _TPM_FLOOR_FRACTION
+                has_explicit_max_tokens = (
+                    data.get("max_tokens") is not None
+                    or data.get("max_completion_tokens") is not None
+                )
+                is_embedding = data.get("input") is not None
+                if (
+                    capped_floor < baseline_floor
+                    and not has_explicit_max_tokens
+                    and not is_embedding
+                ):
+                    data["max_tokens"] = capped_floor
+
                 # Floor at 1 token so contentless requests (/responses,
                 # tool-call continuations, empty messages) still flow
                 # through the atomic counter and get backpressure when at
@@ -2026,6 +2183,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._estimate_tokens_for_request(
                         data=data,
                         model=requested_model,
+                        min_configured_tpm_limit=min_configured_tpm_limit,
                     ),
                     1,
                 )
@@ -2040,6 +2198,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     self._handle_rate_limit_error(
                         response=tpm_response,
                         descriptors=descriptors,
+                        requested_model=requested_model,
                     )
                 else:
                     self._stash_value_in_metadata_channels(

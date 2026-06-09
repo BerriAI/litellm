@@ -118,9 +118,7 @@ export const makeA2ASendMessageRequest = async (
   guardrails?: string[],
 ): Promise<void> => {
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/a2a/${agentId}/message/send`
-    : `/a2a/${agentId}/message/send`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/a2a/${agentId}/message/send` : `/a2a/${agentId}/message/send`;
 
   const requestId = uuidv4();
   const messageId = uuidv4().replace(/-/g, "");
@@ -252,9 +250,7 @@ export const makeA2AStreamMessageRequest = async (
   customBaseUrl?: string,
 ): Promise<void> => {
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
-  const url = proxyBaseUrl
-    ? `${proxyBaseUrl}/a2a/${agentId}`
-    : `/a2a/${agentId}`;
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/a2a/${agentId}` : `/a2a/${agentId}`;
 
   const requestId = uuidv4();
   const messageId = uuidv4().replace(/-/g, "");

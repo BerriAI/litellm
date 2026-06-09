@@ -52,6 +52,9 @@ class VertexAIAnthropicConfig(AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "vertex_ai"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def _add_context_management_beta_headers(
         self, beta_set: set, context_management: dict
     ) -> None:
@@ -106,7 +109,7 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         data.pop("model", None)  # vertex anthropic doesn't accept 'model' parameter
 
-        sanitize_vertex_anthropic_output_params(data)
+        sanitize_vertex_anthropic_output_params(data, model)
 
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)

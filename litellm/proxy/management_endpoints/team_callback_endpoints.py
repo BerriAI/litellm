@@ -27,8 +27,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.management_endpoints.team_endpoints import _verify_team_access
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.repositories.team_repository import TeamRepository
 
 router = APIRouter()
 
@@ -245,9 +247,10 @@ async def add_team_callbacks(
         team_callback_settings.append(data.model_dump())
 
         team_metadata["logging"] = team_callback_settings
+        team_metadata = encrypt_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)  # update team_metadata
 
-        new_team_row = await prisma_client.db.litellm_teamtable.update(
+        new_team_row = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
         )
 
@@ -347,10 +350,11 @@ async def disable_team_logging(
 
         # Update metadata
         team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
+        team_metadata = encrypt_callback_vars(team_metadata)
         team_metadata_json = json.dumps(team_metadata)
 
         # Update team in database
-        updated_team = await prisma_client.db.litellm_teamtable.update(
+        updated_team = await TeamRepository(prisma_client).table.update(
             where={"team_id": team_id}, data={"metadata": team_metadata_json}  # type: ignore
         )
 

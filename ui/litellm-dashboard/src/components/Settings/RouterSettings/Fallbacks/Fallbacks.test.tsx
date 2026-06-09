@@ -80,18 +80,11 @@ describe("Fallbacks", () => {
   const mockUserRole = "Admin";
   const mockUserID = "user-123";
   const mockModelData = {
-    data: [
-      { model_name: "gpt-4" },
-      { model_name: "gpt-3.5-turbo" },
-      { model_name: "claude-3-opus" },
-    ],
+    data: [{ model_name: "gpt-4" }, { model_name: "gpt-3.5-turbo" }, { model_name: "claude-3-opus" }],
   };
 
   const mockRouterSettings = {
-    fallbacks: [
-      { "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] },
-      { "claude-3-opus": ["gpt-4"] },
-    ],
+    fallbacks: [{ "gpt-4": ["gpt-3.5-turbo", "claude-3-opus"] }, { "claude-3-opus": ["gpt-4"] }],
   };
 
   const defaultProps = {
@@ -136,11 +129,7 @@ describe("Fallbacks", () => {
     render(<Fallbacks {...defaultProps} />);
 
     await waitFor(() => {
-      expect(networkingModule.getCallbacksCall).toHaveBeenCalledWith(
-        mockAccessToken,
-        mockUserID,
-        mockUserRole,
-      );
+      expect(networkingModule.getCallbacksCall).toHaveBeenCalledWith(mockAccessToken, mockUserID, mockUserRole);
     });
   });
 

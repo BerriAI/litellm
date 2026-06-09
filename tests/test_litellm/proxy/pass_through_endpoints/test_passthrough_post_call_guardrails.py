@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
@@ -215,6 +216,53 @@ class TestPassthroughPostCallGuardrails:
         assert body["error"]["message"] == "Tool dangerous_tool blocked by policy"
         assert body["error"]["guardrail_name"] == "rubrik"
         assert body["error"]["model"] == "gemini-2.0-flash"
+
+    @patch(_COLLECT, return_value=["rubrik"])
+    async def test_deny_forwards_guardrail_logging_info_to_failure_hook(
+        self,
+        mock_collect,
+    ):
+        """A post-call guardrail deny (non-ModifyResponseException) records its
+        standard_logging_guardrail_information on the hook_data dict; the failure
+        handler must forward that info to post_call_failure_hook so downstream
+        loggers (e.g. the otel guardrail span) still see it. Regression for the
+        block path dropping it."""
+        mock_response = _make_httpx_response(_GEMINI_RESPONSE)
+
+        def _block(*, data, user_api_key_dict, response):
+            metadata = data.setdefault("metadata", {})
+            metadata.setdefault("standard_logging_guardrail_information", []).append(
+                {"guardrail_name": "rubrik", "guardrail_status": "guardrail_intervened"}
+            )
+            raise HTTPException(status_code=400, detail={"error": "blocked"})
+
+        captured = {}
+
+        async def _capture_failure(**kwargs):
+            captured.update(kwargs)
+
+        mock_proxy_logging = MagicMock()
+        mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+        mock_proxy_logging.post_call_success_hook = AsyncMock(side_effect=_block)
+        mock_proxy_logging.post_call_failure_hook = AsyncMock(
+            side_effect=_capture_failure
+        )
+
+        with _common_patches(mock_proxy_logging, mock_response):
+            with pytest.raises(Exception):
+                await pass_through_request(
+                    request=_make_mock_request(),
+                    target="https://example.com/v1/generateContent",
+                    custom_headers={"Content-Type": "application/json"},
+                    user_api_key_dict=_make_user_api_key_dict(),
+                    stream=False,
+                )
+
+        mock_proxy_logging.post_call_failure_hook.assert_awaited_once()
+        entries = captured["request_data"]["metadata"][
+            "standard_logging_guardrail_information"
+        ]
+        assert any(e.get("guardrail_name") == "rubrik" for e in entries)
 
 
 @pytest.mark.asyncio

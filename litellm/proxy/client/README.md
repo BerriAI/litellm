@@ -350,7 +350,7 @@ The CLI provides three authentication commands:
 4. **User Authentication**: User completes SSO authentication in browser
 5. **Callback Processing**: SSO provider redirects back to proxy with state parameter
 6. **User Code Verification**: Browser confirms the verification code shown in the CLI
-7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready
+7. **Polling**: CLI polls `/sso/cli/poll/{login_id}` with the polling secret header until the JWT is ready. When `CLI_SSO_CLAIM_MAP` is configured on the proxy, the poll response may include `attribution_metadata` (allowlisted scalar OIDC claims for client attribution).
 8. **Token Storage**: CLI saves the authentication token to `~/.litellm/token.json`
 
 ### Benefits of This Approach

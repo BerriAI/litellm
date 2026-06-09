@@ -27,6 +27,11 @@ on:
         required: false
         type: number
         default: 10
+      dist:
+        description: "pytest-xdist distribution mode (loadscope|load|worksteal|loadfile|no)"
+        required: false
+        type: string
+        default: "loadscope"
       artifact-name:
         description: "Unique name for the coverage artifact (must be unique per run)"
         required: true
@@ -82,18 +87,31 @@ jobs:
           MAX_FAILURES: ${{ inputs.max-failures }}
           WORKERS: ${{ inputs.workers }}
           RERUNS: ${{ inputs.reruns }}
+          DIST: ${{ inputs.dist }}
         run: |
-          uv run --no-sync pytest ${TEST_PATH:?} \
-            --tb=short -vv \
-            --maxfail="${MAX_FAILURES}" \
-            -n "${WORKERS}" \
-            --reruns "${RERUNS}" \
-            --reruns-delay 1 \
-            --dist=loadscope \
-            --durations=20 \
-            --cov=./litellm \
-            --cov-report=xml:coverage.xml \
-            --cov-config=pyproject.toml
+          if [ "${WORKERS}" = "0" ]; then
+            uv run --no-sync pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --durations=20 \
+              --cov=./litellm \
+              --cov-report=xml:coverage.xml \
+              --cov-config=pyproject.toml
+          else
+            uv run --no-sync pytest ${TEST_PATH:?} \
+              --tb=short -vv \
+              --maxfail="${MAX_FAILURES}" \
+              -n "${WORKERS}" \
+              --reruns "${RERUNS}" \
+              --reruns-delay 1 \
+              --dist="${DIST}" \
+              --durations=20 \
+              --cov=./litellm \
+              --cov-report=xml:coverage.xml \
+              --cov-config=pyproject.toml
+          fi
 
       - name: Save coverage report
         if: always()

@@ -337,6 +337,7 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
 
         tools = optional_params.pop("tools", None)
+        tool_choice = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -371,7 +372,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, model=model
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
@@ -402,6 +403,8 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         cached_content_request_body["tools"] = tools
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(
@@ -487,6 +490,7 @@ class ContextCachingEndpoints(VertexBase):
             return messages, optional_params, None
 
         tools = optional_params.pop("tools", None)
+        tool_choice = optional_params.pop("tool_choice", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
@@ -518,7 +522,7 @@ class ContextCachingEndpoints(VertexBase):
 
         ## CHECK IF CACHED ALREADY
         generated_cache_key = local_cache_obj.get_cache_key(
-            messages=cached_messages, tools=tools, model=model
+            messages=cached_messages, tools=tools, tool_choice=tool_choice, model=model
         )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,
@@ -550,6 +554,8 @@ class ContextCachingEndpoints(VertexBase):
         )
 
         cached_content_request_body["tools"] = tools
+        if tool_choice is not None:
+            cached_content_request_body["toolConfig"] = tool_choice
 
         ## LOGGING
         logging_obj.pre_call(

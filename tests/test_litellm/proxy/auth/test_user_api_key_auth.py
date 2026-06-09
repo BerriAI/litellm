@@ -31,12 +31,14 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.auth_checks import get_key_object, _cache_key_object
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import (
+    _PendingAutoRegister,
     _matches_routing_override,
     _reserve_budget_after_common_checks,
     _route_requires_auth_despite_public,
     _routing_selector_matches_claim,
     _run_centralized_common_checks,
     _run_post_custom_auth_checks,
+    _user_api_key_auth_builder,
     get_api_key,
     user_api_key_auth,
 )
@@ -110,9 +112,69 @@ async def test_should_clear_stale_budget_reservation_when_budget_checks_skip():
         user_api_key_cache=MagicMock(),
         proxy_logging_obj=MagicMock(),
         skip_budget_checks=True,
+        general_settings={},
     )
 
     assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_disable_budget_reservation_skips_reservation():
+    """#27639: general_settings.disable_budget_reservation turns off the optimistic Redis
+    reservation so operators hit by phantom BudgetExceededError can opt out of it."""
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new=AsyncMock(return_value={"reserved_cost": 0.5, "entries": []}),
+    ) as mock_reserve:
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+            general_settings={"disable_budget_reservation": True},
+        )
+
+    mock_reserve.assert_not_called()
+    assert user_api_key_auth_obj.budget_reservation is None
+
+
+@pytest.mark.asyncio
+async def test_budget_reservation_runs_when_not_disabled():
+    """Control for #27639: with the flag absent, the reservation still runs and is stored."""
+    user_api_key_auth_obj = UserAPIKeyAuth(token="test_token")
+    reservation = {
+        "reserved_cost": 0.5,
+        "entries": [{"counter_key": "spend:key:test_token"}],
+    }
+
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new=AsyncMock(return_value=reservation),
+    ) as mock_reserve:
+        await _reserve_budget_after_common_checks(
+            user_api_key_auth_obj=user_api_key_auth_obj,
+            request_data={"model": "gpt-4o"},
+            route="/v1/chat/completions",
+            llm_router=None,
+            team_object=None,
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            skip_budget_checks=False,
+            general_settings={},
+        )
+
+    mock_reserve.assert_awaited_once()
+    assert user_api_key_auth_obj.budget_reservation == reservation
 
 
 @pytest.mark.asyncio
@@ -1513,6 +1575,7 @@ class TestJWTOAuth2Coexistence:
 
         mock_request = MagicMock()
         mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
         mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
         mock_request.query_params = {}
 
@@ -1546,7 +1609,95 @@ class TestJWTOAuth2Coexistence:
             mock_oauth2.assert_not_called()
             # JWT auth SHOULD be called
             mock_jwt_auth.assert_called_once()
+            assert mock_jwt_auth.call_args.kwargs["request_method"] == "POST"
             assert result.user_id == "jwt-human-user"
+
+    @pytest.mark.asyncio
+    async def test_auto_register_passes_validated_org_context_to_generated_key(self):
+        jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyMSJ9.signature"
+        general_settings = {"enable_jwt_auth": True}
+        user_api_key_cache = DualCache()
+        prisma_client = MagicMock()
+        jwt_handler = MagicMock()
+        jwt_handler.is_jwt.return_value = True
+        jwt_handler.auth_jwt = AsyncMock(return_value={"sub": "user1"})
+        jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+            virtual_key_claim_field="sub",
+            virtual_key_mapping_cache_ttl=300,
+        )
+        auto_registered_key = UserAPIKeyAuth(
+            token="hashed-auto-key",
+            team_id="validated-team",
+            user_id="validated-user",
+            org_id="validated-org",
+            end_user_id="validated-end-user",
+        )
+        mock_jwt_result = {
+            "is_proxy_admin": False,
+            "team_object": None,
+            "user_object": None,
+            "end_user_object": None,
+            "org_object": None,
+            "token": jwt_token,
+            "team_id": "validated-team",
+            "user_id": "validated-user",
+            "end_user_id": "validated-end-user",
+            "org_id": "validated-org",
+            "team_membership": None,
+            "jwt_claims": {"sub": "user1"},
+        }
+
+        mock_request = MagicMock()
+        mock_request.url.path = "/v1/chat/completions"
+        mock_request.method = "POST"
+        mock_request.headers = {"authorization": f"Bearer {jwt_token}"}
+        mock_request.query_params = {}
+        mock_request.state = SimpleNamespace()
+
+        with (
+            patch("litellm.proxy.proxy_server.general_settings", general_settings),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch("litellm.proxy.proxy_server.master_key", "sk-master"),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+            patch("litellm.proxy.proxy_server.jwt_handler", jwt_handler),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._resolve_jwt_to_virtual_key",
+                new_callable=AsyncMock,
+                return_value=_PendingAutoRegister(
+                    claim_field="sub",
+                    claim_value="user1",
+                    cache_key="jwt_key_mapping:sub:user1",
+                ),
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.JWTAuthManager.auth_builder",
+                new_callable=AsyncMock,
+                return_value=mock_jwt_result,
+            ),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth._auto_register_jwt_mapping",
+                new_callable=AsyncMock,
+                return_value=auto_registered_key,
+            ) as mock_auto_register,
+        ):
+            result = await _user_api_key_auth_builder(
+                request=mock_request,
+                api_key=jwt_token,
+                azure_api_key_header="",
+                anthropic_api_key_header=None,
+                google_ai_studio_api_key_header=None,
+                azure_apim_header=None,
+                request_data={"model": "gpt-4o-mini"},
+            )
+
+        mock_auto_register.assert_awaited_once()
+        assert mock_auto_register.call_args.kwargs["team_id"] == "validated-team"
+        assert mock_auto_register.call_args.kwargs["user_id"] == "validated-user"
+        assert mock_auto_register.call_args.kwargs["org_id"] == "validated-org"
+        assert mock_auto_register.call_args.kwargs["end_user_id"] == "validated-end-user"
+        assert result.org_id == "validated-org"
 
     @pytest.mark.asyncio
     async def test_routing_override_routes_matching_jwt_to_oauth2(self):

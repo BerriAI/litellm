@@ -1,7 +1,9 @@
 import pytest
 
+from litellm.proxy._types import LitellmUserRoles
+
 from .actors import Actor
-from .conftest import create_scratch_team
+from .conftest import create_scratch_actor, create_scratch_team
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -130,8 +132,8 @@ async def test_team_update_requires_proxy_admin_without_org_context(
 # in ORG_A; each scenario relocates it to ORG_B. PROXY_ADMIN bypasses;
 # ORG_B_ADMIN clears the route gate (dest-org admin) but fails
 # _verify_team_access on the source team (403); the rest fail the route gate
-# (401). The relocation-allowed branch needs a caller who is org admin of both
-# orgs — no seeded actor is, so it is left to a later slice.
+# (401). The relocation-*allowed* branch (caller is org admin of both orgs) is
+# covered by test_team_update_org_relocation_allowed_for_dual_org_admin below.
 _RELOCATION = [
     ("proxy_admin", Actor.PROXY_ADMIN, 200),
     ("org_b_admin", Actor.ORG_B_ADMIN, 403),
@@ -174,3 +176,52 @@ async def test_team_update_org_relocation_gate(
         assert row.organization_id == world.org_b_id
     else:
         assert row.organization_id == world.org_a_id, "denied but team relocated"
+
+
+# Phase 4 F6 — explicit pin on the `_verify_team_access` 403 detail string
+# when an org_admin clears the destination route gate but fails the source
+# team's org-membership check. The relocation matrix above covers the
+# status; this guard turns a silent rename of the helper's exception detail
+# into a CI red.
+async def test_team_update_org_b_admin_relocation_rejection_detail(
+    proxy_client, prisma, scratch, world
+):
+    await _seed_target(prisma, world, "alpha", scratch.prefix)
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {world.keys[Actor.ORG_B_ADMIN].cleartext}"},
+        json={"team_id": scratch.prefix, "organization_id": world.org_b_id},
+    )
+    assert resp.status_code == 403, resp.text
+    assert "do not have access to this team" in resp.text, resp.text
+
+
+async def test_team_update_org_relocation_allowed_for_dual_org_admin(
+    proxy_client, prisma, scratch, world
+):
+    """Relocation-allowed branch: a caller who is org admin of BOTH the source
+    and destination org may relocate a team between them. Completes the
+    _RELOCATION matrix, whose allowed branch PR2 left open — no seeded actor is
+    a dual-org admin, so one is minted with create_scratch_actor."""
+    actor = await create_scratch_actor(
+        prisma,
+        scratch.prefix,
+        user_role=LitellmUserRoles.ORG_ADMIN.value,
+        org_admin_of=(world.org_a_id, world.org_b_id),
+    )
+    team_id = await create_scratch_team(
+        prisma, scratch.tag("team"), organization_id=world.org_a_id
+    )
+
+    resp = await proxy_client.post(
+        "/team/update",
+        headers={"Authorization": f"Bearer {actor.cleartext}"},
+        json={"team_id": team_id, "organization_id": world.org_b_id},
+    )
+    assert resp.status_code == 200, resp.text
+
+    row = await prisma.db.litellm_teamtable.find_unique(where={"team_id": team_id})
+    assert row is not None
+    assert (
+        row.organization_id == world.org_b_id
+    ), "dual-org admin relocation not applied"

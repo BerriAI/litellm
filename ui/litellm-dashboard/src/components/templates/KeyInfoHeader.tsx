@@ -44,18 +44,12 @@ interface KeyInfoHeaderProps {
   regenerateTooltip?: string;
 }
 
-function UserField({
-  userAlias,
-  userEmail,
-  userId,
-}: {
-  userAlias?: string | null;
-  userEmail: string;
-  userId: string;
-}) {
+function UserField({ userAlias, userEmail, userId }: { userAlias?: string | null; userEmail: string; userId: string }) {
   const labelEl = (
     <Space size={4}>
-      <Text type="secondary"><UserOutlined /></Text>
+      <Text type="secondary">
+        <UserOutlined />
+      </Text>
       <Text type="secondary" style={{ fontSize: 12, textTransform: "uppercase", letterSpacing: "0.05em" }}>
         User
       </Text>
@@ -67,7 +61,9 @@ function UserField({
     return (
       <div>
         {labelEl}
-        <div><Text strong>-</Text></div>
+        <div>
+          <Text strong>-</Text>
+        </div>
       </div>
     );
   }
@@ -107,7 +103,9 @@ function UserField({
         {labelEl}
         <div>
           <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-            <span className="cursor-default"><DefaultProxyAdminTag userId={userId} /></span>
+            <span className="cursor-default">
+              <DefaultProxyAdminTag userId={userId} />
+            </span>
           </Popover>
         </div>
       </div>
@@ -119,11 +117,7 @@ function UserField({
       {labelEl}
       <div>
         <Popover content={popoverContent} trigger="hover" placement="bottomLeft">
-          <Text
-            strong
-            ellipsis
-            style={{ cursor: "default", maxWidth: 200, display: "block" }}
-          >
+          <Text strong ellipsis style={{ cursor: "default", maxWidth: 200, display: "block" }}>
             {displayValue}
           </Text>
         </Popover>

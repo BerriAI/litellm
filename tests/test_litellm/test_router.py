@@ -982,6 +982,61 @@ async def test_router_ageneric_api_call_with_fallbacks_helper():
                     assert router.fail_calls["gpt-3.5-turbo"] == initial_fail_count + 1
 
 
+@pytest.mark.asyncio
+async def test_ageneric_api_call_deployment_model_overrides_alias():
+    """
+    Regression: when a model alias (e.g. "not-gemini-2.5-flash") maps to a deployment
+    with model="vertex_ai/gemini-2.5-flash", the underlying litellm function must receive
+    the deployment model, not the alias. Before the fix, **kwargs overwrote data["model"].
+    """
+    from unittest.mock import patch
+
+    captured: dict = {}
+
+    async def capture_model(**kwargs):
+        captured["model"] = kwargs.get("model")
+        return {"result": "ok"}
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "not-gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "api_key": "fake-key",
+                },
+            }
+        ]
+    )
+
+    def inject_alias_into_kwargs(deployment, kwargs, function_name=None):
+        # Simulate the alias leaking into kwargs (as happens when
+        # _ageneric_api_call_with_fallbacks sets kwargs["model"] = alias before
+        # calling the helper through async_function_with_fallbacks).
+        kwargs["model"] = "not-gemini-2.5-flash"
+
+    with patch.object(router, "async_get_available_deployment") as mock_dep, \
+         patch.object(router, "_update_kwargs_with_deployment", side_effect=inject_alias_into_kwargs), \
+         patch.object(router, "async_routing_strategy_pre_call_checks"), \
+         patch.object(router, "_get_client", return_value=None):
+        mock_dep.return_value = {
+            "model_name": "not-gemini-2.5-flash",
+            "litellm_params": {
+                "model": "vertex_ai/gemini-2.5-flash",
+                "api_key": "fake-key",
+            },
+        }
+
+        await router._ageneric_api_call_with_fallbacks_helper(
+            model="not-gemini-2.5-flash",
+            original_generic_function=capture_model,
+        )
+
+    assert captured["model"] == "vertex_ai/gemini-2.5-flash", (
+        f"Expected deployment model 'vertex_ai/gemini-2.5-flash', got '{captured['model']}'"
+    )
+
+
 def test_router_get_model_access_groups_team_only_models():
     """
     Test that Router.get_model_access_groups returns the correct response for team-only models
@@ -2375,6 +2430,74 @@ def test_get_deployment_model_info_base_model_flow():
 
             # Should return None when no model info is found
             assert result is None
+
+    # Test Case 6: custom_model_info present but litellm_model_name_model_info is None
+    # (model has custom pricing in config but is not in built-in model_prices_and_context_window.json)
+    mock_custom_pricing_only = {
+        "input_cost_per_token": 1.74e-06,
+        "output_cost_per_token": 3.48e-06,
+        "cache_read_input_token_cost": 1.45e-08,
+        "mode": "chat",
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"custom-model-id": mock_custom_pricing_only},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+            # Model NOT in built-in cost map — raise exception
+            mock_get_model_info.side_effect = Exception("Model not in cost map")
+
+            result = router.get_deployment_model_info(
+                model_id="custom-model-id", model_name="unknown-model"
+            )
+
+            # Should return custom_model_info even when litellm_model_name_model_info is None
+            assert result is not None
+            assert result["input_cost_per_token"] == 1.74e-06
+            assert result["output_cost_per_token"] == 3.48e-06
+            assert result["cache_read_input_token_cost"] == 1.45e-08
+            assert result["mode"] == "chat"
+
+    # Test Case 7: custom_model_info with base_model but litellm_model_name_model_info None
+    mock_custom_with_base = {
+        "base_model": "some-base-model",
+        "input_cost_per_token": 0.01,
+        "output_cost_per_token": 0.02,
+    }
+    mock_base_info = {
+        "key": "some-base-model",
+        "max_tokens": 8192,
+        "mode": "chat",
+        "litellm_provider": "openai",
+    }
+
+    with patch.object(
+        litellm,
+        "model_cost",
+        {"custom-with-base": mock_custom_with_base},
+    ):
+        with patch.object(litellm, "get_model_info") as mock_get_model_info:
+
+            def get_info_side_effect(model):
+                if model == "some-base-model":
+                    return mock_base_info
+                raise Exception("Model not in cost map")
+
+            mock_get_model_info.side_effect = get_info_side_effect
+
+            result = router.get_deployment_model_info(
+                model_id="custom-with-base", model_name="unknown-model"
+            )
+
+            # Should return custom_model_info merged with base model info
+            assert result is not None
+            assert (
+                result["input_cost_per_token"] == 0.01
+            )  # From custom (overrides base)
+            assert result["max_tokens"] == 8192  # From base model
+            assert result["litellm_provider"] == "openai"  # From base model
 
     print("✓ All base model flow test cases passed!")
 

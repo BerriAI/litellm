@@ -3,6 +3,7 @@
 
 import asyncio
 import contextvars
+import logging
 from typing import Coroutine, Optional
 import atexit
 from typing_extensions import TypedDict
@@ -494,31 +495,43 @@ class LoggingWorker:
             processed = 0
             start_time = loop.time()
 
-            while not self._queue.empty() and processed < MAX_ITERATIONS_TO_CLEAR_QUEUE:
-                if loop.time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
-                    self._safe_log(
-                        "warning",
-                        f"[LoggingWorker] atexit: Reached time limit ({MAX_TIME_TO_CLEAR_QUEUE}s), stopping flush",
-                    )
-                    break
+            # logging.raiseExceptions is a process-wide global; scope the
+            # suppression to just the drain loop, where shutdown callbacks may
+            # log to already-closed handler streams, so other threads keep their
+            # logging error reporting for as little of the window as possible.
+            previous_raise_exceptions = logging.raiseExceptions
+            logging.raiseExceptions = False
+            try:
+                while (
+                    not self._queue.empty()
+                    and processed < MAX_ITERATIONS_TO_CLEAR_QUEUE
+                ):
+                    if loop.time() - start_time >= MAX_TIME_TO_CLEAR_QUEUE:
+                        self._safe_log(
+                            "warning",
+                            f"[LoggingWorker] atexit: Reached time limit ({MAX_TIME_TO_CLEAR_QUEUE}s), stopping flush",
+                        )
+                        break
 
-                try:
-                    task = self._queue.get_nowait()
-                except asyncio.QueueEmpty:
-                    break
+                    try:
+                        task = self._queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
 
-                # Run the coroutine synchronously in new loop
-                # Note: We run the coroutine directly, not via create_task,
-                # since we're in a new event loop context
-                try:
-                    loop.run_until_complete(task["coroutine"])
-                    processed += 1
-                except Exception:
-                    # Silent failure to not break user's program
-                    pass
-                finally:
-                    # Clear reference to prevent memory leaks
-                    task = None
+                    # Run the coroutine synchronously in new loop
+                    # Note: We run the coroutine directly, not via create_task,
+                    # since we're in a new event loop context
+                    try:
+                        loop.run_until_complete(task["coroutine"])
+                        processed += 1
+                    except Exception:
+                        # Silent failure to not break user's program
+                        pass
+                    finally:
+                        # Clear reference to prevent memory leaks
+                        task = None
+            finally:
+                logging.raiseExceptions = previous_raise_exceptions
 
             self._safe_log(
                 "info",

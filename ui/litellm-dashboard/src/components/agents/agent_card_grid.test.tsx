@@ -60,28 +60,18 @@ describe("AgentCardGrid", () => {
   });
 
   it("should show admin empty state message when no agents and isAdmin", () => {
-    renderWithProviders(
-      <AgentCardGrid {...defaultProps} agentsList={[]} isAdmin={true} />
-    );
-    expect(
-      screen.getByText("No agents found. Create one to get started.")
-    ).toBeInTheDocument();
+    renderWithProviders(<AgentCardGrid {...defaultProps} agentsList={[]} isAdmin={true} />);
+    expect(screen.getByText("No agents found. Create one to get started.")).toBeInTheDocument();
   });
 
   it("should show non-admin empty state message when no agents and not admin", () => {
-    renderWithProviders(
-      <AgentCardGrid {...defaultProps} agentsList={[]} isAdmin={false} />
-    );
-    expect(
-      screen.getByText("No agents found. Contact an admin to create agents.")
-    ).toBeInTheDocument();
+    renderWithProviders(<AgentCardGrid {...defaultProps} agentsList={[]} isAdmin={false} />);
+    expect(screen.getByText("No agents found. Contact an admin to create agents.")).toBeInTheDocument();
   });
 
   it("should call onAgentClick when a card is clicked", async () => {
     const onAgentClick = vi.fn();
-    renderWithProviders(
-      <AgentCardGrid {...defaultProps} onAgentClick={onAgentClick} />
-    );
+    renderWithProviders(<AgentCardGrid {...defaultProps} onAgentClick={onAgentClick} />);
     const { default: userEvent } = await import("@testing-library/user-event");
     const user = userEvent.setup();
     await user.click(screen.getByTestId("agent-card-agent-1"));

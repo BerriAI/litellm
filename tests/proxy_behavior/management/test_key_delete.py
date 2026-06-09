@@ -1,3 +1,5 @@
+import uuid
+
 import pytest
 
 from litellm.proxy.utils import hash_token
@@ -99,3 +101,13 @@ async def test_key_delete_authz_matrix(
     else:
         assert row is not None, f"{actor.value}: denied but row vanished"
         assert auth_check.status_code == 200
+
+
+async def test_key_delete_missing_key_is_404(proxy_client, world):
+    """Deleting a key absent from the DB is a 404 — not 401/403."""
+    resp = await proxy_client.post(
+        "/key/delete",
+        headers={"Authorization": f"Bearer {world.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={"keys": ["sk-" + uuid.uuid4().hex]},
+    )
+    assert resp.status_code == 404, resp.text

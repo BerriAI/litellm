@@ -106,7 +106,6 @@ describe("BulkEditUserModal", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-
   it("should show update all users checkbox when allowAllUsers is true", () => {
     renderWithProviders(<BulkEditUserModal {...defaultProps} allowAllUsers={true} />);
 
@@ -198,11 +197,10 @@ describe("BulkEditUserModal", () => {
     await user.click(submitButton);
 
     await waitFor(() => {
-      expect(mockUserBulkUpdateUserCall).toHaveBeenCalledWith(
-        "test-token",
-        { user_role: "admin", max_budget: 100 },
-        ["user1", "user2"],
-      );
+      expect(mockUserBulkUpdateUserCall).toHaveBeenCalledWith("test-token", { user_role: "admin", max_budget: 100 }, [
+        "user1",
+        "user2",
+      ]);
     });
   });
 
@@ -225,7 +223,6 @@ describe("BulkEditUserModal", () => {
       );
     });
   });
-
 
   it("should show success message after successful user update", async () => {
     const user = userEvent.setup();
@@ -267,7 +264,6 @@ describe("BulkEditUserModal", () => {
       expect(NotificationsManager.success).toHaveBeenCalledWith("Updated all users (100 total)");
     });
   });
-
 
   it("should show error message when bulk update fails", async () => {
     const user = userEvent.setup();
