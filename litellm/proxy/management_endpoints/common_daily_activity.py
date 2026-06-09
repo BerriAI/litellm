@@ -700,16 +700,29 @@ _GROUP_DATE_ENDPOINT_API_KEY = 30  # 0b0011110
 
 def _record_to_spend_metrics(record: Any) -> SpendMetrics:
     """Build a SpendMetrics directly from one already-aggregated rollup row."""
+
+    def _zero_if_none(value: Any) -> Any:
+        return 0 if value is None else value
+
+    spend = _zero_if_none(record.spend)
+    prompt_tokens = _zero_if_none(record.prompt_tokens)
+    completion_tokens = _zero_if_none(record.completion_tokens)
+    cache_read_input_tokens = _zero_if_none(record.cache_read_input_tokens)
+    cache_creation_input_tokens = _zero_if_none(record.cache_creation_input_tokens)
+    api_requests = _zero_if_none(record.api_requests)
+    successful_requests = _zero_if_none(record.successful_requests)
+    failed_requests = _zero_if_none(record.failed_requests)
+
     return SpendMetrics(
-        spend=record.spend,
-        prompt_tokens=record.prompt_tokens,
-        completion_tokens=record.completion_tokens,
-        total_tokens=record.prompt_tokens + record.completion_tokens,
-        cache_read_input_tokens=record.cache_read_input_tokens,
-        cache_creation_input_tokens=record.cache_creation_input_tokens,
-        api_requests=record.api_requests,
-        successful_requests=record.successful_requests,
-        failed_requests=record.failed_requests,
+        spend=spend,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        cache_read_input_tokens=cache_read_input_tokens,
+        cache_creation_input_tokens=cache_creation_input_tokens,
+        api_requests=api_requests,
+        successful_requests=successful_requests,
+        failed_requests=failed_requests,
     )
 
 
