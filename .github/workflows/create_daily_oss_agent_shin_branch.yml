@@ -42,8 +42,7 @@ jobs:
             echo "Branch $BRANCH_NAME already exists. Skipping creation."
           else
             echo "Creating new branch: $BRANCH_NAME"
-            # Create the new branch from main
-            git checkout -b $BRANCH_NAME origin/main
+            git checkout -b $BRANCH_NAME origin/litellm_internal_staging
             # persist-credentials is false, so push with an explicit tokenized remote
             git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH_NAME"
             echo "Successfully created and pushed branch: $BRANCH_NAME"
