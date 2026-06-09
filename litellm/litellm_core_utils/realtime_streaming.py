@@ -375,10 +375,8 @@ class RealTimeStreaming:
             msg_type = None
 
         if msg_type == "input_audio_buffer.clear":
-            self._pending_messages_until_setup = (
-                self._collapse_buffered_audio_messages(
-                    self._pending_messages_until_setup + [message]
-                )
+            self._pending_messages_until_setup = self._collapse_buffered_audio_messages(
+                self._pending_messages_until_setup + [message]
             )
             self._sync_pending_messages_byte_total()
             return
