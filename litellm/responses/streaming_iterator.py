@@ -1253,6 +1253,7 @@ class ResponsesWebSocketStreaming:
         request_data: Optional[Dict] = None,
         first_message: Optional[str] = None,
         guardrail_callbacks: Optional[List[Any]] = None,
+        output_guardrail_callbacks: Optional[List[Any]] = None,
     ):
         self.websocket = websocket
         self.backend_ws = backend_ws
@@ -1263,6 +1264,7 @@ class ResponsesWebSocketStreaming:
         self.input_messages: list[Dict[str, str]] = []
         self.first_message = first_message
         self.guardrail_callbacks: List[Any] = guardrail_callbacks or []
+        self.output_guardrail_callbacks: List[Any] = output_guardrail_callbacks or []
 
     def _should_store_event(self, event_obj: dict) -> bool:
         return event_obj.get("type") in RESPONSES_WS_LOGGED_EVENT_TYPES
@@ -1355,7 +1357,8 @@ class ResponsesWebSocketStreaming:
 
                 self._store_event(response_str)
                 unmasked_str = self._unmask_response_completed(response_str)
-                await self.websocket.send_text(unmasked_str)
+                output_masked_str = await self._mask_response_completed(unmasked_str)
+                await self.websocket.send_text(output_masked_str)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore
             verbose_logger.debug("Responses WS backend connection closed: %s", e)
@@ -1491,6 +1494,49 @@ class ResponsesWebSocketStreaming:
                     if unmasked != text:
                         content_block["text"] = unmasked
                         modified = True
+
+        return json.dumps(evt_obj) if modified else response_str
+
+    async def _mask_response_completed(self, response_str: str) -> str:
+        """
+        Apply Presidio output masking (apply_to_output=True) to a
+        ``response.completed`` event before it is forwarded to the client.
+
+        Masks model-generated PII in the output text blocks.  Events that are
+        not ``response.completed`` are returned unchanged.
+        """
+        if not self.output_guardrail_callbacks:
+            return response_str
+
+        try:
+            evt_obj = json.loads(response_str)
+        except (json.JSONDecodeError, TypeError):
+            return response_str
+
+        if evt_obj.get("type") != "response.completed":
+            return response_str
+
+        modified = False
+        for cb in self.output_guardrail_callbacks:
+            presidio_config = cb.get_presidio_settings_from_request_data(
+                self.request_data
+            )
+            response_obj = evt_obj.get("response", {})
+            for output_item in response_obj.get("output", []):
+                for content_block in output_item.get("content", []):
+                    if not isinstance(content_block, dict):
+                        continue
+                    text = content_block.get("text")
+                    if isinstance(text, str):
+                        masked = await cb.check_pii(
+                            text=text,
+                            output_parse_pii=False,
+                            presidio_config=presidio_config,
+                            request_data=self.request_data,
+                        )
+                        if masked != text:
+                            content_block["text"] = masked
+                            modified = True
 
         return json.dumps(evt_obj) if modified else response_str
 
