@@ -565,6 +565,23 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.internal_usage_cache.dual_cache.redis_cache, RedisClusterCache
         )
 
+    @staticmethod
+    def _force_hash_tag_grouping_enabled() -> bool:
+        """
+        Some non-OSS-Cluster Redis backends (e.g. Azure Redis Enterprise /
+        Azure Managed Redis with the EnterpriseCluster clustering policy)
+        enforce cross-slot restrictions but expose a single endpoint and
+        don't use the OSS Cluster protocol, so ``_is_redis_cluster()`` is
+        ``False`` for them. Without hash-tag grouping, batched EVALSHA
+        pipelines fail with ``CROSSSLOT Keys in request don't hash to the
+        same slot``. Users on those backends can set
+        ``litellm.force_redis_hash_tag_grouping = True`` to opt into the
+        slot-grouping path.
+        """
+        import litellm
+
+        return bool(getattr(litellm, "force_redis_hash_tag_grouping", False))
+
     async def in_memory_cache_sliding_window(
         self,
         keys: List[str],
@@ -730,8 +747,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         """
         groups: Dict[str, List[str]] = {}
 
-        # Use slot calculation for Redis clusters only
-        if self._is_redis_cluster():
+        # Use slot calculation for Redis clusters, or for non-OSS-Cluster
+        # backends that still enforce cross-slot restrictions (Azure Redis
+        # Enterprise with EnterpriseCluster policy), opted into via
+        # ``litellm.force_redis_hash_tag_grouping = True``.
+        if self._is_redis_cluster() or self._force_hash_tag_grouping_enabled():
             for key in keys:
                 slot = self.keyslot_for_redis_cluster(key)
                 slot_key = f"slot_{slot}"

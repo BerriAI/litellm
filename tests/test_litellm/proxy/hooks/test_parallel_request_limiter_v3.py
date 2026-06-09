@@ -1860,6 +1860,63 @@ def test_group_keys_by_hash_tag_redis_cluster():
         ), "All keys should be present in groups"
 
 
+def test_group_keys_by_hash_tag_force_grouping_flag():
+    """
+    Regression for #30065. Non-OSS-Cluster Redis backends (e.g. Azure Redis
+    Enterprise with EnterpriseCluster policy) enforce cross-slot
+    restrictions but ``_is_redis_cluster()`` returns False for them, so
+    batched EVALSHA pipelines fail with CROSSSLOT. Users opt into
+    slot-grouping via ``litellm.force_redis_hash_tag_grouping = True``.
+    """
+    import litellm
+
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    keys_two_slots = [
+        "{REDACTED}:max_parallel_requests",
+        "{team:1f44b322-dead-41d9-9244-09515df45269}:tokens",
+    ]
+
+    # Default: no flag, non-cluster cache -> single group (current behaviour).
+    groups_default = handler._group_keys_by_hash_tag(keys_two_slots)
+    assert len(groups_default) == 1
+    assert "all_keys" in groups_default
+
+    # With the opt-in flag, two different hash tags must land in two
+    # distinct slot groups even though _is_redis_cluster() is False.
+    setattr(litellm, "force_redis_hash_tag_grouping", True)
+    try:
+        groups_forced = handler._group_keys_by_hash_tag(keys_two_slots)
+    finally:
+        setattr(litellm, "force_redis_hash_tag_grouping", False)
+
+    assert all(g.startswith("slot_") for g in groups_forced)
+    assert (
+        len(groups_forced) == 2
+    ), f"Two different hash tags must be in two slot groups, got {groups_forced}"
+
+
+def test_force_hash_tag_grouping_enabled_default_false():
+    """
+    Without the opt-in flag set, ``_force_hash_tag_grouping_enabled`` is
+    False so the non-cluster code path is unchanged for users on plain
+    Redis / standalone deployments.
+    """
+    import litellm
+
+    # Defensive: clear any prior test leakage.
+    setattr(litellm, "force_redis_hash_tag_grouping", False)
+
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+
+    assert handler._force_hash_tag_grouping_enabled() is False
+
+
 def test_keyslot_for_redis_cluster():
     """
     Test the keyslot calculation for Redis cluster.
