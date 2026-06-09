@@ -137,6 +137,9 @@ from litellm.proxy.hooks.max_budget_limiter import _PROXY_MaxBudgetLimiter
 from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+    _PROXY_MaxParallelRequestsHandler_v3,
+)
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor
 from litellm.repositories.budget_repository import BudgetRepository
@@ -2613,8 +2616,12 @@ class ProxyLogging:
         # through each of them adds N pass-through trampolines per chunk for
         # zero behavior change. Skip the chain entirely and stream through.
         if not caps.iterator_overrides:
-            async for chunk in response:
-                yield chunk
+            try:
+                async for chunk in response:
+                    yield chunk
+            except (asyncio.CancelledError, GeneratorExit):
+                self._release_max_parallel_requests_on_disconnect(user_api_key_dict)
+                raise
             ProxyLogging._fire_deferred_stream_logging(request_data)
             return
 
@@ -2658,8 +2665,12 @@ class ProxyLogging:
                 )
 
         # Actually iterate through the chained async generator and yield chunks
-        async for chunk in current_response:
-            yield chunk
+        try:
+            async for chunk in current_response:
+                yield chunk
+        except (asyncio.CancelledError, GeneratorExit):
+            self._release_max_parallel_requests_on_disconnect(user_api_key_dict)
+            raise
 
         # Fire deferred logging AFTER all guardrail end-of-stream blocks
         # completed.  unified_guardrail writes guardrail_information during
@@ -2686,6 +2697,29 @@ class ProxyLogging:
             logging_obj._on_deferred_stream_complete = None
             logging_obj._deferred_stream_complete_args = None
             asyncio.create_task(_deferred_cb(*_args))
+
+    def _release_max_parallel_requests_on_disconnect(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Release the api-key max_parallel_requests slot when a streaming
+        response is cancelled mid-flight (client disconnect). Neither the
+        success nor failure logging callback fires on the resulting
+        CancelledError / GeneratorExit, so the pre-call +1 would otherwise
+        leak. Scheduled fire-and-forget (no await) because awaiting is not
+        permitted while unwinding a GeneratorExit.
+        """
+        limiter = self.get_proxy_hook("parallel_request_limiter")
+        if not isinstance(limiter, _PROXY_MaxParallelRequestsHandler_v3):
+            return
+        try:
+            asyncio.create_task(
+                limiter.async_release_max_parallel_requests_on_disconnect(
+                    user_api_key_dict
+                )
+            )
+        except RuntimeError:
+            pass
 
     def _init_response_taking_too_long_task(self, data: Optional[dict] = None):
         """

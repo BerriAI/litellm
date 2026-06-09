@@ -20,6 +20,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import ModelResponse, Usage
 
 
@@ -3120,3 +3121,150 @@ def test_get_key_mcp_rpm_limit_precedence():
     none_set = UserAPIKeyAuth(api_key=hash_token("sk-mcp-key"))
     assert get_key_mcp_rpm_limit(none_set) is None
     assert get_team_mcp_rpm_limit(none_set) is None
+
+
+async def _seed_max_parallel_requests_counter(
+    dual_cache: DualCache, counter_key: str, window_size: int
+) -> None:
+    await dual_cache.async_increment_cache_pipeline(
+        increment_list=[
+            RedisPipelineIncrementOperation(
+                key=counter_key, increment_value=1, ttl=window_size
+            )
+        ]
+    )
+
+
+@pytest.mark.asyncio
+async def test_release_max_parallel_requests_on_disconnect_v3():
+    """
+    Regression for issue #27955: a stream cancelled mid-flight must release the
+    pre-call +1 reservation. The success/failure logging callbacks never fire
+    on cancellation, so without an explicit release the api-key counter climbs
+    by one per cancelled request until the key wedges at its limit. The release
+    must decrement the api-key max_parallel_requests counter by exactly one.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    await _seed_max_parallel_requests_counter(
+        local_cache, counter_key, handler.window_size
+    )
+    assert await local_cache.async_get_cache(key=counter_key) == 1
+
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    assert await local_cache.async_get_cache(key=counter_key) == 0
+
+
+@pytest.mark.asyncio
+async def test_release_max_parallel_requests_on_disconnect_noop_v3():
+    """
+    The release must be a no-op when the key never reserved a parallel slot
+    (no api_key, or max_parallel_requests unset). Otherwise a cancelled
+    no-limit request would drive an unrelated counter negative.
+    """
+    _api_key = hash_token("sk-12345")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=None)
+    )
+    assert await local_cache.async_get_cache(key=counter_key) is None
+
+    await handler.async_release_max_parallel_requests_on_disconnect(
+        UserAPIKeyAuth(api_key=None, max_parallel_requests=5)
+    )
+    assert await local_cache.async_get_cache(key=counter_key) is None
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_releases_counter_on_cancel_v3():
+    """
+    End-to-end regression for issue #27955. When the client cancels a stream
+    mid-flight, async_post_call_streaming_iterator_hook must release the
+    api-key max_parallel_requests reservation and re-raise the CancelledError.
+    Before the fix the counter stayed at +1 because the cancellation slipped
+    past the hook's post-loop cleanup.
+    """
+    _api_key = hash_token("sk-12345")
+    limiter_cache = DualCache()
+    limiter = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(limiter_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    await _seed_max_parallel_requests_counter(
+        limiter_cache, counter_key, limiter.window_size
+    )
+    assert await limiter_cache.async_get_cache(key=counter_key) == 1
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
+
+    async def cancelling_stream():
+        yield ModelResponse()
+        raise asyncio.CancelledError()
+
+    with pytest.raises(asyncio.CancelledError):
+        async for _ in proxy_logging_obj.async_post_call_streaming_iterator_hook(
+            response=cancelling_stream(),
+            user_api_key_dict=user_api_key_dict,
+            request_data={},
+        ):
+            pass
+
+    # The release is scheduled fire-and-forget via create_task; let it run.
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert await limiter_cache.async_get_cache(key=counter_key) == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_releases_counter_on_aclose_v3():
+    """
+    Companion to the cancel test for issue #27955. When the client disconnects,
+    the nested streaming generators are closed, which throws GeneratorExit (not
+    CancelledError) into the iterator hook. That path must also release the
+    api-key max_parallel_requests reservation.
+    """
+    _api_key = hash_token("sk-12345")
+    limiter_cache = DualCache()
+    limiter = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(limiter_cache)
+    )
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    await _seed_max_parallel_requests_counter(
+        limiter_cache, counter_key, limiter.window_size
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.proxy_hook_mapping["parallel_request_limiter"] = limiter
+
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=2)
+
+    async def open_stream():
+        while True:
+            yield ModelResponse()
+
+    hook_iter = proxy_logging_obj.async_post_call_streaming_iterator_hook(
+        response=open_stream(),
+        user_api_key_dict=user_api_key_dict,
+        request_data={},
+    )
+    await hook_iter.__anext__()
+    await hook_iter.aclose()
+
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert await limiter_cache.async_get_cache(key=counter_key) == 0
