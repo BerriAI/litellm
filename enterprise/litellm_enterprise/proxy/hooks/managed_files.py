@@ -1104,20 +1104,20 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 for file_attr in ["output_file_id", "error_file_id"]:
                     file_id_value = getattr(response, file_attr, None)
                     if file_id_value and model_id:
-                        decoded_unified_file_id = _is_base64_encoded_unified_file_id(
+                        decoded_output_file_id = _is_base64_encoded_unified_file_id(
                             file_id_value
                         )
                         if (
-                            decoded_unified_file_id
-                            and "llm_output_file_id," in decoded_unified_file_id
+                            decoded_output_file_id
+                            and "llm_output_file_id," in decoded_output_file_id
                         ):
                             provider_file_id = (
                                 self.get_output_file_id_from_unified_file_id(
-                                    decoded_unified_file_id
+                                    decoded_output_file_id
                                 )
                             )
                             unified_file_id = file_id_value
-                        elif decoded_unified_file_id:
+                        elif decoded_output_file_id:
                             verbose_logger.warning(
                                 f"Skipping {file_attr}={file_id_value!r}: "
                                 "unified id is not a managed file output id"
