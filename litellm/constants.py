@@ -789,6 +789,7 @@ openai_compatible_endpoints: List = [
     "https://ai-gateway.vercel.sh/v1",
     "https://api.inference.wandb.ai/v1",
     "https://api.clarifai.com/v2/ext/openai/v1",
+    "https://gateway.uomi.ai/v1",
 ]
 
 
@@ -832,6 +833,7 @@ openai_compatible_providers: List = [
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
     "parasail",  # Parasail - JSON-configured provider
+    "uomi",  # UOMI - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -873,6 +875,7 @@ openai_text_completion_compatible_providers: List = (
         "lambda_ai",
         "hyperbolic",
         "wandb",
+        "uomi",
     ]
 )
 _openai_like_providers: List = [
