@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import threading
 import time
 import traceback
 from datetime import datetime
@@ -2067,6 +2068,15 @@ class ProxyBaseLLMRequestProcessing:
                     str(e)
                 )
             )
+            _litellm_logging_obj = request_data.get("litellm_logging_obj")
+            if _litellm_logging_obj is not None:
+                traceback_exception = traceback.format_exc()
+                threading.Thread(
+                    target=_litellm_logging_obj.failure_handler,
+                    args=(e, traceback_exception),
+                ).start()
+                await _litellm_logging_obj.async_failure_handler(e, traceback_exception)
+
             transformed_exception = await proxy_logging_obj.post_call_failure_hook(
                 user_api_key_dict=user_api_key_dict,
                 original_exception=e,

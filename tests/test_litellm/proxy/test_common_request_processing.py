@@ -2342,3 +2342,46 @@ class TestAsyncStreamingDataGeneratorFastPath:
         hook_spy.assert_awaited_once()
 
         ProxyLogging._callback_capabilities_cache.clear()
+
+    @pytest.mark.asyncio
+    async def test_async_streaming_data_generator_calls_failure_handlers_on_timeout(
+        self, monkeypatch
+    ):
+        monkeypatch.setattr(litellm, "callbacks", [])
+        ProxyLogging._callback_capabilities_cache.clear()
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=MagicMock())
+        proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+
+        async def _raise_iter():
+            yield b"event: a\ndata: {}\n\n"
+            raise httpx.ReadTimeout("Request timed out")
+
+        async def mock_hook(response, *args, **kwargs):
+            async for chunk in response:
+                yield chunk
+
+        proxy_logging_obj.async_post_call_streaming_iterator_hook = mock_hook
+
+        logging_obj = MagicMock()
+        logging_obj.async_failure_handler = AsyncMock()
+        logging_obj.failure_handler = MagicMock()
+        logging_obj.dispatch_success_handlers = AsyncMock()
+
+        out = [
+            c
+            async for c in ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+                response=MagicMock(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                request_data={"model": "gpt-4", "litellm_logging_obj": logging_obj},
+                proxy_logging_obj=proxy_logging_obj,
+                serialize_chunk=lambda chunk: chunk,
+                serialize_error=lambda exc: f"err:{exc}",
+            )
+        ]
+
+        assert out[0] == b"event: a\ndata: {}\n\n"
+        assert out[1].startswith("err:")
+        logging_obj.async_failure_handler.assert_awaited_once()
+        logging_obj.failure_handler.assert_called_once()
+        logging_obj.dispatch_success_handlers.assert_not_called()
