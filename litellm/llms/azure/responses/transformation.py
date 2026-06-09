@@ -200,7 +200,6 @@ class AzureOpenAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         if api_base is None:
             raise ValueError("api_base is required for Azure WebSocket")
-        import httpx
 
         base = api_base.rstrip("/")
         # Strip existing /openai/responses path if the api_base already contains it
