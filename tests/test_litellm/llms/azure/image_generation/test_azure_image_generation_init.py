@@ -57,6 +57,22 @@ def test_azure_providers_image_generation_json_body_keeps_model():
     assert out == data
 
 
+def test_azure_image_generation_mai_base_model_uses_mai_url():
+    azure_chat = AzureChatCompletion()
+    url = azure_chat.create_azure_base_url(
+        azure_client_params={
+            "azure_endpoint": "https://my-resource.services.ai.azure.com",
+            "api_version": "preview",
+        },
+        model="image-deployment-alias",
+        base_model="MAI-Image-2.5",
+    )
+    assert (
+        url
+        == "https://my-resource.services.ai.azure.com/mai/v1/images/generations?api-version=preview"
+    )
+
+
 def test_azure_image_generation_flattens_extra_body():
     """
     Test that Azure image generation correctly flattens extra_body parameters.
