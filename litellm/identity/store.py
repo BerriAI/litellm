@@ -14,10 +14,16 @@ from fastapi import status
 from litellm.identity.principal import classify_principal_kind
 from litellm.integrations.otel.model.spans import SpanRole
 from litellm.integrations.otel.runtime import traced
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import ProxyErrorTypes, ProxyException, UserAPIKeyAuth
+from litellm.proxy.auth.auth_checks import (
+    _fetch_key_object_from_db_with_reconnect,
+    get_object_permission,
+    get_org_object,
+    get_team_object,
+    get_user_object,
+)
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
     from litellm.proxy.utils import PrismaClient, ProxyLogging
 
@@ -40,15 +46,6 @@ async def _fetch_from_db(
     parent_otel_span,
     proxy_logging_obj: Optional["ProxyLogging"],
 ) -> Optional["UserAPIKeyAuth"]:
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.auth_checks import (
-        _fetch_key_object_from_db_with_reconnect,
-        get_object_permission,
-        get_org_object,
-        get_team_object,
-        get_user_object,
-    )
-
     row = await _fetch_key_object_from_db_with_reconnect(
         hashed_token=hashed_token,
         prisma_client=prisma_client,

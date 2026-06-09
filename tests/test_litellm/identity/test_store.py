@@ -172,7 +172,7 @@ async def test_cold_path_bundles_user_into_cache():
     with (
         patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
         patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
+            "litellm.identity.store.get_user_object",
             side_effect=_fake_get_user_object,
         ),
     ):
@@ -238,7 +238,7 @@ async def test_fetch_from_db_warms_shared_team_and_org_caches():
     with (
         patch("litellm.identity.store._populate_legacy_cache", new=AsyncMock()),
         patch(
-            "litellm.proxy.auth.auth_checks.get_user_object",
+            "litellm.identity.store.get_user_object",
             side_effect=_fake_get_user_object,
         ),
     ):
