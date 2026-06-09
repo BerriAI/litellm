@@ -230,3 +230,83 @@ def test_bundled_tool_args_on_transition_still_preserved_sync():
 
     assert _text_deltas(events) == ["Calling a tool."]
     assert _input_json_deltas(events) == ['{"city": "NY"}']
+
+
+@pytest.mark.parametrize(
+    "processed_chunk, expected",
+    [
+        # Non-empty deltas of every type must be re-emitted.
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": "x"},
+            },
+            True,
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "input_json_delta", "partial_json": "{}"},
+            },
+            True,
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "thinking_delta", "thinking": "t"},
+            },
+            True,
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "signature_delta", "signature": "s"},
+            },
+            True,
+        ),
+        # Empty deltas must NOT be re-emitted (no spurious events).
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "text_delta", "text": ""},
+            },
+            False,
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "input_json_delta", "partial_json": ""},
+            },
+            False,
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "thinking_delta", "thinking": ""},
+            },
+            False,
+        ),
+        (
+            {
+                "type": "content_block_delta",
+                "delta": {"type": "signature_delta", "signature": ""},
+            },
+            False,
+        ),
+        # Unknown delta type / non-content_block_delta / malformed delta.
+        (
+            {"type": "content_block_delta", "delta": {"type": "other_delta"}},
+            False,
+        ),
+        ({"type": "message_delta", "delta": {"stop_reason": "stop"}}, False),
+        ({"type": "content_block_delta", "delta": None}, False),
+    ],
+)
+def test_trigger_delta_has_content_branches(processed_chunk, expected):
+    """Directly exercise the re-emit predicate across all delta types and the
+    empty/malformed guards, so the helper's behavior is pinned independently of
+    upstream chunk-translation details.
+    """
+    assert (
+        AnthropicStreamWrapper._trigger_delta_has_content(processed_chunk) is expected
+    )
