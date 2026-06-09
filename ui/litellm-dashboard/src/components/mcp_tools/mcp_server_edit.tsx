@@ -331,7 +331,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     }
     fetchTools();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mcpServer, accessToken, userID]);
+  }, [mcpServer, accessToken, userID, oauthTokenResponse?.access_token]);
 
   const fetchTools = async () => {
     if (!accessToken || !mcpServer.server_id) return;
@@ -348,9 +348,11 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         delegate_auth_to_upstream: mcpServer.delegate_auth_to_upstream,
       }) === "passthrough";
     if (isPassthrough) {
-      const token = isTokenValid(mcpServer.server_id, userID)
-        ? getToken(mcpServer.server_id, userID)?.access_token ?? null
-        : null;
+      const token =
+        oauthTokenResponse?.access_token ??
+        (isTokenValid(mcpServer.server_id, userID)
+          ? getToken(mcpServer.server_id, userID)?.access_token ?? null
+          : null);
       if (!token) {
         setTools([]);
         setToolsError("Authenticate with this server in the Tools tab to load and configure its tools.");
@@ -706,8 +708,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
               userID,
             );
           }
-        } catch (err) {
-          console.error("Failed to persist MCP OAuth token after save", err);
+        } catch (error: unknown) {
+          const message = error instanceof Error ? error.message : "";
+          NotificationsManager.fromBackend(
+            "MCP Server updated, but failed to persist OAuth token" + (message ? `: ${message}` : ""),
+          );
+          return;
         }
       }
 
