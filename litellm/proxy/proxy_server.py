@@ -2263,7 +2263,7 @@ async def _reconcile_budget_reservation_for_counter_update(
         )
     except Exception:
         verbose_proxy_logger.warning(
-            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and continuing",
+            "Failed to reconcile budget reservation after persisted spend; invalidating reserved counters and falling back to direct increment",
             exc_info=True,
         )
         try:
@@ -2274,6 +2274,7 @@ async def _reconcile_budget_reservation_for_counter_update(
             verbose_proxy_logger.exception(
                 "Failed to invalidate reserved counters after reservation reconciliation failed"
             )
+        return set()
     return reserved_counter_keys
 
 
