@@ -94,12 +94,12 @@ def test_cometapi_key_and_base_precedence(monkeypatch):
     assert get_cometapi_api_base() == "https://proxy.example.com/openai/v1"
 
 
-def test_cometapi_key_and_base_fall_back_to_litellm_globals(monkeypatch):
+def test_cometapi_key_and_base_ignore_litellm_globals(monkeypatch):
     _clear_cometapi_env(monkeypatch)
     _pollute_openai_globals(monkeypatch)
 
-    assert get_cometapi_api_key() == "openai-global-key"
-    assert get_cometapi_api_base() == "https://openai.invalid/v1"
+    assert get_cometapi_api_key() is None
+    assert get_cometapi_api_base() == "https://api.cometapi.com/v1"
 
 
 def test_cometapi_complete_url_preserves_existing_v1_path(monkeypatch):
@@ -275,6 +275,38 @@ def test_cometapi_image_generation_validate_environment_uses_api_key_alias(monke
 
     assert headers["Authorization"] == "Bearer comet-env-key"
     assert headers["Content-Type"] == "application/json"
+
+
+def test_cometapi_image_generation_missing_key_fails_closed(monkeypatch):
+    _clear_cometapi_env(monkeypatch)
+    _pollute_openai_globals(monkeypatch)
+
+    with pytest.raises(ValueError, match="COMETAPI_KEY or COMETAPI_API_KEY"):
+        CometAPIImageGenerationConfig().validate_environment(
+            headers={},
+            model="gpt-image-2",
+            messages=[],
+            optional_params={},
+            litellm_params={},
+        )
+
+
+def test_cometapi_image_generation_missing_key_does_not_call_handler(monkeypatch):
+    _clear_cometapi_env(monkeypatch)
+    _pollute_openai_globals(monkeypatch)
+
+    with patch(
+        "litellm.images.main.llm_http_handler.image_generation_handler"
+    ) as mock_image_handler:
+        with pytest.raises(
+            litellm.APIConnectionError, match="COMETAPI_KEY or COMETAPI_API_KEY"
+        ):
+            image_generation(
+                model="cometapi/gpt-image-2",
+                prompt="A small comet over a clean API diagram",
+            )
+
+    mock_image_handler.assert_not_called()
 
 
 def test_cometapi_image_generation_maps_new_openai_params(monkeypatch):
@@ -479,6 +511,17 @@ def test_cometapi_speech_uses_dynamic_api_key(monkeypatch):
     assert mock_speech.call_args.kwargs["api_key"] == "dynamic-comet-key"
 
 
+def test_cometapi_speech_missing_key_does_not_call_openai_audio(monkeypatch):
+    _clear_cometapi_env(monkeypatch)
+    _pollute_openai_globals(monkeypatch)
+
+    with patch("litellm.main.openai_chat_completions.audio_speech") as mock_speech:
+        with pytest.raises(ValueError, match="COMETAPI_KEY or COMETAPI_API_KEY"):
+            speech(model="cometapi/tts-1", input="hello", voice="alloy")
+
+    mock_speech.assert_not_called()
+
+
 def test_cometapi_speech_requires_voice(monkeypatch):
     _clear_cometapi_env(monkeypatch)
 
@@ -644,6 +687,18 @@ def test_cometapi_moderation_accepts_bare_model_with_custom_provider(monkeypatch
     assert _OpenAIClient.instances[0].moderations.calls[0]["model"] == (
         "omni-moderation-latest"
     )
+
+
+def test_cometapi_moderation_missing_key_does_not_create_openai_client(monkeypatch):
+    _clear_cometapi_env(monkeypatch)
+    _pollute_openai_globals(monkeypatch)
+
+    _OpenAIClient.instances = []
+    with patch("litellm.main.openai.OpenAI", _OpenAIClient):
+        with pytest.raises(ValueError, match="COMETAPI_KEY or COMETAPI_API_KEY"):
+            moderation(model="cometapi/omni-moderation-latest", input="hello")
+
+    assert _OpenAIClient.instances == []
 
 
 def test_openai_moderation_fallback_is_unchanged(monkeypatch):

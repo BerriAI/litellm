@@ -15,18 +15,14 @@ def get_cometapi_api_key(api_key: Optional[str] = None) -> Optional[str]:
         or litellm.cometapi_key
         or get_secret_str("COMETAPI_KEY")
         or get_secret_str("COMETAPI_API_KEY")
-        or litellm.api_key
     )
 
 
 def get_cometapi_api_base(api_base: Optional[str] = None) -> str:
-    import litellm
-
     return (
         api_base
         or get_secret_str("COMETAPI_BASE_URL")
         or get_secret_str("COMETAPI_API_BASE")
-        or litellm.api_base
         or DEFAULT_COMETAPI_API_BASE
     )
 
