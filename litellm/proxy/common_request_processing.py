@@ -1951,23 +1951,17 @@ class ProxyBaseLLMRequestProcessing:
         if (
             _exc_status_code is not None
             and isinstance(_exc_status_code, int)
-            and 100 <= _exc_status_code <= 599
+            and 400 <= _exc_status_code <= 599
         ):
-            raise ProxyException(
-                message=getattr(e, "message", error_msg),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                openai_code=getattr(e, "code", None),
-                code=_exc_status_code,
-                provider_specific_fields=getattr(e, "provider_specific_fields", None),
-                headers=headers,
-            )
+            _code = _exc_status_code
+        else:
+            _code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
