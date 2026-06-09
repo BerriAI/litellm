@@ -14,7 +14,7 @@ import jwt
 from litellm._logging import verbose_proxy_logger
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy._types import JWTAuthBuilderResult, UserAPIKeyAuth
 
 
 def token_is_jwt(token: Optional[str]) -> bool:
@@ -66,7 +66,7 @@ def parse_jwt_scopes(claims: dict) -> Tuple[str, ...]:
 
 def build_user_api_key_auth_from_jwt_result(
     *,
-    result: dict,
+    result: "JWTAuthBuilderResult",
     parent_otel_span: Any = None,
     is_proxy_admin: bool,
 ) -> "UserAPIKeyAuth":
