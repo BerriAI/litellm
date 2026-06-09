@@ -8,18 +8,17 @@ JWT token must have 'litellm_proxy_admin' in scope.
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import hashlib
 import os
 import re
-from typing import Any, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union
 
 import jwt
-from cryptography import x509
-from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization
 from fastapi import HTTPException, status
-from jwt.api_jwk import PyJWK
+from jwt import PyJWK, PyJWKClient
+from jwt.exceptions import PyJWKClientError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL
@@ -28,10 +27,8 @@ from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.httpx_handler import HTTPHandler
 from litellm.proxy._types import (
     RBAC_ROLES,
-    JWKKeyValue,
     JWTAuthBuilderResult,
     JWTIssuerConfig,
-    JWTKeyItem,
     LiteLLM_EndUserTable,
     LiteLLM_JWTAuth,
     LiteLLM_OrganizationTable,
@@ -67,10 +64,6 @@ from .auth_checks import (
     get_team_object_by_alias,
     get_user_object,
 )
-
-
-class NoMatchingJWTPublicKeyError(Exception):
-    """Raised when a JWKS endpoint returns no key matching the requested ``kid``."""
 
 
 class JWTHandler:
@@ -117,9 +110,12 @@ class JWTHandler:
 
     def __init__(
         self,
+        jwks_client_factory: Optional[Callable[[str], PyJWKClient]] = None,
     ) -> None:
         self.http_handler = HTTPHandler()
         self.leeway = 0
+        self._jwks_clients: Dict[str, PyJWKClient] = {}
+        self._jwks_client_factory = jwks_client_factory or self._build_jwks_client
 
     def update_environment(
         self,
@@ -652,94 +648,24 @@ class JWTHandler:
             return 600
         return litellm_jwtauth.public_key_ttl
 
-    async def _get_public_key_from_jwks_url(
-        self, jwks_url: str, kid: Optional[str]
-    ) -> dict:
+    def _build_jwks_client(self, jwks_url: str) -> PyJWKClient:
+        return PyJWKClient(
+            jwks_url,
+            cache_jwk_set=True,
+            lifespan=self._get_public_key_cache_ttl(),
+        )
+
+    def _jwks_client_for(self, jwks_url: str) -> PyJWKClient:
+        client = self._jwks_clients.get(jwks_url)
+        if client is None:
+            client = self._jwks_client_factory(jwks_url)
+            self._jwks_clients[jwks_url] = client
+        return client
+
+    async def _get_signing_key(self, jwks_url: str, token: str) -> PyJWK:
         resolved_jwks_url = await self._resolve_jwks_url(jwks_url)
-        cache_key = f"litellm_jwt_auth_keys_{resolved_jwks_url}"
-
-        cached_keys = await self.user_api_key_cache.async_get_cache(cache_key)
-
-        if cached_keys is None:
-            response = await self.http_handler.get(resolved_jwks_url)
-
-            try:
-                response_json = response.json()
-            except Exception as e:
-                verbose_proxy_logger.error(
-                    f"Error parsing response: {e}. Original Response: {response.text}"
-                )
-                raise Exception(
-                    f"Error parsing response: {e}. Check server logs for original response."
-                )
-
-            if "keys" in response_json:
-                keys: JWKKeyValue = response_json["keys"]
-            else:
-                keys = response_json
-
-            await self.user_api_key_cache.async_set_cache(
-                key=cache_key,
-                value=keys,
-                ttl=self._get_public_key_cache_ttl(),
-            )
-        else:
-            keys = cached_keys
-
-        public_key = self.parse_keys(keys=keys, kid=kid)
-        if public_key is not None:
-            return cast(dict, public_key)
-
-        raise NoMatchingJWTPublicKeyError(
-            f"No matching public key found. keys={resolved_jwks_url}, kid={kid}"
-        )
-
-    async def get_public_key(self, kid: Optional[str]) -> dict:
-        keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
-
-        if keys_url is None:
-            raise Exception("Missing JWT Public Key URL from environment.")
-
-        keys_url_list = [url.strip() for url in keys_url.split(",") if url.strip()]
-
-        for key_url in keys_url_list:
-            try:
-                return await self._get_public_key_from_jwks_url(
-                    jwks_url=key_url, kid=kid
-                )
-            except NoMatchingJWTPublicKeyError as e:
-                verbose_proxy_logger.debug(
-                    "JWT Auth: No matching public key found at %s: %s", key_url, e
-                )
-
-        raise NoMatchingJWTPublicKeyError(
-            f"No matching public key found. keys={keys_url_list}, kid={kid}"
-        )
-
-    def parse_keys(self, keys: JWKKeyValue, kid: Optional[str]) -> Optional[JWTKeyItem]:
-        public_key: Optional[JWTKeyItem] = None
-        if len(keys) == 1:
-            if isinstance(keys, dict) and (keys.get("kid", None) == kid or kid is None):
-                public_key = keys
-            elif isinstance(keys, list) and (
-                keys[0].get("kid", None) == kid or kid is None
-            ):
-                public_key = keys[0]
-        elif len(keys) > 1:
-            for key in keys:
-                if isinstance(key, dict):
-                    key_kid = key.get("kid", None)
-                else:
-                    key_kid = None
-                if (
-                    kid is not None
-                    and isinstance(key, dict)
-                    and key_kid is not None
-                    and key_kid == kid
-                ):
-                    public_key = key
-
-        return public_key
+        client = self._jwks_client_for(resolved_jwks_url)
+        return await asyncio.to_thread(client.get_signing_key_from_jwt, token)
 
     def is_allowed_domain(self, user_email: str) -> bool:
         if self.litellm_jwtauth.user_allowed_email_domain is None:
@@ -936,13 +862,6 @@ class JWTHandler:
 
         return normalized
 
-    def _get_jwk_from_public_key(self, public_key: dict) -> dict:
-        jwk = {}
-        for key in ["kty", "kid", "n", "e", "x", "y", "crv"]:
-            if key in public_key:
-                jwk[key] = public_key[key]
-        return jwk
-
     def _get_decode_options(
         self,
         audience: Optional[Union[str, List[str]]],
@@ -966,10 +885,10 @@ class JWTHandler:
             options["verify_iss"] = False
         return options or None
 
-    def _decode_jwt_with_public_key(
+    def _decode_token(
         self,
         token: str,
-        public_key: Union[dict, str],
+        signing_key: PyJWK,
         audience: Optional[Union[str, List[str]]],
         issuer: Optional[str] = None,
         options: Optional[dict] = None,
@@ -985,46 +904,27 @@ class JWTHandler:
             )
         )
 
-        if isinstance(public_key, dict):
-            public_key_obj = PyJWK.from_dict(
-                self._get_jwk_from_public_key(public_key=public_key)
-            ).key
-            return jwt.decode(
-                token,
-                public_key_obj,  # type: ignore
-                algorithms=self.SUPPORTED_JWT_ALGORITHMS,
-                options=decode_options,  # type: ignore[arg-type]
-                audience=audience,
-                issuer=issuer,
-                leeway=self.leeway,
-            )
-
-        cert = x509.load_pem_x509_certificate(public_key.encode(), default_backend())
-        key = cert.public_key().public_bytes(
-            serialization.Encoding.PEM,
-            serialization.PublicFormat.SubjectPublicKeyInfo,
-        )
         return jwt.decode(
             token,
-            key,
+            signing_key.key,  # type: ignore[arg-type]
             algorithms=self.SUPPORTED_JWT_ALGORITHMS,
+            options=decode_options,  # type: ignore[arg-type]
             audience=audience,
             issuer=issuer,
-            options=decode_options,  # type: ignore[arg-type]
             leeway=self.leeway,
         )
 
     async def _auth_jwt_with_issuer(
-        self, token: str, issuer_config: JWTIssuerConfig, kid: Optional[str]
+        self, token: str, issuer_config: JWTIssuerConfig
     ) -> dict:
-        public_key = await self._get_public_key_from_jwks_url(
+        signing_key = await self._get_signing_key(
             jwks_url=self._get_jwks_url_for_issuer(issuer_config=issuer_config),
-            kid=kid,
+            token=token,
         )
         try:
-            payload = self._decode_jwt_with_public_key(
+            payload = self._decode_token(
                 token=token,
-                public_key=public_key,
+                signing_key=signing_key,
                 audience=issuer_config.audience,
                 issuer=issuer_config.issuer,
                 disable_audience_validation=issuer_config.disable_audience_validation,
@@ -1045,50 +945,55 @@ class JWTHandler:
         )
 
     async def auth_jwt(self, token: str) -> dict:
-        header = jwt.get_unverified_header(token)
-
-        verbose_proxy_logger.debug("header: %s", header)
-
-        kid = header.get("kid", None)
-
         issuer_config = self._get_configured_issuer(token=token)
         if issuer_config is not None:
             return await self._auth_jwt_with_issuer(
                 token=token,
                 issuer_config=issuer_config,
-                kid=kid,
             )
 
+        keys_url = os.getenv("JWT_PUBLIC_KEY_URL")
+        if keys_url is None:
+            raise Exception("Missing JWT Public Key URL from environment.")
+
         decode_kwargs = self._build_decode_kwargs()
+        keys_url_list = [url.strip() for url in keys_url.split(",") if url.strip()]
 
-        public_key = await self.get_public_key(kid=kid)
-
-        if public_key is not None:
+        signing_key: Optional[PyJWK] = None
+        for key_url in keys_url_list:
             try:
-                payload = self._decode_jwt_with_public_key(
-                    token=token,
-                    public_key=public_key,
-                    audience=decode_kwargs["audience"],
-                    issuer=decode_kwargs["issuer"],
-                    options=decode_kwargs["options"],
+                signing_key = await self._get_signing_key(jwks_url=key_url, token=token)
+                break
+            except PyJWKClientError as e:
+                verbose_proxy_logger.debug(
+                    "JWT Auth: no matching signing key at %s: %s", key_url, e
                 )
-                return {
-                    k: v
-                    for k, v in payload.items()
-                    if k not in self.LITELLM_INTERNAL_CLAIMS
-                }
 
-            except jwt.ExpiredSignatureError:
-                raise ProxyException(
-                    message="Token Expired",
-                    type=ProxyErrorTypes.expired_key,
-                    param=None,
-                    code=status.HTTP_401_UNAUTHORIZED,
-                )
-            except Exception as e:
-                raise Exception(f"Validation fails: {str(e)}")
+        if signing_key is None:
+            raise Exception("Invalid JWT Submitted")
 
-        raise Exception("Invalid JWT Submitted")
+        try:
+            payload = self._decode_token(
+                token=token,
+                signing_key=signing_key,
+                audience=decode_kwargs["audience"],
+                issuer=decode_kwargs["issuer"],
+                options=decode_kwargs["options"],
+            )
+            return {
+                k: v
+                for k, v in payload.items()
+                if k not in self.LITELLM_INTERNAL_CLAIMS
+            }
+        except jwt.ExpiredSignatureError:
+            raise ProxyException(
+                message="Token Expired",
+                type=ProxyErrorTypes.expired_key,
+                param=None,
+                code=status.HTTP_401_UNAUTHORIZED,
+            )
+        except Exception as e:
+            raise Exception(f"Validation fails: {str(e)}")
 
     async def close(self):
         await self.http_handler.close()
