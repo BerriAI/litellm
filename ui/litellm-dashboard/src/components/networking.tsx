@@ -404,6 +404,7 @@ export const getUiConfig = async () => {
    * Update the proxy base url and server root path
    */
   console.log("jsonData in getUiConfig:", jsonData);
+  updateServerRootPath(jsonData.server_root_path);
   updateProxyBaseUrl(jsonData.server_root_path, jsonData.proxy_base_url);
   return jsonData;
 };
@@ -5229,11 +5230,16 @@ export const testSearchToolConnection = async (accessToken: string, litellmParam
   }
 };
 
-export const listMCPTools = async (accessToken: string, serverId: string, customHeaders?: Record<string, string>) => {
-  // Construct base URL
-  let url = proxyBaseUrl
-    ? `${proxyBaseUrl}/mcp-rest/tools/list?server_id=${serverId}`
-    : `/mcp-rest/tools/list?server_id=${serverId}`;
+export const listMCPTools = async (
+  accessToken: string,
+  serverId: string,
+  customHeaders?: Record<string, string>,
+  includeDisabledTools?: boolean,
+) => {
+  // Construct base URL. include_disabled_tools returns the full server catalog
+  // (admin-only, backend-enforced) so the settings UI can configure the allowlist.
+  const query = `server_id=${serverId}${includeDisabledTools ? "&include_disabled_tools=true" : ""}`;
+  let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/list?${query}` : `/mcp-rest/tools/list?${query}`;
 
   console.log("Fetching MCP tools from:", url);
 

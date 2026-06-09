@@ -5,7 +5,8 @@ import { Title, Card, Button, Text, Grid, TabGroup, TabList, TabPanel, TabPanels
 import { MCPServer, handleTransport, handleAuth } from "./types";
 // TODO: Move Tools viewer from index file
 import { MCPToolsViewer } from ".";
-import MCPServerEdit from "./mcp_server_edit";
+import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
+import { getSecureItem } from "@/utils/secureStorage";
 import MCPServerCostDisplay from "./mcp_server_cost_display";
 import { getMaskedAndFullUrl } from "./utils";
 import { copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
@@ -21,6 +22,25 @@ interface MCPServerViewProps {
   userRole: string | null;
   userID: string | null;
   availableAccessGroups: string[];
+  initialTabIndex?: number;
+}
+
+// True when this render is the return from the edit-settings OAuth redirect for this
+// server: the edit form wrote its UI-state snapshot before redirecting. Used to open
+// the editing Settings tab on first render instead of defaulting to Overview.
+function isReturningFromEditOAuth(isProxyAdmin: boolean, serverId: string): boolean {
+  if (typeof window === "undefined" || !isProxyAdmin) {
+    return false;
+  }
+  const stored = getSecureItem(EDIT_OAUTH_UI_STATE_KEY);
+  if (!stored) {
+    return false;
+  }
+  try {
+    return JSON.parse(stored)?.serverId === serverId;
+  } catch {
+    return false;
+  }
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -32,11 +52,15 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
   availableAccessGroups,
+  initialTabIndex = 0,
 }) => {
-  const [editing, setEditing] = useState(isEditing);
+  // Open the editing Settings tab on first render when returning from the edit OAuth
+  // redirect, so the "token fetched" feedback shows where the user left off (Settings=2).
+  const returningFromEditOAuth = isReturningFromEditOAuth(isProxyAdmin, mcpServer.server_id);
+  const [editing, setEditing] = useState(isEditing || returningFromEditOAuth);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(returningFromEditOAuth ? 2 : initialTabIndex);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);
@@ -210,6 +234,7 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                 <MCPServerEdit
                   mcpServer={mcpServer}
                   accessToken={accessToken}
+                  userID={userID}
                   onCancel={() => setEditing(false)}
                   onSuccess={handleSuccess}
                   availableAccessGroups={availableAccessGroups}

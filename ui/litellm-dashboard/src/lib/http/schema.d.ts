@@ -18441,7 +18441,49 @@ export interface paths {
         };
         /**
          * Model Info V2
-         * @description v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true
+         * @description Paginated model metadata for proxy deployments (pricing, provider, team access).
+         *
+         *     Returns configured router deployments with enriched `model_info` (costs, provider,
+         *     context window, etc.). Sensitive fields such as API keys and api_base are omitted.
+         *
+         *     Query parameters:
+         *         model: Filter to a single public `model_name`.
+         *         user_models_only: When true, only return models created by the calling user.
+         *         include_team_models: When true, populate `access_via_team_ids` and `direct_access`
+         *             on each model and filter to deployments the caller can use.
+         *         page / size: Pagination controls (defaults: page=1, size=50).
+         *         search: Case-insensitive partial match on model name or team public name.
+         *         modelId: Return a single deployment by LiteLLM model id.
+         *         teamId: Filter to models with direct access or team membership for this team id.
+         *         sortBy / sortOrder: Sort by model_name, created_at, updated_at, costs, or status.
+         *
+         *     Example request:
+         *     ```
+         *     curl -X GET 'http://localhost:4000/v2/model/info?include_team_models=true&page=1&size=50' \
+         *     --header 'Authorization: Bearer sk-1234'
+         *     ```
+         *
+         *     Example response:
+         *     ```json
+         *     {
+         *         "data": [
+         *             {
+         *                 "model_name": "gpt-4",
+         *                 "litellm_params": {"model": "openai/gpt-4.1"},
+         *                 "model_info": {
+         *                     "id": "abc123",
+         *                     "litellm_provider": "openai",
+         *                     "access_via_team_ids": ["team-1"],
+         *                     "direct_access": true
+         *                 }
+         *             }
+         *         ],
+         *         "total_count": 1,
+         *         "current_page": 1,
+         *         "total_pages": 1,
+         *         "size": 50
+         *     }
+         *     ```
          */
         get: operations["model_info_v2_v2_model_info_get"];
         put?: never;
@@ -21992,6 +22034,11 @@ export interface components {
              * @description connect to a postgres db - needed for generating temporary keys + tracking spend / key
              */
             database_url?: string | null;
+            /**
+             * Disable Budget Reservation
+             * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). A proxy-level WARNING is logged on every request while this flag is active as a reminder that hard enforcement is relaxed.
+             */
+            disable_budget_reservation?: boolean | null;
             /**
              * Enable Public Model Hub
              * @description Public model hub for users to see what models they have access to, supported openai params, etc.
@@ -40375,7 +40422,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -43119,13 +43166,13 @@ export interface operations {
             /**
              * @description Unified rate-limit error.
              *
-             *     Every rate-limit condition surfaced by litellm — whether it originated from
-             *     an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
-             *     proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
-             *     max-iterations, etc.) — is raised as an instance of this class.
+             *         Every rate-limit condition surfaced by litellm — whether it originated from
+             *         an upstream LLM provider, a vendor batch endpoint, or one of litellm's own
+             *         proxy-side limiters (parallel-requests, dynamic-rate, batch-rate, budget,
+             *         max-iterations, etc.) — is raised as an instance of this class.
              *
-             *     The :attr:`category` attribute lets callers distinguish the source. See
-             *     :class:`RateLimitErrorCategory` for the available values.
+             *         The :attr:`category` attribute lets callers distinguish the source. See
+             *         :class:`RateLimitErrorCategory` for the available values.
              */
             429: {
                 headers: {

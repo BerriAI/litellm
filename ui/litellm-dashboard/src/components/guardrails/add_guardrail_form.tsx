@@ -1144,6 +1144,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
       title={null}
       open={visible}
       onCancel={handleClose}
+      maskClosable={false}
       footer={null}
       width={1000}
       closable={false}

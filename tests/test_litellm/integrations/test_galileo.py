@@ -357,12 +357,18 @@ def test_galileo_record_to_v2_span_with_tags_and_offset():
 
 def test_galileo_get_output_str_variants(galileo_v2_env):
     logger = GalileoObserve()
-    assert logger.get_output_str_from_response(None, {}) is None
+    assert logger.get_output_str_from_response(None, {}) == ""
     assert (
         logger.get_output_str_from_response(
             EmbeddingResponse(), {"call_type": "embedding"}
         )
-        is None
+        == "embedding-output"
+    )
+    assert (
+        logger.get_output_str_from_response(
+            EmbeddingResponse(), {"call_type": "aembedding"}
+        )
+        == "embedding-output"
     )
 
     text_resp = TextCompletionResponse()
@@ -414,7 +420,7 @@ def test_galileo_get_output_str_variants(galileo_v2_env):
         {"call_type": "acompletion", "messages": [{"role": "user", "content": "hi"}]},
     )
 
-    assert logger.get_output_str_from_response("not-a-supported-type", {}) is None
+    assert logger.get_output_str_from_response("not-a-supported-type", {}) == ""
 
 
 def test_galileo_get_input_output_error_status_message(galileo_v2_env):
@@ -443,6 +449,48 @@ def test_galileo_get_output_str_rerank_response(galileo_v2_env):
     assert output is not None
     assert '"index": 2' in output
     assert '"relevance_score": 0.98' in output
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_log_success_embedding(galileo_v2_env):
+    import datetime
+
+    logger = GalileoObserve()
+    embedding_response = EmbeddingResponse(
+        data=[{"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": 0}]
+    )
+
+    mock_response = MagicMock()
+    mock_response.is_success = True
+    mock_response.status_code = 201
+
+    with patch.object(logger.async_httpx_handler, "post", return_value=mock_response):
+        await logger.async_log_success_event(
+            kwargs={
+                "call_type": "aembedding",
+                "model": "text-embedding-3-small",
+                "input": "hello world",
+                "standard_logging_object": {
+                    "call_type": "aembedding",
+                    "model": "text-embedding-3-small",
+                    "prompt_tokens": 2,
+                    "completion_tokens": 0,
+                    "total_tokens": 2,
+                    "response_cost": 0.0,
+                    "startTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                    "endTime": datetime.datetime(
+                        2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                    ).timestamp(),
+                },
+            },
+            response_obj=embedding_response,
+            start_time=datetime.datetime(2026, 5, 25, 12, 0, 0),
+            end_time=datetime.datetime(2026, 5, 25, 12, 0, 1),
+        )
+
+    assert logger.in_memory_records == []
 
 
 @pytest.mark.asyncio
@@ -522,6 +570,158 @@ def test_galileo_get_ingest_request_legacy(monkeypatch):
     assert "traces" in payload
     assert payload["log_stream_id"] == "stream-id"
     assert payload["traces"][0]["input"] == "hi"
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_success(galileo_v2_env):
+    logger = GalileoObserve()
+    current_user_resp = MagicMock()
+    current_user_resp.status_code = 200
+
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
+        mock_get.return_value = current_user_resp
+        result = await logger.async_health_check()
+
+    assert result["status"] == "healthy"
+    mock_get.assert_awaited_once_with(
+        url="https://api.galileo.ai/current_user",
+        headers={
+            "accept": "application/json",
+            "Content-Type": "application/json",
+            "Galileo-API-Key": "test-api-key",
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_api_error(galileo_v2_env):
+    logger = GalileoObserve()
+    current_user_resp = MagicMock()
+    current_user_resp.status_code = 401
+
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
+        mock_get.return_value = current_user_resp
+        result = await logger.async_health_check()
+
+    assert result["status"] == "unhealthy"
+    assert "HTTP 401" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_missing_project_id(monkeypatch):
+    monkeypatch.setenv("GALILEO_API_KEY", "test-api-key")
+    monkeypatch.setenv("GALILEO_BASE_URL", "https://api.galileo.ai")
+    monkeypatch.delenv("GALILEO_PROJECT_ID", raising=False)
+    logger = GalileoObserve()
+
+    result = await logger.async_health_check()
+
+    assert result["status"] == "unhealthy"
+    assert "GALILEO_PROJECT_ID" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_missing_base_url(monkeypatch):
+    monkeypatch.delenv("GALILEO_API_KEY", raising=False)
+    monkeypatch.delenv("GALILEO_BASE_URL", raising=False)
+    monkeypatch.setenv("GALILEO_PROJECT_ID", "p")
+    monkeypatch.setenv("GALILEO_USERNAME", "u")
+    monkeypatch.setenv("GALILEO_PASSWORD", "pw")
+    logger = GalileoObserve()
+
+    result = await logger.async_health_check()
+
+    assert result["status"] == "unhealthy"
+    assert "GALILEO_BASE_URL" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_missing_credentials(monkeypatch):
+    monkeypatch.delenv("GALILEO_API_KEY", raising=False)
+    monkeypatch.delenv("GALILEO_USERNAME", raising=False)
+    monkeypatch.delenv("GALILEO_PASSWORD", raising=False)
+    monkeypatch.setenv("GALILEO_PROJECT_ID", "p")
+    monkeypatch.setenv("GALILEO_BASE_URL", "https://galileo.example")
+    logger = GalileoObserve()
+
+    result = await logger.async_health_check()
+
+    assert result["status"] == "unhealthy"
+    assert "GALILEO_USERNAME" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_auth_failed(monkeypatch):
+    monkeypatch.delenv("GALILEO_API_KEY", raising=False)
+    monkeypatch.setenv("GALILEO_PROJECT_ID", "p")
+    monkeypatch.setenv("GALILEO_BASE_URL", "https://galileo.example")
+    monkeypatch.setenv("GALILEO_USERNAME", "u")
+    monkeypatch.setenv("GALILEO_PASSWORD", "pw")
+    logger = GalileoObserve()
+
+    with patch.object(
+        logger.async_httpx_handler, "post", new_callable=AsyncMock
+    ) as mock_post:
+        mock_post.side_effect = Exception("login failed")
+        result = await logger.async_health_check()
+
+    assert result["status"] == "unhealthy"
+    assert result["error_message"] == "Galileo authentication failed"
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_health_check_request_exception(galileo_v2_env):
+    logger = GalileoObserve()
+
+    with patch.object(
+        logger.async_httpx_handler, "get", new_callable=AsyncMock
+    ) as mock_get:
+        mock_get.side_effect = Exception("connection refused")
+        result = await logger.async_health_check()
+
+    assert result["status"] == "unhealthy"
+    assert "connection refused" in result["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_galileo_async_log_success_empty_model_response(galileo_v2_env):
+    import datetime
+
+    logger = GalileoObserve()
+    logger.batch_size = 2
+    empty_response = ModelResponse(choices=[])
+
+    await logger.async_log_success_event(
+        kwargs={
+            "call_type": "acompletion",
+            "model": "gpt-5.2",
+            "messages": [{"role": "user", "content": "hi"}],
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "model": "gpt-5.2",
+                "prompt_tokens": 1,
+                "completion_tokens": 0,
+                "total_tokens": 1,
+                "response_cost": 0.0,
+                "startTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 0, tzinfo=datetime.timezone.utc
+                ).timestamp(),
+                "endTime": datetime.datetime(
+                    2026, 5, 25, 12, 0, 1, tzinfo=datetime.timezone.utc
+                ).timestamp(),
+            },
+        },
+        response_obj=empty_response,
+        start_time=datetime.datetime(2026, 5, 25, 12, 0, 0),
+        end_time=datetime.datetime(2026, 5, 25, 12, 0, 1),
+    )
+
+    assert len(logger.in_memory_records) == 1
+    assert logger.in_memory_records[0]["output_text"] == ""
 
 
 @pytest.mark.asyncio
