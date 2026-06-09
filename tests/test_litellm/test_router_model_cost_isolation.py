@@ -493,3 +493,47 @@ def test_partial_pricing_does_not_overwrite_explicit_cache_fields():
         assert entry.get("cache_read_input_token_cost") == explicit_cache_read
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_inherit_builtin_cache_pricing_fills_only_missing_fields():
+    """Direct unit test of the helper: missing cache fields are filled from the
+    backend model's built-in entry, while an explicitly set cache field and the
+    user's input/output pricing are left untouched.
+    """
+    backend_model = "anthropic/claude-sonnet-4-5-20250929"
+    builtin_info = litellm.get_model_info(model=backend_model)
+    builtin_cache_create = builtin_info["cache_creation_input_token_cost"]
+    builtin_cache_read = builtin_info["cache_read_input_token_cost"]
+    assert builtin_cache_create is not None and builtin_cache_create > 0
+    assert builtin_cache_read is not None and builtin_cache_read > 0
+
+    explicit_cache_read = builtin_cache_read + 1
+    model_info = {
+        "input_cost_per_token": 0.000003,
+        "cache_read_input_token_cost": explicit_cache_read,
+    }
+
+    Router._inherit_builtin_cache_pricing(
+        model_info=model_info,
+        backend_model=backend_model,
+        custom_llm_provider="anthropic",
+    )
+
+    assert model_info["input_cost_per_token"] == 0.000003
+    assert model_info["cache_read_input_token_cost"] == explicit_cache_read
+    assert model_info["cache_creation_input_token_cost"] == builtin_cache_create
+
+
+def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
+    """No canonical entry for the backend model means the helper leaves the
+    passed-in dict unchanged rather than raising.
+    """
+    model_info = {"input_cost_per_token": 0.000003}
+
+    Router._inherit_builtin_cache_pricing(
+        model_info=model_info,
+        backend_model="this-backend-model-does-not-exist-x9y8z7",
+        custom_llm_provider=None,
+    )
+
+    assert model_info == {"input_cost_per_token": 0.000003}

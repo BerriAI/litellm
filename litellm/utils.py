@@ -2898,6 +2898,14 @@ _BEDROCK_REGION_PREFIXES = (
     "ap-northeast-1.",
 )
 
+_CACHE_PRICING_FIELDS = (
+    "cache_creation_input_token_cost",
+    "cache_creation_input_token_cost_above_1hr",
+    "cache_creation_input_token_cost_above_200k_tokens",
+    "cache_read_input_token_cost",
+    "cache_read_input_token_cost_above_200k_tokens",
+)
+
 
 def _resolve_builtin_model_cost_entry(
     key: str, provider: str
@@ -2978,13 +2986,18 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
                 existing_model = cast(dict, get_model_info(model=key))
                 model_cost_key = existing_model["key"]
             except Exception:
-                existing_model = (
-                    _resolve_builtin_model_cost_entry(key=_key_str, provider=provider)
-                    or {}
-                )
+                existing_model = {}
                 model_cost_key = key
-                if existing_model:
-                    existing_model["key"] = key
+                builtin_entry = _resolve_builtin_model_cost_entry(
+                    key=_key_str, provider=provider
+                )
+                if builtin_entry is not None:
+                    for field in _CACHE_PRICING_FIELDS:
+                        if (
+                            value.get(field) is None
+                            and builtin_entry.get(field) is not None
+                        ):
+                            existing_model[field] = builtin_entry[field]
                 elif (
                     value.get("cache_creation_input_token_cost") is None
                     and value.get("cache_read_input_token_cost") is None
