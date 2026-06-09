@@ -5685,6 +5685,7 @@ class BaseLLMHTTPHandler:
                     _request_data["litellm_metadata"] = litellm_metadata
 
                 _ws_guardrail_callbacks: list = []
+                _ws_output_guardrail_callbacks: list = []
                 try:
                     import litellm as _litellm
                     from litellm.proxy.guardrails.guardrail_hooks.presidio import (
@@ -5696,7 +5697,12 @@ class BaseLLMHTTPHandler:
                         for cb in _litellm.callbacks
                         if isinstance(cb, _OPTIONAL_PresidioPIIMasking)
                         and getattr(cb, "output_parse_pii", False)
-                        and not getattr(cb, "apply_to_output", False)
+                    ]
+                    _ws_output_guardrail_callbacks = [
+                        cb
+                        for cb in _litellm.callbacks
+                        if isinstance(cb, _OPTIONAL_PresidioPIIMasking)
+                        and getattr(cb, "apply_to_output", False)
                     ]
                 except Exception:
                     pass
@@ -5709,6 +5715,7 @@ class BaseLLMHTTPHandler:
                     request_data=_request_data,
                     first_message=first_message,
                     guardrail_callbacks=_ws_guardrail_callbacks,
+                    output_guardrail_callbacks=_ws_output_guardrail_callbacks,
                 )
                 await streaming.bidirectional_forward()
 
