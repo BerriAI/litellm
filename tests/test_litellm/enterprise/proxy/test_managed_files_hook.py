@@ -222,3 +222,36 @@ async def test_should_not_double_wrap_already_unified_output_file_id():
         already_unified + "=" * (-len(already_unified) % 4)
     ).decode()
     assert decoded.count(f"llm_output_file_id,{provider_file_id}") == 1
+
+
+@pytest.mark.asyncio
+async def test_should_skip_non_file_unified_id_on_output_file_id():
+    """Batch-style unified ids lack llm_output_file_id; must not IndexError or re-wrap."""
+    import base64
+
+    managed_files = _make_managed_files_instance()
+    batch_unified = (
+        base64.urlsafe_b64encode(
+            b"litellm_proxy;model_id:openai/openai/gpt-5.5-batch;llm_batch_id:batch_abc"
+        )
+        .decode()
+        .rstrip("=")
+    )
+
+    batch_response = _make_batch_response(
+        model_id="openai/openai/gpt-5.5-batch",
+        model_name="openai/openai/gpt-5.5-batch",
+        output_file_id=batch_unified,
+    )
+    user_api_key_dict = _make_user_api_key_dict()
+
+    with patch("litellm.afile_retrieve", AsyncMock()) as mock_afile_retrieve:
+        await managed_files.async_post_call_success_hook(
+            data={},
+            user_api_key_dict=user_api_key_dict,
+            response=batch_response,
+        )
+
+    assert batch_response.output_file_id == batch_unified
+    mock_afile_retrieve.assert_not_called()
+    managed_files.store_unified_file_id.assert_not_awaited()
