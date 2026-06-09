@@ -68,45 +68,6 @@ def test_load_config_with_custom_role_names():
 # test_load_config_with_custom_role_names()
 
 
-@pytest.mark.asyncio
-async def test_token_single_public_key(monkeypatch):
-    import jwt
-
-    jwt_handler = JWTHandler()
-    backend_keys = {
-        "keys": [
-            {
-                "kty": "RSA",
-                "use": "sig",
-                "e": "AQAB",
-                "n": "qIgOQfEVrrErJC0E7gsHXi6rs_V0nyFY5qPFui2-tv0o4CwpwDzgfBtLO7o_wLiguq0lnu54sMT2eLNoRiiPuLvv6bg7Iy1H9yc5_4Jf5oYEOrqN5o9ZBOoYp1q68Pv0oNJYyZdGu5ZJfd7V4y953vB2XfEKgXCsAkhVhlvIUMiDNKWoMDWsyb2xela5tRURZ2mJAXcHfSC_sYdZxIA2YYrIHfoevq_vTlaz0qVSe_uOKjEpgOAS08UUrgda4CQL11nzICiIQzc6qmjIQt2cjzB2D_9zb4BYndzEtfl0kwAT0z_I85S3mkwTqHU-1BvKe_4MG4VG3dAAeffLPXJyXQ",
-                "alg": "RS256",
-            }
-        ]
-    }
-
-    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
-
-    # set cache
-    cache = DualCache()
-
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key",
-        value=backend_keys["keys"],
-    )
-
-    jwt_handler.user_api_key_cache = cache
-
-    public_key = await jwt_handler.get_public_key(kid=None)
-
-    assert public_key is not None
-    assert isinstance(public_key, dict)
-    assert (
-        public_key["n"]
-        == "qIgOQfEVrrErJC0E7gsHXi6rs_V0nyFY5qPFui2-tv0o4CwpwDzgfBtLO7o_wLiguq0lnu54sMT2eLNoRiiPuLvv6bg7Iy1H9yc5_4Jf5oYEOrqN5o9ZBOoYp1q68Pv0oNJYyZdGu5ZJfd7V4y953vB2XfEKgXCsAkhVhlvIUMiDNKWoMDWsyb2xela5tRURZ2mJAXcHfSC_sYdZxIA2YYrIHfoevq_vTlaz0qVSe_uOKjEpgOAS08UUrgda4CQL11nzICiIQzc6qmjIQt2cjzB2D_9zb4BYndzEtfl0kwAT0z_I85S3mkwTqHU-1BvKe_4MG4VG3dAAeffLPXJyXQ"
-    )
-
-
 @pytest.mark.parametrize("audience", [None, "litellm-proxy"])
 @pytest.mark.asyncio
 async def test_valid_invalid_token(audience, monkeypatch):
@@ -151,19 +112,15 @@ async def test_valid_invalid_token(audience, monkeypatch):
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
+    public_jwk["kid"] = "rsa-1"
 
     assert isinstance(public_jwk, dict)
 
-    # set cache
-    cache = DualCache()
-
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    jwks_url = "https://example.com/public-key"
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [public_jwk]})
     )
-
-    jwt_handler = JWTHandler()
-
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.user_api_key_cache = DualCache()
 
     # VALID TOKEN
     ## GENERATE A TOKEN
@@ -180,7 +137,9 @@ async def test_valid_invalid_token(audience, monkeypatch):
     # Generate the JWT token
     # But before, you should convert bytes to string
     private_key_str = private_key.decode("utf-8")
-    token = jwt.encode(payload, private_key_str, algorithm="RS256")
+    token = jwt.encode(
+        payload, private_key_str, algorithm="RS256", headers={"kid": "rsa-1"}
+    )
 
     ## VERIFY IT WORKS
 
@@ -208,7 +167,9 @@ async def test_valid_invalid_token(audience, monkeypatch):
     # Generate the JWT token
     # But before, you should convert bytes to string
     private_key_str = private_key.decode("utf-8")
-    token = jwt.encode(payload, private_key_str, algorithm="RS256")
+    token = jwt.encode(
+        payload, private_key_str, algorithm="RS256", headers={"kid": "rsa-1"}
+    )
 
     ## VERIFY IT WORKS
 
@@ -777,19 +738,15 @@ async def test_allowed_routes_admin(
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
+    public_jwk["kid"] = "rsa-1"
 
     assert isinstance(public_jwk, dict)
 
-    # set cache
-    cache = DualCache()
-
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    jwks_url = "https://example.com/public-key"
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [public_jwk]})
     )
-
-    jwt_handler = JWTHandler()
-
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.user_api_key_cache = DualCache()
 
     if admin_allowed_routes:
         jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
@@ -815,7 +772,9 @@ async def test_allowed_routes_admin(
         "aud": audience,
     }
 
-    admin_token = jwt.encode(payload, private_key_str, algorithm="RS256")
+    admin_token = jwt.encode(
+        payload, private_key_str, algorithm="RS256", headers={"kid": "rsa-1"}
+    )
 
     # verify token
 
@@ -926,6 +885,7 @@ def public_jwt_key():
 
     # Convert RSA public key object to JWK (JSON Web Key)
     public_jwk = json.loads(jwt.algorithms.RSAAlgorithm.to_jwk(public_key_obj))
+    public_jwk["kid"] = "rsa-1"
 
     return {"private_key": private_key, "public_jwk": public_jwk}
 
@@ -963,18 +923,13 @@ async def test_allow_access_by_email(
     public_jwk = public_jwt_key["public_jwk"]
     private_key = public_jwt_key["private_key"]
 
-    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
+    jwks_url = "https://example.com/public-key"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
 
-    # set cache
-    cache = DualCache()
-
-    await cache.async_set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key", value=[public_jwk]
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [public_jwk]})
     )
-
-    jwt_handler = JWTHandler()
-
-    jwt_handler.user_api_key_cache = cache
+    jwt_handler.user_api_key_cache = DualCache()
 
     jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
         user_email_jwt_field="email",
@@ -1002,7 +957,9 @@ async def test_allow_access_by_email(
     private_key_str = private_key.decode("utf-8")
 
     ## team token
-    token = jwt.encode(payload, private_key_str, algorithm="RS256")
+    token = jwt.encode(
+        payload, private_key_str, algorithm="RS256", headers={"kid": "rsa-1"}
+    )
 
     ## VERIFY IT WORKS
     # Expect the call to succeed
@@ -1052,32 +1009,6 @@ async def test_allow_access_by_email(
                 print(resp)
 
 
-def test_get_public_key_from_jwk_url():
-    import litellm
-    from litellm.proxy.auth.handle_jwt import JWTHandler
-
-    jwt_handler = JWTHandler()
-
-    jwk_response = [
-        {
-            "kty": "RSA",
-            "alg": "RS256",
-            "kid": "RaPJB8QVptWHjHcoHkVlUWO4f0D3BtcY6iSDXgGVBgk",
-            "use": "sig",
-            "e": "AQAB",
-            "n": "zgLDu57gLpkzzIkKrTKQVyjK8X40hvu6X_JOeFjmYmI0r3bh7FTOmre5rTEkDOL-1xvQguZAx4hjKmCzBU5Kz84FbsGiqM0ug19df4kwdTS6XOM6YEKUZrbaw4P7xTPsbZj7W2G_kxWNm3Xaxq6UKFdUF7n9snnBKKD6iUA-cE6HfsYmt9OhYZJfy44dbAbuanFmAsWw97SHrPFL3ueh3Ixt19KgpF4iSsXNg3YvoesdFM8psmivgePyyHA8k7pK1Yq7rNQX1Q9nzhvP-F7ocFbP52KYPlaSTu30YwPTVTFKYpDNmHT1fZ7LXZZNLrP_7-NSY76HS2ozSpzjsGVelQ",
-        }
-    ]
-
-    public_key = jwt_handler.parse_keys(
-        keys=jwk_response,
-        kid="RaPJB8QVptWHjHcoHkVlUWO4f0D3BtcY6iSDXgGVBgk",
-    )
-
-    assert public_key is not None
-    assert public_key == jwk_response[0]
-
-
 @pytest.mark.asyncio
 async def test_end_user_jwt_auth(monkeypatch):
     import litellm
@@ -1088,14 +1019,12 @@ async def test_end_user_jwt_auth(monkeypatch):
     import json
 
     monkeypatch.delenv("JWT_AUDIENCE", None)
-    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
-    jwt_handler = JWTHandler()
+    jwks_url = "https://example.com/public-key"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
 
     litellm_jwtauth = LiteLLM_JWTAuth(
         end_user_id_jwt_field="sub",
     )
-
-    cache = DualCache()
 
     keys = [
         {
@@ -1116,14 +1045,12 @@ async def test_end_user_jwt_auth(monkeypatch):
         },
     ]
 
-    cache.set_cache(
-        key="litellm_jwt_auth_keys_https://example.com/public-key",
-        value=keys,
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: keys})
     )
-
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=DualCache(),
         litellm_jwtauth=litellm_jwtauth,
         leeway=100000000000000,
     )
@@ -1463,10 +1390,13 @@ async def test_auth_jwt_es256_jwk_path(monkeypatch):
         headers={"kid": "ec1"},
     )
 
-    h = JWTHandler()
-    with patch.object(h, "get_public_key", new=AsyncMock(return_value=ec_jwk)):
-        claims = await h.auth_jwt(token)
-        assert claims["sub"] == "alice"
+    jwks_url = "https://example.com/jwks"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    h = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [ec_jwk]})
+    )
+    claims = await h.auth_jwt(token)
+    assert claims["sub"] == "alice"
 
 
 @pytest.mark.asyncio
@@ -1516,10 +1446,13 @@ async def test_auth_jwt_rs256_regression(monkeypatch):
         headers={"kid": "rsa1"},
     )
 
-    h = JWTHandler()
-    with patch.object(h, "get_public_key", new=AsyncMock(return_value=rsa_jwk)):
-        claims = await h.auth_jwt(token)
-        assert claims["sub"] == "bob"
+    jwks_url = "https://example.com/jwks"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    h = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [rsa_jwk]})
+    )
+    claims = await h.auth_jwt(token)
+    assert claims["sub"] == "bob"
 
 
 @pytest.mark.asyncio
@@ -1561,20 +1494,25 @@ async def test_auth_jwt_mismatched_key_fails(monkeypatch):
     def b64url(b: bytes) -> str:
         return base64.urlsafe_b64encode(b).rstrip(b"=").decode()
 
+    # Same kid as the token so PyJWKClient resolves this key, surfacing the
+    # key-type/signature mismatch at decode time rather than at lookup.
     rsa_jwk = {
         "kty": "RSA",
         "n": b64url(pub.n.to_bytes((pub.n.bit_length() + 7) // 8, "big")),
         "e": b64url(pub.e.to_bytes((pub.e.bit_length() + 7) // 8, "big")),
-        "kid": "rsa1",
+        "kid": "ec1",
         "alg": "RS256",
         "use": "sig",
     }
 
-    h = JWTHandler()
-    with patch.object(h, "get_public_key", new=AsyncMock(return_value=rsa_jwk)):
-        with pytest.raises(Exception) as exc:
-            await h.auth_jwt(token)
-        assert "Validation fails" in str(exc.value)
+    jwks_url = "https://example.com/jwks"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    h = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [rsa_jwk]})
+    )
+    with pytest.raises(Exception) as exc:
+        await h.auth_jwt(token)
+    assert "Validation fails" in str(exc.value)
 
 
 def _base64url_encode_bytes(value: bytes) -> str:
@@ -1631,18 +1569,39 @@ def _encode_rsa_jwt(
     )
 
 
-def _get_jwt_handler_with_issuer_keys(issuers: list, keys_by_url: dict) -> JWTHandler:
-    cache = DualCache()
-    for jwks_url, keys in keys_by_url.items():
-        cache.set_cache(
-            key=f"litellm_jwt_auth_keys_{jwks_url}",
-            value=keys,
-        )
+def _make_static_jwks_client_factory(keys_by_url: dict, fetch_counter: dict = None):
+    """Build a ``jwks_client_factory`` that serves JWK sets from memory.
 
-    jwt_handler = JWTHandler()
+    The real ``PyJWKClient`` still performs kid matching, signature-key
+    construction, and JWK-set caching; only the HTTP fetch is replaced, so the
+    caching path is genuinely exercised.
+    """
+    import jwt as _jwt
+
+    def factory(jwks_url: str):
+        keys = keys_by_url[jwks_url]
+
+        class _StaticJWKClient(_jwt.PyJWKClient):
+            def fetch_data(self) -> dict:
+                if fetch_counter is not None:
+                    fetch_counter[jwks_url] = fetch_counter.get(jwks_url, 0) + 1
+                jwk_set = {"keys": keys}
+                if self.jwk_set_cache is not None:
+                    self.jwk_set_cache.put(jwk_set)
+                return jwk_set
+
+        return _StaticJWKClient(jwks_url, cache_jwk_set=True)
+
+    return factory
+
+
+def _get_jwt_handler_with_issuer_keys(issuers: list, keys_by_url: dict) -> JWTHandler:
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory(keys_by_url)
+    )
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(issuers=issuers),
     )
     return jwt_handler
@@ -1964,13 +1923,12 @@ async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
 
     private_key, jwk = _get_rsa_key_and_jwk(kid="global-key")
-    cache = DualCache()
-    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
-
-    jwt_handler = JWTHandler()
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [jwk]})
+    )
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="email",
             user_email_jwt_field="email",
