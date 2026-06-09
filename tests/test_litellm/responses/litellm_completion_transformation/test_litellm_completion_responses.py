@@ -1228,13 +1228,19 @@ class TestToolTransformation:
         )
         assert result_tool["function"]["parameters"] == namespace_tool["parameters"]
 
-    def test_transform_namespace_tools_without_schema_skips(self):
-        """Name-only namespace tools are skipped instead of becoming hollow functions."""
-        namespace_tool = {
-            "type": "namespace",
-            "name": "mcp__node_repl",
-        }
-
+    @pytest.mark.parametrize(
+        "namespace_tool",
+        [
+            {"type": "namespace", "name": "mcp__node_repl"},
+            {
+                "type": "namespace",
+                "name": "mcp__node_repl",
+                "description": "Runtime namespace exposed by MCP",
+            },
+        ],
+    )
+    def test_transform_namespace_tools_without_schema_skips(self, namespace_tool):
+        """Namespace tools without parameters are skipped instead of becoming hollow functions."""
         (
             result_tools,
             web_search_options,
