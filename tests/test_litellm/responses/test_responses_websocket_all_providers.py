@@ -71,6 +71,14 @@ class TestResponsesAPIWebSocketSupport:
         )
         assert url == "wss://myresource.cognitiveservices.azure.com/openai/v1/responses"
 
+    def test_azure_websocket_url_strips_query_params(self):
+        config = AzureOpenAIResponsesAPIConfig()
+        url = config.get_websocket_url(
+            api_base="https://myresource.cognitiveservices.azure.com/openai/responses?api-version=2024-05-01-preview",
+            litellm_params={},
+        )
+        assert url == "wss://myresource.cognitiveservices.azure.com/openai/v1/responses"
+
     def test_xai_uses_managed_websocket(self):
         """XAI should use managed websocket handler"""
         config = XAIResponsesAPIConfig()
@@ -794,6 +802,61 @@ class TestWebSocketErrorHandling:
         error_event = mock_websocket.send_text.call_args[0][0]
         assert "error" in error_event
         assert "Invalid JSON" in error_event
+
+
+class TestNativeWebSocketGuardrails:
+    @pytest.mark.asyncio
+    async def test_response_create_injects_authorized_model(self):
+        import json
+        from unittest.mock import MagicMock
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        handler = ResponsesWebSocketStreaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=MagicMock(),
+            authorized_model="authorized-deployment",
+        )
+
+        flat_message = await handler._mask_response_create(
+            json.dumps({"type": "response.create", "input": "hi"})
+        )
+        nested_message = await handler._mask_response_create(
+            json.dumps({"type": "response.create", "response": {"input": "hi"}})
+        )
+
+        assert json.loads(flat_message)["model"] == "authorized-deployment"
+        assert (
+            json.loads(nested_message)["response"]["model"] == "authorized-deployment"
+        )
+
+    @pytest.mark.asyncio
+    async def test_completed_event_with_null_response_passes_through(self):
+        from unittest.mock import MagicMock
+
+        from litellm.responses.streaming_iterator import ResponsesWebSocketStreaming
+
+        class Guardrail:
+            def get_presidio_settings_from_request_data(self, request_data):
+                return None
+
+            def _unmask_pii_text(self, text, pii_tokens):
+                return text
+
+        event = '{"type":"response.completed","response":null}'
+        guardrail = Guardrail()
+        handler = ResponsesWebSocketStreaming(
+            websocket=MagicMock(),
+            backend_ws=MagicMock(),
+            logging_obj=MagicMock(),
+            request_data={"metadata": {"pii_tokens": {"<TOKEN_1>": "secret"}}},
+            guardrail_callbacks=[guardrail],
+            output_guardrail_callbacks=[guardrail],
+        )
+
+        assert handler._unmask_response_event(event) == event
+        assert await handler._mask_response_completed(event) == event
 
 
 class TestWebSocketChunkTypes:

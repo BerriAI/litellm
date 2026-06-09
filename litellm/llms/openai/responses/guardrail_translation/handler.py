@@ -502,7 +502,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         # final chunk; iterate output items, apply guardrail, write back.     #
         # ------------------------------------------------------------------ #
         if final_chunk.get("type") == "response.completed":
-            outputs: List[Any] = final_chunk.get("response", {}).get("output", [])
+            response_obj = final_chunk.get("response") or {}
+            if not hasattr(response_obj, "get"):
+                return responses_so_far
+            outputs: List[Any] = response_obj.get("output") or []
 
             texts_to_check: List[str] = []
             tool_calls_to_check: List[ChatCompletionToolCallChunk] = []
@@ -522,7 +525,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 if request_data is None:
                     request_data = {}
                 if "response" not in request_data:
-                    request_data["response"] = final_chunk.get("response", {})
+                    request_data["response"] = response_obj
                 if "litellm_metadata" not in request_data:
                     user_metadata = self.transform_user_api_key_dict_to_metadata(
                         user_api_key_dict
@@ -535,7 +538,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                     inputs["tool_calls"] = cast(
                         List[ChatCompletionToolCallChunk], tool_calls_to_check
                     )
-                response_model = final_chunk.get("response", {}).get("model")
+                response_model = response_obj.get("model")
                 if response_model:
                     inputs["model"] = response_model
 
@@ -552,7 +555,7 @@ class OpenAIResponsesHandler(BaseTranslation):
                 # final_chunk is a reference into responses_so_far so this
                 # mutates the list that the caller holds.
                 await self._apply_guardrail_responses_to_output(
-                    response=final_chunk.get("response", {}),
+                    response=response_obj,
                     responses=guardrailed_texts,
                     task_mappings=task_mappings,
                 )

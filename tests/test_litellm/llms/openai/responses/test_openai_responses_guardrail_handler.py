@@ -901,6 +901,20 @@ class TestOpenAIResponsesHandlerStreamingOutputProcessing:
         assert result == responses_so_far
 
     @pytest.mark.asyncio
+    async def test_process_output_streaming_response_null_response(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockPassThroughGuardrail(guardrail_name="test")
+        responses_so_far = [{"type": "response.completed", "response": None}]
+
+        result = await handler.process_output_streaming_response(
+            responses_so_far=responses_so_far,
+            guardrail_to_apply=guardrail,
+            litellm_logging_obj=None,
+        )
+
+        assert result == responses_so_far
+
+    @pytest.mark.asyncio
     async def test_process_output_streaming_response_unrecognized_output_type(self):
         """Test that streaming response with unrecognized output types doesn't raise IndexError
 
