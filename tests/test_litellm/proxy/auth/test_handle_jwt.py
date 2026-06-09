@@ -1206,7 +1206,13 @@ async def test_auth_builder_returns_team_membership_object():
             JWTAuthManager,
             "get_objects",
             new_callable=AsyncMock,
-            return_value=(user_object, None, None, mock_team_membership, user_object.user_id),
+            return_value=(
+                user_object,
+                None,
+                None,
+                mock_team_membership,
+                user_object.user_id,
+            ),
         ) as mock_get_objects,
         patch.object(
             JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
@@ -3205,9 +3211,7 @@ def test_canonical_user_id_no_change_when_ids_match():
     user_object = LiteLLM_UserTable(user_id=same, user_email=same)
 
     assert (
-        JWTAuthManager._canonical_user_id_from_db(
-            user_id=same, user_object=user_object
-        )
+        JWTAuthManager._canonical_user_id_from_db(user_id=same, user_object=user_object)
         == same
     )
 
@@ -3245,81 +3249,43 @@ def test_canonical_user_id_no_change_when_db_user_id_falsy():
 
 
 @pytest.mark.asyncio
-async def test_auth_jwt_expired_token_raises_401_jwk_path():
-    """An expired JWT (access token) decoded via the JWK/dict public-key path
-    must raise a ProxyException carrying a 401 status code so the status is
-    preserved end-to-end (client response + OTel traces).
+async def test_auth_jwt_expired_token_raises_401_jwk_path(monkeypatch):
+    """An expired JWT decoded via the global JWKS path must raise a
+    ProxyException carrying a 401 status code so the status is preserved
+    end-to-end (client response + OTel traces).
     """
-    import jwt as jwt_lib
+    import time
 
-    jwt_handler = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+    from litellm.caching.dual_cache import DualCache
 
-    with (
-        patch.object(
-            jwt_handler, "get_public_key", new_callable=AsyncMock
-        ) as mock_get_public_key,
-        patch(
-            "litellm.proxy.auth.handle_jwt.jwt.get_unverified_header",
-            return_value={"kid": "test-kid"},
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.PyJWK.from_dict",
-            return_value=MagicMock(key="fake-key"),
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.jwt.decode",
-            side_effect=jwt_lib.ExpiredSignatureError("Signature has expired"),
-        ),
-    ):
-        mock_get_public_key.return_value = {"kty": "RSA", "kid": "test-kid"}
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    jwks_url = "https://expired-issuer.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
 
-        with pytest.raises(ProxyException) as exc_info:
-            await jwt_handler.auth_jwt(token="expired.jwt.token")
+    private_key, jwk = _get_rsa_key_and_jwk(kid="expired-kid")
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [jwk]})
+    )
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
 
-        assert exc_info.value.code == str(401)
-        assert exc_info.value.type == ProxyErrorTypes.expired_key.value
-        assert "Token Expired" in exc_info.value.message
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://expired-issuer.example.com",
+        audience="my-audience",
+        kid="expired-kid",
+        extra_claims={"exp": int(time.time()) - 100},
+    )
 
+    with pytest.raises(ProxyException) as exc_info:
+        await jwt_handler.auth_jwt(token=token)
 
-@pytest.mark.asyncio
-async def test_auth_jwt_expired_token_raises_401_pem_cert_path():
-    """Same as above but for the PEM-certificate (string public-key) decode path."""
-    import jwt as jwt_lib
-
-    jwt_handler = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
-
-    mock_cert = MagicMock()
-    mock_cert.public_key.return_value.public_bytes.return_value = b"fake-key"
-
-    with (
-        patch.object(
-            jwt_handler, "get_public_key", new_callable=AsyncMock
-        ) as mock_get_public_key,
-        patch(
-            "litellm.proxy.auth.handle_jwt.jwt.get_unverified_header",
-            return_value={"kid": "test-kid"},
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.x509.load_pem_x509_certificate",
-            return_value=mock_cert,
-        ),
-        patch(
-            "litellm.proxy.auth.handle_jwt.jwt.decode",
-            side_effect=jwt_lib.ExpiredSignatureError("Signature has expired"),
-        ),
-    ):
-        mock_get_public_key.return_value = (
-            "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----"
-        )
-
-        with pytest.raises(ProxyException) as exc_info:
-            await jwt_handler.auth_jwt(token="expired.jwt.token")
-
-        assert exc_info.value.code == str(401)
-        assert exc_info.value.type == ProxyErrorTypes.expired_key.value
-        assert "Token Expired" in exc_info.value.message
+    assert exc_info.value.code == str(401)
+    assert exc_info.value.type == ProxyErrorTypes.expired_key.value
+    assert "Token Expired" in exc_info.value.message
 
 
 def _base64url_encode_int(value: int) -> str:
@@ -3381,78 +3347,85 @@ def _encode_rsa_jwt(
     )
 
 
+def _make_static_jwks_client_factory(
+    keys_by_url: dict, fetch_counter: Optional[dict] = None
+):
+    """Build a ``jwks_client_factory`` that serves JWK sets from memory.
+
+    The real ``PyJWKClient`` still performs kid matching, signature-key
+    construction, and JWK-set caching; only the HTTP fetch is replaced, so the
+    caching path is genuinely exercised. ``fetch_counter`` (when supplied) is
+    incremented per network fetch so tests can assert the cache prevents
+    refetching.
+    """
+    import jwt as _jwt
+
+    def factory(jwks_url: str) -> "_jwt.PyJWKClient":
+        keys = keys_by_url[jwks_url]
+
+        class _StaticJWKClient(_jwt.PyJWKClient):
+            def fetch_data(self) -> dict:
+                if fetch_counter is not None:
+                    fetch_counter[jwks_url] = fetch_counter.get(jwks_url, 0) + 1
+                jwk_set = {"keys": keys}
+                if self.jwk_set_cache is not None:
+                    self.jwk_set_cache.put(jwk_set)
+                return jwk_set
+
+        return _StaticJWKClient(jwks_url, cache_jwk_set=True)
+
+    return factory
+
+
 def _get_jwt_handler_with_issuer_keys(issuers: list, keys_by_url: dict) -> JWTHandler:
     from litellm.caching.dual_cache import DualCache
 
-    cache = DualCache()
-    for jwks_url, keys in keys_by_url.items():
-        cache.set_cache(
-            key=f"litellm_jwt_auth_keys_{jwks_url}",
-            value=keys,
-        )
-
-    jwt_handler = JWTHandler()
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory(keys_by_url)
+    )
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(issuers=issuers),
     )
     return jwt_handler
 
 
 @pytest.mark.asyncio
-async def test_get_public_key_fetches_and_caches_jwks_response():
-    from unittest.mock import AsyncMock, MagicMock
-
+async def test_auth_jwt_tries_next_jwks_url_when_kid_missing(monkeypatch):
+    """Comma-separated JWT_PUBLIC_KEY_URL must fall through to the next URL when
+    the first JWKS has no key matching the token's kid.
+    """
     from litellm.caching.dual_cache import DualCache
 
-    jwt_handler = JWTHandler()
-    cache = DualCache()
-    jwt_handler.update_environment(
-        prisma_client=None,
-        user_api_key_cache=cache,
-        litellm_jwtauth=LiteLLM_JWTAuth(public_key_ttl=123),
-    )
-    expected_key_id = "cached-key"
-    _, jwk = _get_rsa_key_and_jwk(kid=expected_key_id)
-    mock_response = MagicMock()
-    mock_response.json.return_value = {"keys": [jwk]}
-    jwt_handler.http_handler.get = AsyncMock(return_value=mock_response)
-
-    public_key = await jwt_handler._get_public_key_from_jwks_url(
-        jwks_url="https://issuer.example.com/keys",
-        kid=expected_key_id,
-    )
-
-    assert public_key == jwk
-    cached_keys = await cache.async_get_cache(
-        key="litellm_jwt_auth_keys_https://issuer.example.com/keys"
-    )
-    assert cached_keys == [jwk]
-
-
-@pytest.mark.asyncio
-async def test_get_public_key_tries_next_jwks_url_when_kid_missing(monkeypatch):
-    from litellm.caching.dual_cache import DualCache
-
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
     first_jwks_url = "https://first.example.com/keys"
     second_jwks_url = "https://second.example.com/keys"
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", f"{first_jwks_url}, {second_jwks_url},,")
+
     _, first_jwk = _get_rsa_key_and_jwk(kid="first-key")
-    _, second_jwk = _get_rsa_key_and_jwk(kid="second-key")
-    cache = DualCache()
-    cache.set_cache(key=f"litellm_jwt_auth_keys_{first_jwks_url}", value=[first_jwk])
-    cache.set_cache(key=f"litellm_jwt_auth_keys_{second_jwks_url}", value=[second_jwk])
-    jwt_handler = JWTHandler()
+    second_private_key, second_jwk = _get_rsa_key_and_jwk(kid="second-key")
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory(
+            {first_jwks_url: [first_jwk], second_jwks_url: [second_jwk]}
+        )
+    )
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(),
     )
 
-    public_key = await jwt_handler.get_public_key(kid="second-key")
+    token = _encode_rsa_jwt(
+        private_key=second_private_key,
+        issuer="https://second.example.com",
+        audience="my-audience",
+        kid="second-key",
+    )
 
-    assert public_key == second_jwk
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert claims["sub"] == "test-subject"
 
 
 def test_get_jwks_url_for_issuer_falls_back_to_discovery_document():
@@ -3498,12 +3471,15 @@ async def test_get_objects_team_membership_uses_rebound_user_id():
         user_id_jwt_field="email", user_id_upsert=True
     )
 
-    with patch(
-        "litellm.proxy.auth.handle_jwt.get_user_object",
-        side_effect=fake_get_user_object,
-    ), patch(
-        "litellm.proxy.auth.handle_jwt.get_team_membership",
-        side_effect=fake_get_team_membership,
+    with (
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_user_object",
+            side_effect=fake_get_user_object,
+        ),
+        patch(
+            "litellm.proxy.auth.handle_jwt.get_team_membership",
+            side_effect=fake_get_team_membership,
+        ),
     ):
         (
             user_object,
@@ -3871,13 +3847,12 @@ async def test_global_jwt_ignores_user_supplied_internal_claims(monkeypatch):
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
 
     private_key, jwk = _get_rsa_key_and_jwk(kid="global-key")
-    cache = DualCache()
-    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
-
-    jwt_handler = JWTHandler()
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [jwk]})
+    )
     jwt_handler.update_environment(
         prisma_client=None,
-        user_api_key_cache=cache,
+        user_api_key_cache=DualCache(),
         litellm_jwtauth=LiteLLM_JWTAuth(
             user_id_jwt_field="email",
             user_email_jwt_field="email",
@@ -4028,3 +4003,137 @@ def test_build_decode_kwargs_warns_for_unscoped_global_fallback_in_mixed_deploym
         if "neither JWT_AUDIENCE nor JWT_ISSUER" in r.getMessage()
     ]
     assert len(matching) == 1
+
+
+# ---------------------------------------------------------------------------
+# PyJWKClient-backed JWKS resolution (replaces custom JWKS fetch/cache plumbing)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_handle_jwt_pyjwkclient_validates_rs256_jwt(monkeypatch):
+    """A correctly signed RS256 token validates through PyJWKClient using only
+    the JWKS served at JWT_PUBLIC_KEY_URL plus the token's kid.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    jwks_url = "https://idp.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid="rs256-key")
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory({jwks_url: [jwk]})
+    )
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://idp.example.com",
+        audience="my-audience",
+        kid="rs256-key",
+        extra_claims={"sub": "alice"},
+    )
+
+    claims = await jwt_handler.auth_jwt(token=token)
+
+    assert claims["sub"] == "alice"
+
+
+@pytest.mark.asyncio
+async def test_handle_jwt_pyjwkclient_rejects_wrong_signature(monkeypatch):
+    """A token signed with key A but verified against key B (same kid) is
+    rejected. PyJWKClient resolves the advertised key; jwt.decode then fails
+    the signature check, surfaced as a "Validation fails" error.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    jwks_url = "https://idp.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    signing_key, _ = _get_rsa_key_and_jwk(kid="rs256-key")
+    _, advertised_jwk = _get_rsa_key_and_jwk(kid="rs256-key")
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory(
+            {jwks_url: [advertised_jwk]}
+        )
+    )
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=signing_key,
+        issuer="https://idp.example.com",
+        audience="my-audience",
+        kid="rs256-key",
+    )
+
+    with pytest.raises(Exception) as exc:
+        await jwt_handler.auth_jwt(token=token)
+    assert "Validation fails" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_handle_jwt_pyjwkclient_caches_jwks_calls(monkeypatch):
+    """A second validation in the same process must not re-fetch the JWKS:
+    PyJWKClient's in-process JWK-set cache serves the key. The request-counting
+    fake at the HTTP (fetch) layer must record exactly one fetch.
+    """
+    from litellm.caching.dual_cache import DualCache
+
+    monkeypatch.delenv("JWT_AUDIENCE", raising=False)
+    jwks_url = "https://idp.example.com/keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+
+    private_key, jwk = _get_rsa_key_and_jwk(kid="rs256-key")
+    fetch_counter: dict = {}
+    jwt_handler = JWTHandler(
+        jwks_client_factory=_make_static_jwks_client_factory(
+            {jwks_url: [jwk]}, fetch_counter=fetch_counter
+        )
+    )
+    jwt_handler.update_environment(
+        prisma_client=None,
+        user_api_key_cache=DualCache(),
+        litellm_jwtauth=LiteLLM_JWTAuth(),
+    )
+
+    token = _encode_rsa_jwt(
+        private_key=private_key,
+        issuer="https://idp.example.com",
+        audience="my-audience",
+        kid="rs256-key",
+    )
+
+    await jwt_handler.auth_jwt(token=token)
+    await jwt_handler.auth_jwt(token=token)
+
+    assert fetch_counter[jwks_url] == 1
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "get_public_key",
+        "_get_public_key_from_jwks_url",
+        "parse_keys",
+        "_get_jwk_from_public_key",
+        "_decode_jwt_with_public_key",
+    ],
+)
+def test_handle_jwt_retired_jwks_methods_are_gone(method_name):
+    """The custom JWKS fetch/parse/transform methods were retired in favor of
+    PyJWKClient. Importing or calling them must fail so no caller silently
+    resurrects the dead plumbing.
+    """
+    assert not hasattr(JWTHandler, method_name)
+    with pytest.raises(AttributeError):
+        getattr(JWTHandler(), method_name)
