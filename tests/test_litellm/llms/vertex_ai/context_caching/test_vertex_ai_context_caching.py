@@ -86,7 +86,7 @@ class TestContextCachingEndpoints:
         cached_content = "cached_content_123"
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -129,7 +129,7 @@ class TestContextCachingEndpoints:
         mock_separate.return_value = ([], self.sample_messages)  # No cached messages
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -177,7 +177,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -254,7 +254,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -324,7 +324,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute and Assert
         with pytest.raises(VertexAIError) as exc_info:
@@ -364,7 +364,7 @@ class TestContextCachingEndpoints:
         cached_content = "cached_content_123"
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -404,7 +404,7 @@ class TestContextCachingEndpoints:
         mock_separate.return_value = ([], self.sample_messages)
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -453,7 +453,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -535,7 +535,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -606,7 +606,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute and Assert
         with pytest.raises(VertexAIError) as exc_info:
@@ -648,7 +648,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Mock the check_cache to return existing cache so we don't make HTTP calls
             with patch.object(
@@ -694,7 +694,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Execute
             result = self.context_caching.check_and_create_cache(
@@ -735,7 +735,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Execute
             result = await self.context_caching.async_check_and_create_cache(
@@ -778,7 +778,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Mock the async_check_cache to return existing cache so we don't make HTTP calls
             with patch.object(
@@ -1880,6 +1880,70 @@ class TestVertexAIGlobalLocation:
             assert (
                 "global-aiplatform" not in url
             ), "URL should not contain 'global-aiplatform' prefix"
+
+    @pytest.mark.parametrize("vertex_location", ["eu", "us"])
+    def test_multi_region_location_url_construction_v1(self, vertex_location):
+        """Multi-region locations (eu/us) must use the REP host for v1 API.
+
+        Regression test: previously context caching built
+        ``https://{location}-aiplatform.googleapis.com`` for every non-global
+        location, producing the invalid host ``eu-aiplatform.googleapis.com``
+        (404) for the multi-region endpoints. Inference already resolved these
+        to ``aiplatform.{geo}.rep.googleapis.com`` via ``get_vertex_base_url``;
+        context caching now uses the same helper.
+        """
+        caching = ContextCachingEndpoints()
+
+        with patch.object(
+            caching,
+            "_check_custom_proxy",
+            side_effect=lambda **kwargs: (kwargs.get("auth_header"), kwargs.get("url")),
+        ):
+            auth_header, url = caching._get_token_and_url_context_caching(
+                gemini_api_key=None,
+                custom_llm_provider="vertex_ai",
+                api_base=None,
+                vertex_project="test-project",
+                vertex_location=vertex_location,
+                vertex_auth_header="Bearer test-token",
+            )
+
+            expected_url = (
+                f"https://aiplatform.{vertex_location}.rep.googleapis.com"
+                f"/v1/projects/test-project/locations/{vertex_location}/cachedContents"
+            )
+            assert url == expected_url, f"Expected {expected_url}, got {url}"
+            assert (
+                f"{vertex_location}-aiplatform" not in url
+            ), "URL must not use the invalid '<location>-aiplatform' host for multi-region"
+
+    @pytest.mark.parametrize("vertex_location", ["eu", "us"])
+    def test_multi_region_location_url_construction_v1beta1(self, vertex_location):
+        """Multi-region locations (eu/us) must use the REP host for v1beta1 API."""
+        caching = ContextCachingEndpoints()
+
+        with patch.object(
+            caching,
+            "_check_custom_proxy",
+            side_effect=lambda **kwargs: (kwargs.get("auth_header"), kwargs.get("url")),
+        ):
+            auth_header, url = caching._get_token_and_url_context_caching(
+                gemini_api_key=None,
+                custom_llm_provider="vertex_ai_beta",
+                api_base=None,
+                vertex_project="test-project",
+                vertex_location=vertex_location,
+                vertex_auth_header="Bearer test-token",
+            )
+
+            expected_url = (
+                f"https://aiplatform.{vertex_location}.rep.googleapis.com"
+                f"/v1beta1/projects/test-project/locations/{vertex_location}/cachedContents"
+            )
+            assert url == expected_url, f"Expected {expected_url}, got {url}"
+            assert (
+                f"{vertex_location}-aiplatform" not in url
+            ), "URL must not use the invalid '<location>-aiplatform' host for multi-region"
 
     def test_gemini_context_caching_with_custom_api_base_passes_model(self):
         """Gemini context caching with custom api_base must pass model to _check_custom_proxy.
