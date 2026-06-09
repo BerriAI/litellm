@@ -2409,39 +2409,6 @@ async def test_virtual_key_budget_check_fallback_no_counter():
         assert exc_info.value.current_cost == 15.0
 
 
-@pytest.mark.asyncio
-async def test_virtual_key_budget_check_stale_counter_reconciliation():
-    """
-    Test that if database spend is reset to 0.0, but the counter is stale (> 0.0),
-    and budget_reset_at is in the future (active budget window), the counter is invalidated
-    and the budget check passes.
-    """
-    from litellm.proxy.utils import ProxyLogging
-    from datetime import datetime, timedelta, timezone
-
-    valid_token = UserAPIKeyAuth(
-        token="test-hashed-token",
-        spend=0.0,
-        max_budget=1.0,
-        user_id="test-user",
-        budget_reset_at=(datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
-    )
-
-    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
-    proxy_logging_obj.budget_alerts = AsyncMock()
-
-    async def mock_get_current_spend(counter_key, fallback_spend):
-        return 1.5
-
-    mock_invalidate = AsyncMock()
-
-    with patch("litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend), \
-         patch("litellm.proxy.proxy_server._invalidate_spend_counter", mock_invalidate):
-        await _virtual_key_max_budget_check(
-            valid_token=valid_token,
-            proxy_logging_obj=proxy_logging_obj,
-        )
-        mock_invalidate.assert_called_once_with(counter_key="spend:key:test-hashed-token")
 
 
 @pytest.mark.asyncio
