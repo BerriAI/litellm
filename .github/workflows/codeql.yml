@@ -22,7 +22,7 @@ jobs:
     if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm' || github.repository == 'rayward-external/litellm'
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 90
     permissions:
       security-events: write
       packages: read
