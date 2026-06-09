@@ -7,7 +7,8 @@
 set -eu
 
 MIN_PYTHON_MAJOR=3
-MIN_PYTHON_MINOR=9
+MIN_PYTHON_MINOR=10
+MANAGED_PYTHON_VERSION=3.13
 
 # NOTE: before merging, this must stay as "litellm[proxy]" to install from PyPI.
 LITELLM_PACKAGE="litellm[proxy]"
@@ -67,10 +68,7 @@ for candidate in python3 python; do
 done
 
 if [ -z "$PYTHON_BIN" ]; then
-  die "Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ is required but not found.
-  Install it from https://python.org/downloads or via your package manager:
-    macOS:  brew install python@3
-    Ubuntu: sudo apt install python3"
+  info "No Python ${MIN_PYTHON_MAJOR}.${MIN_PYTHON_MINOR}+ found; uv will install a managed Python ${MANAGED_PYTHON_VERSION}"
 fi
 
 # ── uv detection / install ────────────────────────────────────────────────
@@ -105,8 +103,10 @@ echo ""
 header "Installing litellm[proxy]…"
 echo ""
 
-"$UV_BIN" tool install --python "$PYTHON_BIN" --force "${LITELLM_PACKAGE}" \
-  || die "uv tool install failed. Try manually: $UV_BIN tool install --python '$PYTHON_BIN' '${LITELLM_PACKAGE}'"
+INSTALL_PYTHON="${PYTHON_BIN:-$MANAGED_PYTHON_VERSION}"
+
+"$UV_BIN" tool install --python "$INSTALL_PYTHON" --force "${LITELLM_PACKAGE}" \
+  || die "uv tool install failed. Try manually: $UV_BIN tool install --python '$INSTALL_PYTHON' '${LITELLM_PACKAGE}'"
 
 # ── find the litellm binary installed by uv tool ───────────────────────────
 SCRIPTS_DIR="$("$UV_BIN" tool dir --bin)"
