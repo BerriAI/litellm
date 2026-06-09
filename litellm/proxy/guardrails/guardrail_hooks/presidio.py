@@ -1225,6 +1225,38 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
+    @staticmethod
+    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: Dict[str, str]) -> bytes:
+        try:
+            text = chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            return chunk
+
+        result_lines: List[str] = []
+        for line in text.split("\n"):
+            if line.startswith("data: ") and line != "data: [DONE]":
+                raw_json = line[6:]
+                try:
+                    event = json.loads(raw_json)
+                    delta = event.get("delta") if isinstance(event, dict) else None
+                    if (
+                        isinstance(delta, dict)
+                        and event.get("type") == "content_block_delta"
+                        and delta.get("type") == "text_delta"
+                        and isinstance(delta.get("text"), str)
+                    ):
+                        unmasked = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(
+                            delta["text"], pii_tokens
+                        )
+                        if unmasked != delta["text"]:
+                            event["delta"]["text"] = unmasked
+                            line = "data: " + json.dumps(event)
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    pass
+            result_lines.append(line)
+
+        return "\n".join(result_lines).encode("utf-8")
+
     async def _stream_pii_unmasking(
         self,
         response: Any,
@@ -1237,13 +1269,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         from litellm.main import stream_chunk_builder
         from litellm.types.utils import ModelResponse
 
+        metadata = (request_data.get("metadata") or {}) if request_data else {}
+        pii_tokens: Dict[str, str] = metadata.get("pii_tokens", {})
+
         remaining_chunks: List[ModelResponseStream] = []
         try:
             async for chunk in response:
                 if isinstance(chunk, ModelResponseStream):
                     remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
-                    yield chunk  # type: ignore[misc]
+                    if pii_tokens:
+                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)  # type: ignore[misc]
+                    else:
+                        yield chunk  # type: ignore[misc]
                     continue
 
             if not remaining_chunks:
