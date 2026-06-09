@@ -1299,15 +1299,29 @@ class JWTAuthManager:
 
         # First try to get team by team_id
         if individual_team_id:
-            team_object = await get_team_object(
-                team_id=individual_team_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
-                team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
-            )
-            return individual_team_id, team_object
+            try:
+                team_object = await get_team_object(
+                    team_id=individual_team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    team_id_upsert=jwt_handler.litellm_jwtauth.team_id_upsert,
+                )
+                return individual_team_id, team_object
+            except HTTPException as e:
+                if (
+                    e.status_code != 404
+                    or not jwt_handler.litellm_jwtauth.team_claim_fallback
+                ):
+                    raise
+                # Claim doesn't map to a known team — defer to fallback.
+                verbose_proxy_logger.debug(
+                    "JWT team_id claim '%s' did not resolve to a team: %s",
+                    individual_team_id,
+                    e.detail,
+                )
+                return None, None
 
         # If no team_id found, try to resolve via team_alias_jwt_field
         team_alias = jwt_handler.get_team_alias(
@@ -1431,6 +1445,7 @@ class JWTAuthManager:
                 )
             return None, None
 
+        any_claim_team_resolved = False
         for team_id in team_ids:
             try:
                 team_object = await get_team_object(
@@ -1440,6 +1455,9 @@ class JWTAuthManager:
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
+
+                if team_object is not None:
+                    any_claim_team_resolved = True
 
                 if team_object and team_object.models is not None:
                     team_models = team_object.models
@@ -1478,12 +1496,17 @@ class JWTAuthManager:
         if denied_auth_enforced_pass_through_route:
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
-        if requested_model:
+        if requested_model and (
+            any_claim_team_resolved
+            or not jwt_handler.litellm_jwtauth.team_claim_fallback
+        ):
+            # Claim resolved but no model access, or fallback disabled — deny.
             raise HTTPException(
                 status_code=403,
                 detail=f"No team has access to the requested model: {requested_model}. Checked teams={team_ids}. Check `/models` to see all available models.",
             )
 
+        # No claim team resolved and fallback enabled — defer to fallback.
         return None, None
 
     @staticmethod

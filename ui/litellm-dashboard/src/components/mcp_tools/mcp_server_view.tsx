@@ -21,6 +21,7 @@ interface MCPServerViewProps {
   userRole: string | null;
   userID: string | null;
   availableAccessGroups: string[];
+  initialTabIndex?: number;
 }
 
 export const MCPServerView: React.FC<MCPServerViewProps> = ({
@@ -32,11 +33,12 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
   userRole,
   userID,
   availableAccessGroups,
+  initialTabIndex = 0,
 }) => {
   const [editing, setEditing] = useState(isEditing);
   const [showFullUrl, setShowFullUrl] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
-  const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [selectedTabIndex, setSelectedTabIndex] = useState(initialTabIndex);
 
   const handleSuccess = (updated: MCPServer) => {
     setEditing(false);

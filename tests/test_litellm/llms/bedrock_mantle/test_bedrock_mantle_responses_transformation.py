@@ -12,6 +12,11 @@ import sys
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
 import pytest
+from botocore.exceptions import (
+    ConnectTimeoutError,
+    PartialCredentialsError,
+    ProfileNotFound,
+)
 
 import litellm
 from litellm.llms.bedrock_mantle.responses.transformation import (
@@ -114,16 +119,15 @@ class TestBedrockMantleResponsesAuth:
         )
         assert headers["Authorization"] == "Bearer bearer-key"
 
-    def test_missing_key_raises(self, monkeypatch):
+    def test_missing_bearer_does_not_raise_in_validate_environment(self, monkeypatch):
+        # SigV4 may still apply, so validate_environment must defer instead of raising.
         monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
         monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
         cfg = BedrockMantleResponsesAPIConfig()
-        with pytest.raises(ValueError, match="Bedrock Mantle API key"):
-            cfg.validate_environment(
-                headers={},
-                model="openai.gpt-5.5",
-                litellm_params=GenericLiteLLMParams(),
-            )
+        headers = cfg.validate_environment(
+            headers={}, model="openai.gpt-5.5", litellm_params=GenericLiteLLMParams()
+        )
+        assert "Authorization" not in headers
 
     def test_custom_llm_provider(self):
         cfg = BedrockMantleResponsesAPIConfig()
@@ -259,6 +263,386 @@ def local_cost_map(monkeypatch):
     finally:
         litellm.model_cost = original_model_cost
         litellm.get_model_info.cache_clear()
+
+
+class TestBedrockMantleResponsesSigV4:
+    def test_bearer_short_circuits_without_credentials(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        headers, signed_body = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key="bearer-from-config",
+        )
+        assert headers["Authorization"] == "Bearer bearer-from-config"
+        assert signed_body == b'{"input": "hi"}'
+        signer.get_credentials.assert_not_called()
+
+    def test_bearer_resolved_from_mantle_env_key(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-bearer")
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key=None,
+        )
+        assert headers["Authorization"] == "Bearer env-bearer"
+
+    def test_bearer_arg_takes_priority_over_mantle_env_key(self, monkeypatch):
+        # The passed api_key (e.g. litellm_params.api_key) must win over the env
+        # bearer; a reordered precedence chain would silently use the wrong token.
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.setenv("BEDROCK_MANTLE_API_KEY", "env-bearer")
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=AssertionError("get_credentials must not run for bearer auth")
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={},
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key="arg-bearer",
+        )
+        assert headers["Authorization"] == "Bearer arg-bearer"
+        signer.get_credentials.assert_not_called()
+
+    def test_access_key_produces_sigv4_headers(self, monkeypatch):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=BaseAWSLLM())
+        headers, signed_body = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_session_token": "session-token-test",
+                "aws_region_name": "us-east-2",
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key=None,
+        )
+        assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "Credential=AKIAEXAMPLE/" in headers["Authorization"]
+        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+        assert "X-Amz-Date" in headers
+        assert headers["X-Amz-Security-Token"] == "session-token-test"
+        assert signed_body == b'{"input": "hi"}'
+
+    def test_assume_role_path_produces_sigv4_headers(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from botocore.credentials import Credentials
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            return_value=Credentials(
+                access_key="ASIAEXAMPLE",
+                secret_key="YXNzdW1lZC1yb2xlLXNlY3JldC1hc3N1bWVk",
+                token="assumed-session-token",
+            )
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_role_name": "arn:aws:iam::000000000000:role/test-role",
+                "aws_session_name": "litellm-test",
+                "aws_region_name": "us-east-2",
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key=None,
+        )
+        signer.get_credentials.assert_called_once()
+        call = signer.get_credentials.call_args.kwargs
+        assert call["aws_role_name"] == "arn:aws:iam::000000000000:role/test-role"
+        assert call["aws_session_name"] == "litellm-test"
+        assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+
+    def test_signed_body_matches_final_data_after_normalize(self, monkeypatch):
+        """Core regression: the signed bytes must equal the bytes actually sent.
+
+        Sign the *final* data dict and assert the returned signed_body decodes to
+        exactly that dict, so a later change to the data would break the SigV4 hash.
+        """
+        import json
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        final_data = {"model": "openai.gpt-5.5", "input": "hi", "max_output_tokens": 16}
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=BaseAWSLLM())
+        _, signed_body = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_region_name": "us-east-2",
+            },
+            request_data=final_data,
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key=None,
+        )
+        assert signed_body is not None
+        assert json.loads(signed_body) == final_data
+
+    def test_region_comes_from_optional_params(self, monkeypatch):
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_region_name": "eu-west-1",
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.eu-west-1.api.aws/openai/v1/responses",
+            api_key=None,
+        )
+        assert "/eu-west-1/bedrock/aws4_request" in headers["Authorization"]
+
+    def test_url_region_and_sigv4_region_agree_from_litellm_params(self, monkeypatch):
+        """Adversarial-review regression: a caller-supplied aws_region_name (no region
+        env set) must shape BOTH the URL host and the SigV4 credential scope, or the
+        request is signed for one region and sent to another -> 401.
+        """
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        params = {
+            "aws_region_name": "ap-southeast-2",
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+        }
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=BaseAWSLLM())
+        url = cfg.get_complete_url(api_base=None, litellm_params=params)
+        assert (
+            url == "https://bedrock-mantle.ap-southeast-2.api.aws/openai/v1/responses"
+        )
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params=params,
+            request_data={"input": "hi"},
+            api_base=url,
+            api_key=None,
+        )
+        assert "/ap-southeast-2/bedrock/aws4_request" in headers["Authorization"]
+
+    def test_injected_default_region_base_does_not_override_aws_region_name(
+        self, monkeypatch
+    ):
+        """2nd-round adversarial regression: responses/main.py auto-injects
+        litellm_params.api_base = https://bedrock-mantle.<DEFAULT>.api.aws/v1 (default
+        region, ignoring aws_region_name). The config must still pin BOTH the URL host
+        and the SigV4 scope to aws_region_name, or the IAM deployment 401s. A naive
+        'resolve region only when api_base is None' fix would fail this test.
+        """
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.delenv("AWS_REGION_NAME", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        injected_base = "https://bedrock-mantle.us-east-1.api.aws/v1"  # default region
+        params = {
+            "aws_region_name": "us-east-2",  # what the caller actually wants
+            "api_base": injected_base,
+            "aws_access_key_id": "AKIAEXAMPLE",
+            "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+        }
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=BaseAWSLLM())
+        url = cfg.get_complete_url(api_base=injected_base, litellm_params=params)
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+        headers, _ = cfg.sign_request(
+            headers={},
+            optional_params=params,
+            request_data={"input": "hi"},
+            api_base=url,
+            api_key=None,
+        )
+        assert "/us-east-2/bedrock/aws4_request" in headers["Authorization"]
+        assert "us-east-1" not in headers["Authorization"]
+
+    def test_custom_proxy_host_is_preserved(self, monkeypatch):
+        """A genuinely custom (non-Mantle) api_base host must be preserved, not rewritten
+        to a bedrock-mantle host. Only standard Mantle hosts are region-pinned.
+        """
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base="https://mantle-proxy.internal.example/openai/v1",
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == "https://mantle-proxy.internal.example/openai/v1/responses"
+
+    def test_caller_authorization_does_not_override_sigv4(self, monkeypatch):
+        """Adversarial-review regression: a caller-supplied Authorization header (e.g.
+        from extra_headers, surviving the relaxed validate_environment) must not clobber
+        the SigV4 Authorization that _sign_request would otherwise restore.
+        """
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=BaseAWSLLM())
+        headers, _ = cfg.sign_request(
+            headers={"Authorization": "Bearer stale-caller-token"},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "c2VjcmV0LXRlc3Qtc2VjcmV0LXRlc3Qtc2VjcmV0",
+                "aws_region_name": "us-east-2",
+            },
+            request_data={"input": "hi"},
+            api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+            api_key=None,
+        )
+        assert headers["Authorization"].startswith("AWS4-HMAC-SHA256")
+        assert "Bearer stale-caller-token" not in headers["Authorization"]
+
+    def test_no_bearer_and_no_credentials_raises_both_paths(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from botocore.exceptions import NoCredentialsError
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(side_effect=NoCredentialsError())
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        with pytest.raises(ValueError) as exc:
+            cfg.sign_request(
+                headers={},
+                optional_params={"aws_region_name": "us-east-2"},
+                request_data={"input": "hi"},
+                api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+                api_key=None,
+            )
+        msg = str(exc.value)
+        assert "Bearer" in msg
+        assert "SigV4" in msg or "IAM" in msg
+
+    @pytest.mark.parametrize(
+        "cred_error",
+        [
+            PartialCredentialsError(provider="env", cred_var="aws_secret_access_key"),
+            ProfileNotFound(profile="missing-profile"),
+        ],
+    )
+    def test_partial_credentials_raises_both_paths(self, monkeypatch, cred_error):
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(side_effect=cred_error)
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        with pytest.raises(ValueError) as exc:
+            cfg.sign_request(
+                headers={},
+                optional_params={"aws_region_name": "us-east-2"},
+                request_data={"input": "hi"},
+                api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+                api_key=None,
+            )
+        msg = str(exc.value)
+        assert "Bearer" in msg
+        assert "SigV4" in msg or "IAM" in msg
+
+    def test_sts_transport_error_is_not_masked_as_credentials(self, monkeypatch):
+        # An AssumeRole / web-identity flow hits STS over the network, so a transient
+        # connection error must surface as itself, not be rewritten into the
+        # "no usable AWS credentials" message that would send the user to fix the
+        # wrong thing.
+        from unittest.mock import MagicMock
+        from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+        monkeypatch.delenv("BEDROCK_MANTLE_API_KEY", raising=False)
+        monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+
+        signer = BaseAWSLLM()
+        signer.get_credentials = MagicMock(
+            side_effect=ConnectTimeoutError(
+                endpoint_url="https://sts.us-east-2.amazonaws.com"
+            )
+        )
+        cfg = BedrockMantleResponsesAPIConfig(aws_signer=signer)
+
+        with pytest.raises(ConnectTimeoutError):
+            cfg.sign_request(
+                headers={},
+                optional_params={
+                    "aws_role_name": "arn:aws:iam::000000000000:role/test-role",
+                    "aws_region_name": "us-east-2",
+                },
+                request_data={"input": "hi"},
+                api_base="https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses",
+                api_key=None,
+            )
 
 
 class TestBedrockMantleResponsesPricing:

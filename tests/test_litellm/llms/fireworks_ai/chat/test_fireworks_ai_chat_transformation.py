@@ -127,12 +127,14 @@ def test_get_supported_openai_params_parallel_tool_calls():
     config = FireworksAIConfig()
 
     supported_params = config.get_supported_openai_params(
-        "fireworks_ai/accounts/fireworks/models/glm-4p6"
+        "fireworks_ai/accounts/fireworks/models/glm-5p1"
     )
     assert "parallel_tool_calls" in supported_params
+    assert "tools" in supported_params
+    assert "tool_choice" in supported_params
 
     unsupported_params = config.get_supported_openai_params(
-        "fireworks_ai/accounts/fireworks/models/glm-5p1"
+        "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct"
     )
     assert "parallel_tool_calls" not in unsupported_params
 
@@ -163,9 +165,9 @@ def test_get_model_info_respects_explicit_fireworks_capabilities():
     """Test that get_model_info preserves explicit capability flags from the model map."""
     model_info = get_model_info("fireworks_ai/accounts/fireworks/models/glm-5p1")
 
-    assert model_info["supports_function_calling"] is False
+    assert model_info["supports_function_calling"] is True
     assert model_info["supports_reasoning"] is True
-    assert model_info["supports_tool_choice"] is False
+    assert model_info["supports_tool_choice"] is True
 
 
 def test_get_provider_info_omits_false_supports_reasoning(monkeypatch):
