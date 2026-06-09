@@ -208,6 +208,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "datadog_llm_observability",
             "generic_api",
             "arize",
+            "galileo",
             "newrelic",
             "sqs",
         ]:

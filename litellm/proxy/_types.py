@@ -3077,7 +3077,7 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         ],
         ui_callback_name="Galileo",
     )
-    
+
     newrelic: CallbackOnUI = CallbackOnUI(
         litellm_callback_name="newrelic",
         ui_callback_name="New Relic",
