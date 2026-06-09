@@ -1394,44 +1394,56 @@ class ResponsesWebSocketStreaming:
             presidio_config = cb.get_presidio_settings_from_request_data(
                 self.request_data
             )
-            input_data = msg_obj.get("input", [])
+            # response.create supports two shapes:
+            #   flat:   {"type": "response.create", "input": [...], ...}
+            #   nested: {"type": "response.create", "response": {"input": [...], ...}}
+            # Mask both so PII is never forwarded unmasked regardless of shape.
+            nested_response = msg_obj.get("response") if isinstance(msg_obj.get("response"), dict) else None
+            input_containers: list[tuple[dict, str]] = []
+            if "input" in msg_obj:
+                input_containers.append((msg_obj, "input"))
+            if nested_response is not None and "input" in nested_response:
+                input_containers.append((nested_response, "input"))
 
-            if isinstance(input_data, str):
-                msg_obj["input"] = await cb.check_pii(
-                    text=input_data,
-                    output_parse_pii=True,
-                    presidio_config=presidio_config,
-                    request_data=self.request_data,
-                )
-                modified = True
+            for container, key in input_containers:
+                input_data = container[key]
 
-            elif isinstance(input_data, list):
-                for item in input_data:
-                    if not isinstance(item, dict):
-                        continue
-                    content = item.get("content", [])
-                    if isinstance(content, str):
-                        item["content"] = await cb.check_pii(
-                            text=content,
-                            output_parse_pii=True,
-                            presidio_config=presidio_config,
-                            request_data=self.request_data,
-                        )
-                        modified = True
-                    elif isinstance(content, list):
-                        for block in content:
-                            if (
-                                isinstance(block, dict)
-                                and block.get("type") == "input_text"
-                                and isinstance(block.get("text"), str)
-                            ):
-                                block["text"] = await cb.check_pii(
-                                    text=block["text"],
-                                    output_parse_pii=True,
-                                    presidio_config=presidio_config,
-                                    request_data=self.request_data,
-                                )
-                                modified = True
+                if isinstance(input_data, str):
+                    container[key] = await cb.check_pii(
+                        text=input_data,
+                        output_parse_pii=True,
+                        presidio_config=presidio_config,
+                        request_data=self.request_data,
+                    )
+                    modified = True
+
+                elif isinstance(input_data, list):
+                    for item in input_data:
+                        if not isinstance(item, dict):
+                            continue
+                        content = item.get("content", [])
+                        if isinstance(content, str):
+                            item["content"] = await cb.check_pii(
+                                text=content,
+                                output_parse_pii=True,
+                                presidio_config=presidio_config,
+                                request_data=self.request_data,
+                            )
+                            modified = True
+                        elif isinstance(content, list):
+                            for block in content:
+                                if (
+                                    isinstance(block, dict)
+                                    and block.get("type") == "input_text"
+                                    and isinstance(block.get("text"), str)
+                                ):
+                                    block["text"] = await cb.check_pii(
+                                        text=block["text"],
+                                        output_parse_pii=True,
+                                        presidio_config=presidio_config,
+                                        request_data=self.request_data,
+                                    )
+                                    modified = True
 
         return json.dumps(msg_obj) if modified else message
 
