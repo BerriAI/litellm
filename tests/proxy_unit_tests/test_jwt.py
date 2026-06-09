@@ -1281,10 +1281,9 @@ def test_user_api_key_auth_jwt_hashing():
     Critical: This was a security fix for users
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.auth.handle_jwt import JWTHandler
 
-    # Test with a JWT token (3 parts separated by dots)
-    jwt_token = "test-jwt-token-header.payload.signature"
+    # Test with a JWT token (header decodes as base64 JSON)
+    jwt_token = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxMjMifQ.sig"
 
     # Create UserAPIKeyAuth instance with JWT
     user_auth = UserAPIKeyAuth(api_key=jwt_token)
