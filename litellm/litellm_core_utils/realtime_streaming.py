@@ -114,6 +114,9 @@ class RealTimeStreaming:
             "input_audio_buffer.end",
         ]
     )
+    _CLIENT_AUDIO_BUFFER_COMMIT_TYPES = frozenset(
+        ["input_audio_buffer.commit", "input_audio_buffer.end"]
+    )
     _AUDIO_FORMAT_MAP: Dict[str, Dict[str, Any]] = {
         "pcm16": {"type": "audio/pcm", "rate": 24000},
         "g711_ulaw": {"type": "audio/G711-ulaw", "rate": 8000},
@@ -309,6 +312,48 @@ class RealTimeStreaming:
             return False
         return not self.provider_config.requires_session_configuration()
 
+    @staticmethod
+    def _collapse_buffered_audio_messages(messages: List[str]) -> List[str]:
+        """Apply ``input_audio_buffer.clear`` semantics before replaying buffered frames.
+
+        During deferred Gemini Live setup, ``clear`` is buffered alongside appends.
+        On flush each append becomes a provider ``realtimeInput``; ``clear`` must
+        drop preceding uncommitted appends instead of being forwarded as a no-op.
+        """
+        collapsed: List[str] = []
+        pending_appends: List[str] = []
+
+        for message in messages:
+            try:
+                msg_type = json.loads(message).get("type")
+            except (json.JSONDecodeError, TypeError):
+                collapsed.extend(pending_appends)
+                pending_appends = []
+                collapsed.append(message)
+                continue
+
+            if msg_type == "input_audio_buffer.append":
+                pending_appends.append(message)
+            elif msg_type == "input_audio_buffer.clear":
+                pending_appends = []
+            elif msg_type in RealTimeStreaming._CLIENT_AUDIO_BUFFER_COMMIT_TYPES:
+                collapsed.extend(pending_appends)
+                pending_appends = []
+                collapsed.append(message)
+            else:
+                collapsed.extend(pending_appends)
+                pending_appends = []
+                collapsed.append(message)
+
+        collapsed.extend(pending_appends)
+        return collapsed
+
+    def _sync_pending_messages_byte_total(self) -> None:
+        self._pending_messages_byte_total = sum(
+            len(message.encode("utf-8"))
+            for message in self._pending_messages_until_setup
+        )
+
     def _should_buffer_client_message_until_setup(self, message: str) -> bool:
         if not self._uses_deferred_backend_setup():
             return False
@@ -324,6 +369,20 @@ class RealTimeStreaming:
         return msg_obj.get("type") in RealTimeStreaming._CLIENT_AUDIO_BUFFER_TYPES
 
     def _buffer_pending_message_until_setup(self, message: str) -> None:
+        try:
+            msg_type = json.loads(message).get("type")
+        except (json.JSONDecodeError, TypeError):
+            msg_type = None
+
+        if msg_type == "input_audio_buffer.clear":
+            self._pending_messages_until_setup = (
+                self._collapse_buffered_audio_messages(
+                    self._pending_messages_until_setup + [message]
+                )
+            )
+            self._sync_pending_messages_byte_total()
+            return
+
         msg_bytes = len(message.encode("utf-8"))
         if (
             len(self._pending_messages_until_setup)
@@ -341,7 +400,9 @@ class RealTimeStreaming:
             )
 
     async def _flush_pending_messages_until_setup(self) -> bool:
-        pending = self._pending_messages_until_setup
+        pending = self._collapse_buffered_audio_messages(
+            self._pending_messages_until_setup
+        )
         self._pending_messages_until_setup = []
         self._pending_messages_byte_total = 0
         for idx, message in enumerate(pending):
