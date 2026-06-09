@@ -160,6 +160,7 @@ def get_llm_provider(  # noqa: PLR0915
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
     litellm_params: Optional[LiteLLM_Params] = None,
+    suppress_debug_info: bool = False,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
@@ -167,6 +168,8 @@ def get_llm_provider(  # noqa: PLR0915
     For router -> Can also give the whole litellm param dict -> this function will extract the relevant details
 
     Raises Error - if unable to map model to a provider
+
+    suppress_debug_info: avoid printing provider-list guidance before raising.
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
@@ -525,7 +528,7 @@ def get_llm_provider(  # noqa: PLR0915
         elif model.startswith("sap/"):
             custom_llm_provider = "sap"
         if not custom_llm_provider:
-            if litellm.suppress_debug_info is False:
+            if litellm.suppress_debug_info is False and suppress_debug_info is False:
                 print()  # noqa
                 print(  # noqa
                     "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"  # noqa

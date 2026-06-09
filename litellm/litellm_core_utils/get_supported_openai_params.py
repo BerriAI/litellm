@@ -34,7 +34,9 @@ def get_supported_openai_params(  # noqa: PLR0915
     """
     if not custom_llm_provider:
         try:
-            custom_llm_provider = litellm.get_llm_provider(model=model)[1]
+            custom_llm_provider = litellm.get_llm_provider(
+                model=model, suppress_debug_info=True
+            )[1]
         except BadRequestError:
             return None
 
