@@ -766,3 +766,112 @@ async def test_streaming_flushes_advisor_call_before_running_advisor():
     assert events.index("advisor_leg_invoked") < events.index(
         "emit:advisor_tool_result"
     ), "advisor result must be emitted after the advisor sub-call returns"
+
+
+# ---------------------------------------------------------------------------
+# 11. Advisor token usage is attributed to the advisor model via usage.iterations[]
+# ---------------------------------------------------------------------------
+
+
+def _advisor_iterations(usage):
+    return [
+        it
+        for it in (usage or {}).get("iterations", [])
+        if it.get("type") == "advisor_message"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_non_streaming_reports_advisor_usage_in_iterations():
+    """Without usage.iterations[], a client folds all spend into the executor
+    model and the advisor's cost disappears. The final response must carry an
+    advisor_message iteration tagged with the advisor model and its token counts,
+    and the last iteration must be the executor turn so the context-window readout
+    stays correct."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            resp = _text_resp("Use a sieve.", model="claude-opus-4-6")
+            resp["usage"] = {"input_tokens": 1234, "output_tokens": 56}
+            return resp
+        return _text_resp("def is_prime(n): ...")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    iterations = result["usage"]["iterations"]
+    advisor_iters = _advisor_iterations(result["usage"])
+    assert len(advisor_iters) == 1
+    entry = advisor_iters[0]
+    assert entry["model"] == "claude-opus-4-6"
+    assert entry["input_tokens"] == 1234
+    assert entry["output_tokens"] == 56
+    assert iterations[-1]["type"] != "advisor_message"
+
+
+@pytest.mark.asyncio
+async def test_streaming_reports_advisor_usage_in_message_delta():
+    """The streamed message_delta must carry usage.iterations[] with the advisor
+    leg, since clients read per-model usage from there."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            resp = _text_resp("Use a sieve.", model="claude-opus-4-6")
+            resp["usage"] = {"input_tokens": 1234, "output_tokens": 56}
+            return resp
+        return _text_resp("Final answer.")
+
+    delta_usage = None
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+        async for raw in result:
+            text = raw.decode()
+            if "event: message_delta" in text:
+                delta_usage = json.loads(
+                    text.split("data: ", 1)[1].split("\n\n", 1)[0]
+                )["usage"]
+
+    assert delta_usage is not None
+    advisor_iters = _advisor_iterations(delta_usage)
+    assert len(advisor_iters) == 1
+    assert advisor_iters[0]["model"] == "claude-opus-4-6"
+    assert advisor_iters[0]["input_tokens"] == 1234
+    assert advisor_iters[0]["output_tokens"] == 56

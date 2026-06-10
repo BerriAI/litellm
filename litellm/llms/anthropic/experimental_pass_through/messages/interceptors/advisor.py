@@ -166,8 +166,11 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
         and non-streaming consumers share one orchestration path. The advisor
         sub-call runs between the "advisor_call" and "advice" events, so a
         streaming consumer that flushes "advisor_call" first surfaces the advisor
-        as in-progress for the duration of its real latency."""
+        as in-progress for the duration of its real latency. The advisor legs are
+        accumulated into a usage.iterations[] list (carried on the "final" event)
+        so clients attribute the advisor model's tokens to its own cost line."""
         iteration = 0
+        iterations: List[Dict] = []
         while True:
             executor_response = await _call_messages_handler(
                 model=model,
@@ -186,7 +189,8 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
 
             advisor_use_block = _find_advisor_tool_use(executor_response)
             if advisor_use_block is None:
-                yield ("final", executor_response, None)
+                iterations.append(_iteration_entry("message", model, executor_response))
+                yield ("final", executor_response, iterations)
                 return
 
             iteration += 1
@@ -217,6 +221,9 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 **advisor_kwargs,
             )
             advisor_text = _extract_response_text(advisor_response)
+            iterations.append(
+                _iteration_entry("advisor_message", advisor_model, advisor_response)
+            )
 
             yield ("advice", advisor_use_block, advisor_text)
 
@@ -241,6 +248,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                 return {
                     **a,
                     "content": output_content + list(a.get("content") or []),
+                    "usage": {**(a.get("usage") or {}), "iterations": b},
                 }
         raise AdvisorMaxIterationsError("Advisor loop ended without a final response")
 
@@ -294,7 +302,7 @@ class AdvisorOrchestrationHandler(MessagesInterceptor):
                     for chunk in build_content_block_chunks(block, index):
                         yield chunk
                     index += 1
-                for chunk in _final_message_events(a):
+                for chunk in _final_message_events(a, b):
                     yield chunk
 
 
@@ -388,8 +396,30 @@ def _sse(event: str, data: Dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n".encode()
 
 
-def _final_message_events(executor_response: Any) -> List[bytes]:
-    """The closing message_delta (stop reason + output usage) and message_stop."""
+_USAGE_TOKEN_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+)
+
+
+def _iteration_entry(entry_type: str, model: str, response: Any) -> Dict:
+    """A usage.iterations[] entry. Clients attribute an advisor_message entry's
+    tokens to its own model, so the advisor leg gets its own cost line instead of
+    folding into the executor's."""
+    usage = (response.get("usage") if isinstance(response, dict) else None) or {}
+    entry: Dict[str, Any] = {"type": entry_type, "model": model}
+    for key in _USAGE_TOKEN_KEYS:
+        entry[key] = usage.get(key, 0)
+    return entry
+
+
+def _final_message_events(
+    executor_response: Any, iterations: List[Dict]
+) -> List[bytes]:
+    """The closing message_delta (stop reason + usage, including the advisor
+    iterations) and message_stop."""
     usage = (
         executor_response.get("usage") if isinstance(executor_response, dict) else None
     ) or {}
@@ -401,6 +431,7 @@ def _final_message_events(executor_response: Any) -> List[bytes]:
     ):
         if usage.get(key) is not None:
             delta_usage[key] = usage[key]
+    delta_usage["iterations"] = iterations
     return [
         _sse(
             "message_delta",
@@ -413,7 +444,10 @@ def _final_message_events(executor_response: Any) -> List[bytes]:
                 "usage": delta_usage,
             },
         ),
-        _sse("message_stop", {"type": "message_stop", "usage": usage}),
+        _sse(
+            "message_stop",
+            {"type": "message_stop", "usage": {**usage, "iterations": iterations}},
+        ),
     ]
 
 
