@@ -2,6 +2,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Button, Badge, Text } from "@tremor/react";
 import { Tooltip, Tag } from "antd";
 import { CopyOutlined, InfoCircleOutlined } from "@ant-design/icons";
+import i18n from "@/lib/i18n";
 
 export interface MCPServerData {
   server_id: string;
@@ -36,9 +37,10 @@ export const mcpHubColumns = (
   copyToClipboard: (text: string) => void,
   publicPage: boolean = false,
 ): ColumnDef<MCPServerData>[] => {
+  const t = i18n.t.bind(i18n);
   const allColumns: ColumnDef<MCPServerData>[] = [
     {
-      header: "Server Name",
+      header: t("mcpHubTableColumns.colServerName"),
       accessorKey: "server_name",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -49,7 +51,7 @@ export const mcpHubColumns = (
           <div className="space-y-1">
             <div className="flex items-center space-x-2">
               <Text className="font-medium text-sm">{server.server_name}</Text>
-              <Tooltip title="Copy server name">
+              <Tooltip title={t("mcpHubTableColumns.copyServerName")}>
                 <CopyOutlined
                   onClick={() => copyToClipboard(server.server_name)}
                   className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs"
@@ -65,7 +67,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Description",
+      header: t("common.description"),
       accessorKey: "description",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -79,7 +81,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "URL",
+      header: t("mcpHubTableColumns.colUrl"),
       accessorKey: "url",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -89,7 +91,7 @@ export const mcpHubColumns = (
         return (
           <div className="flex items-center space-x-2">
             <Text className="text-xs truncate max-w-xs">{server.url}</Text>
-            <Tooltip title="Copy URL">
+            <Tooltip title={t("mcpHubTableColumns.copyUrl")}>
               <CopyOutlined
                 onClick={() => copyToClipboard(server.url)}
                 className="cursor-pointer text-gray-500 hover:text-blue-500 text-xs flex-shrink-0"
@@ -103,7 +105,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Transport",
+      header: t("mcpHubTableColumns.colTransport"),
       accessorKey: "transport",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -121,7 +123,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Auth Type",
+      header: t("mcpHubTableColumns.colAuthType"),
       accessorKey: "auth_type",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -141,7 +143,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Status",
+      header: t("common.status"),
       accessorKey: "status",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -166,7 +168,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Tools",
+      header: t("mcpHubTableColumns.colTools"),
       accessorKey: "allowed_tools",
       enableSorting: false,
       cell: ({ row }) => {
@@ -176,7 +178,9 @@ export const mcpHubColumns = (
         return (
           <div className="space-y-1">
             <Text className="text-xs font-medium">
-              {tools.length > 0 ? `${tools.length} tool${tools.length !== 1 ? "s" : ""}` : "All tools"}
+              {tools.length > 0
+                ? t("mcpHubTableColumns.toolCount", { count: tools.length })
+                : t("mcpHubTableColumns.allTools")}
             </Text>
             {tools.length > 0 && (
               <div className="flex flex-wrap gap-1">
@@ -196,7 +200,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Created By",
+      header: t("mcpHubTableColumns.colCreatedBy"),
       accessorKey: "created_by",
       enableSorting: true,
       sortingFn: "alphanumeric",
@@ -210,7 +214,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Public",
+      header: t("mcpHubTableColumns.colPublic"),
       accessorKey: "mcp_info.is_public",
       enableSorting: true,
       sortingFn: (rowA, rowB) => {
@@ -223,11 +227,11 @@ export const mcpHubColumns = (
 
         return server.mcp_info?.is_public === true ? (
           <Badge color="green" size="xs">
-            Yes
+            {t("common.yes")}
           </Badge>
         ) : (
           <Badge color="gray" size="xs">
-            No
+            {t("common.no")}
           </Badge>
         );
       },
@@ -236,7 +240,7 @@ export const mcpHubColumns = (
       },
     },
     {
-      header: "Details",
+      header: t("common.details"),
       id: "details",
       enableSorting: false,
       cell: ({ row }) => {
@@ -244,8 +248,8 @@ export const mcpHubColumns = (
 
         return (
           <Button size="xs" variant="secondary" onClick={() => showModal(server)} icon={InfoCircleOutlined}>
-            <span className="hidden lg:inline">Details</span>
-            <span className="lg:hidden">Info</span>
+            <span className="hidden lg:inline">{t("common.details")}</span>
+            <span className="lg:hidden">{t("mcpHubTableColumns.infoShort")}</span>
           </Button>
         );
       },

@@ -14,6 +14,7 @@ import {
   Switch,
 } from "@tremor/react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 import { getGeneralSettingsCall, updateConfigFieldSetting, deleteConfigFieldSetting } from "./networking";
 import { InputNumber } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
@@ -37,6 +38,7 @@ interface generalSettingsItem {
 }
 
 const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, userRole, userID, modelData }) => {
+  const { t } = useTranslation();
   const [generalSettings, setGeneralSettings] = useState<generalSettingsItem[]>([]);
 
   useEffect(() => {
@@ -106,10 +108,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
     <div className="w-full">
       <TabGroup className="h-[75vh] w-full">
         <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-          <Tab value="1">Loadbalancing</Tab>
-          <Tab value="2">Routing Groups</Tab>
-          <Tab value="3">Fallbacks</Tab>
-          <Tab value="4">General</Tab>
+          <Tab value="1">{t("generalSettings.tabLoadbalancing")}</Tab>
+          <Tab value="2">{t("generalSettings.tabRoutingGroups")}</Tab>
+          <Tab value="3">{t("generalSettings.tabFallbacks")}</Tab>
+          <Tab value="4">{t("generalSettings.tabGeneral")}</Tab>
         </TabList>
         <TabPanels className="px-8 py-6">
           <TabPanel>
@@ -126,10 +128,10 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableHeaderCell>Setting</TableHeaderCell>
-                    <TableHeaderCell>Value</TableHeaderCell>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Action</TableHeaderCell>
+                    <TableHeaderCell>{t("generalSettings.colSetting")}</TableHeaderCell>
+                    <TableHeaderCell>{t("generalSettings.colValue")}</TableHeaderCell>
+                    <TableHeaderCell>{t("generalSettings.colStatus")}</TableHeaderCell>
+                    <TableHeaderCell>{t("generalSettings.colAction")}</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -167,16 +169,18 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                         <TableCell>
                           {value.stored_in_db == true ? (
                             <Badge icon={CheckCircleIcon} className="text-white">
-                              In DB
+                              {t("generalSettings.statusInDb")}
                             </Badge>
                           ) : value.stored_in_db == false ? (
-                            <Badge className="text-gray bg-white outline">In Config</Badge>
+                            <Badge className="text-gray bg-white outline">{t("generalSettings.statusInConfig")}</Badge>
                           ) : (
-                            <Badge className="text-gray bg-white outline">Not Set</Badge>
+                            <Badge className="text-gray bg-white outline">{t("generalSettings.statusNotSet")}</Badge>
                           )}
                         </TableCell>
                         <TableCell>
-                          <Button onClick={() => handleUpdateField(value.field_name, index)}>Update</Button>
+                          <Button onClick={() => handleUpdateField(value.field_name, index)}>
+                            {t("common.update")}
+                          </Button>
                           <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
                             Reset
                           </Icon>
