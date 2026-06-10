@@ -12,6 +12,7 @@ import {
   Users,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { getRemainingUsers, getLicenseInfo, LicenseInfo } from "./networking";
 
 // Simple utility function to combine class names
@@ -44,19 +45,21 @@ const getDaysUntilExpiration = (expirationDate: string | null): number | null =>
   return diffDays;
 };
 
-// Format expiration for display
-const formatExpirationDisplay = (daysRemaining: number | null): string => {
-  if (daysRemaining === null) return "No expiration";
-  if (daysRemaining < 0) return "Expired";
-  if (daysRemaining === 0) return "Expires today";
-  if (daysRemaining === 1) return "1 day remaining";
-  if (daysRemaining < 30) return `${daysRemaining} days remaining`;
-  if (daysRemaining < 60) return "1 month remaining";
+const formatExpirationDisplay = (
+  daysRemaining: number | null,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string => {
+  if (daysRemaining === null) return t("usageIndicator.noExpiration");
+  if (daysRemaining < 0) return t("usageIndicator.expired");
+  if (daysRemaining === 0) return t("usageIndicator.expiresToday");
+  if (daysRemaining < 30) return t("usageIndicator.daysRemaining", { count: daysRemaining });
+  if (daysRemaining < 60) return t("usageIndicator.oneMonthRemaining");
   const months = Math.floor(daysRemaining / 30);
-  return `${months} months remaining`;
+  return t("usageIndicator.monthsRemaining", { count: months });
 };
 
 export default function UsageIndicator({ accessToken, width = 220 }: UsageIndicatorProps) {
+  const { t } = useTranslation();
   const disableUsageIndicator = useDisableUsageIndicator();
   const [isExpanded, setIsExpanded] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -81,7 +84,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         setLicenseInfo(licenseResult);
       } catch (err) {
         console.error("Failed to fetch usage data:", err);
-        setError("Failed to load usage data");
+        setError(t("usageIndicator.failedToLoad"));
       } finally {
         setIsLoading(false);
       }
@@ -177,7 +180,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             hasError && "text-red-400 hover:text-red-600",
             hasWarning && "text-yellow-500 hover:text-yellow-700",
           )}
-          title="Show usage details"
+          title={t("usageIndicator.showUsageDetails")}
         >
           <Users className="h-3 w-3 flex-shrink-0" />
           {hasAnyIssue && <span className="flex-shrink-0">{getStatusIcon()}</span>}
@@ -200,12 +203,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   isLicenseExpiringSoon && "text-yellow-500",
                 )}
               >
-                {daysUntilExpiration < 0 ? "Exp!" : `${daysUntilExpiration}d`}
+                {daysUntilExpiration < 0 ? t("usageIndicator.expiredShort") : `${daysUntilExpiration}d`}
               </span>
             )}
             {!data ||
               (data.total_users === null && data.total_teams === null && !licenseInfo && (
-                <span className="truncate">Usage</span>
+                <span className="truncate">{t("usageIndicator.usageLabel")}</span>
               ))}
           </div>
         </button>
@@ -223,7 +226,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
       return (
         <div className="flex items-center gap-3 px-3 py-2 text-gray-500" style={{ maxWidth: `${width}px` }}>
           <Loader2 className="h-4 w-4 animate-spin flex-shrink-0" />
-          <span className="text-sm truncate">Loading...</span>
+          <span className="text-sm truncate">{t("common.loading")}</span>
         </div>
       );
     }
@@ -236,12 +239,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         >
           <div className="flex items-center gap-3 min-w-0 flex-1">
             <Users className="h-4 w-4 flex-shrink-0" />
-            <span className="text-sm truncate">{error || "No data"}</span>
+            <span className="text-sm truncate">{error || t("common.noData")}</span>
           </div>
           <button
             onClick={() => setIsMinimized(true)}
             className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-gray-100 rounded transition-all flex-shrink-0"
-            title="Minimize"
+            title={t("usageIndicator.minimize")}
           >
             <Minus className="h-3 w-3" />
           </button>
@@ -262,7 +265,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             )}
           >
             <Users className="h-4 w-4 flex-shrink-0" />
-            <span className="text-sm font-medium truncate">Usage Status</span>
+            <span className="text-sm font-medium truncate">{t("usageIndicator.usageStatus")}</span>
             {hasAnyIssue && (
               <Badge color={getStatusColor()} className="text-xs px-1.5 py-0.5 flex-shrink-0">
                 {getStatusIcon()}
@@ -279,7 +282,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
           <button
             onClick={() => setIsMinimized(true)}
             className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-gray-100 rounded transition-all ml-1 flex-shrink-0"
-            title="Minimize"
+            title={t("usageIndicator.minimize")}
           >
             <Minus className="h-3 w-3 text-gray-400" />
           </button>
@@ -293,7 +296,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
               <div>
                 <div className="mb-1 flex items-center gap-1">
                   <Calendar className="h-3 w-3" />
-                  <span className="font-medium">License</span>
+                  <span className="font-medium">{t("usageIndicator.licenseLabel")}</span>
                 </div>
                 <div
                   className={cn(
@@ -307,7 +310,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   ) : isLicenseExpiringSoon ? (
                     <TrendingUp className="h-3 w-3" />
                   ) : null}
-                  <span className="truncate">{formatExpirationDisplay(daysUntilExpiration)}</span>
+                  <span className="truncate">{formatExpirationDisplay(daysUntilExpiration, t)}</span>
                 </div>
               </div>
             )}
@@ -320,7 +323,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   <span className="font-medium">
                     {data.total_users_used}/{data.total_users}
                   </span>
-                  <span className="text-gray-500">users</span>
+                  <span className="text-gray-500">{t("usageIndicator.usersLabel")}</span>
                 </div>
 
                 {/* User progress bar */}
@@ -349,7 +352,11 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     ) : (
                       <TrendingUp className="h-3 w-3" />
                     )}
-                    <span className="truncate">Users {userMetrics.isOverLimit ? "Over Limit" : "Near Limit"}</span>
+                    <span className="truncate">
+                      {userMetrics.isOverLimit
+                        ? t("usageIndicator.usersOverLimit")
+                        : t("usageIndicator.usersNearLimit")}
+                    </span>
                   </div>
                 )}
               </div>
@@ -363,7 +370,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                   <span className="font-medium">
                     {data.total_teams_used}/{data.total_teams}
                   </span>
-                  <span className="text-gray-500">teams</span>
+                  <span className="text-gray-500">{t("usageIndicator.teamsLabel")}</span>
                 </div>
 
                 {/* Team progress bar */}
@@ -392,7 +399,11 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     ) : (
                       <TrendingUp className="h-3 w-3" />
                     )}
-                    <span className="truncate">Teams {teamMetrics.isOverLimit ? "Over Limit" : "Near Limit"}</span>
+                    <span className="truncate">
+                      {teamMetrics.isOverLimit
+                        ? t("usageIndicator.teamsOverLimit")
+                        : t("usageIndicator.teamsNearLimit")}
+                    </span>
                   </div>
                 )}
               </div>
@@ -412,7 +423,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
           className={cn(
             "bg-white border border-gray-200 rounded-lg shadow-sm p-3 hover:shadow-md transition-all w-full",
           )}
-          title="Show usage details"
+          title={t("usageIndicator.showUsageDetails")}
         >
           <div className="flex items-center gap-2">
             <Users className="h-4 w-4 flex-shrink-0" />
@@ -451,12 +462,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     !isLicenseExpired && !isLicenseExpiringSoon && "bg-gray-50 text-gray-700 border-gray-200",
                   )}
                 >
-                  {daysUntilExpiration < 0 ? "Exp!" : `${daysUntilExpiration}d`}
+                  {daysUntilExpiration < 0 ? t("usageIndicator.expiredShort") : `${daysUntilExpiration}d`}
                 </span>
               )}
               {!data ||
                 (data.total_users === null && data.total_teams === null && !licenseInfo && (
-                  <span className="truncate">Usage</span>
+                  <span className="truncate">{t("usageIndicator.usageLabel")}</span>
                 ))}
             </div>
           </div>
@@ -469,7 +480,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 w-full">
           <div className="flex items-center justify-center gap-2 py-2">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span className="text-sm text-gray-500 truncate">Loading...</span>
+            <span className="text-sm text-gray-500 truncate">{t("common.loading")}</span>
           </div>
         </div>
       );
@@ -480,12 +491,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 group w-full">
           <div className="flex items-center justify-between gap-2">
             <div className="flex-1 min-w-0">
-              <span className="text-sm text-gray-500 truncate block">{error || "No data"}</span>
+              <span className="text-sm text-gray-500 truncate block">{error || t("common.noData")}</span>
             </div>
             <button
               onClick={() => setIsMinimized(true)}
               className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded transition-all flex-shrink-0"
-              title="Minimize"
+              title={t("usageIndicator.minimize")}
             >
               <Minus className="h-3 w-3 text-gray-400" />
             </button>
@@ -499,12 +510,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
         <div className="flex items-center justify-between gap-2 mb-3">
           <div className="flex items-center gap-2 min-w-0 flex-1">
             <Users className="h-4 w-4 flex-shrink-0" />
-            <span className="font-medium text-sm truncate">Usage</span>
+            <span className="font-medium text-sm truncate">{t("usageIndicator.usageLabel")}</span>
           </div>
           <button
             onClick={() => setIsMinimized(true)}
             className="opacity-0 group-hover:opacity-100 p-1 hover:bg-gray-100 rounded transition-all flex-shrink-0"
-            title="Minimize"
+            title={t("usageIndicator.minimize")}
           >
             <Minus className="h-3 w-3 text-gray-400" />
           </button>
@@ -523,7 +534,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             >
               <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
                 <Calendar className="h-3 w-3" />
-                <span className="font-medium">License</span>
+                <span className="font-medium">{t("usageIndicator.licenseLabel")}</span>
                 <span
                   className={cn(
                     "ml-1 px-1.5 py-0.5 rounded border",
@@ -532,11 +543,15 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     !isLicenseExpired && !isLicenseExpiringSoon && "bg-gray-50 text-gray-600 border-gray-200",
                   )}
                 >
-                  {isLicenseExpired ? "Expired" : isLicenseExpiringSoon ? "Expiring soon" : "OK"}
+                  {isLicenseExpired
+                    ? t("usageIndicator.expired")
+                    : isLicenseExpiringSoon
+                      ? t("usageIndicator.expiringSoon")
+                      : t("common.ok")}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-600 text-xs">Status:</span>
+                <span className="text-gray-600 text-xs">{t("usageIndicator.statusLabel")}</span>
                 <span
                   className={cn(
                     "font-medium text-right",
@@ -544,12 +559,12 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     isLicenseExpiringSoon && "text-yellow-600",
                   )}
                 >
-                  {formatExpirationDisplay(daysUntilExpiration)}
+                  {formatExpirationDisplay(daysUntilExpiration, t)}
                 </span>
               </div>
               {licenseInfo.license_type && (
                 <div className="flex justify-between items-center">
-                  <span className="text-gray-600 text-xs">Type:</span>
+                  <span className="text-gray-600 text-xs">{t("common.type")}:</span>
                   <span className="font-medium text-right capitalize">{licenseInfo.license_type}</span>
                 </div>
               )}
@@ -567,7 +582,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             >
               <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
                 <Users className="h-3 w-3" />
-                <span className="font-medium">Users</span>
+                <span className="font-medium">{t("usageIndicator.usersSection")}</span>
                 <span
                   className={cn(
                     "ml-1 px-1.5 py-0.5 rounded border",
@@ -576,17 +591,21 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     !userMetrics.isOverLimit && !userMetrics.isNearLimit && "bg-gray-50 text-gray-600 border-gray-200",
                   )}
                 >
-                  {userMetrics.isOverLimit ? "Over limit" : userMetrics.isNearLimit ? "Near limit" : "OK"}
+                  {userMetrics.isOverLimit
+                    ? t("usageIndicator.overLimit")
+                    : userMetrics.isNearLimit
+                      ? t("usageIndicator.nearLimit")
+                      : t("common.ok")}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-600 text-xs">Used:</span>
+                <span className="text-gray-600 text-xs">{t("usageIndicator.usedLabel")}</span>
                 <span className="font-medium text-right">
                   {data.total_users_used}/{data.total_users}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-600 text-xs">Remaining:</span>
+                <span className="text-gray-600 text-xs">{t("usageIndicator.remainingLabel")}</span>
                 <span
                   className={cn(
                     "font-medium text-right",
@@ -598,7 +617,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-600 text-xs">Usage:</span>
+                <span className="text-gray-600 text-xs">{t("usageIndicator.usageRowLabel")}</span>
                 <span className="font-medium text-right">{Math.round(userMetrics.usagePercentage)}%</span>
               </div>
 
@@ -628,7 +647,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
             >
               <div className="flex items-center gap-2 text-xs text-gray-600 mb-1">
                 <UserCheck className="h-3 w-3" />
-                <span className="font-medium">Teams</span>
+                <span className="font-medium">{t("usageIndicator.teamsSection")}</span>
                 <span
                   className={cn(
                     "ml-1 px-1.5 py-0.5 rounded border",
@@ -637,17 +656,21 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                     !teamMetrics.isOverLimit && !teamMetrics.isNearLimit && "bg-gray-50 text-gray-600 border-gray-200",
                   )}
                 >
-                  {teamMetrics.isOverLimit ? "Over limit" : teamMetrics.isNearLimit ? "Near limit" : "OK"}
+                  {teamMetrics.isOverLimit
+                    ? t("usageIndicator.overLimit")
+                    : teamMetrics.isNearLimit
+                      ? t("usageIndicator.nearLimit")
+                      : t("common.ok")}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-600 text-xs">Used:</span>
+                <span className="text-gray-600 text-xs">{t("usageIndicator.usedLabel")}</span>
                 <span className="font-medium text-right">
                   {data.total_teams_used}/{data.total_teams}
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-600 text-xs">Remaining:</span>
+                <span className="text-gray-600 text-xs">{t("usageIndicator.remainingLabel")}</span>
                 <span
                   className={cn(
                     "font-medium text-right",
@@ -659,7 +682,7 @@ export default function UsageIndicator({ accessToken, width = 220 }: UsageIndica
                 </span>
               </div>
               <div className="flex justify-between items-center">
-                <span className="text-gray-600 text-xs">Usage:</span>
+                <span className="text-gray-600 text-xs">{t("usageIndicator.usageRowLabel")}</span>
                 <span className="font-medium text-right">{Math.round(teamMetrics.usagePercentage)}%</span>
               </div>
 
