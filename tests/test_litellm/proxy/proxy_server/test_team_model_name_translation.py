@@ -152,8 +152,7 @@ async def test_model_info_v2_translates_team_model_name(monkeypatch):
 @pytest.mark.asyncio
 async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     """/v1/model/info list path (no litellm_model_id) must include team-scoped
-    deployments from the router model list and surface the public name plus
-    access_via_team_ids (#28382)."""
+    deployments from the router model list and surface the public name (#28382)."""
     team_row = _team_row()
     global_row = {
         "model_name": "gpt-4o",
@@ -168,27 +167,6 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(
-        ps,
-        "get_all_team_and_direct_access_models",
-        AsyncMock(
-            side_effect=lambda all_models, **kwargs: [
-                {
-                    **m,
-                    "model_info": {
-                        **m.get("model_info", {}),
-                        **(
-                            {"access_via_team_ids": ["team-abc-123"]}
-                            if m.get("model_info", {}).get("team_id")
-                            else {"direct_access": True}
-                        ),
-                    },
-                }
-                for m in all_models
-            ]
-        ),
-    )
     monkeypatch.setattr(
         ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
     )
@@ -208,15 +186,11 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     names = [m["model_name"] for m in resp["data"]]
     assert "team-claude-sonnet" in names
     assert "model_name_team-abc-123_4a6b8" not in names
-    team_model = next(
-        m for m in resp["data"] if m["model_name"] == "team-claude-sonnet"
-    )
-    assert team_model["model_info"]["access_via_team_ids"] == ["team-abc-123"]
 
 
 @pytest.mark.asyncio
-async def test_model_info_v1_no_user_id_with_db_skips_team_access_filter(monkeypatch):
-    """Service/CI keys without user_id must not hit the team-membership filter."""
+async def test_model_info_v1_unrestricted_key_returns_all_deployments(monkeypatch):
+    """Unrestricted keys must see all router deployments (legacy v1 access logic)."""
     deployment = {
         "model_name": "gpt-4",
         "litellm_params": {"model": "gpt-4"},
@@ -227,12 +201,9 @@ async def test_model_info_v1_no_user_id_with_db_skips_team_access_filter(monkeyp
     router.get_model_names.return_value = ["gpt-4"]
     router.get_model_access_groups.return_value = {}
 
-    get_team_access = AsyncMock()
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(ps, "get_all_team_and_direct_access_models", get_team_access)
     monkeypatch.setattr(
         ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
     )
@@ -245,7 +216,7 @@ async def test_model_info_v1_no_user_id_with_db_skips_team_access_filter(monkeyp
     )
 
     caller = UserAPIKeyAuth(
-        user_id=None,
+        user_id="user-1",
         user_role=LitellmUserRoles.INTERNAL_USER,
         models=[],
         team_models=[],
@@ -253,12 +224,11 @@ async def test_model_info_v1_no_user_id_with_db_skips_team_access_filter(monkeyp
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
     assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
-    get_team_access.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_model_info_v1_restricted_key_filters_after_team_enrichment(monkeypatch):
-    """Key-level model allowlists must apply after DB team-access enrichment."""
+async def test_model_info_v1_restricted_key_filters_deployments(monkeypatch):
+    """Key-level model allowlists must filter router deployments."""
     team_row = _team_row()
     global_row = {
         "model_name": "gpt-4",
@@ -273,27 +243,6 @@ async def test_model_info_v1_restricted_key_filters_after_team_enrichment(monkey
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
-    monkeypatch.setattr(ps, "prisma_client", MagicMock())
-    monkeypatch.setattr(
-        ps,
-        "get_all_team_and_direct_access_models",
-        AsyncMock(
-            side_effect=lambda all_models, **kwargs: [
-                {
-                    **m,
-                    "model_info": {
-                        **m.get("model_info", {}),
-                        **(
-                            {"access_via_team_ids": ["team-abc-123"]}
-                            if m.get("model_info", {}).get("team_id")
-                            else {"direct_access": True}
-                        ),
-                    },
-                }
-                for m in all_models
-            ]
-        ),
-    )
     monkeypatch.setattr(
         ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
     )
