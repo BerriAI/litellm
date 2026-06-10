@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Button } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import AddGuardrailForm from "./add_guardrail_form";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
@@ -13,30 +14,53 @@ interface GuardrailDetailViewProps {
 }
 
 const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack, accessToken, onGuardrailCreated }) => {
+  const { t } = useTranslation();
   const [isAddFormVisible, setIsAddFormVisible] = useState(false);
   const [activeTab, setActiveTab] = useState("overview");
 
   const detailRows = [
-    { property: "Provider", value: card.category === "litellm" ? "LiteLLM Content Filter" : "Partner Guardrail" },
-    ...(card.subcategory ? [{ property: "Subcategory", value: card.subcategory }] : []),
-    ...(card.category === "litellm" ? [{ property: "Cost", value: "$0 / request" }] : []),
-    ...(card.category === "litellm" ? [{ property: "External Dependencies", value: "None" }] : []),
-    ...(card.category === "litellm" ? [{ property: "Latency", value: card.eval?.latency || "<1ms" }] : []),
+    {
+      property: t("guardrails.guardrailGardenDetail.propertyProvider"),
+      value:
+        card.category === "litellm"
+          ? t("guardrails.guardrailGardenDetail.litellmContentFilter")
+          : t("guardrails.guardrailGardenDetail.partnerGuardrail"),
+    },
+    ...(card.subcategory
+      ? [{ property: t("guardrails.guardrailGardenDetail.propertySubcategory"), value: card.subcategory }]
+      : []),
+    ...(card.category === "litellm"
+      ? [
+          {
+            property: t("guardrails.guardrailGardenDetail.propertyCost"),
+            value: t("guardrails.guardrailGardenDetail.costFree"),
+          },
+        ]
+      : []),
+    ...(card.category === "litellm"
+      ? [{ property: t("guardrails.guardrailGardenDetail.propertyExternalDeps"), value: t("common.none") }]
+      : []),
+    ...(card.category === "litellm"
+      ? [{ property: t("guardrails.guardrailGardenDetail.propertyLatency"), value: card.eval?.latency || "<1ms" }]
+      : []),
   ];
 
   const evalRows = card.eval
     ? [
-        { metric: "Precision", value: `${card.eval.precision}%` },
-        { metric: "Recall", value: `${card.eval.recall}%` },
-        { metric: "F1 Score", value: `${card.eval.f1}%` },
-        { metric: "Test Cases", value: String(card.eval.testCases) },
-        { metric: "False Positives", value: "0" },
-        { metric: "False Negatives", value: "0" },
-        { metric: "Latency (p50)", value: card.eval.latency },
+        { metric: t("guardrails.guardrailGardenDetail.metricPrecision"), value: `${card.eval.precision}%` },
+        { metric: t("guardrails.guardrailGardenDetail.metricRecall"), value: `${card.eval.recall}%` },
+        { metric: t("guardrails.guardrailGardenDetail.metricF1Score"), value: `${card.eval.f1}%` },
+        { metric: t("guardrails.guardrailGardenDetail.metricTestCases"), value: String(card.eval.testCases) },
+        { metric: t("guardrails.guardrailGardenDetail.metricFalsePositives"), value: "0" },
+        { metric: t("guardrails.guardrailGardenDetail.metricFalseNegatives"), value: "0" },
+        { metric: t("guardrails.guardrailGardenDetail.metricLatencyP50"), value: card.eval.latency },
       ]
     : [];
 
-  const tabs = [{ key: "overview", label: "Overview" }, ...(card.eval ? [{ key: "eval", label: "Eval Results" }] : [])];
+  const tabs = [
+    { key: "overview", label: t("guardrails.guardrailGardenDetail.tabOverview") },
+    ...(card.eval ? [{ key: "eval", label: t("guardrails.guardrailGardenDetail.tabEval") }] : []),
+  ];
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto" }}>
@@ -86,7 +110,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
             fontSize: 14,
           }}
         >
-          Create Guardrail
+          {t("guardrails.guardrailGardenDetail.createGuardrail")}
         </Button>
       </div>
 
@@ -118,17 +142,23 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
         <div style={{ display: "flex", gap: 64 }}>
           {/* Left column — overview + details table */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 12px 0" }}>Overview</h2>
+            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 12px 0" }}>
+              {t("guardrails.guardrailGardenDetail.tabOverview")}
+            </h2>
             <p style={{ fontSize: 14, color: "#3c4043", lineHeight: 1.7, margin: "0 0 32px 0" }}>{card.description}</p>
 
-            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 4px 0" }}>Guardrail Details</h2>
-            <p style={{ fontSize: 13, color: "#5f6368", margin: "0 0 16px 0" }}>Details are as follows</p>
+            <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 4px 0" }}>
+              {t("guardrails.guardrailGardenDetail.guardrailDetails")}
+            </h2>
+            <p style={{ fontSize: 13, color: "#5f6368", margin: "0 0 16px 0" }}>
+              {t("guardrails.guardrailGardenDetail.detailsSubtitle")}
+            </p>
 
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #dadce0" }}>
                   <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500, width: 200 }}>
-                    Property
+                    {t("guardrails.guardrailGardenDetail.propertyHeader")}
                   </th>
                   <th style={{ textAlign: "left", padding: "12px 0", color: "#5f6368", fontWeight: 500 }}>
                     {card.name}
@@ -150,22 +180,30 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
           <div style={{ width: 240, flexShrink: 0 }}>
             {/* Guardrail ID */}
             <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>Guardrail ID</div>
+              <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>
+                {t("guardrails.guardrailGardenDetail.guardrailId")}
+              </div>
               <div style={{ fontSize: 13, color: "#202124", wordBreak: "break-all" }}>litellm/{card.id}</div>
             </div>
 
             {/* Type */}
             <div style={{ marginBottom: 28 }}>
-              <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>Type</div>
+              <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 4 }}>
+                {t("guardrails.guardrailGardenDetail.typeLabel")}
+              </div>
               <div style={{ fontSize: 13, color: "#202124" }}>
-                {card.category === "litellm" ? "Content Filter" : "Partner"}
+                {card.category === "litellm"
+                  ? t("guardrails.guardrailGardenDetail.typeContentFilter")
+                  : t("guardrails.guardrailGardenDetail.typePartner")}
               </div>
             </div>
 
             {/* Tags — pill style like Vertex */}
             {card.tags.length > 0 && (
               <div style={{ marginBottom: 28 }}>
-                <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 8 }}>Tags</div>
+                <div style={{ fontSize: 12, color: "#5f6368", marginBottom: 8 }}>
+                  {t("guardrails.guardrailGardenDetail.tagsLabel")}
+                </div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                   {card.tags.map((tag) => (
                     <span
@@ -191,12 +229,18 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
 
       {activeTab === "eval" && (
         <div>
-          <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 16px 0" }}>Eval Results</h2>
+          <h2 style={{ fontSize: 18, fontWeight: 400, color: "#202124", margin: "0 0 16px 0" }}>
+            {t("guardrails.guardrailGardenDetail.tabEval")}
+          </h2>
           <table style={{ width: "100%", maxWidth: 560, borderCollapse: "collapse", fontSize: 14 }}>
             <thead>
               <tr style={{ backgroundColor: "#f8f9fa", borderBottom: "1px solid #dadce0" }}>
-                <th style={{ textAlign: "left", padding: "12px 16px", color: "#5f6368", fontWeight: 500 }}>Metric</th>
-                <th style={{ textAlign: "left", padding: "12px 16px", color: "#5f6368", fontWeight: 500 }}>Value</th>
+                <th style={{ textAlign: "left", padding: "12px 16px", color: "#5f6368", fontWeight: 500 }}>
+                  {t("guardrails.guardrailGardenDetail.metricHeader")}
+                </th>
+                <th style={{ textAlign: "left", padding: "12px 16px", color: "#5f6368", fontWeight: 500 }}>
+                  {t("guardrails.guardrailGardenDetail.valueHeader")}
+                </th>
               </tr>
             </thead>
             <tbody>
