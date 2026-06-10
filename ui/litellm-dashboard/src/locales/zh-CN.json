@@ -4486,5 +4486,85 @@
       "deleteModalMessage": "确定要删除此回退吗？此操作无法撤销。",
       "deleteModalResourceTitle": "回退信息"
     }
+  },
+  "promptsPage": {
+    "addPromptForm": {
+      "title": "添加新提示词",
+      "createPrompt": "创建提示词",
+      "accessTokenRequired": "访问令牌不能为空",
+      "uploadPromptFileRequired": "请上传 .prompt 文件",
+      "conversionFailed": "提示词文件转换为 JSON 失败",
+      "createSuccess": "提示词创建成功！",
+      "createFailed": "创建提示词失败",
+      "promptIdLabel": "提示词 ID",
+      "promptIdRequired": "请输入提示词 ID",
+      "promptIdPattern": "提示词 ID 只能包含字母、数字、下划线和连字符",
+      "promptIdPlaceholder": "输入唯一提示词 ID（如：my_prompt_id）",
+      "integrationLabel": "提示词集成",
+      "fileLabel": "提示词文件",
+      "fileExtra": "上传符合 Dotprompt 规范的 .prompt 文件",
+      "selectFile": "选择 .prompt 文件",
+      "selected": "已选择：{{name}}"
+    },
+    "developerMessageCard": {
+      "title": "开发者消息",
+      "subtitle": "可选的模型系统指令",
+      "placeholder": "例如：你是一个有帮助的助手..."
+    },
+    "dotpromptViewTab": {
+      "title": "生成的 .prompt 文件",
+      "subtitle": "这是将保存到数据库的 dotprompt 格式"
+    },
+    "modelConfigCard": {
+      "parameters": "参数",
+      "modelParameters": "模型参数",
+      "temperature": "Temperature",
+      "maxTokens": "最大 Token 数"
+    },
+    "promptCodeSnippets": {
+      "getCode": "获取代码",
+      "modalTitle": "生成的代码",
+      "language": "语言",
+      "copyToClipboard": "复制到剪贴板",
+      "copiedToClipboard": "已复制到剪贴板！",
+      "tabBasic": "基础",
+      "tabWithMessages": "含消息",
+      "tabWithVersion": "含版本"
+    },
+    "promptEditorHeader": {
+      "envDevelopment": "开发",
+      "envStaging": "预发布",
+      "envProduction": "生产",
+      "draft": "草稿",
+      "unsavedChanges": "有未保存的更改",
+      "history": "历史"
+    },
+    "promptMessagesCard": {
+      "title": "提示词消息",
+      "variableSyntaxHint": "使用 <code>{{variable}}</code> 语法定义模板变量",
+      "roleUser": "用户",
+      "roleAssistant": "助手",
+      "roleSystem": "系统",
+      "contentPlaceholder": "输入提示词内容...",
+      "addMessage": "添加消息"
+    },
+    "publishModal": {
+      "title": "发布提示词",
+      "publish": "发布",
+      "namePlaceholder": "输入提示词名称",
+      "versionedHint": "已发布的提示词可在 API 调用中使用，并支持版本管理以便追踪。"
+    },
+    "toolsCard": {
+      "title": "工具",
+      "noTools": "暂无工具"
+    },
+    "versionHistorySidePanel": {
+      "title": "版本历史",
+      "noHistory": "暂无版本历史。",
+      "latest": "最新",
+      "active": "当前",
+      "savedToDatabase": "已保存到数据库",
+      "configPrompt": "配置提示词"
+    }
   }
 }

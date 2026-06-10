@@ -4486,5 +4486,85 @@
       "deleteModalMessage": "Are you sure you want to delete this fallback? This action cannot be undone.",
       "deleteModalResourceTitle": "Fallback Information"
     }
+  },
+  "promptsPage": {
+    "addPromptForm": {
+      "title": "Add New Prompt",
+      "createPrompt": "Create Prompt",
+      "accessTokenRequired": "Access token is required",
+      "uploadPromptFileRequired": "Please upload a .prompt file",
+      "conversionFailed": "Failed to convert prompt file to JSON",
+      "createSuccess": "Prompt created successfully!",
+      "createFailed": "Failed to create prompt",
+      "promptIdLabel": "Prompt ID",
+      "promptIdRequired": "Please enter a prompt ID",
+      "promptIdPattern": "Prompt ID can only contain letters, numbers, underscores, and hyphens",
+      "promptIdPlaceholder": "Enter unique prompt ID (e.g., my_prompt_id)",
+      "integrationLabel": "Prompt Integration",
+      "fileLabel": "Prompt File",
+      "fileExtra": "Upload a .prompt file that follows the Dotprompt specification",
+      "selectFile": "Select .prompt File",
+      "selected": "Selected: {{name}}"
+    },
+    "developerMessageCard": {
+      "title": "Developer message",
+      "subtitle": "Optional system instructions for the model",
+      "placeholder": "e.g., You are a helpful assistant..."
+    },
+    "dotpromptViewTab": {
+      "title": "Generated .prompt file",
+      "subtitle": "This is the dotprompt format that will be saved to the database"
+    },
+    "modelConfigCard": {
+      "parameters": "Parameters",
+      "modelParameters": "Model Parameters",
+      "temperature": "Temperature",
+      "maxTokens": "Max Tokens"
+    },
+    "promptCodeSnippets": {
+      "getCode": "Get Code",
+      "modalTitle": "Generated Code",
+      "language": "Language",
+      "copyToClipboard": "Copy to Clipboard",
+      "copiedToClipboard": "Copied to clipboard!",
+      "tabBasic": "Basic",
+      "tabWithMessages": "With Messages",
+      "tabWithVersion": "With Version"
+    },
+    "promptEditorHeader": {
+      "envDevelopment": "Development",
+      "envStaging": "Staging",
+      "envProduction": "Production",
+      "draft": "Draft",
+      "unsavedChanges": "Unsaved changes",
+      "history": "History"
+    },
+    "promptMessagesCard": {
+      "title": "Prompt messages",
+      "variableSyntaxHint": "Use <code>{{variable}}</code> syntax for template variables",
+      "roleUser": "User",
+      "roleAssistant": "Assistant",
+      "roleSystem": "System",
+      "contentPlaceholder": "Enter prompt content...",
+      "addMessage": "Add message"
+    },
+    "publishModal": {
+      "title": "Publish Prompt",
+      "publish": "Publish",
+      "namePlaceholder": "Enter prompt name",
+      "versionedHint": "Published prompts can be used in API calls and are versioned for easy tracking."
+    },
+    "toolsCard": {
+      "title": "Tools",
+      "noTools": "No tools added"
+    },
+    "versionHistorySidePanel": {
+      "title": "Version History",
+      "noHistory": "No version history available.",
+      "latest": "Latest",
+      "active": "Active",
+      "savedToDatabase": "Saved to Database",
+      "configPrompt": "Config Prompt"
+    }
   }
 }

@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Button as TremorButton } from "@tremor/react";
 import { Input, Select } from "antd";
 import { ArrowLeftIcon, SaveIcon, ClockIcon } from "lucide-react";
@@ -40,11 +41,12 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
   environment,
   onEnvironmentChange,
 }) => {
+  const { t } = useTranslation();
   return (
     <div className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
       <div className="flex items-center space-x-3">
         <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onBack} size="xs">
-          Back
+          {t("common.back")}
         </TremorButton>
         <Input
           value={promptName}
@@ -61,13 +63,15 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
           style={{ width: 140 }}
           size="small"
           options={[
-            { label: "Development", value: "development" },
-            { label: "Staging", value: "staging" },
-            { label: "Production", value: "production" },
+            { label: t("promptsPage.promptEditorHeader.envDevelopment"), value: "development" },
+            { label: t("promptsPage.promptEditorHeader.envStaging"), value: "staging" },
+            { label: t("promptsPage.promptEditorHeader.envProduction"), value: "production" },
           ]}
         />
-        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">Draft</span>
-        <span className="text-xs text-gray-400">Unsaved changes</span>
+        <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-600 rounded">
+          {t("promptsPage.promptEditorHeader.draft")}
+        </span>
+        <span className="text-xs text-gray-400">{t("promptsPage.promptEditorHeader.unsavedChanges")}</span>
       </div>
       <div className="flex items-center space-x-2">
         <PromptCodeSnippets
@@ -80,11 +84,11 @@ const PromptEditorHeader: React.FC<PromptEditorHeaderProps> = ({
         />
         {editMode && onShowHistory && (
           <TremorButton icon={ClockIcon} variant="secondary" onClick={onShowHistory}>
-            History
+            {t("promptsPage.promptEditorHeader.history")}
           </TremorButton>
         )}
         <TremorButton icon={SaveIcon} onClick={onSave} loading={isSaving} disabled={isSaving}>
-          {editMode ? "Update" : "Save"}
+          {editMode ? t("common.update") : t("common.save")}
         </TremorButton>
       </div>
     </div>
