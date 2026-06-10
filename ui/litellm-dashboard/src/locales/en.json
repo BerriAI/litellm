@@ -8025,5 +8025,28 @@
       "modelRpmLimits": "Model RPM Limits: {{value}}",
       "fieldMetadata": "Metadata"
     }
+  },
+  "deletedKeys": {
+    "deletedKeysPage": {
+      "comingSoonToEnterprise": "Coming soon to Enterprise",
+      "auditingDescription": "Deleted key auditing is graduating from beta into our Enterprise audit & compliance suite."
+    },
+    "deletedKeysTable": {
+      "colKeyId": "Key ID",
+      "colKeyAlias": "Key Alias",
+      "colTeamAlias": "Team Alias",
+      "colSpend": "Spend (USD)",
+      "colBudget": "Budget (USD)",
+      "colUserEmail": "User Email",
+      "colUserId": "User ID",
+      "colCreatedBy": "Created By",
+      "colDeletedAt": "Deleted At",
+      "colDeletedBy": "Deleted By",
+      "unlimited": "Unlimited",
+      "showingRange": "Showing {{range}} of {{total}} results",
+      "pageOf": "Page {{current}} of {{total}}",
+      "loadingKeys": "🚅 Loading keys...",
+      "noDeletedKeys": "No deleted keys found"
+    }
   }
 }

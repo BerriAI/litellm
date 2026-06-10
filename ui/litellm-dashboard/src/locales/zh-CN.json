@@ -8025,5 +8025,28 @@
       "modelRpmLimits": "模型 RPM 限制：{{value}}",
       "fieldMetadata": "元数据"
     }
+  },
+  "deletedKeys": {
+    "deletedKeysPage": {
+      "comingSoonToEnterprise": "即将在企业版上线",
+      "auditingDescription": "已删除密钥审计正从测试版毕业，纳入我们的企业级审计与合规套件。"
+    },
+    "deletedKeysTable": {
+      "colKeyId": "密钥 ID",
+      "colKeyAlias": "密钥别名",
+      "colTeamAlias": "团队别名",
+      "colSpend": "花费（USD）",
+      "colBudget": "预算（USD）",
+      "colUserEmail": "用户邮箱",
+      "colUserId": "用户 ID",
+      "colCreatedBy": "创建人",
+      "colDeletedAt": "删除时间",
+      "colDeletedBy": "删除人",
+      "unlimited": "无限制",
+      "showingRange": "显示第 {{range}} 条，共 {{total}} 条",
+      "pageOf": "第 {{current}} 页，共 {{total}} 页",
+      "loadingKeys": "🚅 正在加载密钥...",
+      "noDeletedKeys": "未找到已删除密钥"
+    }
   }
 }
