@@ -1777,6 +1777,23 @@ class TestHTMLIntegration:
         assert isinstance(html, str)
         assert len(html) > 0
 
+    def test_success_page_instructs_manual_close_without_false_countdown(self):
+        """Browsers refuse window.close() on tabs they did not open via window.open()
+        (the CLI opens the page with webbrowser.open), so a 'closing in 3...' countdown
+        is a promise the browser usually can't keep and the page gets stuck on
+        'Closing...'. The page must instead always show the manual-close instruction
+        and never advertise an auto-close that won't happen.
+        """
+        from litellm.proxy.common_utils.html_forms.cli_sso_success import (
+            render_cli_sso_success_page,
+        )
+
+        html = render_cli_sso_success_page()
+
+        assert "You can now close this window and return to your terminal." in html
+        assert "Closing..." not in html
+        assert "This window will close in" not in html
+
 
 class TestCustomUISSO:
     """Test the custom UI SSO sign-in handler functionality"""

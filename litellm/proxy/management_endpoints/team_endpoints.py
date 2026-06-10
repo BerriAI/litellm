@@ -358,6 +358,42 @@ class TeamMemberBudgetHandler:
         data_dict.pop("team_member_tpm_limit", None)
 
     @staticmethod
+    async def clear_team_member_budget_fields(
+        team_table: LiteLLM_TeamTable,
+        user_api_key_dict: "UserAPIKeyAuth",
+        updated_kv: dict,
+        explicitly_set_fields: set,
+    ) -> dict:
+        """Clear explicitly-nulled fields on the team member budget row."""
+        from litellm.proxy._types import BudgetNewRequest
+        from litellm.proxy.management_endpoints.budget_management_endpoints import (
+            update_budget,
+        )
+
+        if team_table.metadata is None:
+            team_table.metadata = {}
+
+        team_member_budget_id = team_table.metadata.get("team_member_budget_id")
+        if team_member_budget_id is not None and isinstance(team_member_budget_id, str):
+            budget_request = BudgetNewRequest(budget_id=team_member_budget_id)
+            if "team_member_budget" in explicitly_set_fields:
+                budget_request.max_budget = None
+            if "team_member_budget_duration" in explicitly_set_fields:
+                budget_request.budget_duration = None
+                budget_request.budget_reset_at = None
+            if "team_member_rpm_limit" in explicitly_set_fields:
+                budget_request.rpm_limit = None
+            if "team_member_tpm_limit" in explicitly_set_fields:
+                budget_request.tpm_limit = None
+            await update_budget(
+                budget_obj=budget_request,
+                user_api_key_dict=user_api_key_dict,
+            )
+
+        TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
+        return updated_kv
+
+    @staticmethod
     async def backfill_team_member_budget_entries(
         team_id: str,
         members_with_roles: List[Union[Member, dict]],
@@ -779,54 +815,39 @@ async def _check_user_team_limits(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     user_api_key_cache: Any,
-    existing_team_max_budget: Optional[float] = None,
 ) -> None:
     """
-    Check user team limits for standalone teams (not org-scoped).
+    Enforce the caller's personal limits when CREATING a standalone team.
 
-    This validates:
-    - Team budget vs user's max_budget
-    - Team models vs user's allowed models
+    This validates the requested team budget / models / tpm / rpm against the
+    caller's own limits, so a non-admin user cannot mint a brand-new team that
+    is richer than themselves.
 
-    Should only be called for standalone teams (when organization_id is None).
-    For org-scoped teams, use _check_org_team_limits() instead.
-
-    `existing_team_max_budget` is the team's current `max_budget` on the
-    /team/update path. When the incoming `max_budget` is unchanged or lower
-    than the team's current budget, the personal-budget comparison is skipped
-    so a team admin can edit other fields (e.g. tpm_limit, team name) without
-    being blocked by a budget the team already has. The UI sends the full team
-    object on every update, so the unchanged `max_budget` would otherwise fail.
+    Only used by /team/new for standalone teams (organization_id is None).
+    /team/update does NOT call this — an existing team's admin is already
+    authorized via _verify_team_access() and is not gated by their personal
+    wallet. Org-scoped teams use _check_org_team_limits() instead.
     """
     # Validate team budget against user's max_budget
     if data.max_budget is not None and user_api_key_dict.user_id is not None:
-        # On /team/update, allow unchanged or lower budgets without checking
-        # the caller's personal max_budget. Only increases above the team's
-        # current budget are validated against the user's personal limit.
-        budget_unchanged_or_lower = (
-            existing_team_max_budget is not None
-            and data.max_budget <= existing_team_max_budget
+        user_obj = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_id_upsert=False,
         )
 
-        if not budget_unchanged_or_lower:
-            user_obj = await get_user_object(
-                user_id=user_api_key_dict.user_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                user_id_upsert=False,
+        if (
+            user_obj is not None
+            and user_obj.max_budget is not None
+            and data.max_budget > user_obj.max_budget
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
+                },
             )
-
-            if (
-                user_obj is not None
-                and user_obj.max_budget is not None
-                and data.max_budget > user_obj.max_budget
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"max budget higher than user max. User max budget={user_obj.max_budget}. User role={user_api_key_dict.user_role}"
-                    },
-                )
 
     # Validate team models against user's allowed models
     if data.models is not None and len(user_api_key_dict.models) > 0:
@@ -861,6 +882,45 @@ async def _check_user_team_limits(
             status_code=400,
             detail={
                 "error": f"rpm limit higher than user max. User rpm limit={user_api_key_dict.rpm_limit}. User role={user_api_key_dict.user_role}"
+            },
+        )
+
+
+def _check_team_budget_update_authority(
+    data: UpdateTeamRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+    existing_team_max_budget: Optional[float],
+) -> None:
+    """
+    Restrict who can grow a standalone team's spend ceiling on /team/update.
+
+    A team admin (already authorized via _verify_team_access) may keep or lower
+    the team budget, but only a proxy admin may grow it - by raising max_budget
+    above the team's current value or by removing the cap (setting it to None).
+    Setting a finite budget on a team that has no cap is a restriction and is
+    allowed. Org-scoped teams are governed by _check_org_team_limits().
+    """
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    if existing_team_max_budget is None:
+        return
+
+    budget_explicitly_set = "max_budget" in (
+        getattr(data, "model_fields_set", None) or set()
+    )
+    if budget_explicitly_set and data.max_budget is None:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Only a proxy admin can remove a team's max_budget. Team's current max_budget={existing_team_max_budget}."
+            },
+        )
+
+    if data.max_budget is not None and data.max_budget > existing_team_max_budget:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": f"Only a proxy admin can raise a team's max_budget. Team's current max_budget={existing_team_max_budget}, requested={data.max_budget}."
             },
         )
 
@@ -1827,22 +1887,14 @@ async def update_team(  # noqa: PLR0915
                     prisma_client=prisma_client,
                 )
 
-        # Check user limits for standalone teams (not org-scoped)
-        # Skip for PROXY_ADMIN users
-        if (
-            user_api_key_dict.user_role is None
-            or user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-        ):
-            # Only validate user budget/models for standalone teams
-            # For org-scoped teams, validation is done by _check_org_team_limits() above
-            if org_id_to_check is None:
-                await _check_user_team_limits(
-                    data=data,
-                    user_api_key_dict=user_api_key_dict,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    existing_team_max_budget=existing_team_row.max_budget,
-                )
+        # Only a proxy admin may grow a standalone team's spend ceiling.
+        # Org-scoped teams are validated by _check_org_team_limits() above.
+        if org_id_to_check is None:
+            _check_team_budget_update_authority(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                existing_team_max_budget=existing_team_row.max_budget,
+            )
 
         updated_kv = data.json(exclude_unset=True)
 
@@ -1856,11 +1908,25 @@ async def update_team(  # noqa: PLR0915
         # Check budget_duration and budget_reset_at
         _set_budget_reset_at(data, updated_kv)
 
-        if TeamMemberBudgetHandler.should_create_budget(
-            team_member_budget=data.team_member_budget,
-            team_member_rpm_limit=data.team_member_rpm_limit,
-            team_member_tpm_limit=data.team_member_tpm_limit,
-            team_member_budget_duration=data.team_member_budget_duration,
+        _team_member_fields_in_request = {
+            field
+            for field in [
+                "team_member_budget",
+                "team_member_rpm_limit",
+                "team_member_tpm_limit",
+                "team_member_budget_duration",
+            ]
+            if field in updated_kv
+        }
+
+        if (
+            _team_member_fields_in_request
+            and TeamMemberBudgetHandler.should_create_budget(
+                team_member_budget=data.team_member_budget,
+                team_member_rpm_limit=data.team_member_rpm_limit,
+                team_member_tpm_limit=data.team_member_tpm_limit,
+                team_member_budget_duration=data.team_member_budget_duration,
+            )
         ):
             updated_kv = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
                 team_table=existing_team_row,
@@ -1883,6 +1949,13 @@ async def update_team(  # noqa: PLR0915
                     team_member_budget_id=_backfill_budget_id,
                     prisma_client=prisma_client,
                 )
+        elif _team_member_fields_in_request:
+            updated_kv = await TeamMemberBudgetHandler.clear_team_member_budget_fields(
+                team_table=existing_team_row,
+                user_api_key_dict=user_api_key_dict,
+                updated_kv=updated_kv,
+                explicitly_set_fields=_team_member_fields_in_request,
+            )
         else:
             TeamMemberBudgetHandler._clean_team_member_fields(updated_kv)
 
@@ -1971,6 +2044,8 @@ def _set_budget_reset_at(data: UpdateTeamRequest, updated_kv: dict) -> None:
 
         reset_at = get_budget_reset_time(budget_duration=data.budget_duration)
         updated_kv["budget_reset_at"] = reset_at
+    elif "budget_duration" in updated_kv and updated_kv["budget_duration"] is None:
+        updated_kv["budget_reset_at"] = None
 
     if data.budget_limits is not None and len(data.budget_limits) > 0:
         from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time

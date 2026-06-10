@@ -713,7 +713,8 @@ async def test_count_input_file_usage_decodes_model_embedded_file_id():
 @pytest.mark.asyncio
 async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias():
     """After replace_model_in_jsonl, body.model is the provider id (e.g. gpt-5.5).
-    Auth must check the proxy model_name the key was granted, not the stripped id."""
+    Auth must check target_model_names from the unified file id, not reverse-map
+    the stripped id."""
     from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
 
     rate_limiter = _PROXY_BatchRateLimiter(
@@ -732,7 +733,6 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
     )
     mock_router = MagicMock()
     mock_router.model_list = []
-    mock_router.resolve_model_name_from_model_id.return_value = proxy_alias
     can_key_call_model = AsyncMock(return_value=True)
 
     with (
@@ -745,10 +745,105 @@ async def test_pre_call_allows_stripped_provider_model_when_key_has_proxy_alias(
         await rate_limiter._enforce_batch_file_model_access(
             user_api_key_dict=user,
             file_content_as_dict=file_dict,
+            target_model_names=[proxy_alias],
         )
 
     can_key_call_model.assert_awaited_once()
     assert can_key_call_model.await_args.kwargs["model"] == proxy_alias
+    mock_router.resolve_model_name_from_model_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model_list_order",
+    [
+        [
+            "openai/openai/gpt-5.5",
+            "openai/openai/gpt-5.5-batch",
+            "us/azure/openai/gpt-5.5",
+        ],
+        [
+            "us/azure/openai/gpt-5.5",
+            "openai/openai/gpt-5.5",
+            "openai/openai/gpt-5.5-batch",
+        ],
+        [
+            "openai/openai/gpt-5.5-batch",
+            "us/azure/openai/gpt-5.5",
+            "openai/openai/gpt-5.5",
+        ],
+    ],
+)
+async def test_pre_call_uses_target_model_names_not_stripped_reverse_lookup(
+    model_list_order,
+):
+    """LIT-3593: three deployments strip to gpt-5.5; auth must use the upload
+    target alias from target_model_names, not first-match reverse lookup."""
+    from litellm.proxy.hooks.batch_rate_limiter import _PROXY_BatchRateLimiter
+
+    rate_limiter = _PROXY_BatchRateLimiter(
+        internal_usage_cache=MagicMock(),
+        parallel_request_limiter=MagicMock(),
+    )
+    batch_alias = "openai/openai/gpt-5.5-batch"
+    deployment_templates = {
+        "openai/openai/gpt-5.5": {
+            "model_name": "openai/openai/gpt-5.5",
+            "litellm_params": {"model": "openai/gpt-5.5"},
+            "model_info": {"id": "openai/openai/gpt-5.5", "mode": "chat"},
+        },
+        "openai/openai/gpt-5.5-batch": {
+            "model_name": "openai/openai/gpt-5.5-batch",
+            "litellm_params": {"model": "openai/gpt-5.5"},
+            "model_info": {"id": "openai/openai/gpt-5.5-batch", "mode": "batch"},
+        },
+        "us/azure/openai/gpt-5.5": {
+            "model_name": "us/azure/openai/gpt-5.5",
+            "litellm_params": {"model": "azure/gpt-5.5"},
+            "model_info": {"id": "openai/openai/gpt-5.5", "mode": "chat"},
+        },
+    }
+    mock_router = MagicMock()
+    mock_router.model_list = [deployment_templates[name] for name in model_list_order]
+
+    def _resolve(model_id):
+        for deployment in mock_router.model_list:
+            actual_model = deployment.get("litellm_params", {}).get("model")
+            if actual_model == model_id or (
+                actual_model and actual_model.endswith(f"/{model_id}")
+            ):
+                return deployment.get("model_name")
+        return None
+
+    mock_router.resolve_model_name_from_model_id.side_effect = _resolve
+
+    file_dict = [
+        {"body": {"model": "gpt-5.5", "messages": [{"role": "user", "content": "x"}]}}
+    ]
+    user = UserAPIKeyAuth(
+        api_key="sk-ok",
+        user_id="alice",
+        models=[batch_alias],
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    can_key_call_model = AsyncMock(return_value=True)
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_checks.can_key_call_model",
+            new=can_key_call_model,
+        ),
+        patch("litellm.proxy.proxy_server.llm_router", mock_router),
+    ):
+        await rate_limiter._enforce_batch_file_model_access(
+            user_api_key_dict=user,
+            file_content_as_dict=file_dict,
+            target_model_names=[batch_alias],
+        )
+
+    can_key_call_model.assert_awaited_once()
+    assert can_key_call_model.await_args.kwargs["model"] == batch_alias
+    mock_router.resolve_model_name_from_model_id.assert_not_called()
 
 
 @pytest.mark.asyncio
