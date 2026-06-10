@@ -282,8 +282,18 @@ class TestParallelAISearch:
             assert second.snippet == "Only excerpt."
             assert second.date is None
 
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://proxy.internal.example.com",
+            "https://proxy.internal.example.com/",
+            "https://proxy.internal.example.com/v1",
+            "https://proxy.internal.example.com/v1/",
+            "https://proxy.internal.example.com/v1/search",
+        ],
+    )
     @pytest.mark.asyncio
-    async def test_custom_api_base_appends_v1_search(self):
+    async def test_custom_api_base_appends_v1_search(self, api_base):
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             new_callable=AsyncMock,
@@ -293,7 +303,7 @@ class TestParallelAISearch:
             await litellm.asearch(
                 query="AI developments",
                 search_provider="parallel_ai",
-                api_base="https://proxy.internal.example.com/",
+                api_base=api_base,
             )
 
             call_args = mock_post.call_args

@@ -93,8 +93,9 @@ class ParallelAISearchConfig(BaseSearchConfig):
             or self.PARALLEL_AI_API_BASE
         )
 
+        api_base = api_base.rstrip("/")
         if not api_base.endswith("/v1/search"):
-            api_base = f"{api_base.rstrip('/')}/v1/search"
+            api_base = f"{api_base.removesuffix('/v1')}/v1/search"
 
         return api_base
 
