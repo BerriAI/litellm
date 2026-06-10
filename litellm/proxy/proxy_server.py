@@ -8130,6 +8130,11 @@ async def model_list(
     unhealthy_names: Set[str] = set()
     if healthy_only and llm_router is not None:
         unhealthy_names = await llm_router.async_get_fully_unhealthy_model_names()
+        if not unhealthy_names:
+            verbose_proxy_logger.debug(
+                "healthy_only=true but no unhealthy deployment state is available "
+                "(requires background_health_checks); returning unfiltered model list"
+            )
 
     hidden_names = blocked_names | unhealthy_names
 

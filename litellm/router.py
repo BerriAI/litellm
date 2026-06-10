@@ -9890,7 +9890,8 @@ class Router:
               mechanism, so nothing is hidden here either.
             - Team-specific public model names (`team_public_model_name`) are
               aggregated alongside `model_name`, so team aliases of fully-unhealthy
-              deployments are hidden too.
+              deployments are hidden too (unlike `get_fully_blocked_model_names`,
+              which matches `model_name` only).
             - Wildcard routes (e.g. `openai/*`) are matched by their literal
               deployment name only; models expanded from a wildcard route are not
               hidden (fail open).
