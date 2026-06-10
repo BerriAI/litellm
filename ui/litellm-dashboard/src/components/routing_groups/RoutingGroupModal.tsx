@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import { Form, Input, Modal, Select, Space, Typography } from "antd";
+import { useTranslation } from "react-i18next";
 import type { RoutingGroup, RoutingStrategy } from "./types";
 
 const { Text, Paragraph } = Typography;
@@ -43,6 +44,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
   onSubmit,
   saving,
 }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm<FormValues>();
   const selectedStrategy = Form.useWatch("routing_strategy", form);
 
@@ -71,7 +73,7 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
         form.setFields([
           {
             name: "routing_strategy_args",
-            errors: ["Must be valid JSON"],
+            errors: [t("routingGroups.routingGroupModal.strategyArgsMustBeJson")],
           },
         ]);
         return;
@@ -88,12 +90,20 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
 
   return (
     <Modal
-      title={mode === "create" ? "Create Routing Group" : `Edit ${initialValue?.group_name ?? ""}`}
+      title={
+        mode === "create"
+          ? t("routingGroups.routingGroupModal.titleCreate")
+          : t("routingGroups.routingGroupModal.titleEdit", { groupName: initialValue?.group_name ?? "" })
+      }
       open={open}
       onCancel={onClose}
       onOk={handleSubmit}
-      okText={mode === "create" ? "Create Group" : "Save Changes"}
-      cancelText="Cancel"
+      okText={
+        mode === "create"
+          ? t("routingGroups.routingGroupModal.okTextCreate")
+          : t("routingGroups.routingGroupModal.okTextEdit")
+      }
+      cancelText={t("common.cancel")}
       confirmLoading={saving}
       destroyOnClose
       width={560}
@@ -106,51 +116,57 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
         initialValues={initialValues}
       >
         <Form.Item
-          label="Group Name"
+          label={t("routingGroups.routingGroupModal.groupNameLabel")}
           name="group_name"
           rules={[
-            { required: true, message: "Group name is required" },
-            { max: GROUP_NAME_MAX_LENGTH, message: `Must be ${GROUP_NAME_MAX_LENGTH} characters or fewer` },
+            { required: true, message: t("routingGroups.routingGroupModal.groupNameRequired") },
+            {
+              max: GROUP_NAME_MAX_LENGTH,
+              message: t("routingGroups.routingGroupModal.groupNameMaxLength", { max: GROUP_NAME_MAX_LENGTH }),
+            },
             {
               pattern: GROUP_NAME_PATTERN,
-              message: "Only letters, numbers, dot, underscore, and dash are allowed",
+              message: t("routingGroups.routingGroupModal.groupNamePattern"),
             },
             {
               validator: (_, value: string) => {
                 if (!value) return Promise.resolve();
                 if (reservedNames.has(value.trim().toLowerCase())) {
-                  return Promise.reject(new Error("A group with this name already exists"));
+                  return Promise.reject(new Error(t("routingGroups.routingGroupModal.groupNameExists")));
                 }
                 return Promise.resolve();
               },
             },
           ]}
-          extra="Use this name as the model in API calls — LiteLLM routes the request to one of the group's models."
+          extra={t("routingGroups.routingGroupModal.groupNameExtra")}
         >
-          <Input placeholder="fast-chat" disabled={mode === "edit"} />
+          <Input placeholder={t("routingGroups.routingGroupModal.groupNamePlaceholder")} disabled={mode === "edit"} />
         </Form.Item>
 
         <Form.Item
-          label="Models"
+          label={t("routingGroups.routingGroupModal.modelsLabel")}
           name="models"
-          rules={[{ required: true, message: "Select at least one model" }]}
-          extra="Models from your model list that this group routes between."
+          rules={[{ required: true, message: t("routingGroups.routingGroupModal.modelsRequired") }]}
+          extra={t("routingGroups.routingGroupModal.modelsExtra")}
         >
           <Select
             mode="multiple"
             allowClear
-            placeholder="Select models"
+            placeholder={t("routingGroups.routingGroupModal.modelsPlaceholder")}
             options={modelOptions.map((m) => ({ label: m, value: m }))}
             optionFilterProp="label"
           />
         </Form.Item>
 
         <Form.Item
-          label="Routing Strategy"
+          label={t("routingGroups.routingGroupModal.routingStrategyLabel")}
           name="routing_strategy"
-          rules={[{ required: true, message: "Strategy is required" }]}
+          rules={[{ required: true, message: t("routingGroups.routingGroupModal.routingStrategyRequired") }]}
         >
-          <Select options={availableStrategies.map((s) => ({ label: s, value: s }))} placeholder="Select strategy" />
+          <Select
+            options={availableStrategies.map((s) => ({ label: s, value: s }))}
+            placeholder={t("routingGroups.routingGroupModal.strategyPlaceholder")}
+          />
         </Form.Item>
 
         {selectedStrategy && strategyDescriptions[selectedStrategy] && (
@@ -159,21 +175,25 @@ const RoutingGroupModal: React.FC<RoutingGroupModalProps> = ({
 
         {STRATEGIES_WITH_ARGS.has(String(selectedStrategy)) && (
           <Form.Item
-            label="Strategy Arguments (JSON)"
+            label={t("routingGroups.routingGroupModal.strategyArgsLabel")}
             name="routing_strategy_args"
             extra={
               selectedStrategy === "latency-based-routing"
-                ? 'Example: { "ttl": 3600, "lowest_latency_buffer": 0 }'
-                : 'Example: { "ttl": 60 }'
+                ? t("routingGroups.routingGroupModal.strategyArgsExampleLatency")
+                : t("routingGroups.routingGroupModal.strategyArgsExampleUsage")
             }
           >
-            <Input.TextArea rows={4} placeholder='{ "ttl": 3600 }' className="font-mono text-xs" />
+            <Input.TextArea
+              rows={4}
+              placeholder={t("routingGroups.routingGroupModal.strategyArgsPlaceholder")}
+              className="font-mono text-xs"
+            />
           </Form.Item>
         )}
 
         <Space direction="vertical" className="w-full mt-2">
           <Text type="secondary" className="text-xs">
-            Models not claimed by an explicit group fall through to the proxy&apos;s top-level routing strategy.
+            {t("routingGroups.routingGroupModal.fallbackNote")}
           </Text>
         </Space>
       </Form>

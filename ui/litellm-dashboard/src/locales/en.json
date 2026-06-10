@@ -7729,5 +7729,60 @@
       "title": "Vector Stores",
       "empty": "No vector stores configured"
     }
+  },
+  "routingGroups": {
+    "routingGroupModal": {
+      "titleCreate": "Create Routing Group",
+      "titleEdit": "Edit {{groupName}}",
+      "okTextCreate": "Create Group",
+      "okTextEdit": "Save Changes",
+      "groupNameLabel": "Group Name",
+      "groupNameRequired": "Group name is required",
+      "groupNameMaxLength": "Must be {{max}} characters or fewer",
+      "groupNamePattern": "Only letters, numbers, dot, underscore, and dash are allowed",
+      "groupNameExists": "A group with this name already exists",
+      "groupNameExtra": "Use this name as the model in API calls — LiteLLM routes the request to one of the group's models.",
+      "groupNamePlaceholder": "fast-chat",
+      "modelsLabel": "Models",
+      "modelsRequired": "Select at least one model",
+      "modelsExtra": "Models from your model list that this group routes between.",
+      "modelsPlaceholder": "Select models",
+      "routingStrategyLabel": "Routing Strategy",
+      "routingStrategyRequired": "Strategy is required",
+      "strategyPlaceholder": "Select strategy",
+      "strategyArgsLabel": "Strategy Arguments (JSON)",
+      "strategyArgsExampleLatency": "Example: { \"ttl\": 3600, \"lowest_latency_buffer\": 0 }",
+      "strategyArgsExampleUsage": "Example: { \"ttl\": 60 }",
+      "strategyArgsMustBeJson": "Must be valid JSON",
+      "strategyArgsPlaceholder": "{ \"ttl\": 3600 }",
+      "fallbackNote": "Models not claimed by an explicit group fall through to the proxy's top-level routing strategy."
+    },
+    "routingGroupsTable": {
+      "colGroupName": "GROUP NAME",
+      "colModels": "MODELS",
+      "colStrategy": "STRATEGY",
+      "strategySimpleShuffle": "Simple Shuffle",
+      "strategyLeastBusy": "Least Busy",
+      "strategyUsageBased": "Usage Based",
+      "strategyLatencyBased": "Latency Based",
+      "howRoutingWorksTitle": "How routing works for this group",
+      "howRoutingWorksDesc": "Callers request any model in the group by name — LiteLLM picks a deployment behind the scenes using the <strong>{{strategy}}</strong> strategy.",
+      "tabCurl": "cURL",
+      "tabPython": "Python (OpenAI SDK)",
+      "tabJavascript": "JavaScript (OpenAI SDK)"
+    },
+    "index": {
+      "searchPlaceholder": "Search groups...",
+      "showingResults_one": "Showing {{count}} result",
+      "showingResults_other": "Showing {{count}} results",
+      "createGroup": "Create Group",
+      "deleteTitle": "Delete routing group?",
+      "deleteFallbackNote": "Models in <strong>{{groupName}}</strong> will fall back to the proxy's top-level routing strategy. This cannot be undone.",
+      "createSucceeded": "Created routing group \"{{groupName}}\"",
+      "updateSucceeded": "Updated routing group \"{{groupName}}\"",
+      "deleteSucceeded": "Deleted routing group \"{{groupName}}\"",
+      "saveFailed": "Failed to save routing group",
+      "deleteFailed": "Failed to delete routing group"
+    }
   }
 }

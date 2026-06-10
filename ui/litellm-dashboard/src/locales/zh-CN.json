@@ -7729,5 +7729,60 @@
       "title": "向量存储",
       "empty": "未配置任何向量存储"
     }
+  },
+  "routingGroups": {
+    "routingGroupModal": {
+      "titleCreate": "创建路由组",
+      "titleEdit": "编辑 {{groupName}}",
+      "okTextCreate": "创建组",
+      "okTextEdit": "保存更改",
+      "groupNameLabel": "组名",
+      "groupNameRequired": "组名不能为空",
+      "groupNameMaxLength": "不能超过 {{max}} 个字符",
+      "groupNamePattern": "只允许字母、数字、点、下划线和短横线",
+      "groupNameExists": "已存在同名组",
+      "groupNameExtra": "在 API 调用中将此名称作为模型使用 — LiteLLM 会将请求路由到组内某个模型。",
+      "groupNamePlaceholder": "fast-chat",
+      "modelsLabel": "模型",
+      "modelsRequired": "至少选择一个模型",
+      "modelsExtra": "此组路由的模型列表中的模型。",
+      "modelsPlaceholder": "选择模型",
+      "routingStrategyLabel": "路由策略",
+      "routingStrategyRequired": "策略不能为空",
+      "strategyPlaceholder": "选择策略",
+      "strategyArgsLabel": "策略参数（JSON）",
+      "strategyArgsExampleLatency": "示例：{ \"ttl\": 3600, \"lowest_latency_buffer\": 0 }",
+      "strategyArgsExampleUsage": "示例：{ \"ttl\": 60 }",
+      "strategyArgsMustBeJson": "必须是有效的 JSON",
+      "strategyArgsPlaceholder": "{ \"ttl\": 3600 }",
+      "fallbackNote": "未被明确指定到组的模型将回退到代理的顶级路由策略。"
+    },
+    "routingGroupsTable": {
+      "colGroupName": "组名",
+      "colModels": "模型",
+      "colStrategy": "策略",
+      "strategySimpleShuffle": "简单随机",
+      "strategyLeastBusy": "最少繁忙",
+      "strategyUsageBased": "基于用量",
+      "strategyLatencyBased": "基于延迟",
+      "howRoutingWorksTitle": "此组的路由方式",
+      "howRoutingWorksDesc": "调用方按名称请求组内任意模型 — LiteLLM 在后台使用 <strong>{{strategy}}</strong> 策略选取部署。",
+      "tabCurl": "cURL",
+      "tabPython": "Python（OpenAI SDK）",
+      "tabJavascript": "JavaScript（OpenAI SDK）"
+    },
+    "index": {
+      "searchPlaceholder": "搜索组...",
+      "showingResults_one": "显示 {{count}} 条结果",
+      "showingResults_other": "显示 {{count}} 条结果",
+      "createGroup": "创建组",
+      "deleteTitle": "删除路由组？",
+      "deleteFallbackNote": "<strong>{{groupName}}</strong> 中的模型将回退到代理的顶级路由策略。此操作不可撤销。",
+      "createSucceeded": "已创建路由组\"{{groupName}}\"",
+      "updateSucceeded": "已更新路由组\"{{groupName}}\"",
+      "deleteSucceeded": "已删除路由组\"{{groupName}}\"",
+      "saveFailed": "保存路由组失败",
+      "deleteFailed": "删除路由组失败"
+    }
   }
 }
