@@ -243,6 +243,22 @@ def test_gemini_image_generation_openai_web_search_tool_maps_to_google_search():
     assert request["tools"] == [{"googleSearch": {}}]
 
 
+def test_gemini_image_generation_dedupes_search_tools_from_tools_and_web_search_options():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={
+            "tools": [{"type": "web_search"}],
+            "web_search_options": {},
+        },
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped["tools"] == [{"googleSearch": {}}]
+
+
 def test_gemini_image_generation_usage_without_output_details_treats_output_as_image():
     config = GoogleImageGenConfig()
     raw_response = httpx.Response(

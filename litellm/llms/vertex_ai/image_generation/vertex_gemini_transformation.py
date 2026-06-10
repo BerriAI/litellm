@@ -83,7 +83,7 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                     elif k not in ("tools", "web_search_options"):
                         mapped_params[k] = v
 
-        map_gemini_image_tools_params(non_default_params, mapped_params)
+        mapped_params = map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:

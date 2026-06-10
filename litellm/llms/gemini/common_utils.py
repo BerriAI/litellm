@@ -183,23 +183,58 @@ def map_openai_image_params_to_gemini(
     return mapped_params
 
 
+def _dedupe_gemini_search_tools(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    search_tool_keys = VertexGeminiConfig._search_tool_keys()
+    seen_search_keys: set[str] = set()
+    deduped_tools: List[Dict[str, Any]] = []
+
+    for tool in tools:
+        if not isinstance(tool, dict):
+            deduped_tools.append(tool)
+            continue
+
+        search_key = next((key for key in search_tool_keys if key in tool), None)
+        if search_key is None:
+            deduped_tools.append(tool)
+            continue
+
+        if search_key in seen_search_keys:
+            continue
+
+        seen_search_keys.add(search_key)
+        deduped_tools.append(tool)
+
+    return deduped_tools
+
+
+def _has_gemini_search_tool(tools: List[Any]) -> bool:
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    search_tool_keys = VertexGeminiConfig._search_tool_keys()
+    return any(
+        isinstance(tool, dict) and any(key in tool for key in search_tool_keys)
+        for tool in tools
+    )
+
+
 def map_gemini_image_tools_params(
     non_default_params: Dict[str, Any],
     mapped_params: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """
-    Map tools and web_search_options to Gemini googleSearch tools for image generation.
-
-    Reuses VertexGeminiConfig tool mapping so OpenAI-style web_search tools,
-    web_search_options, and native googleSearch/google_search tools are supported.
-    """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
     gemini_config = VertexGeminiConfig()
-    working_params = dict(mapped_params)
-    working_params.pop("web_search_options", None)
+    result = dict(mapped_params)
+    result.pop("web_search_options", None)
+    working_params = dict(result)
 
     tools_value = non_default_params.get("tools")
     if isinstance(tools_value, list) and tools_value:
@@ -211,7 +246,10 @@ def map_gemini_image_tools_params(
         )
 
     web_search_options = non_default_params.get("web_search_options")
-    if isinstance(web_search_options, dict):
+    existing_tools = working_params.get("tools")
+    if isinstance(web_search_options, dict) and not (
+        isinstance(existing_tools, list) and _has_gemini_search_tool(existing_tools)
+    ):
         search_tool = gemini_config._map_web_search_options(web_search_options)
         working_params = gemini_config._add_tools_to_optional_params(
             working_params, [search_tool]
@@ -219,10 +257,10 @@ def map_gemini_image_tools_params(
 
     gemini_config._drop_search_tools_mixed_with_functions(working_params)
 
-    if "tools" in working_params:
-        mapped_params["tools"] = working_params["tools"]
-    mapped_params.pop("web_search_options", None)
-    return mapped_params
+    if isinstance(working_params.get("tools"), list):
+        result["tools"] = _dedupe_gemini_search_tools(working_params["tools"])
+
+    return result
 
 
 def get_gemini_image_generation_config(

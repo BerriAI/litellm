@@ -59,7 +59,9 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             optional_params=optional_params,
         )
         if is_gemini_image_model(model):
-            map_gemini_image_tools_params(non_default_params, mapped_params)
+            mapped_params = map_gemini_image_tools_params(
+                non_default_params, mapped_params
+            )
         return mapped_params
 
     def get_complete_url(
