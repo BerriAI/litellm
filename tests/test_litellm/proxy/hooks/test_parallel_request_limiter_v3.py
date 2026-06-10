@@ -20,7 +20,12 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 class TimeController:
@@ -545,6 +550,68 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     assert (
         tpm_operation["increment_value"] == expected_tokens[token_rate_limit_type]
     ), f"Expected {expected_tokens[token_rate_limit_type]} tokens for type '{token_rate_limit_type}', got {tpm_operation['increment_value']}"
+
+
+@pytest.mark.parametrize(
+    "response_obj",
+    [
+        EmbeddingResponse(
+            model="text-embedding-3-small",
+            usage=Usage(prompt_tokens=50, completion_tokens=0, total_tokens=50),
+        ),
+        TextCompletionResponse(
+            model="gpt-3.5-turbo-instruct",
+            usage=Usage(prompt_tokens=20, completion_tokens=30, total_tokens=50),
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_log_success_event_counts_non_chat_response_tokens(
+    monkeypatch, response_obj
+):
+    """
+    Embedding and text completion responses must increment the TPM counter,
+    not just chat completion ModelResponse objects.
+    """
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+
+    _api_key = hash_token("sk-12345")
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", lambda: "total"
+    )
+
+    mock_kwargs = {
+        "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        "model": response_obj.model,
+    }
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    tpm_operation = next(
+        (op for op in captured_operations if op["key"].endswith(":tokens")), None
+    )
+    assert tpm_operation is not None, "Should have a TPM increment operation"
+    assert tpm_operation["increment_value"] == 50
 
 
 @pytest.mark.asyncio
