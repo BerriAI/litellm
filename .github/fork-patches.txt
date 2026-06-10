@@ -11,8 +11,4 @@ gateway/Dockerfile    | FROM.*sha256:    | Digest-pinned base image (not ARG-var
 migrations/Dockerfile | FROM.*sha256:    | Digest-pinned base image (not ARG-variable FROM)
 .github/workflows/codeql.yml        | timeout-minutes: 90                       | CodeQL analyze job timeout raised 30->90 min so python leg completes
 .github/codeql/codeql-config.yml    | py/log-injection                          | Exclude CWE-117 query: taint explosion from pervasive logging; same scaling class as py/clear-text-logging-sensitive-data
-
-# Sync log
-# 2026-06-08: security sweep — all 3 Dockerfile digest pins intact; CodeQL cancelled (pre-existing on litellm_internal_staging).
-# 2026-06-08: merged 10 upstream commits from BerriAI/litellm:litellm_internal_staging (-X theirs); all 3 Dockerfile digest pins intact.
-# 2026-06-09: synced upstream (PR #52); all 5 fork patches intact. CodeQL python SAST restored — push-triggered scan on d634c906 succeeded in 4.5 min (timeout-minutes: 90 + py/log-injection exclusion).
+.github/workflows/alert-bridge.yml  | workflow_dispatch                          | Alert bridge for code-scanning triage; re-apply after -X theirs syncs that wipe .github/workflows/
