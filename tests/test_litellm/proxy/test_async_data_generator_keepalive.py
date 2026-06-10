@@ -273,10 +273,10 @@ def test_iter_with_keepalive_cancels_pending_task_on_early_close():
     # Track the Tasks ``_iter_with_keepalive`` creates so we can assert on
     # cancellation after the wrapper is closed.
     created_tasks = []
-    original_ensure_future = asyncio.ensure_future
+    original_create_task = asyncio.create_task
 
-    def _spy_ensure_future(coro_or_future, *args, **kwargs):
-        task = original_ensure_future(coro_or_future, *args, **kwargs)
+    def _spy_create_task(coro, *args, **kwargs):
+        task = original_create_task(coro, *args, **kwargs)
         created_tasks.append(task)
         return task
 
@@ -287,7 +287,7 @@ def test_iter_with_keepalive_cancels_pending_task_on_early_close():
         yield "unreachable"  # pragma: no cover
 
     async def _run_test():
-        with patch.object(asyncio, "ensure_future", _spy_ensure_future):
+        with patch.object(asyncio, "create_task", _spy_create_task):
             wrapper = proxy_server_module._iter_with_keepalive(
                 _never_yields().__aiter__(), keepalive_seconds=0.05
             )

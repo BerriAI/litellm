@@ -7051,7 +7051,7 @@ async def _iter_with_keepalive(aiter, keepalive_seconds: float):
     try:
         while True:
             if pending is None:
-                pending = asyncio.ensure_future(aiter.__anext__())
+                pending = asyncio.create_task(aiter.__anext__())
             done, _ = await asyncio.wait({pending}, timeout=keepalive_seconds)
             if not done:
                 yield _STREAM_KEEPALIVE
