@@ -110,6 +110,92 @@ class PrismaDBExceptionHandler:
         return False
 
     @staticmethod
+    def is_prisma_engine_internal_error(e: Exception) -> bool:
+        """True iff ``e`` is a non-``PrismaError`` exception raised from inside
+        prisma-client-py's query-engine layer.
+
+        During the instant a DB connection is torn down, the query engine can
+        return a malformed error payload (``user_facing_error.meta`` is
+        ``null``). prisma-client-py's ``handle_response_errors`` then crashes
+        with ``AttributeError: 'NoneType' object has no attribute 'get'``
+        before it can raise the proper P1001 "can't reach database server"
+        error. That AttributeError carries no connection keyword, so it can't
+        be matched by message; identify it by its ``prisma.engine`` origin
+        instead.
+
+        Recognized ``PrismaError`` subclasses are excluded: connectivity ones
+        are already classified by type/keyword above, and data-layer ones
+        (the DB IS reachable) must stay 401.
+        """
+        import prisma
+
+        if isinstance(e, prisma.errors.PrismaError):
+            return False
+        tb = getattr(e, "__traceback__", None)
+        while tb is not None:
+            if tb.tb_frame.f_globals.get("__name__", "").startswith("prisma.engine"):
+                return True
+            tb = tb.tb_next
+        return False
+
+    @staticmethod
+    def is_database_service_unavailable_error(e: Exception) -> bool:
+        """True iff the exception means the database could not answer at the
+        infrastructure level (connection refused, socket/interface failure,
+        timeout) rather than a genuine auth failure (key not found) or a
+        data-layer error (the DB IS reachable and rejected the data).
+
+        Auth must answer 401 only for a key the DB confirms is invalid. When
+        the DB itself is unreachable, the request has to surface as 503 so
+        callers retry instead of treating valid keys as invalid during an
+        outage.
+
+        Note: prisma-client-py mislabels the P1001 "can't reach database
+        server" connectivity failure as a ``DataError`` (a data-layer type),
+        so a type-only check misses real outages. ``is_database_transport_error``
+        keyword-matches the connection message and catches that masquerade,
+        while genuine data errors (no connection keyword) correctly stay 401.
+
+        The Postgres "cached plan must not change result type" error is matched
+        here, not in ``is_database_transport_error``: it is a transient stale-DB-
+        state condition (not an invalid key), but the connection is healthy so it
+        must not trigger a reconnect.
+
+        A non-``PrismaError`` raised from inside the prisma query engine (e.g.
+        the ``AttributeError`` from ``handle_response_errors`` when the engine
+        returns a malformed error payload mid-tear-down) is also treated as
+        unavailable; see ``is_prisma_engine_internal_error``.
+        """
+        import asyncio
+
+        if PrismaDBExceptionHandler.is_database_connection_error(e):
+            return True
+        if PrismaDBExceptionHandler.is_database_transport_error(e):
+            return True
+        if PrismaDBExceptionHandler.is_prisma_engine_internal_error(e):
+            return True
+        if "cached plan must not change result type" in str(e).lower():
+            return True
+
+        # OSError already covers ConnectionError and (Py3.3+) TimeoutError.
+        # asyncio.TimeoutError is a distinct class before Py3.11.
+        if isinstance(e, (OSError, asyncio.TimeoutError)):
+            return True
+
+        try:
+            import asyncpg
+        except ImportError:
+            return False
+
+        return isinstance(
+            e,
+            (
+                asyncpg.exceptions.PostgresConnectionError,
+                asyncpg.exceptions.InterfaceError,
+            ),
+        )
+
+    @staticmethod
     def handle_db_exception(e: Exception):
         """
         Primary handler for `allow_requests_on_db_unavailable` flag. Decides whether to raise a DB Exception or not based on the flag.
