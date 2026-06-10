@@ -20,6 +20,7 @@ import {
   type ToolPolicyOverrideRow,
 } from "@/components/networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
+import { useTranslation } from "react-i18next";
 
 interface ToolDetailProps {
   toolName: string;
@@ -45,6 +46,7 @@ function getDefaultLogsDateRange(): { start: string; end: string } {
 }
 
 export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [overrideSaving, setOverrideSaving] = useState(false);
   const [inputPolicySaving, setInputPolicySaving] = useState(false);
@@ -145,12 +147,12 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         await updateToolPolicy(accessToken, toolName, { input_policy: newPolicy });
         invalidateDetail();
       } catch (e: unknown) {
-        alert(`Failed to update input policy: ${e instanceof Error ? e.message : String(e)}`);
+        alert(t("toolDetail.updateInputPolicyFailed", { error: e instanceof Error ? e.message : String(e) }));
       } finally {
         setInputPolicySaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail],
+    [accessToken, toolName, invalidateDetail, t],
   );
 
   const handleOutputPolicyChange = useCallback(
@@ -161,12 +163,12 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         await updateToolPolicy(accessToken, toolName, { output_policy: newPolicy });
         invalidateDetail();
       } catch (e: unknown) {
-        alert(`Failed to update output policy: ${e instanceof Error ? e.message : String(e)}`);
+        alert(t("toolDetail.updateOutputPolicyFailed", { error: e instanceof Error ? e.message : String(e) }));
       } finally {
         setOutputPolicySaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail],
+    [accessToken, toolName, invalidateDetail, t],
   );
 
   const handleAddOverride = useCallback(async () => {
@@ -190,11 +192,11 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
       setBlockTeamId(null);
       setBlockKey(null);
     } catch (e: unknown) {
-      alert(`Failed to add override: ${e instanceof Error ? e.message : String(e)}`);
+      alert(t("toolDetail.addOverrideFailed", { error: e instanceof Error ? e.message : String(e) }));
     } finally {
       setOverrideSaving(false);
     }
-  }, [accessToken, toolName, blockScope, blockTeamId, blockKey, invalidateDetail]);
+  }, [accessToken, toolName, blockScope, blockTeamId, blockKey, invalidateDetail, t]);
 
   const handleRemoveOverride = useCallback(
     async (override: ToolPolicyOverrideRow) => {
@@ -207,12 +209,12 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         });
         invalidateDetail();
       } catch (e: unknown) {
-        alert(`Failed to remove override: ${e instanceof Error ? e.message : String(e)}`);
+        alert(t("toolDetail.removeOverrideFailed", { error: e instanceof Error ? e.message : String(e) }));
       } finally {
         setOverrideSaving(false);
       }
     },
-    [accessToken, toolName, invalidateDetail],
+    [accessToken, toolName, invalidateDetail, t],
   );
 
   if (detailLoading && !detail) {
@@ -227,9 +229,9 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     return (
       <div>
         <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
-          Back to Tool Policies
+          {t("toolDetail.backToToolPolicies")}
         </Button>
-        <p className="text-red-600">Failed to load tool details.</p>
+        <p className="text-red-600">{t("toolDetail.failedToLoad")}</p>
       </div>
     );
   }
@@ -247,7 +249,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
     <div>
       <div className="mb-6">
         <Button type="link" icon={<ArrowLeftOutlined />} onClick={onBack} className="pl-0 mb-4">
-          Back to Tool Policies
+          {t("toolDetail.backToToolPolicies")}
         </Button>
 
         <div className="flex items-start justify-between">
@@ -259,13 +261,13 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                 {tool.origin ?? "—"}
               </span>
               <span className="inline-flex items-center px-2.5 py-1 text-xs font-medium rounded-md bg-indigo-50 text-indigo-700 border border-indigo-200">
-                {(tool.call_count ?? 0).toLocaleString()} calls
+                {t("toolDetail.callCount", { count: tool.call_count ?? 0 })}
               </span>
             </div>
             <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-600">
               {tool.user_agent && (
                 <div className="flex items-center gap-1.5">
-                  <dt className="font-medium text-gray-500 whitespace-nowrap">User Agent:</dt>
+                  <dt className="font-medium text-gray-500 whitespace-nowrap">{t("toolDetail.userAgentLabel")}</dt>
                   <dd className="font-mono truncate max-w-[40ch]" title={tool.user_agent}>
                     {tool.user_agent}
                   </dd>
@@ -273,13 +275,15 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
               )}
               {tool.created_at && (
                 <div className="flex items-center gap-1.5">
-                  <dt className="font-medium text-gray-500 whitespace-nowrap">First Discovered:</dt>
+                  <dt className="font-medium text-gray-500 whitespace-nowrap">
+                    {t("toolDetail.firstDiscoveredLabel")}
+                  </dt>
                   <dd>{new Date(tool.created_at).toLocaleString()}</dd>
                 </div>
               )}
               {tool.last_used_at && (
                 <div className="flex items-center gap-1.5">
-                  <dt className="font-medium text-gray-500 whitespace-nowrap">Last Used:</dt>
+                  <dt className="font-medium text-gray-500 whitespace-nowrap">{t("toolDetail.lastUsedLabel")}</dt>
                   <dd>{new Date(tool.last_used_at).toLocaleString()}</dd>
                 </div>
               )}
@@ -292,10 +296,8 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         {/* Two-panel policy layout */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-1">Input Policy</h2>
-            <p className="text-xs text-gray-500 mb-3">
-              {inputDesc ?? "Controls what data this tool is allowed to accept."}
-            </p>
+            <h2 className="text-sm font-semibold text-gray-700 mb-1">{t("toolDetail.inputPolicyTitle")}</h2>
+            <p className="text-xs text-gray-500 mb-3">{inputDesc ?? t("toolDetail.inputPolicyDefaultDesc")}</p>
             <PolicySelect
               value={tool.input_policy}
               toolName={tool.tool_name}
@@ -309,10 +311,8 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
           </section>
 
           <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-1">Output Policy</h2>
-            <p className="text-xs text-gray-500 mb-3">
-              {outputDesc ?? "Controls how this tool's output is trusted by downstream tools."}
-            </p>
+            <h2 className="text-sm font-semibold text-gray-700 mb-1">{t("toolDetail.outputPolicyTitle")}</h2>
+            <p className="text-xs text-gray-500 mb-3">{outputDesc ?? t("toolDetail.outputPolicyDefaultDesc")}</p>
             <PolicySelect
               value={tool.output_policy}
               toolName={tool.tool_name}
@@ -328,14 +328,14 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
 
         {overrides.length > 0 && (
           <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-            <h2 className="text-sm font-semibold text-gray-700 mb-3">Blocked for team or key</h2>
+            <h2 className="text-sm font-semibold text-gray-700 mb-3">{t("toolDetail.blockedForTitle")}</h2>
             <ul className="border rounded-md divide-y divide-gray-100 bg-red-50/30">
               {overrides.map((ov) => (
                 <li key={ov.override_id} className="flex items-center justify-between px-3 py-2.5 text-sm">
                   <span className="text-gray-700">
-                    {ov.team_id ? `Team: ${ov.team_id}` : ""}
+                    {ov.team_id ? t("toolDetail.teamLabel", { id: ov.team_id }) : ""}
                     {ov.team_id && ov.key_hash ? " · " : ""}
-                    {ov.key_hash ? `Key: ${ov.key_alias || ov.key_hash.substring(0, 8)}` : ""}
+                    {ov.key_hash ? t("toolDetail.keyLabel", { id: ov.key_alias || ov.key_hash.substring(0, 8) }) : ""}
                     {!ov.team_id && !ov.key_hash ? "—" : ""}
                   </span>
                   <Button
@@ -345,7 +345,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                     disabled={overrideSaving}
                     onClick={() => handleRemoveOverride(ov)}
                   >
-                    Remove
+                    {t("common.remove")}
                   </Button>
                 </li>
               ))}
@@ -354,10 +354,10 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         )}
 
         <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-700 mb-3">Block for team or key</h2>
+          <h2 className="text-sm font-semibold text-gray-700 mb-3">{t("toolDetail.blockForTitle")}</h2>
           <div className="flex flex-col gap-4 max-w-md">
             <div>
-              <span className="text-sm font-medium text-gray-700 block mb-2">Scope</span>
+              <span className="text-sm font-medium text-gray-700 block mb-2">{t("toolDetail.scopeLabel")}</span>
               <div className="flex items-center gap-6">
                 <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
                   <input
@@ -366,7 +366,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                     onChange={() => setBlockScope("team")}
                     className="align-middle"
                   />
-                  Team
+                  {t("toolDetail.scopeTeam")}
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer text-sm text-gray-700">
                   <input
@@ -375,19 +375,19 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
                     onChange={() => setBlockScope("key")}
                     className="align-middle"
                   />
-                  Key
+                  {t("toolDetail.scopeKey")}
                 </label>
               </div>
             </div>
             <div>
               <span className="text-sm font-medium text-gray-700 block mb-2">
-                {blockScope === "team" ? "Team" : "Key"}
+                {blockScope === "team" ? t("toolDetail.scopeTeam") : t("toolDetail.scopeKey")}
               </span>
               {blockScope === "team" ? (
                 <TeamDropdown value={blockTeamId ?? undefined} onChange={(id) => setBlockTeamId(id || null)} />
               ) : (
                 <Select
-                  placeholder="Select key"
+                  placeholder={t("toolDetail.selectKeyPlaceholder")}
                   allowClear
                   showSearch
                   optionFilterProp="label"
@@ -412,7 +412,9 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
               loading={overrideSaving}
               onClick={handleAddOverride}
             >
-              Block for {blockScope}
+              {t("toolDetail.blockForButton", {
+                scope: blockScope === "team" ? t("toolDetail.scopeTeam") : t("toolDetail.scopeKey"),
+              })}
             </Button>
           </div>
         </section>
@@ -420,7 +422,7 @@ export function ToolDetail({ toolName, onBack, accessToken }: ToolDetailProps) {
         <section className="bg-white rounded-lg border border-gray-200 p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
             <HistoryOutlined />
-            Recent logs
+            {t("toolDetail.recentLogsTitle")}
           </h2>
           <LogViewer
             guardrailName={tool.tool_name}
