@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Switch, Spin } from "antd";
+import { useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 import { fetchMCPServers, listMCPTools } from "../networking";
 import { MCPServer } from "../mcp_tools/types";
@@ -11,6 +12,7 @@ interface Props {
 }
 
 const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onChange }) => {
+  const { t } = useTranslation();
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loadingServers, setLoadingServers] = useState(true);
   // Track which individual servers are being toggled on (verifying tools)
@@ -58,13 +60,13 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
       const result = await listMCPTools(accessToken, serverName);
       // listMCPTools never throws; it returns { tools, error, message } on failure
       if (result?.error) {
-        MessageManager.warning(`Could not load tools for ${serverName} — it will be excluded from this message.`);
+        MessageManager.warning(t("chat.mCPConnectPicker.couldNotLoadTools", { name: serverName }));
         // Do not add to selectedServers
         return;
       }
       onChange([...selectedServers, serverName]);
     } catch {
-      MessageManager.warning(`Could not load tools for ${serverName} — it will be excluded from this message.`);
+      MessageManager.warning(t("chat.mCPConnectPicker.couldNotLoadTools", { name: serverName }));
       // Do not add to selectedServers
     } finally {
       setTogglingOn((prev) => {
@@ -90,7 +92,7 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
         </div>
       ) : servers.length === 0 ? (
         <div style={{ padding: "16px 12px", color: "#8c8c8c", fontSize: 13, textAlign: "center" }}>
-          No MCP servers configured
+          {t("chat.mCPConnectPicker.noServersConfigured")}
         </div>
       ) : (
         servers.map((server) => {
@@ -112,7 +114,7 @@ const MCPConnectPicker: React.FC<Props> = ({ accessToken, selectedServers, onCha
               {server.mcp_info?.logo_url && (
                 <img
                   src={server.mcp_info.logo_url}
-                  alt={`${name} logo`}
+                  alt={t("chat.mCPConnectPicker.logoAlt", { name })}
                   style={{
                     width: 24,
                     height: 24,

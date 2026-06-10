@@ -11,6 +11,7 @@ import {
   MessageOutlined,
 } from "@ant-design/icons";
 import dayjs from "dayjs";
+import { useTranslation } from "react-i18next";
 import { Conversation } from "./types";
 
 const { Text } = Typography;
@@ -71,6 +72,7 @@ interface ConversationRowProps {
 }
 
 const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSelect, onDelete, onRename }) => {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(conv.title);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -181,7 +183,7 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
             }}
             onClick={(e) => e.stopPropagation()}
           >
-            <Tooltip title="Rename">
+            <Tooltip title={t("chat.conversationList.rename")}>
               <Button
                 type="text"
                 size="small"
@@ -191,13 +193,13 @@ const ConversationRow: React.FC<ConversationRowProps> = ({ conv, isActive, onSel
               />
             </Tooltip>
             <Popconfirm
-              title="Delete this conversation?"
+              title={t("chat.conversationList.deleteConversationTitle")}
               onConfirm={() => onDelete(conv.id)}
-              okText="Delete"
-              cancelText="Cancel"
+              okText={t("common.delete")}
+              cancelText={t("common.cancel")}
               okButtonProps={{ danger: true }}
             >
-              <Tooltip title="Delete">
+              <Tooltip title={t("common.delete")}>
                 <Button
                   type="text"
                   size="small"
@@ -224,6 +226,7 @@ interface SearchModalProps {
 }
 
 const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect, onClose }) => {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
 
   useEffect(() => {
@@ -251,7 +254,7 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
       <Input
         autoFocus
         prefix={<SearchOutlined style={{ color: "#bbb" }} />}
-        placeholder="Search conversations…"
+        placeholder={t("chat.conversationList.searchPlaceholder")}
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         style={{ marginBottom: 12 }}
@@ -260,7 +263,9 @@ const SearchModal: React.FC<SearchModalProps> = ({ open, conversations, onSelect
 
       <div style={{ maxHeight: 320, overflowY: "auto" }}>
         {filtered.length === 0 ? (
-          <div style={{ textAlign: "center", padding: "24px 0", color: "#999" }}>No conversations found</div>
+          <div style={{ textAlign: "center", padding: "24px 0", color: "#999" }}>
+            {t("chat.conversationList.noConversationsFound")}
+          </div>
         ) : (
           filtered.map((conv) => {
             const truncated = conv.title.length > 55 ? conv.title.slice(0, 55) + "…" : conv.title;
@@ -308,7 +313,18 @@ const ConversationList: React.FC<Props> = ({
   onNewChat,
   onRename,
 }) => {
+  const { t } = useTranslation();
   const [searchModalOpen, setSearchModalOpen] = useState(false);
+
+  const dateGroupLabel = (group: DateGroup): string => {
+    const keyMap: Record<DateGroup, string> = {
+      Today: "chat.conversationList.dateGroupToday",
+      Yesterday: "chat.conversationList.dateGroupYesterday",
+      "Last 7 Days": "chat.conversationList.dateGroupLast7Days",
+      Older: "chat.conversationList.dateGroupOlder",
+    };
+    return t(keyMap[group]);
+  };
 
   // Cmd+K / Ctrl+K listener
   const handleGlobalKeyDown = useCallback((e: KeyboardEvent) => {
@@ -345,12 +361,9 @@ const ConversationList: React.FC<Props> = ({
       >
         {/* Top: New Chat button */}
         <div style={{ padding: "12px 10px 8px" }}>
-          <Tooltip
-            title="Chats are saved locally in this browser. All requests are logged in Spend → Logs."
-            placement="right"
-          >
+          <Tooltip title={t("chat.conversationList.chatsLocalStorageTooltip")} placement="right">
             <Button type="primary" icon={<PlusOutlined />} onClick={onNewChat} style={{ width: "100%" }}>
-              New Chat
+              {t("chat.conversationList.newChat")}
             </Button>
           </Tooltip>
         </div>
@@ -371,11 +384,10 @@ const ConversationList: React.FC<Props> = ({
                 fontSize: 12,
                 marginTop: 32,
                 padding: "0 12px",
+                whiteSpace: "pre-line",
               }}
             >
-              No conversations yet.
-              <br />
-              Start a new chat above.
+              {t("chat.conversationList.noConversationsYet")}
             </div>
           ) : (
             grouped.map(({ group, items }) => (
@@ -390,7 +402,7 @@ const ConversationList: React.FC<Props> = ({
                     padding: "8px 8px 4px",
                   }}
                 >
-                  {group}
+                  {dateGroupLabel(group)}
                 </div>
                 {items.map((conv) => (
                   <ConversationRow
@@ -431,7 +443,7 @@ const ConversationList: React.FC<Props> = ({
               textOverflow: "ellipsis",
             }}
           >
-            My Account
+            {t("chat.conversationList.myAccount")}
           </Text>
         </div>
       </div>
