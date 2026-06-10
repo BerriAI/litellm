@@ -8581,6 +8581,53 @@
       "modelDeletedSuccess": "Model deleted successfully",
       "modelPaused": "Model paused",
       "modelResumed": "Model resumed"
+    },
+    "modelRetrySettings": {
+      "retryScopeLabel": "Retry Policy Scope:",
+      "globalDefault": "Global Default",
+      "globalRetryPolicyTitle": "Global Retry Policy",
+      "globalRetryPolicyDesc": "Default retry settings applied to all model groups unless overridden",
+      "modelRetryPolicyTitle": "Retry Policy for {{modelGroup}}",
+      "modelRetryPolicyDesc": "Model-specific retry settings. Falls back to global defaults if not set.",
+      "globalValue": "(Global: {{value}})"
+    },
+    "priceDataManagement": {
+      "title": "Price Data Management",
+      "description": "Manage model pricing data and configure automatic reload schedules",
+      "reloadButtonText": "Reload Price Data"
+    },
+    "organizationFilters": {
+      "searchByName": "Search by Organization Name",
+      "searchById": "Search by Organization ID"
+    },
+    "playgroundPage": {
+      "tabChat": "Chat",
+      "tabCompare": "Compare",
+      "tabCompliance": "Compliance",
+      "tabAgentBuilder": "Agent Builder (Experimental)"
+    },
+    "mcpOauthCallback": {
+      "title": "LiteLLM MCP OAuth",
+      "authComplete": "Authorization complete. You may close this window and return to the LiteLLM dashboard.",
+      "closeManually": "If the window does not close automatically, everything is still saved—you can close it manually."
+    },
+    "onboardingErrorView": {
+      "message": "Failed to load invitation",
+      "description": "The invitation link may be invalid or expired.",
+      "backToLogin": "Back to Login"
+    },
+    "onboardingFormBody": {
+      "resetPasswordTitle": "Reset Password",
+      "signUpTitle": "Sign Up",
+      "resetPasswordSubtitle": "Reset your password to access Admin UI.",
+      "signUpSubtitle": "Claim your user account to login to Admin UI.",
+      "ssoDescription": "SSO is under the Enterprise Tier.",
+      "getFreeTrial": "Get Free Trial",
+      "emailAddressLabel": "Email Address",
+      "passwordLabel": "Password",
+      "passwordRequired": "password required to sign up",
+      "passwordHelpReset": "Enter your new password",
+      "passwordHelpSignup": "Create a password for your account"
     }
   }
 }

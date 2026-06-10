@@ -1,6 +1,7 @@
 import { Button, Select, SelectItem, TabPanel, Text, Title } from "@tremor/react";
 import { InputNumber } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 interface GlobalRetryPolicyObject {
   [retryPolicyKey: string]: number;
@@ -42,20 +43,21 @@ const ModelRetrySettingsTab = ({
   setModelGroupRetryPolicy,
   handleSaveRetrySettings,
 }: ModelRetrySettingsTabProps) => {
+  const { t } = useTranslation();
   //  const [modelGroupRetryPolicy, setModelGroupRetryPolicy] = useState<RetryPolicyObject | null>(null);
 
   return (
     <TabPanel>
       <div className="flex items-center gap-4 mb-6">
         <div className="flex items-center">
-          <Text>Retry Policy Scope:</Text>
+          <Text>{t("pages.modelRetrySettings.retryScopeLabel")}</Text>
           <Select
             className="ml-2 w-48"
             defaultValue="global"
             value={selectedModelGroup === "global" ? "global" : selectedModelGroup || availableModelGroups[0]}
             onValueChange={(value) => setSelectedModelGroup(value)}
           >
-            <SelectItem value="global">Global Default</SelectItem>
+            <SelectItem value="global">{t("pages.modelRetrySettings.globalDefault")}</SelectItem>
             {availableModelGroups.map((group, idx) => (
               <SelectItem key={idx} value={group} onClick={() => setSelectedModelGroup(group)}>
                 {group}
@@ -67,13 +69,13 @@ const ModelRetrySettingsTab = ({
 
       {selectedModelGroup === "global" ? (
         <>
-          <Title>Global Retry Policy</Title>
-          <Text className="mb-6">Default retry settings applied to all model groups unless overridden</Text>
+          <Title>{t("pages.modelRetrySettings.globalRetryPolicyTitle")}</Title>
+          <Text className="mb-6">{t("pages.modelRetrySettings.globalRetryPolicyDesc")}</Text>
         </>
       ) : (
         <>
-          <Title>Retry Policy for {selectedModelGroup}</Title>
-          <Text className="mb-6">Model-specific retry settings. Falls back to global defaults if not set.</Text>
+          <Title>{t("pages.modelRetrySettings.modelRetryPolicyTitle", { modelGroup: selectedModelGroup })}</Title>
+          <Text className="mb-6">{t("pages.modelRetrySettings.modelRetryPolicyDesc")}</Text>
         </>
       )}
       {retryPolicyMap && (
@@ -102,7 +104,9 @@ const ModelRetrySettingsTab = ({
                     <Text>{exceptionType}</Text>
                     {selectedModelGroup !== "global" && (
                       <Text className="text-xs text-gray-500 ml-2">
-                        (Global: {globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry})
+                        {t("pages.modelRetrySettings.globalValue", {
+                          value: globalRetryPolicy?.[retryPolicyKey] ?? defaultRetry,
+                        })}
                       </Text>
                     )}
                   </td>
@@ -145,7 +149,7 @@ const ModelRetrySettingsTab = ({
         </table>
       )}
       <Button className="mt-6 mr-8" onClick={handleSaveRetrySettings}>
-        Save
+        {t("common.save")}
       </Button>
     </TabPanel>
   );

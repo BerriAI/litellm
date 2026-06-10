@@ -8581,6 +8581,53 @@
       "modelDeletedSuccess": "模型已成功删除",
       "modelPaused": "模型已暂停",
       "modelResumed": "模型已恢复"
+    },
+    "modelRetrySettings": {
+      "retryScopeLabel": "重试策略范围：",
+      "globalDefault": "全局默认",
+      "globalRetryPolicyTitle": "全局重试策略",
+      "globalRetryPolicyDesc": "应用于所有模型组的默认重试设置（除非被覆盖）",
+      "modelRetryPolicyTitle": "{{modelGroup}} 的重试策略",
+      "modelRetryPolicyDesc": "模型特定的重试设置。未设置时回退到全局默认值。",
+      "globalValue": "（全局：{{value}}）"
+    },
+    "priceDataManagement": {
+      "title": "价格数据管理",
+      "description": "管理模型定价数据并配置自动重载计划",
+      "reloadButtonText": "重载价格数据"
+    },
+    "organizationFilters": {
+      "searchByName": "按组织名称搜索",
+      "searchById": "按组织 ID 搜索"
+    },
+    "playgroundPage": {
+      "tabChat": "聊天",
+      "tabCompare": "对比",
+      "tabCompliance": "合规",
+      "tabAgentBuilder": "Agent 构建器（实验性）"
+    },
+    "mcpOauthCallback": {
+      "title": "LiteLLM MCP OAuth",
+      "authComplete": "授权完成。您可以关闭此窗口并返回 LiteLLM 仪表盘。",
+      "closeManually": "如果窗口未自动关闭，所有数据已保存——您可以手动关闭它。"
+    },
+    "onboardingErrorView": {
+      "message": "加载邀请失败",
+      "description": "邀请链接可能无效或已过期。",
+      "backToLogin": "返回登录"
+    },
+    "onboardingFormBody": {
+      "resetPasswordTitle": "重置密码",
+      "signUpTitle": "注册",
+      "resetPasswordSubtitle": "重置密码以访问管理界面。",
+      "signUpSubtitle": "认领您的用户账户以登录管理界面。",
+      "ssoDescription": "SSO 属于企业版功能。",
+      "getFreeTrial": "免费试用",
+      "emailAddressLabel": "邮箱地址",
+      "passwordLabel": "密码",
+      "passwordRequired": "注册时需要填写密码",
+      "passwordHelpReset": "请输入新密码",
+      "passwordHelpSignup": "为您的账户创建密码"
     }
   }
 }
