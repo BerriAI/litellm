@@ -139,7 +139,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableShowNewBadge");
             }
           }}
-          aria-label="Toggle hide new feature indicators"
+          aria-label={t("user.toggleHideNewFeatureIndicators")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
@@ -156,7 +156,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableShowPrompts");
             }
           }}
-          aria-label="Toggle hide all prompts"
+          aria-label={t("user.toggleHideAllPrompts")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
@@ -173,7 +173,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableUsageIndicator");
             }
           }}
-          aria-label="Toggle hide usage indicator"
+          aria-label={t("user.toggleHideUsageIndicator")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
@@ -190,7 +190,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableBlogPosts");
             }
           }}
-          aria-label="Toggle hide blog posts"
+          aria-label={t("user.toggleHideBlogPosts")}
         />
       </Space>
       <Space style={{ width: "100%", justifyContent: "space-between" }}>
@@ -207,7 +207,7 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
               emitLocalStorageChange("disableBouncingIcon");
             }
           }}
-          aria-label="Toggle hide bouncing icon"
+          aria-label={t("user.toggleHideBouncingIcon")}
         />
       </Space>
     </Space>
@@ -235,7 +235,10 @@ const UserDropdown: React.FC<UserDropdownProps> = ({ onLogout }) => {
       <Button
         type="text"
         className="!flex max-w-[min(200px,34vw)] items-center gap-2 !rounded-md !py-0.5 !pl-1 !pr-2 transition-colors hover:!bg-gray-100"
-        aria-label={`Account menu — ${userRole ?? "Unknown role"} — signed in as ${userEmail || userId || "unknown"}`}
+        aria-label={t("user.accountMenuAriaLabel", {
+          role: userRole ?? t("common.unknown"),
+          identity: userEmail || userId || t("common.unknown"),
+        })}
         aria-haspopup="menu"
       >
         <span

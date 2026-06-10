@@ -61,7 +61,12 @@
     "slackCommunity": "LiteLLM Slack 社区",
     "joinSlack": "加入 Slack",
     "githubRepo": "LiteLLM 的 GitHub 仓库",
-    "language": "语言"
+    "language": "语言",
+    "notificationsBell": {
+      "notifications": "通知",
+      "agentPlatformDesc": "开源 Agent 基础设施 — 沙箱、持久会话以及运行在 AWS Fargate 上的 worker。",
+      "markAsRead": "标记为已读"
+    }
   },
   "user": {
     "logout": "退出登录",
@@ -74,7 +79,13 @@
     "hideAllPrompts": "隐藏所有提示",
     "hideUsageIndicator": "隐藏用量指示器",
     "hideBlogPosts": "隐藏博客文章",
-    "hideBouncingIcon": "隐藏跳动图标"
+    "hideBouncingIcon": "隐藏跳动图标",
+    "accountMenuAriaLabel": "账号菜单 — {{role}} — 已登录为 {{identity}}",
+    "toggleHideNewFeatureIndicators": "切换隐藏新功能标记",
+    "toggleHideAllPrompts": "切换隐藏所有提示",
+    "toggleHideUsageIndicator": "切换隐藏用量指示器",
+    "toggleHideBlogPosts": "切换隐藏博客文章",
+    "toggleHideBouncingIcon": "切换隐藏跳动图标"
   },
   "login": {
     "title": "登录",

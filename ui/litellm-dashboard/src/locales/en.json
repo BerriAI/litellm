@@ -61,7 +61,12 @@
     "slackCommunity": "LiteLLM Slack community",
     "joinSlack": "Join Slack",
     "githubRepo": "LiteLLM on GitHub",
-    "language": "Language"
+    "language": "Language",
+    "notificationsBell": {
+      "notifications": "Notifications",
+      "agentPlatformDesc": "Open-source agent infra — sandboxes, durable sessions, and workers on AWS Fargate.",
+      "markAsRead": "Mark as read"
+    }
   },
   "user": {
     "logout": "Logout",
@@ -74,7 +79,13 @@
     "hideAllPrompts": "Hide All Prompts",
     "hideUsageIndicator": "Hide Usage Indicator",
     "hideBlogPosts": "Hide Blog Posts",
-    "hideBouncingIcon": "Hide Bouncing Icon"
+    "hideBouncingIcon": "Hide Bouncing Icon",
+    "accountMenuAriaLabel": "Account menu — {{role}} — signed in as {{identity}}",
+    "toggleHideNewFeatureIndicators": "Toggle hide new feature indicators",
+    "toggleHideAllPrompts": "Toggle hide all prompts",
+    "toggleHideUsageIndicator": "Toggle hide usage indicator",
+    "toggleHideBlogPosts": "Toggle hide blog posts",
+    "toggleHideBouncingIcon": "Toggle hide bouncing icon"
   },
   "login": {
     "title": "Login",
