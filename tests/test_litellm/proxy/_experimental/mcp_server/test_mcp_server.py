@@ -5367,15 +5367,11 @@ async def test_create_mcp_client_sampling_enabled():
 
 @pytest.mark.asyncio
 async def test_execute_mcp_tool_sets_model_in_model_call_details():
-    """Regression test: MCP passthrough tools/call spend logs had model="".
+    """Regression test: MCP tools/call spend logs persisted with model="".
 
-    The @client decorator on call_mcp_tool creates the logging object via
-    function_setup without a "model" kwarg, so model_call_details["model"]
-    starts as None. execute_mcp_tool set logging_obj.model as an instance
-    attribute only, which the spend-log writer never reads (it reads
-    kwargs["model"] from model_call_details). The tools/call rows therefore
-    persisted with an empty model while list_tools rows showed
-    "MCP: list_tools".
+    execute_mcp_tool set logging_obj.model only; the spend-log writer reads
+    model_call_details["model"], which stays None when function_setup builds
+    the logging object without a "model" kwarg.
     """
     import uuid
     from datetime import timezone
