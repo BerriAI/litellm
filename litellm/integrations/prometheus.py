@@ -3932,30 +3932,48 @@ class PrometheusLogger(CustomLogger):
     @staticmethod
     def _mount_metrics_endpoint():
         """
-        Mount the Prometheus metrics endpoint with optional authentication.
+        Expose the Prometheus metrics endpoint with optional authentication.
 
-        Args:
-            require_auth (bool, optional): Whether to require authentication for the metrics endpoint.
-                                        Defaults to False.
+        Registers explicit GET routes for ``/metrics`` and ``/metrics/``
+        instead of using ``app.mount(...)``. Starlette mounts emit a 307
+        redirect when the request path equals the mount prefix without a
+        trailing slash; Prometheus-compatible scrapers do not follow
+        redirects, so bare-path scrapes return an empty body and silently
+        record no metrics (#30079).
         """
-        from prometheus_client import make_asgi_app
+        from fastapi import Response
+        from prometheus_client import (
+            CONTENT_TYPE_LATEST,
+            generate_latest,
+        )
 
         from litellm._logging import verbose_proxy_logger
         from litellm.proxy.proxy_server import app
 
-        # Create metrics ASGI app
         if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
             from prometheus_client import CollectorRegistry, multiprocess
 
             registry = CollectorRegistry()
             multiprocess.MultiProcessCollector(registry)
-            metrics_app = make_asgi_app(registry)
         else:
-            metrics_app = make_asgi_app()
+            from prometheus_client import REGISTRY as registry
 
-        # Mount the metrics app to the app
-        app.mount("/metrics", metrics_app)
-        verbose_proxy_logger.debug("Starting Prometheus Metrics on /metrics (no authentication)")
+        async def _metrics_endpoint() -> Response:
+            return Response(
+                content=generate_latest(registry),
+                media_type=CONTENT_TYPE_LATEST,
+            )
+
+        for path in ("/metrics", "/metrics/"):
+            app.add_api_route(
+                path,
+                _metrics_endpoint,
+                methods=["GET"],
+                include_in_schema=False,
+            )
+        verbose_proxy_logger.debug(
+            "Starting Prometheus Metrics on /metrics (no authentication)"
+        )
 
 
 def _prometheus_labels_from_context(
