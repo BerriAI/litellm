@@ -153,6 +153,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "bitbucket",
     "gitlab",
     "cloudzero",
+    "faros",
     "focus",
     "vantage",
     "posthog",
