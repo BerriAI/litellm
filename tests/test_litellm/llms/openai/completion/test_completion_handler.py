@@ -65,6 +65,19 @@ def test_completion_forwards_client_headers_to_provider(mock_completions_endpoin
 
 
 @respx.mock
+def test_completion_forwards_extra_headers_to_provider(mock_completions_endpoint):
+    text_completion(
+        model="gpt-3.5-turbo-instruct",
+        prompt="hello",
+        max_tokens=5,
+        extra_headers={"x-mycorp-llmcall-id": "abc-123"},
+    )
+
+    request_headers = mock_completions_endpoint.calls.last.request.headers
+    assert request_headers["x-mycorp-llmcall-id"] == "abc-123"
+
+
+@respx.mock
 async def test_acompletion_forwards_client_headers_to_provider(
     mock_completions_endpoint, monkeypatch
 ):

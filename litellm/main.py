@@ -2134,9 +2134,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
-
             ## LOAD CONFIG - if set
             config = litellm.OpenAITextCompletionConfig.get_config()
             for k, v in config.items():
