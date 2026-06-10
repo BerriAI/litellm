@@ -479,6 +479,7 @@ function OutputMessage({ output }: { output: RealtimeOutputItem }) {
 }
 
 function TokenBreakdown({ label, details }: { label: string; details: Record<string, any> }) {
+  const { t } = useTranslation();
   const entries = Object.entries(details).filter(
     ([, v]) => typeof v === "number" || (typeof v === "object" && v !== null),
   );
@@ -488,7 +489,7 @@ function TokenBreakdown({ label, details }: { label: string; details: Record<str
   return (
     <div style={{ marginTop: 4 }}>
       <Text type="secondary" style={{ fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase" }}>
-        {label} Token Breakdown
+        {label} {t("viewLogs.realtimePrettyView.tokenBreakdownSuffix")}
       </Text>
       <div
         style={{

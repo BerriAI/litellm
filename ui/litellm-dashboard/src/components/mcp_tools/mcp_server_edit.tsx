@@ -162,9 +162,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
         form.setFieldsValue({ credentials });
 
-        NotificationsManager.success(
-          t("mcpTools.mcpServerEdit.oauthAuthSuccess"),
-        );
+        NotificationsManager.success(t("mcpTools.mcpServerEdit.oauthAuthSuccess"));
       }
     },
     onBeforeRedirect: persistEditUiState,
@@ -828,9 +826,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
             {isStdioTransport && (
               <div className="rounded-lg border border-gray-200 p-4 space-y-4">
-                <p className="text-sm text-gray-600">
-                  {t("mcpTools.mcpServerEdit.stdioDesc")}
-                </p>
+                <p className="text-sm text-gray-600">{t("mcpTools.mcpServerEdit.stdioDesc")}</p>
 
                 <Form.Item
                   label={t("mcpTools.mcpServerEdit.stdioCommandLabel")}
@@ -838,7 +834,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   rules={[{ required: true, message: t("mcpTools.mcpServerEdit.stdioCommandRequired") }]}
                 >
                   <Input
-                    placeholder="e.g., npx"
+                    placeholder={t("mcpTools.mcpServerEdit.stdioCommandPlaceholder")}
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
@@ -1056,14 +1052,17 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                       }
                       name="token_storage_ttl_seconds"
                     >
-                      <InputNumber min={1} placeholder={t("mcpTools.mcpServerEdit.tokenStorageTtlPlaceholder")} style={{ width: "100%" }} className="rounded-lg" />
+                      <InputNumber
+                        min={1}
+                        placeholder={t("mcpTools.mcpServerEdit.tokenStorageTtlPlaceholder")}
+                        style={{ width: "100%" }}
+                        className="rounded-lg"
+                      />
                     </Form.Item>
                   </>
                 )}
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">
-                    {t("mcpTools.mcpServerEdit.oauthFlowDesc")}
-                  </p>
+                  <p className="text-sm text-gray-600">{t("mcpTools.mcpServerEdit.oauthFlowDesc")}</p>
                   <Button
                     variant="secondary"
                     onClick={startOAuthFlow}
@@ -1118,8 +1117,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Service Name
-                      <Tooltip title="AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.">
+                      {t("mcpTools.mcpServerEdit.awsServiceNameLabel")}
+                      <Tooltip title={t("mcpTools.mcpServerEdit.awsServiceNameTooltip")}>
                         <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                       </Tooltip>
                     </span>
@@ -1127,15 +1126,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   name={["credentials", "aws_service_name"]}
                 >
                   <Input
-                    placeholder="bedrock-agentcore (leave blank to keep existing)"
+                    placeholder={t("mcpTools.mcpServerEdit.awsServiceNamePlaceholder")}
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Access Key ID
-                      <Tooltip title="Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).">
+                      {t("mcpTools.mcpServerEdit.awsAccessKeyIdLabel")}
+                      <Tooltip title={t("mcpTools.mcpServerEdit.awsAccessKeyIdTooltip")}>
                         <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                       </Tooltip>
                     </span>
@@ -1144,15 +1143,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   rules={[]}
                 >
                   <Input.Password
-                    placeholder="Leave blank to keep existing"
+                    placeholder={t("mcpTools.mcpServerEdit.leaveBlankPlaceholder")}
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Secret Access Key
-                      <Tooltip title="Optional. Required if AWS Access Key ID is provided.">
+                      {t("mcpTools.mcpServerEdit.awsSecretAccessKeyLabel")}
+                      <Tooltip title={t("mcpTools.mcpServerEdit.awsSecretAccessKeyTooltip")}>
                         <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                       </Tooltip>
                     </span>
@@ -1161,15 +1160,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   rules={[]}
                 >
                   <Input.Password
-                    placeholder="Leave blank to keep existing"
+                    placeholder={t("mcpTools.mcpServerEdit.leaveBlankPlaceholder")}
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Session Token
-                      <Tooltip title="Optional. Only needed for temporary STS credentials.">
+                      {t("mcpTools.mcpServerEdit.awsSessionTokenLabel")}
+                      <Tooltip title={t("mcpTools.mcpServerEdit.awsSessionTokenTooltip")}>
                         <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                       </Tooltip>
                     </span>
@@ -1177,15 +1176,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   name={["credentials", "aws_session_token"]}
                 >
                   <Input.Password
-                    placeholder="Leave blank to keep existing"
+                    placeholder={t("mcpTools.mcpServerEdit.leaveBlankPlaceholder")}
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Role ARN
-                      <Tooltip title="Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials.">
+                      {t("mcpTools.mcpServerEdit.awsRoleArnLabel")}
+                      <Tooltip title={t("mcpTools.mcpServerEdit.awsRoleArnTooltip")}>
                         <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                       </Tooltip>
                     </span>
@@ -1193,15 +1192,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   name={["credentials", "aws_role_name"]}
                 >
                   <Input
-                    placeholder="Leave blank to keep existing"
+                    placeholder={t("mcpTools.mcpServerEdit.leaveBlankPlaceholder")}
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">
-                      AWS Session Name
-                      <Tooltip title="Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.">
+                      {t("mcpTools.mcpServerEdit.awsSessionNameLabel")}
+                      <Tooltip title={t("mcpTools.mcpServerEdit.awsSessionNameTooltip")}>
                         <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
                       </Tooltip>
                     </span>
@@ -1209,7 +1208,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   name={["credentials", "aws_session_name"]}
                 >
                   <Input
-                    placeholder="Leave blank to keep existing"
+                    placeholder={t("mcpTools.mcpServerEdit.leaveBlankPlaceholder")}
                     className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
                   />
                 </Form.Item>
@@ -1269,8 +1268,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             </div>
 
             <div className="flex justify-end gap-2">
-              <AntdButton onClick={onCancel}>Cancel</AntdButton>
-              <Button type="submit">Save Changes</Button>
+              <AntdButton onClick={onCancel}>{t("common.cancel")}</AntdButton>
+              <Button type="submit">{t("mcpTools.mcpServerEdit.saveChanges")}</Button>
             </div>
           </Form>
         </TabPanel>
@@ -1280,8 +1279,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
             <MCPServerCostConfig value={costConfig} onChange={setCostConfig} tools={tools} disabled={isLoadingTools} />
 
             <div className="flex justify-end gap-2">
-              <AntdButton onClick={onCancel}>Cancel</AntdButton>
-              <Button onClick={() => form.submit()}>Save Changes</Button>
+              <AntdButton onClick={onCancel}>{t("common.cancel")}</AntdButton>
+              <Button onClick={() => form.submit()}>{t("mcpTools.mcpServerEdit.saveChanges")}</Button>
             </div>
           </div>
         </TabPanel>

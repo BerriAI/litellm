@@ -8,6 +8,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { DebugWarningBanner } from "@/components/DebugWarningBanner";
 import { MIGRATED_PAGES, migratedHref, legacyPageHref, legacyKeyForPathname } from "@/utils/migratedPages";
+import i18n from "@/lib/i18n";
 
 function LayoutContent({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -56,7 +57,9 @@ function LayoutContent({ children }: { children: React.ReactNode }) {
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+    <Suspense
+      fallback={<div className="flex items-center justify-center min-h-screen">{i18n.t("common.loading")}</div>}
+    >
       <LayoutContent>{children}</LayoutContent>
     </Suspense>
   );

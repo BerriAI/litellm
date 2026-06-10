@@ -327,7 +327,11 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
           rules={[{ type: "email", message: t("claudeCodePluginsPage.addPluginForm.authorEmailRule") }]}
           tooltip={t("claudeCodePluginsPage.addPluginForm.authorEmailTooltip")}
         >
-          <Input type="email" placeholder="author@example.com" className="rounded-lg" />
+          <Input
+            type="email"
+            placeholder={t("claudeCodePluginsPage.addPluginForm.authorEmailPlaceholder")}
+            className="rounded-lg"
+          />
         </Form.Item>
 
         {/* Submit Buttons */}

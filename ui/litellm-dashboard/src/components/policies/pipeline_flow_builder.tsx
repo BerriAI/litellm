@@ -966,7 +966,11 @@ const PipelineTestPanel: React.FC<PipelineTestPanelProps> = ({ pipeline, accessT
                       action: actionLabels[step.action_taken] || step.action_taken,
                     })}
                     {step.duration_seconds != null && (
-                      <span style={{ marginLeft: 8 }}>({(step.duration_seconds * 1000).toFixed(0)}ms)</span>
+                      <span style={{ marginLeft: 8 }}>
+                        {t("policies.pipelineFlowBuilder.durationMs", {
+                          ms: (step.duration_seconds * 1000).toFixed(0),
+                        })}
+                      </span>
                     )}
                   </div>
                   {step.error_detail && (

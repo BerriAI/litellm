@@ -792,7 +792,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
             {selectedAgentTypeInfo.credential_fields.length > 0 && (
               <div className="mt-4 p-4 border border-gray-200 rounded-lg">
                 <h4 className="text-sm font-medium text-gray-700 mb-3">
-                  {selectedAgentTypeInfo.agent_type_display_name} Settings
+                  {t("agentsPage.addAgentForm.agentTypeSettings", {
+                    agentType: selectedAgentTypeInfo.agent_type_display_name,
+                  })}
                 </h4>
                 {selectedAgentTypeInfo.credential_fields.map((field) => (
                   <Form.Item
@@ -1001,7 +1003,13 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
     <Modal
       title={
         <div className="flex items-center space-x-3 pb-4 border-b border-gray-100">
-          {selectedLogo && currentStep < 1 && <img src={selectedLogo} alt="Agent" className="w-6 h-6 object-contain" />}
+          {selectedLogo && currentStep < 1 && (
+            <img
+              src={selectedLogo}
+              alt={t("agentsPage.addAgentForm.agentLogoAlt")}
+              className="w-6 h-6 object-contain"
+            />
+          )}
           <h2 className="text-xl font-semibold text-gray-900">{t("agentsPage.addAgentForm.modalTitle")}</h2>
         </div>
       }

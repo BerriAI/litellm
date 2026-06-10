@@ -282,7 +282,9 @@
       "manageExisting": "Manage Existing Aliases",
       "noAliases": "No aliases added yet. Add a new alias above.",
       "configExample": "Configuration Example",
-      "configExampleDesc": "Here's how your current aliases would look in the config:"
+      "configExampleDesc": "Here's how your current aliases would look in the config:",
+      "aliasNamePlaceholder": "e.g., gpt-4o",
+      "selectTargetModelPlaceholder": "Select target model"
     },
     "modelSelector": {
       "placeholder": "Select a Model",
@@ -1202,7 +1204,8 @@
       "authorEmailRule": "Please enter a valid email",
       "authorEmailTooltip": "Contact email for the skill author",
       "adding": "Adding...",
-      "addSkill": "Add Skill"
+      "addSkill": "Add Skill",
+      "authorEmailPlaceholder": "author@example.com"
     },
     "pluginTable": {
       "copiedToClipboard": "Copied to clipboard!",
@@ -1863,7 +1866,9 @@
       "selectValue": "Select {{key}} value",
       "selectCategoryPlaceholder": "Select category to configure",
       "selectCategoryHint": "Select a category to add threshold configuration",
-      "fieldRequired": "{{fieldKey}} is required"
+      "fieldRequired": "{{fieldKey}} is required",
+      "boolTrue": "True",
+      "boolFalse": "False"
     },
     "guardrailProviderFields": {
       "loadFailed": "Failed to load provider parameters",
@@ -2941,7 +2946,8 @@
       "turnCount_one": "{{count}} turn",
       "turnCount_other": "{{count}} turns",
       "inputTokenBreakdown": "Input Token Breakdown",
-      "outputTokenBreakdown": "Output Token Breakdown"
+      "outputTokenBreakdown": "Output Token Breakdown",
+      "tokenBreakdownSuffix": "Token Breakdown"
     },
     "sectionHeader": {
       "labelInput": "Input",
@@ -3897,7 +3903,23 @@
       "awsSigv4ViewDocs": "View docs",
       "awsRegionLabel": "AWS Region",
       "awsRegionTooltip": "AWS region for SigV4 signing (e.g., us-east-1)",
-      "awsRegionPlaceholder": "us-east-1 (leave blank to keep existing)"
+      "awsRegionPlaceholder": "us-east-1 (leave blank to keep existing)",
+      "stdioCommandPlaceholder": "e.g., npx",
+      "awsServiceNameLabel": "AWS Service Name",
+      "awsServiceNameTooltip": "AWS service name for SigV4 signing. Defaults to 'bedrock-agentcore'.",
+      "awsServiceNamePlaceholder": "bedrock-agentcore (leave blank to keep existing)",
+      "awsAccessKeyIdLabel": "AWS Access Key ID",
+      "awsAccessKeyIdTooltip": "Optional. If not provided, falls back to the boto3 credential chain (IAM role, env vars, etc.).",
+      "awsSecretAccessKeyLabel": "AWS Secret Access Key",
+      "awsSecretAccessKeyTooltip": "Optional. Required if AWS Access Key ID is provided.",
+      "awsSessionTokenLabel": "AWS Session Token",
+      "awsSessionTokenTooltip": "Optional. Only needed for temporary STS credentials.",
+      "awsRoleArnLabel": "AWS Role ARN",
+      "awsRoleArnTooltip": "Optional. IAM role ARN to assume via STS before signing. If set, LiteLLM calls sts:AssumeRole to get temporary credentials.",
+      "awsSessionNameLabel": "AWS Session Name",
+      "awsSessionNameTooltip": "Optional. Session name for the AssumeRole call — appears in CloudTrail logs. Auto-generated if omitted.",
+      "leaveBlankPlaceholder": "Leave blank to keep existing",
+      "saveChanges": "Save Changes"
     },
     "mcpServerView": {
       "backToAllServers": "Back to All Servers",
@@ -5167,7 +5189,8 @@
       "testPipeline": "Test Pipeline",
       "updatePolicy": "Update Policy",
       "savePolicy": "Save Policy",
-      "addDescriptionPlaceholder": "Add a description (optional)..."
+      "addDescriptionPlaceholder": "Add a description (optional)...",
+      "durationMs": "({{ms}}ms)"
     },
     "policyInfo": {
       "notFound": "Policy not found",
@@ -5913,7 +5936,9 @@
       "vertexCollectionIdLabel": "Collection ID (optional)",
       "vertexCollectionIdTooltip": "Discovery Engine collection ID. Leave blank to use the default collection.",
       "vertexEngineIdLabel": "Engine ID (optional)",
-      "vertexEngineIdTooltip": "Search app (engine) ID. Required for website, healthcare, and connector-based data stores (Workspace, Slack, Jira, etc.) because these sources route search through an engine. Leave blank to query the data store directly."
+      "vertexEngineIdTooltip": "Search app (engine) ID. Required for website, healthcare, and connector-based data stores (Workspace, Slack, Jira, etc.) because these sources route search through an engine. Leave blank to query the data store directly.",
+      "vertexCollectionIdPlaceholder": "e.g. my-custom-collection",
+      "vertexEngineIdPlaceholder": "e.g. my-search-app_1234567890"
     },
     "openai": {
       "apiKeyLabel": "API Key",
@@ -5931,7 +5956,8 @@
       "apiBaseLabel": "API Base",
       "apiBaseTooltip": "Enter your Milvus endpoint (e.g., https://your-milvus-endpoint.com/)",
       "embeddingModelLabel": "Embedding Model",
-      "embeddingModelTooltip": "Select the embedding model to use"
+      "embeddingModelTooltip": "Select the embedding model to use",
+      "apiKeyPlaceholder": "username:password or api key"
     },
     "s3Vectors": {
       "vectorBucketNameLabel": "Vector Bucket Name",
@@ -6217,7 +6243,9 @@
       "nextButton": "Next →",
       "createAgentButton": "Create Agent →",
       "creatingButton": "Creating...",
-      "credentialFieldRequired": "Please enter {{label}}"
+      "credentialFieldRequired": "Please enter {{label}}",
+      "agentTypeSettings": "{{agentType}} Settings",
+      "agentLogoAlt": "Agent"
     },
     "agentCard": {
       "noDescription": "No description",
@@ -6861,7 +6889,8 @@
       "selectAtLeastOne": "Please select at least one MCP server to make public",
       "successCount_one": "Successfully made {{count}} MCP server public!",
       "successCount_other": "Successfully made {{count}} MCP servers public!",
-      "failedToMakePublic": "Failed to make MCP servers public. Please try again."
+      "failedToMakePublic": "Failed to make MCP servers public. Please try again.",
+      "warningLabel": "Warning:"
     },
     "makeModelPublicForm": {
       "modalTitle": "Make Models Public",
@@ -8628,6 +8657,7 @@
       "passwordRequired": "password required to sign up",
       "passwordHelpReset": "Enter your new password",
       "passwordHelpSignup": "Create a password for your account"
-    }
+    },
+    "loading": "Loading..."
   }
 }

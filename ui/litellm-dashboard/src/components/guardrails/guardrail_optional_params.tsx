@@ -96,8 +96,8 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
                 />
               ) : field.dict_value_type === "boolean" ? (
                 <Select placeholder={t("guardrails.guardrailOptionalParams.selectValue", { key: entry.key })}>
-                  <Select.Option value={true}>True</Select.Option>
-                  <Select.Option value={false}>False</Select.Option>
+                  <Select.Option value={true}>{t("guardrails.guardrailOptionalParams.boolTrue")}</Select.Option>
+                  <Select.Option value={false}>{t("guardrails.guardrailOptionalParams.boolFalse")}</Select.Option>
                 </Select>
               ) : (
                 <Input placeholder={t("guardrails.guardrailOptionalParams.enterValue", { key: entry.key })} />
@@ -199,8 +199,8 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
             </Select>
           ) : field.type === "bool" || field.type === "boolean" ? (
             <Select placeholder={field.description}>
-              <Select.Option value={true}>True</Select.Option>
-              <Select.Option value={false}>False</Select.Option>
+              <Select.Option value={true}>{t("guardrails.guardrailOptionalParams.boolTrue")}</Select.Option>
+              <Select.Option value={false}>{t("guardrails.guardrailOptionalParams.boolFalse")}</Select.Option>
             </Select>
           ) : field.type === "number" ? (
             <NumericalInput step={1} width={400} placeholder={field.description} />

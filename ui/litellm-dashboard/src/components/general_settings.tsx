@@ -182,7 +182,7 @@ const GeneralSettings: React.FC<GeneralSettingsPageProps> = ({ accessToken, user
                             {t("common.update")}
                           </Button>
                           <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-                            Reset
+                            {t("common.reset")}
                           </Icon>
                         </TableCell>
                       </TableRow>

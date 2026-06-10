@@ -282,7 +282,9 @@
       "manageExisting": "管理现有别名",
       "noAliases": "暂无别名。请在上方添加新别名。",
       "configExample": "配置示例",
-      "configExampleDesc": "以下是您当前别名在配置中的样子："
+      "configExampleDesc": "以下是您当前别名在配置中的样子：",
+      "aliasNamePlaceholder": "例如：gpt-4o",
+      "selectTargetModelPlaceholder": "选择目标模型"
     },
     "modelSelector": {
       "placeholder": "选择模型",
@@ -1202,7 +1204,8 @@
       "authorEmailRule": "请输入有效的邮箱地址",
       "authorEmailTooltip": "技能作者的联系邮箱",
       "adding": "添加中...",
-      "addSkill": "添加技能"
+      "addSkill": "添加技能",
+      "authorEmailPlaceholder": "author@example.com"
     },
     "pluginTable": {
       "copiedToClipboard": "已复制到剪贴板！",
@@ -1863,7 +1866,9 @@
       "selectValue": "选择 {{key}} 的值",
       "selectCategoryPlaceholder": "选择要配置的类别",
       "selectCategoryHint": "选择类别以添加阈值配置",
-      "fieldRequired": "{{fieldKey}} 为必填项"
+      "fieldRequired": "{{fieldKey}} 为必填项",
+      "boolTrue": "True",
+      "boolFalse": "False"
     },
     "guardrailProviderFields": {
       "loadFailed": "加载提供商参数失败",
@@ -2941,7 +2946,8 @@
       "turnCount_one": "{{count}} 轮",
       "turnCount_other": "{{count}} 轮",
       "inputTokenBreakdown": "输入 Token 明细",
-      "outputTokenBreakdown": "输出 Token 明细"
+      "outputTokenBreakdown": "输出 Token 明细",
+      "tokenBreakdownSuffix": "Token 分布"
     },
     "sectionHeader": {
       "labelInput": "输入",
@@ -3897,7 +3903,23 @@
       "awsSigv4ViewDocs": "查看文档",
       "awsRegionLabel": "AWS 区域",
       "awsRegionTooltip": "用于 SigV4 签名的 AWS 区域（例如 us-east-1）",
-      "awsRegionPlaceholder": "us-east-1（留空则保留现有值）"
+      "awsRegionPlaceholder": "us-east-1（留空则保留现有值）",
+      "stdioCommandPlaceholder": "例如：npx",
+      "awsServiceNameLabel": "AWS 服务名称",
+      "awsServiceNameTooltip": "用于 SigV4 签名的 AWS 服务名称。默认为 'bedrock-agentcore'。",
+      "awsServiceNamePlaceholder": "bedrock-agentcore（留空保留现有值）",
+      "awsAccessKeyIdLabel": "AWS Access Key ID",
+      "awsAccessKeyIdTooltip": "可选。若未提供，则回退到 boto3 凭证链（IAM 角色、环境变量等）。",
+      "awsSecretAccessKeyLabel": "AWS Secret Access Key",
+      "awsSecretAccessKeyTooltip": "可选。若提供了 AWS Access Key ID，则此项必填。",
+      "awsSessionTokenLabel": "AWS Session Token",
+      "awsSessionTokenTooltip": "可选。仅在使用临时 STS 凭证时需要。",
+      "awsRoleArnLabel": "AWS Role ARN",
+      "awsRoleArnTooltip": "可选。签名前通过 STS 代入的 IAM 角色 ARN。若设置，LiteLLM 将调用 sts:AssumeRole 获取临时凭证。",
+      "awsSessionNameLabel": "AWS 会话名称",
+      "awsSessionNameTooltip": "可选。AssumeRole 调用的会话名称，会出现在 CloudTrail 日志中。若省略则自动生成。",
+      "leaveBlankPlaceholder": "留空保留现有值",
+      "saveChanges": "保存更改"
     },
     "mcpServerView": {
       "backToAllServers": "返回所有服务器",
@@ -5167,7 +5189,8 @@
       "testPipeline": "测试流水线",
       "updatePolicy": "更新策略",
       "savePolicy": "保存策略",
-      "addDescriptionPlaceholder": "添加描述（可选）..."
+      "addDescriptionPlaceholder": "添加描述（可选）...",
+      "durationMs": "（{{ms}}ms）"
     },
     "policyInfo": {
       "notFound": "未找到策略",
@@ -5913,7 +5936,9 @@
       "vertexCollectionIdLabel": "集合 ID（可选）",
       "vertexCollectionIdTooltip": "Discovery Engine 集合 ID。留空则使用默认集合。",
       "vertexEngineIdLabel": "引擎 ID（可选）",
-      "vertexEngineIdTooltip": "搜索应用（引擎）ID。对于网站、医疗和基于连接器的数据存储（Workspace、Slack、Jira 等）为必填，因为这些来源通过引擎路由搜索。留空则直接查询数据存储。"
+      "vertexEngineIdTooltip": "搜索应用（引擎）ID。对于网站、医疗和基于连接器的数据存储（Workspace、Slack、Jira 等）为必填，因为这些来源通过引擎路由搜索。留空则直接查询数据存储。",
+      "vertexCollectionIdPlaceholder": "例如：my-custom-collection",
+      "vertexEngineIdPlaceholder": "例如：my-search-app_1234567890"
     },
     "openai": {
       "apiKeyLabel": "API 密钥",
@@ -5931,7 +5956,8 @@
       "apiBaseLabel": "API 基础 URL",
       "apiBaseTooltip": "输入您的 Milvus 端点（例如：https://your-milvus-endpoint.com/）",
       "embeddingModelLabel": "嵌入模型",
-      "embeddingModelTooltip": "选择要使用的嵌入模型"
+      "embeddingModelTooltip": "选择要使用的嵌入模型",
+      "apiKeyPlaceholder": "用户名:密码 或 API 密钥"
     },
     "s3Vectors": {
       "vectorBucketNameLabel": "向量存储桶名称",
@@ -6217,7 +6243,9 @@
       "nextButton": "下一步 →",
       "createAgentButton": "创建 Agent →",
       "creatingButton": "创建中...",
-      "credentialFieldRequired": "请输入 {{label}}"
+      "credentialFieldRequired": "请输入 {{label}}",
+      "agentTypeSettings": "{{agentType}} 设置",
+      "agentLogoAlt": "Agent"
     },
     "agentCard": {
       "noDescription": "无描述",
@@ -6861,7 +6889,8 @@
       "selectAtLeastOne": "请至少选择一个 MCP 服务器以设为公开",
       "successCount_one": "成功将 {{count}} 个 MCP 服务器设为公开！",
       "successCount_other": "成功将 {{count}} 个 MCP 服务器设为公开！",
-      "failedToMakePublic": "将 MCP 服务器设为公开失败，请重试。"
+      "failedToMakePublic": "将 MCP 服务器设为公开失败，请重试。",
+      "warningLabel": "警告："
     },
     "makeModelPublicForm": {
       "modalTitle": "将模型设为公开",
@@ -8628,6 +8657,7 @@
       "passwordRequired": "注册时需要填写密码",
       "passwordHelpReset": "请输入新密码",
       "passwordHelpSignup": "为您的账户创建密码"
-    }
+    },
+    "loading": "加载中..."
   }
 }
