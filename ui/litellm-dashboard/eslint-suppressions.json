@@ -2072,9 +2072,6 @@
   "src/components/vector_store_management/VectorStoreForm.tsx": {
     "no-restricted-imports": {
       "count": 1
-    },
-    "react/no-unescaped-entities": {
-      "count": 1
     }
   },
   "src/components/vector_store_management/VectorStoreTable.tsx": {
