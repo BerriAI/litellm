@@ -521,6 +521,7 @@ export function ToolTestPanel({
 
               <div className="pt-3 border-t border-gray-100">
                 <Button
+                  type="button"
                   onClick={() => form.submit()}
                   disabled={isLoading}
                   variant="primary"

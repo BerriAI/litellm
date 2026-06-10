@@ -898,6 +898,61 @@ def test_bedrock_tools_unpack_defs():
     _bedrock_tools_pt(tools=tools)
 
 
+def test_bedrock_tools_pt_strict_parameter():
+    """Regression for strict tools on the Bedrock Converse path.
+
+    Claude on Bedrock honours strict in toolSpec (with additionalProperties, which
+    Bedrock requires alongside strict); without forwarding it the model ignores the
+    enum constraint the caller asked for. Every other Bedrock family (Nova, Llama,
+    GPT-OSS) rejects the strict field, so it must only be forwarded for Claude.
+    """
+    tools_with_strict = [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_sql",
+                "strict": True,
+                "description": "Generate a SQL query",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                    "additionalProperties": False,
+                },
+            },
+        }
+    ]
+    result = _bedrock_tools_pt(
+        tools_with_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+    assert result[0]["toolSpec"]["strict"] is True
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["additionalProperties"] is False
+
+    result = _bedrock_tools_pt(tools_with_strict, model="us.amazon.nova-micro-v1:0")
+    assert "strict" not in result[0]["toolSpec"]
+    assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
+
+    tools_without_strict = [
+        {
+            "type": "function",
+            "function": {
+                "name": "generate_sql",
+                "description": "Generate a SQL query",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            },
+        }
+    ]
+    result = _bedrock_tools_pt(
+        tools_without_strict, model="anthropic.claude-sonnet-4-5-20250929-v1:0"
+    )
+    assert "strict" not in result[0]["toolSpec"]
+    assert "additionalProperties" not in result[0]["toolSpec"]["inputSchema"]["json"]
+
+
 def test_bedrock_image_processor_content_type_fallback_url_extension():
     """
     Test that _post_call_image_processing falls back to URL extension

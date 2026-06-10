@@ -1,6 +1,5 @@
 "use client";
 
-import APIReferenceView from "@/app/(dashboard)/api-reference/APIReferenceView";
 import SidebarProvider from "@/app/(dashboard)/components/SidebarProvider";
 import OldModelDashboard from "@/app/(dashboard)/models-and-endpoints/ModelsAndEndpointsView";
 import PlaygroundPage from "@/app/(dashboard)/playground/page";
@@ -10,6 +9,7 @@ import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
 import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { teamListCall as v2TeamListCall } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
@@ -54,6 +54,7 @@ import {
   storeReturnUrl,
 } from "@/utils/returnUrlUtils";
 import { isAdminRole } from "@/utils/roles";
+import { MIGRATED_PAGES, migratedHref } from "@/utils/migratedPages";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
@@ -64,13 +65,6 @@ interface ProxySettings {
   PROXY_LOGOUT_URL: string;
   LITELLM_UI_API_DOC_BASE_URL?: string | null;
 }
-
-/**
- * Map of legacy query-param page keys → new path-based route segments.
- * When a user visits ?page=<key>, they are redirected to /ui/<value>.
- * Add entries here as pages are migrated from the if/else chain to path-based routes.
- */
-const LEGACY_REDIRECTS: Record<string, string> = {};
 
 function CreateKeyPageContent() {
   const { authLoading, token, userID, userRole, userEmail, accessToken, premiumUser, setUserRole, setUserEmail } =
@@ -89,6 +83,9 @@ function CreateKeyPageContent() {
   const searchParams = useSearchParams()!;
   const [modelData, setModelData] = useState<any>({ data: [] });
   const [createClicked, setCreateClicked] = useState<boolean>(false);
+
+  const { data: uiSettingsData, isLoading: uiSettingsLoading } = useUISettings();
+  const nudgesDisabled = uiSettingsLoading || Boolean(uiSettingsData?.values?.disable_ui_nudges);
 
   // Survey state - always show by default
   const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
@@ -162,15 +159,16 @@ function CreateKeyPageContent() {
     return searchParams.get("page") || "api-keys";
   });
 
-  // Custom setPage function that updates URL
   const updatePage = (newPage: string) => {
-    // Update URL without full page reload
+    const migratedRoute = MIGRATED_PAGES[newPage];
+    if (migratedRoute) {
+      router.push(migratedHref(migratedRoute));
+      setPage(newPage);
+      return;
+    }
     const newSearchParams = new URLSearchParams(searchParams);
     newSearchParams.set("page", newPage);
-
-    // Use Next.js router to update URL
     window.history.pushState(null, "", `?${newSearchParams.toString()}`);
-
     setPage(newPage);
   };
 
@@ -202,11 +200,10 @@ function CreateKeyPageContent() {
   }, [redirectToLogin]);
 
   // Redirect legacy query-param pages to their new path-based routes
-  const isLegacyRedirect = page in LEGACY_REDIRECTS;
+  const isLegacyRedirect = page in MIGRATED_PAGES;
   useEffect(() => {
     if (!authLoading && isLegacyRedirect) {
-      const base = (proxyBaseUrl || "") + "/ui";
-      router.replace(`${base}/${LEGACY_REDIRECTS[page]}`);
+      router.replace(migratedHref(MIGRATED_PAGES[page]));
     }
   }, [authLoading, isLegacyRedirect, page, router]);
 
@@ -265,6 +262,9 @@ function CreateKeyPageContent() {
 
   // Fetch in-product nudges configuration from backend
   useEffect(() => {
+    if (nudgesDisabled) {
+      return;
+    }
     if (accessToken && token) {
       (async () => {
         try {
@@ -284,7 +284,7 @@ function CreateKeyPageContent() {
         }
       })();
     }
-  }, [accessToken, token]);
+  }, [accessToken, token, nudgesDisabled]);
 
   // Auto-dismiss survey prompt after 15 seconds
   useEffect(() => {
@@ -447,8 +447,6 @@ function CreateKeyPageContent() {
                   />
                 ) : page == "admin-panel" ? (
                   <AdminPanel proxySettings={proxySettings} />
-                ) : page == "api_ref" || page == "api-reference" ? (
-                  <APIReferenceView proxySettings={proxySettings} />
                 ) : page == "logging-and-alerts" ? (
                   <Settings userID={userID} userRole={userRole} accessToken={accessToken} premiumUser={premiumUser} />
                 ) : page == "budgets" ? (
@@ -550,7 +548,7 @@ function CreateKeyPageContent() {
 
               {/* Survey Components */}
               <SurveyPrompt
-                isVisible={showSurveyPrompt}
+                isVisible={showSurveyPrompt && !nudgesDisabled}
                 onOpen={handleOpenSurvey}
                 onDismiss={handleDismissSurveyPrompt}
               />
@@ -562,7 +560,7 @@ function CreateKeyPageContent() {
 
               {/* Claude Code Components */}
               <ClaudeCodePrompt
-                isVisible={showClaudeCodePrompt}
+                isVisible={showClaudeCodePrompt && !nudgesDisabled}
                 onOpen={handleOpenClaudeCode}
                 onDismiss={handleDismissClaudeCodePrompt}
               />

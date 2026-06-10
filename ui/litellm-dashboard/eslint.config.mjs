@@ -6,7 +6,7 @@ import unusedImports from "eslint-plugin-unused-imports";
 
 const eslintConfig = [
   {
-    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts"],
+    ignores: [".next/**", "out/**", "build/**", "coverage/**", "next-env.d.ts", "src/lib/http/schema.d.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

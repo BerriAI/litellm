@@ -1351,11 +1351,6 @@
       "count": 1
     }
   },
-  "src/components/mcp_tools/mcp_server_edit.test.tsx": {
-    "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
   "src/components/mcp_tools/mcp_server_edit.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -1504,7 +1499,7 @@
       "count": 23
     },
     "no-restricted-syntax": {
-      "count": 241
+      "count": 154
     }
   },
   "src/components/object_permissions_view.tsx": {
@@ -1514,11 +1509,6 @@
   },
   "src/components/onboarding_link.tsx": {
     "no-restricted-imports": {
-      "count": 1
-    }
-  },
-  "src/components/organisms/RegenerateKeyModal.tsx": {
-    "react-hooks/set-state-in-effect": {
       "count": 1
     }
   },

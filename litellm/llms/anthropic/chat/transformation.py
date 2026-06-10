@@ -81,7 +81,6 @@ from litellm.types.utils import (
 from litellm.utils import (
     ModelResponse,
     Usage,
-    _supports_factory,
     add_dummy_tool,
     any_assistant_message_has_thinking_blocks,
     get_max_tokens,
@@ -336,50 +335,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return any(
             v in model_lower for v in ("opus-4-7", "opus_4_7", "opus-4.7", "opus_4.7")
         )
-
-    @staticmethod
-    def _supports_model_capability(model: str, key: str) -> bool:
-        """Check a boolean capability ``key`` in the model map.
-
-        Strips bedrock/vertex prefixes so a provider-routed Claude still
-        resolves to the Anthropic model-map entry.
-        """
-        try:
-            if _supports_factory(
-                model=model,
-                custom_llm_provider="anthropic",
-                key=key,
-            ):
-                return True
-        except Exception:
-            pass
-        candidates = [model]
-        for prefix in (
-            "bedrock/converse/",
-            "bedrock/invoke/",
-            "bedrock/",
-            "vertex_ai/",
-        ):
-            if model.startswith(prefix):
-                candidates.append(model[len(prefix) :])
-        try:
-            from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-            base = BedrockModelInfo.get_base_model(model)
-            if base:
-                candidates.append(base)
-                candidates.append(f"bedrock/{base}")
-        except Exception:
-            pass
-        try:
-            for cand in candidates:
-                if cand in litellm.model_cost and (
-                    litellm.model_cost[cand].get(key) is True
-                ):
-                    return True
-        except Exception:
-            pass
-        return False
 
     @staticmethod
     def _supports_effort_level(model: str, level: str) -> bool:
@@ -1652,6 +1607,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         return _tool
 
+    def should_strip_billing_metadata(self) -> bool:
+        """
+        Whether to drop x-anthropic-billing-header system blocks before sending upstream.
+
+        The first-party Anthropic API uses these blocks for Claude Code attribution, so the
+        base config keeps them. Providers that reject them (e.g. Bedrock) override this to True.
+        """
+        return False
+
     def translate_system_message(
         self, messages: List[AllMessageValues]
     ) -> List[AnthropicSystemMessageContent]:
@@ -1659,7 +1623,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         Translate system message to anthropic format.
 
         Removes system message from the original list and returns a new list of anthropic system message content.
-        Filters out system messages containing x-anthropic-billing-header metadata.
+        When should_strip_billing_metadata() is True, x-anthropic-billing-header system blocks are dropped.
         """
         system_prompt_indices = []
         anthropic_system_message_list: List[AnthropicSystemMessageContent] = []
@@ -1671,10 +1635,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     # Skip empty text blocks - Anthropic API raises errors for empty text
                     if not system_message_block["content"]:
                         continue
-                    # Skip system messages containing x-anthropic-billing-header metadata
-                    if system_message_block["content"].startswith(
-                        "x-anthropic-billing-header:"
-                    ):
+                    if self.should_strip_billing_metadata() and system_message_block[
+                        "content"
+                    ].startswith("x-anthropic-billing-header:"):
                         continue
                     anthropic_system_message_content = AnthropicSystemMessageContent(
                         type="text",
@@ -1693,9 +1656,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         text_value = _content.get("text")
                         if _content.get("type") == "text" and not text_value:
                             continue
-                        # Skip system messages containing x-anthropic-billing-header metadata
                         if (
-                            _content.get("type") == "text"
+                            self.should_strip_billing_metadata()
+                            and _content.get("type") == "text"
                             and text_value
                             and text_value.startswith("x-anthropic-billing-header:")
                         ):

@@ -3934,7 +3934,7 @@ class TestMCPServerManagerReload:
         ):
             await manager.reload_servers_from_database()
 
-        mock_build.assert_awaited_once_with(db_row)
+        mock_build.assert_awaited_once_with(db_row, env_vars_are_encrypted=True)
         assert manager.registry["server-1"] is rebuilt_server
 
     @pytest.mark.asyncio
@@ -3965,7 +3965,7 @@ class TestMCPServerManagerReload:
             updated_at=timestamp,
         )
 
-        async def build_server(db_row):
+        async def build_server(db_row, **kwargs):
             if db_row.server_id == "bad-server":
                 raise RuntimeError("transient build failure")
             if db_row.server_id == "healthy-server":
@@ -4031,7 +4031,7 @@ class TestMCPServerManagerReload:
             updated_at=timestamp,
         )
 
-        async def build_server(db_row):
+        async def build_server(db_row, **kwargs):
             if db_row.server_id == "healthy-server":
                 return healthy_server
             return bad_openapi_server

@@ -6655,7 +6655,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
 
 
 @client
-def transcription(
+def transcription(  # noqa: PLR0915
     model: str,
     file: FileTypes,
     ## OPTIONAL OPENAI PARAMS ##
@@ -6846,6 +6846,35 @@ def transcription(
                 if isinstance(provider_config, NvidiaRivaAudioTranscriptionConfig)
                 else None
             ),
+        )
+    elif custom_llm_provider == "soniox":
+        from litellm.llms.soniox.audio_transcription.handler import (
+            SonioxAudioTranscriptionHandler,
+        )
+
+        response = SonioxAudioTranscriptionHandler().audio_transcriptions(
+            model=model,
+            audio_file=file,
+            optional_params=optional_params,
+            litellm_params=litellm_params_dict,
+            model_response=model_response,
+            atranscription=atranscription,
+            client=(
+                client
+                if client is not None
+                and (
+                    isinstance(client, HTTPHandler)
+                    or isinstance(client, AsyncHTTPHandler)
+                )
+                else None
+            ),
+            timeout=timeout,
+            max_retries=max_retries,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=api_key,
+            headers=extra_headers,
+            provider_config=provider_config,  # type: ignore[arg-type]
         )
     elif provider_config is not None:
         response = base_llm_http_handler.audio_transcriptions(
@@ -7732,6 +7761,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                     "cost",
                     logging_obj._response_cost_calculator(result=response),
                 )
+            processor.apply_provider_assembled_streaming_metadata(
+                response, chunks, logging_obj
+            )
             return response
 
         tool_call_chunks = [
@@ -7911,6 +7943,9 @@ def stream_chunk_builder(  # noqa: PLR0915
                 usage, "cost", logging_obj._response_cost_calculator(result=response)
             )
 
+        processor.apply_provider_assembled_streaming_metadata(
+            response, chunks, logging_obj
+        )
         return response
     except Exception as e:
         verbose_logger.exception(

@@ -659,6 +659,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or get_secret_str("NVIDIA_RIVA_API_KEY")
             or get_secret_str("NVIDIA_NIM_API_KEY")
         )
+    elif custom_llm_provider == "soniox":
+        api_base = (
+            api_base or get_secret_str("SONIOX_API_BASE") or "https://api.soniox.com"
+        )
+        dynamic_api_key = api_key or get_secret_str("SONIOX_API_KEY")
     elif custom_llm_provider == "cerebras":
         api_base = (
             api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"

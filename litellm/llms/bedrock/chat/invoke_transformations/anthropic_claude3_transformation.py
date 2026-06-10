@@ -60,6 +60,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def custom_llm_provider(self) -> Optional[str]:
         return "bedrock"
 
+    def should_strip_billing_metadata(self) -> bool:
+        return True
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
