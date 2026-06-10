@@ -678,6 +678,7 @@ OPENAI_CHAT_COMPLETION_PARAMS = [
     "extra_headers",
     "thinking",
     "web_search_options",
+    "include_server_side_tool_invocations",
     "service_tier",
     "prompt_cache_key",
     "prompt_cache_retention",
@@ -739,6 +740,7 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "verbosity": None,
     "thinking": None,
     "web_search_options": None,
+    "include_server_side_tool_invocations": None,
     "service_tier": None,
     "safety_identifier": None,
     "prompt_cache_key": None,
@@ -829,6 +831,7 @@ openai_compatible_providers: List = [
     "nano-gpt",  # Nano-GPT - JSON-configured provider
     "poe",  # Poe - JSON-configured provider
     "chutes",  # Chutes - JSON-configured provider
+    "parasail",  # Parasail - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -1155,6 +1158,7 @@ BEDROCK_CONVERSE_MODELS = [
     "openai.gpt-oss-120b-1:0",
     "anthropic.claude-haiku-4-5-20251001-v1:0",
     "anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "anthropic.claude-fable-5",
     "anthropic.claude-opus-4-8",
     "anthropic.claude-opus-4-7",
     "anthropic.claude-opus-4-6-v1:0",

@@ -1930,6 +1930,25 @@ def emit_vcr_classification_summary(terminalreporter) -> None:
             continue
         terminalreporter.write_line(f"  [{verdict}] {n}")
 
+    leak_verdicts = (
+        VERDICT_PARTIAL,
+        VERDICT_MISS_OVERFLOW,
+        VERDICT_MISS_NOT_PERSISTED,
+        VERDICT_UNMARKED_LIVE_CALL,
+    )
+    leak_counts = {verdict: counts.get(verdict, 0) for verdict in leak_verdicts}
+    total_leaks = sum(leak_counts.values())
+    terminalreporter.write_sep("-", "VCR COST LEAK CHECK", bold=True)
+    if total_leaks:
+        rendered = ", ".join(
+            f"{verdict}={count}" for verdict, count in leak_counts.items() if count
+        )
+        terminalreporter.write_line(f"  FAIL: {rendered}")
+    else:
+        terminalreporter.write_line(
+            "  PASS: no overflow, partial, not-persisted, or unmarked live-call verdicts"
+        )
+
     overflow = snapshot["overflow_tests"]
     if overflow:
         terminalreporter.write_sep(

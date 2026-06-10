@@ -12,7 +12,6 @@ import os
 import pytest
 import asyncio
 
-
 # Path to your service account JSON file
 SERVICE_ACCOUNT_FILE = "path/to/your/service-account.json"
 
@@ -95,6 +94,15 @@ async def call_spend_logs_endpoint():
 LITE_LLM_ENDPOINT = "http://localhost:4000"
 
 
+def _is_vertex_quota_error(exc: Exception) -> bool:
+    message = str(exc)
+    return (
+        "429" in message
+        or "Too Many Requests" in message
+        or "RESOURCE_EXHAUSTED" in message
+    )
+
+
 @pytest.mark.asyncio()
 async def test_basic_vertex_ai_pass_through_with_spendlog():
 
@@ -109,7 +117,12 @@ async def test_basic_vertex_ai_pass_through_with_spendlog():
     )
 
     model = GenerativeModel(model_name="gemini-3.1-flash-lite")
-    response = model.generate_content("hi")
+    try:
+        response = model.generate_content("hi")
+    except Exception as exc:
+        if _is_vertex_quota_error(exc):
+            pytest.skip("Vertex AI quota exhausted")
+        raise
 
     print("response", response)
 

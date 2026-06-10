@@ -277,11 +277,7 @@ export default function ModelInfoView({
       //   - field touched but empty → explicit null (signals backend to remove override)
       //   - only input_cost touched → fall back to input_cost (guarded against null)
       if (form.isFieldTouched("cache_read_cost") || form.isFieldTouched("input_cost")) {
-        if (
-          values.cache_read_cost !== undefined &&
-          values.cache_read_cost !== null &&
-          values.cache_read_cost !== ""
-        ) {
+        if (values.cache_read_cost !== undefined && values.cache_read_cost !== null && values.cache_read_cost !== "") {
           updatedLitellmParams.cache_read_input_token_cost = Number(values.cache_read_cost) / 1_000_000;
         } else if (form.isFieldTouched("cache_read_cost")) {
           updatedLitellmParams.cache_read_input_token_cost = null;
@@ -506,10 +502,11 @@ export default function ModelInfoView({
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
-                ? "text-green-600 bg-green-50 border-green-200"
-                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-                }`}
+              className={`left-2 z-10 transition-all duration-200 ${
+                copiedStates["model-id"]
+                  ? "text-green-600 bg-green-50 border-green-200"
+                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+              }`}
             />
           </div>
         </div>
@@ -620,10 +617,10 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
-                    month: "short",
-                    day: "numeric",
-                    year: "numeric",
-                  })
+                      month: "short",
+                      day: "numeric",
+                      year: "numeric",
+                    })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -1080,7 +1077,7 @@ export default function ModelInfoView({
                                         >
                                           {vsId}
                                         </span>
-                                      )
+                                      ),
                                     )}
                                   </div>
                                 ) : (
@@ -1183,18 +1180,20 @@ export default function ModelInfoView({
                                 allowClear
                                 options={(() => {
                                   const wildcardProvider = modelData.litellm_model_name.split("/")[0];
-                                  return modelHubData?.data
-                                    ?.filter((model: any) => {
-                                      // Filter by provider to match the wildcard provider
-                                      return (
-                                        model.providers?.includes(wildcardProvider) &&
-                                        model.model_group !== modelData.litellm_model_name
-                                      );
-                                    })
-                                    .map((model: any) => ({
-                                      value: model.model_group,
-                                      label: model.model_group,
-                                    })) || [];
+                                  return (
+                                    modelHubData?.data
+                                      ?.filter((model: any) => {
+                                        // Filter by provider to match the wildcard provider
+                                        return (
+                                          model.providers?.includes(wildcardProvider) &&
+                                          model.model_group !== modelData.litellm_model_name
+                                        );
+                                      })
+                                      .map((model: any) => ({
+                                        value: model.model_group,
+                                        label: model.model_group,
+                                      })) || []
+                                  );
                                 })()}
                               />
                             </Form.Item>

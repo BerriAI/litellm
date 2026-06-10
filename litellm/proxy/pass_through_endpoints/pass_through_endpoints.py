@@ -59,13 +59,14 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-from litellm.proxy.utils import get_server_root_path, normalize_route_for_root_path
+from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
-    EndpointType,
     LITELLM_PASS_THROUGH_CUSTOM_BODY_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
+    EndpointType,
     PassthroughStandardLoggingPayload,
 )
 
@@ -1002,9 +1003,7 @@ async def pass_through_request(  # noqa: PLR0915
                 is_passthrough_list_route,
                 list_passthrough_ids_from_db,
             )
-            from litellm.proxy.proxy_server import (
-                prisma_client as _list_prisma,
-            )
+            from litellm.proxy.proxy_server import prisma_client as _list_prisma
 
             if (
                 is_passthrough_list_route(
@@ -1100,6 +1099,20 @@ async def pass_through_request(  # noqa: PLR0915
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
+            # Call response headers hook for streaming pass-through
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            )
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                _response_headers.update(callback_headers)
+
             return StreamingResponse(
                 PassThroughStreamingHandler.chunk_processor(
                     response=response,
@@ -1110,10 +1123,7 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=response.headers,
-                    litellm_call_id=litellm_call_id,
-                ),
+                headers=_response_headers,
                 status_code=response.status_code,
             )
 
@@ -1152,6 +1162,20 @@ async def pass_through_request(  # noqa: PLR0915
                     status_code=e.response.status_code, detail=await e.response.aread()
                 )
 
+            # Call response headers hook for detected streaming pass-through
+            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                headers=response.headers,
+                litellm_call_id=litellm_call_id,
+            )
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=_parsed_body or {},
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+                request_headers=dict(request.headers),
+            )
+            if callback_headers:
+                _response_headers.update(callback_headers)
+
             return StreamingResponse(
                 PassThroughStreamingHandler.chunk_processor(
                     response=response,
@@ -1162,10 +1186,7 @@ async def pass_through_request(  # noqa: PLR0915
                     passthrough_success_handler_obj=pass_through_endpoint_logging,
                     url_route=str(url),
                 ),
-                headers=HttpPassThroughEndpointHelpers.get_response_headers(
-                    headers=response.headers,
-                    litellm_call_id=litellm_call_id,
-                ),
+                headers=_response_headers,
                 status_code=response.status_code,
             )
 
@@ -1303,6 +1324,16 @@ async def pass_through_request(  # noqa: PLR0915
             cache_key=None,
             api_base=str(url._uri_reference),
         )
+
+        # Call response headers hook
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=_parsed_body or {},
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+            request_headers=dict(request.headers),
+        )
+        if callback_headers:
+            custom_headers.update(callback_headers)
 
         response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
             headers=response.headers,
@@ -2499,20 +2530,16 @@ class InitPassThroughEndpointHelpers:
         return list(_registered_pass_through_routes.keys())
 
     @staticmethod
-    def _build_full_path_with_root(path: str) -> str:
+    def _route_for_registry_lookup(route: str) -> str:
         """
-        Build full path by prepending server root path if needed.
+        Normalize an incoming route to the bare path stored in the registry.
 
-        Args:
-            path: The relative path to build
-
-        Returns:
-            Full path with server root prepended (if root is not "/")
+        Registry keys store root-stripped paths. Callers should pass routes from
+        ``get_request_route()`` (already stripped); prefixed ``request.url.path``
+        values are stripped via ``normalize_route_for_root_path``.
         """
-        root_path = get_server_root_path()
-        if root_path == "/":
-            return path
-        return f"{root_path}{path}"
+        normalized_route = normalize_route_for_root_path(route)
+        return normalized_route if normalized_route is not None else route
 
     @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
@@ -2535,6 +2562,10 @@ class InitPassThroughEndpointHelpers:
                 if normalized_route.startswith(mapped_route):
                     return True
 
+        comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(
+            route
+        )
+
         # Fast path: check if any registered route key contains this path
         # Keys are in format: "{endpoint_id}:exact:{path}:{methods}" or "{endpoint_id}:subpath:{path}:{methods}"
         # For backward compatibility, also support old format: "{endpoint_id}:exact:{path}" or "{endpoint_id}:subpath:{path}"
@@ -2543,14 +2574,13 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
-                )
-                if route_type == "exact" and route == registered_path:
+                registered_path = parts[2]
+                if route_type == "exact" and comparison_route == registered_path:
                     return True
                 elif route_type == "subpath":
-                    if route == registered_path or route.startswith(
-                        registered_path + "/"
+                    if (
+                        comparison_route == registered_path
+                        or comparison_route.startswith(registered_path + "/")
                     ):
                         return True
 
@@ -2561,13 +2591,14 @@ class InitPassThroughEndpointHelpers:
         route: str, method: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """Get passthrough params for a given route and optionally filter by HTTP method"""
+        comparison_route = InitPassThroughEndpointHelpers._route_for_registry_lookup(
+            route
+        )
         for key in _registered_pass_through_routes.keys():
             parts = key.split(":", 3)  # Split into [endpoint_id, type, path, methods?]
             if len(parts) >= 3:
                 route_type = parts[1]
-                registered_path = (
-                    InitPassThroughEndpointHelpers._build_full_path_with_root(parts[2])
-                )
+                registered_path = parts[2]
 
                 # Get the methods for this route. Prefer the registered metadata,
                 # but keep supporting test fixtures / older registry entries that
@@ -2581,11 +2612,12 @@ class InitPassThroughEndpointHelpers:
 
                 # Check if path matches
                 path_matches = False
-                if route_type == "exact" and route == registered_path:
+                if route_type == "exact" and comparison_route == registered_path:
                     path_matches = True
                 elif route_type == "subpath":
-                    if route == registered_path or route.startswith(
-                        registered_path + "/"
+                    if (
+                        comparison_route == registered_path
+                        or comparison_route.startswith(registered_path + "/")
                     ):
                         path_matches = True
 
@@ -2874,7 +2906,7 @@ async def _filter_endpoints_by_team_allowed_routes(
         HTTPException: If team is not found
     """
     # retrieve team from db
-    team = await prisma_client.db.litellm_teamtable.find_unique(
+    team = await TeamRepository(prisma_client).table.find_unique(
         where={"team_id": team_id},
     )
     if team is None:

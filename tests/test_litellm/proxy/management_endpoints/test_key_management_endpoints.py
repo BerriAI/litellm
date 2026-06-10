@@ -11539,3 +11539,132 @@ async def test_ghsa_q775_admin_bypasses_budget_ceiling():
             litellm_changed_by=None,
         )
         assert result is not None
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_ui_session_token_team_key_exempt_from_budget_ceiling():
+    """
+    Regression: a UI/CLI session token (team_id=litellm-dashboard) creating a
+    TEAM key (data.team_id set) is exempt from the delegated-authority ceiling.
+    The session max_budget is a per-session chat spend cap (max_ui_session_budget,
+    default $0.25), not a delegation authority, and the team key's spend is bounded
+    by the team budget at request time. This is the team-admin key-creation flow
+    blocked since v1.86.x. Calls the helper directly so the ceiling runs (mocking
+    out _common_key_generation_helper would mock out the check under test).
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500, team_id="team-abc")
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+    ):
+        try:
+            await _common_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                team_table=MagicMock(),
+            )
+        except (HTTPException, ProxyException) as err:
+            msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+            assert (
+                "cannot exceed" not in msg.lower()
+            ), "UI/CLI session token creating a team key must be exempt from the ceiling"
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_ui_session_token_personal_key_still_capped():
+    """
+    Security regression for GHSA-q775: the session-token exemption must NOT extend
+    to personal keys. A UI/CLI session token (team_id=litellm-dashboard) creating a
+    key with no data.team_id is still bound by the ceiling; otherwise a session
+    token - or a leaked one, whose blast radius is the $0.25 chat cap - could mint
+    an arbitrary-budget personal key, the exact escalation GHSA-q775 closed. Unlike
+    a team key, nothing else bounds a personal key's spend.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500)
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    mock_prisma_client = AsyncMock()
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_custom_key_generate", None),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await generate_key_fn(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption():
+    """
+    Security regression for GHSA-q775: the team-key exemption must key off the
+    team_id the CALLER supplied, not one injected by default_key_generate_params.
+    With default_key_generate_params.team_id set, a UI session token's personal-key
+    request (no team_id) would otherwise have team_id auto-filled before the ceiling
+    check, flipping is_ui_session_team_key to True and bypassing the ceiling. The
+    request must still be rejected. Mirrors how _requested_max_budget is captured
+    before defaults run.
+    """
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+
+    data = GenerateKeyRequest(max_budget=500)
+    assert data.team_id is None
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="sk-ui-session",
+        user_id="user-1",
+        team_id=UI_SESSION_TOKEN_TEAM_ID,
+        max_budget=0.25,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", AsyncMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", None),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id"),
+        patch("litellm.default_key_generate_params", {"team_id": "injected-team"}),
+    ):
+        with pytest.raises((HTTPException, ProxyException)) as exc_info:
+            await _common_key_generation_helper(
+                data=data,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+                team_table=None,
+            )
+        err = exc_info.value
+        code = getattr(err, "status_code", None) or getattr(err, "code", None)
+        msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
+        assert str(code) == "400"
+        assert "cannot exceed" in msg.lower()

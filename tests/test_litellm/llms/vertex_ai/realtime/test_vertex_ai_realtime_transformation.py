@@ -278,8 +278,8 @@ async def test_vertex_realtime_text_in_text_out():
     assert session_created_msgs, "Expected session.created to be sent to client"
 
     # At least one text delta should have been forwarded
-    text_delta_msgs = [m for m in sent_to_client if '"response.text.delta"' in m]
-    assert text_delta_msgs, "Expected response.text.delta to be sent to client"
+    text_delta_msgs = [m for m in sent_to_client if '"response.output_text.delta"' in m]
+    assert text_delta_msgs, "Expected response.output_text.delta to be sent to client"
 
     # Verify the delta contains the model's text
     delta_obj = json.loads(text_delta_msgs[0])

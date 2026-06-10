@@ -10,20 +10,12 @@ interface ToolsCardProps {
   onRemoveTool: (index: number) => void;
 }
 
-const ToolsCard: React.FC<ToolsCardProps> = ({
-  tools,
-  onAddTool,
-  onEditTool,
-  onRemoveTool,
-}) => {
+const ToolsCard: React.FC<ToolsCardProps> = ({ tools, onAddTool, onEditTool, onRemoveTool }) => {
   return (
     <Card className="p-3">
       <div className="flex items-center justify-between mb-2">
         <Text className="text-sm font-medium">Tools</Text>
-        <button
-          onClick={onAddTool}
-          className="text-xs text-blue-600 hover:text-blue-700 flex items-center"
-        >
+        <button onClick={onAddTool} className="text-xs text-blue-600 hover:text-blue-700 flex items-center">
           <PlusIcon size={14} className="mr-1" />
           Add
         </button>
@@ -42,16 +34,10 @@ const ToolsCard: React.FC<ToolsCardProps> = ({
                 <div className="text-xs text-gray-500 truncate">{tool.description}</div>
               </div>
               <div className="flex items-center space-x-1 ml-2">
-                <button
-                  onClick={() => onEditTool(index)}
-                  className="text-xs text-blue-600 hover:text-blue-700"
-                >
+                <button onClick={() => onEditTool(index)} className="text-xs text-blue-600 hover:text-blue-700">
                   Edit
                 </button>
-                <button
-                  onClick={() => onRemoveTool(index)}
-                  className="text-gray-400 hover:text-red-500"
-                >
+                <button onClick={() => onRemoveTool(index)} className="text-gray-400 hover:text-red-500">
                   <TrashIcon size={14} />
                 </button>
               </div>
@@ -64,4 +50,3 @@ const ToolsCard: React.FC<ToolsCardProps> = ({
 };
 
 export default ToolsCard;
-

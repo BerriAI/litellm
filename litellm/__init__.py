@@ -16,8 +16,17 @@ import os
 # Load .env before any other litellm imports so env vars (e.g. LITELLM_UI_SESSION_DURATION) are available
 import dotenv as _dotenv
 
+
+def _dev_env_hot_reload_enabled() -> bool:
+    """The proxy exports this flag when started with ``--reload``. A reloaded
+    worker is a fresh process that inherits the reloader's environment, so an
+    edited ``.env`` value stays masked by the stale inherited one unless we
+    let the file win; overriding makes the edit take effect on reload."""
+    return os.getenv("LITELLM_DEV_ENV_HOT_RELOAD") == "True"
+
+
 if os.getenv("LITELLM_MODE", "DEV") == "DEV":
-    _dotenv.load_dotenv()
+    _dotenv.load_dotenv(override=_dev_env_hot_reload_enabled())
 
 from typing import (
     Callable,
@@ -433,6 +442,13 @@ custom_prometheus_metadata_labels: List[str] = []
 custom_prometheus_tags: List[str] = []
 prometheus_metrics_config: Optional[List] = None
 prometheus_emit_stream_label: bool = False
+# Opt-in: emit `rate_limit_category` and `rate_limit_type` labels on
+# `litellm_proxy_failed_requests_metric`. Off by default to preserve the
+# pre-unification label set so existing dashboards / recording rules keyed on
+# that metric keep matching after upgrade. Enable when downstream consumers
+# are ready to split 429s by source (vendor vs. litellm) and dimension
+# (RPM/TPM/concurrent/budget).
+prometheus_emit_rate_limit_labels: bool = False
 prometheus_user_budget_label_include_email_alias: bool = False
 prometheus_end_user_metrics_max_series_per_metric: Optional[int] = 10000
 prometheus_end_user_metrics_ttl_seconds: Optional[float] = 3600.0
@@ -444,6 +460,7 @@ disable_copilot_system_to_assistant: bool = (
     False  # If false (default), converts all 'system' role messages to 'assistant' for GitHub Copilot compatibility. Set to true to disable this behavior.
 )
 public_mcp_servers: Optional[List[str]] = None
+public_mcp_hub_strict_whitelist: bool = True
 public_model_groups: Optional[List[str]] = None
 public_agent_groups: Optional[List[str]] = None
 # Supports both old format (Dict[str, str]) and new format (Dict[str, Dict[str, Any]])
@@ -611,6 +628,7 @@ cerebras_models: Set = set()
 galadriel_models: Set = set()
 nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
+soniox_models: Set = set()
 sambanova_models: Set = set()
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
@@ -843,6 +861,8 @@ def add_known_models(model_cost_map: Optional[Dict] = None):
             nvidia_nim_models.add(key)
         elif value.get("litellm_provider") == "nvidia_riva":
             nvidia_riva_models.add(key)
+        elif value.get("litellm_provider") == "soniox":
+            soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
@@ -1008,6 +1028,7 @@ model_list = list(
     | galadriel_models
     | nvidia_nim_models
     | nvidia_riva_models
+    | soniox_models
     | sambanova_models
     | azure_text_models
     | novita_models
@@ -1108,6 +1129,7 @@ models_by_provider: dict = {
     "galadriel": galadriel_models,
     "nvidia_nim": nvidia_nim_models,
     "nvidia_riva": nvidia_riva_models,
+    "soniox": soniox_models,
     "sambanova": sambanova_models | sambanova_embedding_models,
     "novita": novita_models,
     "nebius": nebius_models | nebius_embedding_models,
@@ -1288,6 +1310,8 @@ from .exceptions import (
     NotFoundError,
     PermissionDeniedError,
     RateLimitError,
+    RateLimitErrorCategory,
+    RateLimitType,
     ServiceUnavailableError,
     BadGatewayError,
     OpenAIError,
@@ -1738,6 +1762,9 @@ if TYPE_CHECKING:
     )
     from .llms.openrouter.responses.transformation import (
         OpenRouterResponsesAPIConfig as OpenRouterResponsesAPIConfig,
+    )
+    from .llms.bedrock_mantle.responses.transformation import (
+        BedrockMantleResponsesAPIConfig as BedrockMantleResponsesAPIConfig,
     )
     from .llms.gemini.interactions.transformation import (
         GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig,

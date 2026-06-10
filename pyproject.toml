@@ -1,6 +1,6 @@
 [project]
 name = "litellm"
-version = "1.88.0"
+version = "1.89.0"
 description = "Library to easily interface with LLM API providers"
 readme = "README.md"
 requires-python = ">=3.10, <3.14"
@@ -53,7 +53,7 @@ proxy = [
     "orjson>=3.11.6,<4.0",
     "apscheduler>=3.11.2,<4.0",
     "fastapi-sso>=0.19.0,<1.0",
-    "PyJWT>=2.12.0,<3.0",
+    "PyJWT>=2.13.0,<3.0",
     "python-multipart>=0.0.27,<1.0",
     "cryptography>=46.0.7,<47.0",
     "pynacl>=1.6.2,<2.0",
@@ -62,7 +62,7 @@ proxy = [
     "azure-identity>=1.25.2,<2.0",
     "azure-storage-blob>=12.28.0,<13.0",
     "mcp>=1.26.0,<2.0",
-    "litellm-proxy-extras==0.4.73",
+    "litellm-proxy-extras==0.4.74",
     "litellm-enterprise==0.1.42",
     "RestrictedPython>=8.1,<9.0",
     "rich>=13.9.4,<14.0",
@@ -260,7 +260,7 @@ source-exclude = [
 profile = "black"
 
 [tool.commitizen]
-version = "1.88.0"
+version = "1.89.0"
 version_files = [
     "pyproject.toml:^version",
 ]

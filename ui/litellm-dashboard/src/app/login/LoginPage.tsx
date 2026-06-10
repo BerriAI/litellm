@@ -50,13 +50,11 @@ function LoginPageContent() {
     // Validate the SSO code is a plausible OAuth authorization code (alphanumeric
     // plus common URL-safe chars) so that arbitrary user input cannot trigger the
     // exchange endpoint.
-    const ssoCode =
-      rawSsoCode && /^[a-zA-Z0-9._~+/=-]+$/.test(rawSsoCode) ? rawSsoCode : null;
+    const ssoCode = rawSsoCode && /^[a-zA-Z0-9._~+/=-]+$/.test(rawSsoCode) ? rawSsoCode : null;
     if (ssoCode) {
       const rawWorkerUrl = localStorage.getItem("litellm_worker_url");
       // Validate the stored worker URL: only allow http(s) URLs.
-      const workerUrl =
-        rawWorkerUrl && /^https?:\/\/.+/.test(rawWorkerUrl) ? rawWorkerUrl : null;
+      const workerUrl = rawWorkerUrl && /^https?:\/\/.+/.test(rawWorkerUrl) ? rawWorkerUrl : null;
       exchangeLoginCode(ssoCode, workerUrl).then(() => {
         params.delete("code");
         const cleanSearch = params.toString();
@@ -277,10 +275,7 @@ function LoginPageContent() {
             </Form.Item>
             <Form.Item>
               {!uiConfig?.sso_configured ? (
-                <Popover
-                  content="Please configure SSO to log in with SSO."
-                  trigger="hover"
-                >
+                <Popover content="Please configure SSO to log in with SSO." trigger="hover">
                   <Button disabled block size="large">
                     Login with SSO
                   </Button>
@@ -315,7 +310,13 @@ function LoginPageContent() {
             type="info"
             showIcon
             closable
-            message={<Text>Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon loading this page. To re-enable auto-redirect-to-SSO, set <Text code>AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</Text> in your environment configuration.</Text>}
+            message={
+              <Text>
+                Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon
+                loading this page. To re-enable auto-redirect-to-SSO, set{" "}
+                <Text code>AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</Text> in your environment configuration.
+              </Text>
+            }
           />
         )}
       </Card>

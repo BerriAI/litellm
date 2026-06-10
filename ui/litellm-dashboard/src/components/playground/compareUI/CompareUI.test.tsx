@@ -131,7 +131,7 @@ describe("CompareUI", () => {
     );
 
     const file = new File(["test content"], "test-image.png", { type: "image/png" });
-    
+
     await waitFor(() => {
       expect(capturedOnImageUpload).not.toBeNull();
     });
