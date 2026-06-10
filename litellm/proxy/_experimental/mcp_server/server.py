@@ -3409,6 +3409,8 @@ if MCP_AVAILABLE:
                     )
                     if stored_oauth_headers:
                         continue
+                    if getattr(server, "delegate_auth_to_upstream", False) is True:
+                        continue
 
                 request = StarletteRequest(scope)
                 base_url = get_request_base_url(request)

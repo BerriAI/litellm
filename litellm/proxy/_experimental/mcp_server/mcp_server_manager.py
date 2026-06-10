@@ -2729,28 +2729,40 @@ class MCPServerManager:
         Uses anyio.fail_after() instead of asyncio.wait_for() to avoid conflicts
         with the MCP SDK's anyio TaskGroup. See GitHub issue #20715 for details.
 
-        For pass-through MCP servers (``MCPServer.is_oauth_passthrough``) an
+        For OAuth pass-through and upstream-delegated OAuth2 MCP servers, an
         upstream HTTP 401 is converted into :class:`MCPUpstreamAuthError`
         instead of being swallowed to an empty tool list. That lets the
         single-server HTTP routes surface a proper 401 + ``WWW-Authenticate``
         challenge so standards-compliant MCP clients trigger the upstream
-        OAuth flow. Non-pass-through servers keep today's swallow-and-log
-        behaviour so the multi-server ``/mcp`` aggregator doesn't get
-        tainted by a single bad server.
+        OAuth flow. Other servers keep today's swallow-and-log behaviour so
+        the multi-server ``/mcp`` aggregator doesn't get tainted by a single
+        bad server.
 
         Args:
             client: MCP client instance
             server_name: Name of the server for logging
-            server: Optional MCPServer; when pass-through, auth errors are
-                re-raised as :class:`MCPUpstreamAuthError`.
+            server: Optional MCPServer; when upstream auth is delegated, auth
+                errors are re-raised as :class:`MCPUpstreamAuthError`.
 
         Returns:
             List of tools from the server
         """
-        is_passthrough = bool(server is not None and server.is_oauth_passthrough)
+        should_surface_upstream_auth = bool(
+            server is not None
+            and (
+                server.is_oauth_passthrough
+                or (
+                    server.auth_type == MCPAuth.oauth2
+                    and getattr(server, "delegate_auth_to_upstream", False) is True
+                    and not server.has_client_credentials
+                )
+            )
+        )
         try:
             with anyio.fail_after(MCP_TOOL_LISTING_TIMEOUT):
-                tools = await client.list_tools(raise_on_error=is_passthrough)
+                tools = await client.list_tools(
+                    raise_on_error=should_surface_upstream_auth
+                )
                 verbose_logger.debug(f"Tools from {server_name}: {tools}")
                 return tools
         except TimeoutError:
@@ -2767,12 +2779,12 @@ class MCPServerManager:
             )
             return []
         except Exception as e:
-            if is_passthrough:
+            if should_surface_upstream_auth:
                 auth_info = _extract_upstream_auth_failure(e)
                 if auth_info is not None:
                     status_code, www_authenticate = auth_info
                     verbose_logger.info(
-                        f"Upstream auth failure from pass-through MCP server "
+                        f"Upstream auth failure from MCP server "
                         f"{server_name}: HTTP {status_code}"
                     )
                     raise MCPUpstreamAuthError(
