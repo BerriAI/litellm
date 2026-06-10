@@ -8138,5 +8138,17 @@
       "modelIdLabel": "Model ID:",
       "noModelsFound": "No models found"
     }
+  },
+  "alerting": {
+    "alertingSettings": {
+      "saveSuccess": "Wait 10s for proxy to update."
+    },
+    "dynamicForm": {
+      "enterpriseFeature": "✨ Enterprise Feature",
+      "inDb": "In DB",
+      "inConfig": "In Config",
+      "notSet": "Not Set",
+      "updateSettings": "Update Settings"
+    }
   }
 }

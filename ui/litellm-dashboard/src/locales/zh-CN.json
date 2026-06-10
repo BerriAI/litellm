@@ -8138,5 +8138,17 @@
       "modelIdLabel": "模型 ID：",
       "noModelsFound": "未找到模型"
     }
+  },
+  "alerting": {
+    "alertingSettings": {
+      "saveSuccess": "等待代理更新，约需 10 秒。"
+    },
+    "dynamicForm": {
+      "enterpriseFeature": "✨ 企业版功能",
+      "inDb": "已存入数据库",
+      "inConfig": "来自配置文件",
+      "notSet": "未设置",
+      "updateSettings": "更新设置"
+    }
   }
 }
