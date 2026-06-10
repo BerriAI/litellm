@@ -6,7 +6,10 @@ import sys
 sys.path.insert(
     0, os.path.abspath("../../../../..")
 )  # Adds the parent directory to the system path
-from litellm.llms.bedrock.count_tokens.transformation import BedrockCountTokensConfig
+from litellm.llms.bedrock.count_tokens.transformation import (
+    DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS,
+    BedrockCountTokensConfig,
+)
 
 
 def test_detect_input_type():
@@ -72,7 +75,7 @@ def test_transform_to_invoke_model_format_base64_encodes_body():
     assert body["messages"] == request["messages"]
     assert "model" not in body
     assert body["anthropic_version"] == "bedrock-2023-05-31"
-    assert body["max_tokens"] == 1024
+    assert body["max_tokens"] == DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
 
 
 def test_transform_to_invoke_model_format_raw_body_unchanged():

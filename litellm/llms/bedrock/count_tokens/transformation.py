@@ -11,6 +11,11 @@ from typing import Any, Dict, List, Optional
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 
+# Placeholder satisfying the Anthropic InvokeModel schema's required
+# max_tokens field; CountTokens only counts input, so it has no effect
+# on any generation.
+DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS = 1024
+
 
 class BedrockCountTokensConfig(BaseAWSLLM):
     """
@@ -191,7 +196,9 @@ class BedrockCountTokensConfig(BaseAWSLLM):
             # Bedrock validates the body against the model's InvokeModel schema;
             # Anthropic Messages bodies require these fields.
             body_data.setdefault("anthropic_version", "bedrock-2023-05-31")
-            body_data.setdefault("max_tokens", 1024)
+            body_data.setdefault(
+                "max_tokens", DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS
+            )
 
         # The CountTokens API expects invokeModel.body as a base64-encoded blob
         encoded_body = base64.b64encode(json.dumps(body_data).encode()).decode()
