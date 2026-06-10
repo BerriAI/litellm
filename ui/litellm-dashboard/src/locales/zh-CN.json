@@ -4565,6 +4565,89 @@
       "active": "当前",
       "savedToDatabase": "已保存到数据库",
       "configPrompt": "配置提示词"
+    },
+    "messageInput": {
+      "placeholder": "输入消息...（Shift+Enter 换行）"
+    },
+    "variableInput": {
+      "title": "填写模板变量以开始测试",
+      "valuePlaceholder": "输入 {{varName}} 的值"
+    },
+    "variableWarning": {
+      "title": "请填写上方所有模板变量",
+      "missing": "缺少：{{list}}"
+    },
+    "conversationPanel": {
+      "clearChat": "清空对话",
+      "accessTokenRequired": "访问令牌不能为空",
+      "fillAllVariables": "请填写所有模板变量",
+      "requestCancelled": "请求已取消",
+      "chatCleared": "对话历史已清空。",
+      "errorMessage": "错误：{{message}}"
+    },
+    "promptEditorView": {
+      "failedToParsePrompt": "解析提示词数据失败",
+      "invalidJsonFormat": "JSON 格式无效",
+      "failedToLoadVersion": "加载提示词版本失败",
+      "accessTokenRequired": "访问令牌不能为空",
+      "invalidPromptName": "请输入有效的提示词名称",
+      "updateSuccess": "提示词更新成功！",
+      "createSuccess": "提示词创建成功！",
+      "updateFailed": "更新提示词失败",
+      "saveFailed": "保存提示词失败",
+      "viewModePretty": "可视化",
+      "viewModeDotprompt": "DOTPROMPT"
+    },
+    "promptInfo": {
+      "failedToLoadInfo": "加载提示词信息失败",
+      "promptNotFound": "提示词不存在",
+      "backToPrompts": "返回提示词列表",
+      "title": "提示词详情",
+      "promptStudio": "提示词工作室",
+      "deletePrompt": "删除提示词",
+      "viewingOldVersion": "正在查看 v{{version}} — 非最新版本（v{{latest}}）",
+      "goToLatest": "跳转到最新版本",
+      "tabOverview": "概览",
+      "tabPromptTemplate": "提示词模板",
+      "tabRawJson": "原始 JSON",
+      "cardVersion": "版本",
+      "cardPromptType": "提示词类型",
+      "cardCreatedBy": "创建者",
+      "updatedAt": "更新于：{{date}}",
+      "versionHistoryTitle": "版本历史 — {{env}}",
+      "loadingVersions": "加载版本中...",
+      "colVersion": "版本",
+      "colDate": "日期",
+      "latestBadge": "最新",
+      "noVersionsFound": "在 {{env}} 中未找到版本",
+      "templateId": "模板 ID",
+      "templateContent": "内容",
+      "templateMetadata": "模板元数据",
+      "copyContent": "复制内容",
+      "rawApiResponse": "原始 API 响应",
+      "copyJson": "复制 JSON",
+      "deleteModalTitle": "删除提示词",
+      "deleteConfirmText": "确定要删除提示词：<strong>{{id}}</strong>？",
+      "deleteCannotUndo": "此操作无法撤销。",
+      "deleteSuccess": "提示词「{{id}}」已成功删除",
+      "deleteFailed": "删除提示词失败",
+      "failedToLoadVersion": "加载版本 v{{version}} 失败"
+    },
+    "promptTable": {
+      "colPromptId": "提示词 ID",
+      "colModel": "模型",
+      "colEnvironment": "环境",
+      "colCreatedBy": "创建者",
+      "colType": "类型",
+      "copyPromptId": "复制提示词 ID",
+      "deletePrompt": "删除提示词",
+      "noPromptsFound": "未找到提示词"
+    },
+    "toolModal": {
+      "title": "添加工具",
+      "invalidJsonError": "JSON 格式无效，请检查语法。",
+      "placeholder": "在此粘贴工具 JSON...",
+      "addButton": "添加"
     }
   }
 }

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import NotificationsManager from "../../../molecules/notifications_manager";
 import { TokenUsage } from "../../../playground/chat_ui/ResponseMetrics";
 import { Message } from "./types";
@@ -6,6 +7,7 @@ import { convertToDotPrompt, extractVariables } from "../utils";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "../../../networking";
 
 export const useConversation = (prompt: any, accessToken: string | null) => {
+  const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState("");
@@ -37,12 +39,12 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
 
   const handleSendMessage = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token is required");
+      NotificationsManager.fromBackend(t("promptsPage.conversationPanel.accessTokenRequired"));
       return;
     }
 
     if (extractedVariables.length > 0 && !allVariablesFilled) {
-      NotificationsManager.fromBackend("Please fill in all template variables");
+      NotificationsManager.fromBackend(t("promptsPage.conversationPanel.fillAllVariables"));
       return;
     }
 
@@ -183,9 +185,18 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
         setMessages((prev) => {
           const lastMsg = prev[prev.length - 1];
           if (lastMsg && lastMsg.role === "assistant" && lastMsg.content === "") {
-            return [...prev.slice(0, -1), { role: "assistant", content: `Error: ${error.message}` }];
+            return [
+              ...prev.slice(0, -1),
+              {
+                role: "assistant",
+                content: t("promptsPage.conversationPanel.errorMessage", { message: error.message }),
+              },
+            ];
           }
-          return [...prev, { role: "assistant", content: `Error: ${error.message}` }];
+          return [
+            ...prev,
+            { role: "assistant", content: t("promptsPage.conversationPanel.errorMessage", { message: error.message }) },
+          ];
         });
       }
     } finally {
@@ -199,14 +210,14 @@ export const useConversation = (prompt: any, accessToken: string | null) => {
       abortController.abort();
       setAbortController(null);
       setIsLoading(false);
-      NotificationsManager.info("Request cancelled");
+      NotificationsManager.info(t("promptsPage.conversationPanel.requestCancelled"));
     }
   };
 
   const handleClearConversation = () => {
     setMessages([]);
     setVariablesFilled(false);
-    NotificationsManager.success("Chat history cleared.");
+    NotificationsManager.success(t("promptsPage.conversationPanel.chatCleared"));
   };
 
   const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {

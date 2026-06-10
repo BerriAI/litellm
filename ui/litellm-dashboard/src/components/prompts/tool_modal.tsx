@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Modal, Button } from "antd";
+import { useTranslation } from "react-i18next";
 
 interface ToolModalProps {
   visible: boolean;
@@ -31,6 +32,7 @@ const defaultToolJson = `{
 }`;
 
 const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onClose }) => {
+  const { t } = useTranslation();
   const [json, setJson] = useState(initialJson || defaultToolJson);
   const [error, setError] = useState<string | null>(null);
 
@@ -40,7 +42,7 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
       setError(null);
       onSave(json);
     } catch (e) {
-      setError("Invalid JSON format. Please check your syntax.");
+      setError(t("promptsPage.toolModal.invalidJsonError"));
     }
   };
 
@@ -53,7 +55,7 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
     <Modal
       title={
         <div className="flex items-center justify-between">
-          <span className="text-lg font-medium">Add Tool</span>
+          <span className="text-lg font-medium">{t("promptsPage.toolModal.title")}</span>
         </div>
       }
       open={visible}
@@ -61,10 +63,10 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
       width={800}
       footer={[
         <Button key="cancel" onClick={handleClose}>
-          Cancel
+          {t("common.cancel")}
         </Button>,
         <Button key="save" type="primary" onClick={handleSave}>
-          Add
+          {t("promptsPage.toolModal.addButton")}
         </Button>,
       ]}
     >
@@ -74,7 +76,7 @@ const ToolModal: React.FC<ToolModalProps> = ({ visible, initialJson, onSave, onC
           value={json}
           onChange={(e) => setJson(e.target.value)}
           className="w-full min-h-[400px] px-4 py-3 border border-gray-300 rounded-lg text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
-          placeholder="Paste your tool JSON here..."
+          placeholder={t("promptsPage.toolModal.placeholder")}
         />
       </div>
     </Modal>

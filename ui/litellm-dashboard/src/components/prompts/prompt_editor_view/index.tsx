@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import ToolModal from "../tool_modal";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { createPromptCall, updatePromptCall, getPromptInfo } from "../../networking";
@@ -15,13 +16,14 @@ import DotpromptViewTab from "./DotpromptViewTab";
 import VersionHistorySidePanel from "./VersionHistorySidePanel";
 
 const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess, accessToken, initialPromptData }) => {
+  const { t } = useTranslation();
   const getInitialPrompt = (): PromptType => {
     if (initialPromptData) {
       try {
         return parseExistingPrompt(initialPromptData);
       } catch (error) {
         console.error("Error parsing existing prompt:", error);
-        NotificationsManager.fromBackend("Failed to parse prompt data");
+        NotificationsManager.fromBackend(t("promptsPage.promptEditorView.failedToParsePrompt"));
       }
     }
     return {
@@ -142,7 +144,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       setShowToolModal(false);
       setEditingToolIndex(null);
     } catch (error) {
-      NotificationsManager.fromBackend("Invalid JSON format");
+      NotificationsManager.fromBackend(t("promptsPage.promptEditorView.invalidJsonFormat"));
     }
   };
 
@@ -172,7 +174,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
       // NotificationsManager.success(`Loaded version v${versionNum}`);
     } catch (error) {
       console.error("Error loading version:", error);
-      NotificationsManager.fromBackend("Failed to load prompt version");
+      NotificationsManager.fromBackend(t("promptsPage.promptEditorView.failedToLoadVersion"));
     }
   };
 
@@ -186,12 +188,12 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
   const handleSave = async () => {
     if (!accessToken) {
-      NotificationsManager.fromBackend("Access token is required");
+      NotificationsManager.fromBackend(t("promptsPage.promptEditorView.accessTokenRequired"));
       return;
     }
 
     if (!prompt.name || prompt.name.trim() === "") {
-      NotificationsManager.fromBackend("Please enter a valid prompt name");
+      NotificationsManager.fromBackend(t("promptsPage.promptEditorView.invalidPromptName"));
       return;
     }
 
@@ -215,16 +217,18 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
 
       if (editMode && initialPromptData?.prompt_spec?.prompt_id) {
         await updatePromptCall(accessToken, initialPromptData.prompt_spec.prompt_id, promptData);
-        NotificationsManager.success("Prompt updated successfully!");
+        NotificationsManager.success(t("promptsPage.promptEditorView.updateSuccess"));
       } else {
         await createPromptCall(accessToken, promptData);
-        NotificationsManager.success("Prompt created successfully!");
+        NotificationsManager.success(t("promptsPage.promptEditorView.createSuccess"));
       }
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error saving prompt:", error);
-      NotificationsManager.fromBackend(editMode ? "Failed to update prompt" : "Failed to save prompt");
+      NotificationsManager.fromBackend(
+        editMode ? t("promptsPage.promptEditorView.updateFailed") : t("promptsPage.promptEditorView.saveFailed"),
+      );
     } finally {
       setIsSaving(false);
       setShowNameModal(false);
@@ -321,7 +325,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                   }`}
                   onClick={() => setViewMode("pretty")}
                 >
-                  PRETTY
+                  {t("promptsPage.promptEditorView.viewModePretty")}
                 </button>
                 <button
                   className={`px-3 py-1 text-xs font-medium rounded-full transition-colors ${
@@ -329,7 +333,7 @@ const PromptEditorView: React.FC<PromptEditorViewProps> = ({ onClose, onSuccess,
                   }`}
                   onClick={() => setViewMode("dotprompt")}
                 >
-                  DOTPROMPT
+                  {t("promptsPage.promptEditorView.viewModeDotprompt")}
                 </button>
               </div>
             </div>

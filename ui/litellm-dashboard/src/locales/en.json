@@ -4565,6 +4565,89 @@
       "active": "Active",
       "savedToDatabase": "Saved to Database",
       "configPrompt": "Config Prompt"
+    },
+    "messageInput": {
+      "placeholder": "Type your message... (Shift+Enter for new line)"
+    },
+    "variableInput": {
+      "title": "Fill in template variables to start testing",
+      "valuePlaceholder": "Enter value for {{varName}}"
+    },
+    "variableWarning": {
+      "title": "Please fill in all template variables above",
+      "missing": "Missing: {{list}}"
+    },
+    "conversationPanel": {
+      "clearChat": "Clear Chat",
+      "accessTokenRequired": "Access token is required",
+      "fillAllVariables": "Please fill in all template variables",
+      "requestCancelled": "Request cancelled",
+      "chatCleared": "Chat history cleared.",
+      "errorMessage": "Error: {{message}}"
+    },
+    "promptEditorView": {
+      "failedToParsePrompt": "Failed to parse prompt data",
+      "invalidJsonFormat": "Invalid JSON format",
+      "failedToLoadVersion": "Failed to load prompt version",
+      "accessTokenRequired": "Access token is required",
+      "invalidPromptName": "Please enter a valid prompt name",
+      "updateSuccess": "Prompt updated successfully!",
+      "createSuccess": "Prompt created successfully!",
+      "updateFailed": "Failed to update prompt",
+      "saveFailed": "Failed to save prompt",
+      "viewModePretty": "PRETTY",
+      "viewModeDotprompt": "DOTPROMPT"
+    },
+    "promptInfo": {
+      "failedToLoadInfo": "Failed to load prompt information",
+      "promptNotFound": "Prompt not found",
+      "backToPrompts": "Back to Prompts",
+      "title": "Prompt Details",
+      "promptStudio": "Prompt Studio",
+      "deletePrompt": "Delete Prompt",
+      "viewingOldVersion": "Viewing v{{version}} — not the latest version (v{{latest}})",
+      "goToLatest": "Go to latest",
+      "tabOverview": "Overview",
+      "tabPromptTemplate": "Prompt Template",
+      "tabRawJson": "Raw JSON",
+      "cardVersion": "Version",
+      "cardPromptType": "Prompt Type",
+      "cardCreatedBy": "Created By",
+      "updatedAt": "Updated: {{date}}",
+      "versionHistoryTitle": "Version History — {{env}}",
+      "loadingVersions": "Loading versions...",
+      "colVersion": "Version",
+      "colDate": "Date",
+      "latestBadge": "latest",
+      "noVersionsFound": "No versions found in {{env}}",
+      "templateId": "Template ID",
+      "templateContent": "Content",
+      "templateMetadata": "Template Metadata",
+      "copyContent": "Copy Content",
+      "rawApiResponse": "Raw API Response",
+      "copyJson": "Copy JSON",
+      "deleteModalTitle": "Delete Prompt",
+      "deleteConfirmText": "Are you sure you want to delete prompt: <strong>{{id}}</strong>?",
+      "deleteCannotUndo": "This action cannot be undone.",
+      "deleteSuccess": "Prompt \"{{id}}\" deleted successfully",
+      "deleteFailed": "Failed to delete prompt",
+      "failedToLoadVersion": "Failed to load version v{{version}}"
+    },
+    "promptTable": {
+      "colPromptId": "Prompt ID",
+      "colModel": "Model",
+      "colEnvironment": "Environment",
+      "colCreatedBy": "Created By",
+      "colType": "Type",
+      "copyPromptId": "Copy prompt ID",
+      "deletePrompt": "Delete prompt",
+      "noPromptsFound": "No prompts found"
+    },
+    "toolModal": {
+      "title": "Add Tool",
+      "invalidJsonError": "Invalid JSON format. Please check your syntax.",
+      "placeholder": "Paste your tool JSON here...",
+      "addButton": "Add"
     }
   }
 }
