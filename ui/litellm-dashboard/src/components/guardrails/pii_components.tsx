@@ -1,6 +1,7 @@
 import React from "react";
 import { Typography, Select, Button, Checkbox, Tooltip, Tag } from "antd";
 import { CloseOutlined, EyeInvisibleOutlined, StopOutlined, FilterOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { PiiEntityCategory } from "./types";
 
 const { Text } = Typography;
@@ -30,15 +31,16 @@ export interface CategoryFilterProps {
 }
 
 export const CategoryFilter: React.FC<CategoryFilterProps> = ({ categories, selectedCategories, onChange }) => {
+  const { t } = useTranslation();
   return (
     <div>
       <div className="flex items-center mb-2">
         <FilterOutlined className="text-gray-500 mr-1" />
-        <Text className="text-gray-500 font-medium">Filter by category</Text>
+        <Text className="text-gray-500 font-medium">{t("guardrails.piiComponents.filterByCategory")}</Text>
       </div>
       <Select
         mode="multiple"
-        placeholder="Select categories to filter by"
+        placeholder={t("guardrails.piiComponents.selectCategoriesPlaceholder")}
         style={{ width: "100%" }}
         onChange={onChange}
         value={selectedCategories}
@@ -70,14 +72,15 @@ export interface QuickActionsProps {
 }
 
 export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnselectAll, hasSelectedEntities }) => {
+  const { t } = useTranslation();
   return (
     <div className="bg-gray-50 p-5 rounded-lg mb-6 border border-gray-200 shadow-sm">
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center">
           <Text strong className="text-gray-700 text-base">
-            Quick Actions
+            {t("guardrails.piiComponents.quickActions")}
           </Text>
-          <Tooltip title="Apply action to all PII types at once">
+          <Tooltip title={t("guardrails.piiComponents.quickActionsTooltip")}>
             <div className="ml-2 text-gray-400 cursor-help text-xs">ⓘ</div>
           </Tooltip>
         </div>
@@ -88,7 +91,7 @@ export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnsel
           disabled={!hasSelectedEntities}
           icon={<CloseOutlined />}
         >
-          Unselect All
+          {t("guardrails.piiComponents.unselectAll")}
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-4">
@@ -100,7 +103,7 @@ export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnsel
           block
           icon={<EyeInvisibleOutlined />}
         >
-          Select All & Mask
+          {t("guardrails.piiComponents.selectAllMask")}
         </Button>
         <Button
           color="danger"
@@ -110,7 +113,7 @@ export const QuickActions: React.FC<QuickActionsProps> = ({ onSelectAll, onUnsel
           block
           icon={<StopOutlined />}
         >
-          Select All & Block
+          {t("guardrails.piiComponents.selectAllBlock")}
         </Button>
       </div>
     </div>
@@ -137,19 +140,20 @@ export const PiiEntityList: React.FC<PiiEntityListProps> = ({
   onActionSelect,
   entityToCategoryMap,
 }) => {
+  const { t } = useTranslation();
   return (
     <div className="border rounded-lg overflow-hidden shadow-sm">
       <div className="bg-gray-50 px-5 py-3 border-b flex">
         <Text strong className="flex-1 text-gray-700">
-          PII Type
+          {t("guardrails.piiComponents.piiTypeHeader")}
         </Text>
         <Text strong className="w-32 text-right text-gray-700">
-          Action
+          {t("guardrails.piiComponents.actionHeader")}
         </Text>
       </div>
       <div className="max-h-[400px] overflow-y-auto">
         {entities.length === 0 ? (
-          <div className="py-10 text-center text-gray-500">No PII types match your filter criteria</div>
+          <div className="py-10 text-center text-gray-500">{t("guardrails.piiComponents.noMatch")}</div>
         ) : (
           entities.map((entity) => (
             <div

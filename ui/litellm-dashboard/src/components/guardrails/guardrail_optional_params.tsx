@@ -1,5 +1,6 @@
 import React from "react";
 import { Form, Select, Typography, Input, Button } from "antd";
+import { useTranslation } from "react-i18next";
 import NumericalInput from "../shared/numerical_input";
 
 const { Title } = Typography;
@@ -30,6 +31,7 @@ interface DictFieldProps {
 }
 
 const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, value }) => {
+  const { t } = useTranslation();
   const [selectedEntries, setSelectedEntries] = React.useState<Array<{ key: string; id: string }>>([]);
   const [availableKeys, setAvailableKeys] = React.useState<string[]>(field.dict_key_options || []);
 
@@ -87,19 +89,23 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
               }
             >
               {field.dict_value_type === "number" ? (
-                <NumericalInput step={1} width={200} placeholder={`Enter ${entry.key} value`} />
+                <NumericalInput
+                  step={1}
+                  width={200}
+                  placeholder={t("guardrails.guardrailOptionalParams.enterValue", { key: entry.key })}
+                />
               ) : field.dict_value_type === "boolean" ? (
-                <Select placeholder={`Select ${entry.key} value`}>
+                <Select placeholder={t("guardrails.guardrailOptionalParams.selectValue", { key: entry.key })}>
                   <Select.Option value={true}>True</Select.Option>
                   <Select.Option value={false}>False</Select.Option>
                 </Select>
               ) : (
-                <Input placeholder={`Enter ${entry.key} value`} />
+                <Input placeholder={t("guardrails.guardrailOptionalParams.enterValue", { key: entry.key })} />
               )}
             </Form.Item>
           </div>
           <Button type="text" danger size="small" onClick={() => removeEntry(entry.id, entry.key)}>
-            Remove
+            {t("common.remove")}
           </Button>
         </div>
       ))}
@@ -108,7 +114,7 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
       {availableKeys.length > 0 && (
         <div className="flex items-center space-x-3 mt-2">
           <Select
-            placeholder="Select category to configure"
+            placeholder={t("guardrails.guardrailOptionalParams.selectCategoryPlaceholder")}
             style={{ width: 200 }}
             onSelect={(value: string | undefined) => value && addEntry(value)}
             value={undefined}
@@ -119,7 +125,7 @@ const DictField: React.FC<DictFieldProps> = ({ field, fieldKey, fullFieldKey, va
               </Select.Option>
             ))}
           </Select>
-          <span className="text-sm text-gray-500">Select a category to add threshold configuration</span>
+          <span className="text-sm text-gray-500">{t("guardrails.guardrailOptionalParams.selectCategoryHint")}</span>
         </div>
       )}
     </div>
@@ -131,6 +137,8 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
   parentFieldKey,
   values,
 }) => {
+  const { t } = useTranslation();
+
   const renderField = (fieldKey: string, field: ProviderParam) => {
     const fullFieldKey = `${parentFieldKey}.${fieldKey}`;
     const value = values?.[fieldKey];
@@ -156,7 +164,11 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
               <p className="text-sm text-gray-600 mt-1">{field.description}</p>
             </div>
           }
-          rules={field.required ? [{ required: true, message: `${fieldKey} is required` }] : undefined}
+          rules={
+            field.required
+              ? [{ required: true, message: t("guardrails.guardrailOptionalParams.fieldRequired", { fieldKey }) }]
+              : undefined
+          }
           className="mb-0"
           initialValue={value !== undefined ? value : field.default_value}
           normalize={
@@ -210,10 +222,10 @@ const GuardrailOptionalParams: React.FC<GuardrailOptionalParamsProps> = ({
     <div className="guardrail-optional-params">
       <div className="mb-8 pb-4 border-b border-gray-100">
         <Title level={3} className="mb-2 font-semibold text-gray-900">
-          Optional Parameters
+          {t("guardrails.guardrailOptionalParams.title")}
         </Title>
         <p className="text-gray-600 text-sm">
-          {optionalParams.description || "Configure additional settings for this guardrail provider"}
+          {optionalParams.description || t("guardrails.guardrailOptionalParams.defaultDescription")}
         </p>
       </div>
 
