@@ -113,6 +113,91 @@ async def test_handle_authentication_error_data_layer_errors_do_not_fall_back(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "db_error",
+    [
+        HTTPClientClosedError(),
+        ClientNotConnectedError(),
+        PrismaError(),
+    ],
+)
+async def test_handle_authentication_error_db_error_raises_503_not_401(db_error):
+    """A DB infra failure must surface as 503 (no_db_connection), not 401.
+
+    When ``allow_requests_on_db_unavailable`` is False the handler still falls
+    through to render the error. Before the fix every non-HTTP/Proxy/Budget
+    exception became a 401, so a Postgres outage looked like a bad key and
+    clients got auth errors across all models. Connectivity failures must map
+    to a 5xx so callers retry instead of treating the key as invalid.
+    """
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                db_error,
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                "sk-key",
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.no_db_connection
+    assert int(exc_info.value.code) == status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+@pytest.mark.asyncio
+async def test_handle_authentication_error_genuine_auth_error_still_401():
+    """A real auth failure (DB reachable, key not found) must still be a 401.
+
+    Guards the ask-#3 fix from over-reaching: only connectivity errors get the
+    503 treatment; a plain non-DB exception remains an authentication error.
+    """
+    handler = UserAPIKeyAuthExceptionHandler()
+
+    with (
+        patch(
+            "litellm.proxy.auth.auth_exception_handler.seed_request_identity",
+        ),
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj.post_call_failure_hook",
+            new_callable=AsyncMock,
+            return_value=None,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.general_settings",
+            {"allow_requests_on_db_unavailable": False},
+        ),
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await handler._handle_authentication_error(
+                ValueError("invalid user key"),
+                MagicMock(),
+                {},
+                "/v1/chat/completions",
+                None,
+                "sk-key",
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.auth_error
+    assert int(exc_info.value.code) == status.HTTP_401_UNAUTHORIZED
+
+
+@pytest.mark.asyncio
 async def test_handle_authentication_error_budget_exceeded():
     handler = UserAPIKeyAuthExceptionHandler()
 

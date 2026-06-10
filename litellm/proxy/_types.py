@@ -2168,6 +2168,16 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "This is the main knob for capping idle DB connections from LiteLLM."
         ),
     )
+    database_disable_prepared_statements: Optional[bool] = Field(
+        None,
+        description=(
+            "Disable server-side prepared statements by setting `pgbouncer=true` on "
+            "the Prisma DATABASE_URL / DIRECT_URL. Set this when running behind a "
+            "transaction-mode pooler (PgBouncer, RDS Proxy) or to avoid the "
+            "'cached plan must not change result type' failures that pooled prepared "
+            "statements hit when a schema changes during a rolling deploy."
+        ),
+    )
     database_extra_connection_params: Optional[Dict[str, Any]] = Field(
         None,
         description=(

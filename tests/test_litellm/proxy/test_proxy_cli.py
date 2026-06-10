@@ -695,6 +695,33 @@ class TestProxyInitializationHelpers:
         assert params["connect_timeout"] == 15
         assert params["socket_timeout"] == 120
 
+    def test_build_db_connection_url_params_disable_prepared_statements(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            disable_prepared_statements=True,
+        )
+        assert params["pgbouncer"] == "true"
+
+    def test_build_db_connection_url_params_prepared_statements_on_by_default(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(connection_limit=10, pool_timeout=60)
+        assert "pgbouncer" not in params
+
+    def test_build_db_connection_url_params_extras_override_disable(self):
+        from litellm.proxy.proxy_cli import _build_db_connection_url_params
+
+        params = _build_db_connection_url_params(
+            connection_limit=10,
+            pool_timeout=60,
+            disable_prepared_statements=True,
+            extra_params={"pgbouncer": "false"},
+        )
+        assert params["pgbouncer"] == "false"
+
     def test_build_db_connection_url_params_extras_override_defaults(self):
         from litellm.proxy.proxy_cli import _build_db_connection_url_params
 

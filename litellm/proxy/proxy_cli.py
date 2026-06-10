@@ -44,15 +44,19 @@ def _build_db_connection_url_params(
     pool_timeout: Optional[Union[int, float]],
     connect_timeout: Optional[Union[int, float]] = None,
     socket_timeout: Optional[Union[int, float]] = None,
+    disable_prepared_statements: bool = False,
     extra_params: Optional[dict] = None,
 ) -> dict:
     """Build the Prisma DATABASE_URL query params controlling connection pool behavior.
 
     `connect_timeout` / `socket_timeout` map to the Prisma URL params of the same
     name (https://www.prisma.io/docs/orm/overview/databases/postgresql) and are
-    omitted when None so Prisma's defaults apply. `extra_params` is an
-    untyped passthrough — keys it provides win over the named arguments above,
-    so it can be used to override any default we set here.
+    omitted when None so Prisma's defaults apply. `disable_prepared_statements`
+    sets `pgbouncer=true`, Prisma's switch for turning off server-side prepared
+    statements; use it behind a transaction-mode pooler or to sidestep the
+    cached-plan failures that pooled prepared statements suffer across schema
+    changes. `extra_params` is an untyped passthrough — keys it provides win over
+    the named arguments above, so it can be used to override any default we set here.
     """
     params: dict = {
         "connection_limit": connection_limit,
@@ -63,6 +67,8 @@ def _build_db_connection_url_params(
         params["connect_timeout"] = connect_timeout
     if socket_timeout is not None:
         params["socket_timeout"] = socket_timeout
+    if disable_prepared_statements:
+        params["pgbouncer"] = "true"
     if extra_params:
         params.update(extra_params)
     return params
@@ -947,6 +953,7 @@ def run_server(  # noqa: PLR0915
         db_connection_timeout: Optional[Union[int, float]] = 60
         db_connect_timeout: Optional[Union[int, float]] = None
         db_socket_timeout: Optional[Union[int, float]] = None
+        db_disable_prepared_statements: bool = False
         db_extra_connection_params: Optional[dict] = None
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
@@ -1067,6 +1074,9 @@ def run_server(  # noqa: PLR0915
                 )
             db_connect_timeout = general_settings.get("database_connect_timeout")
             db_socket_timeout = general_settings.get("database_socket_timeout")
+            db_disable_prepared_statements = bool(
+                general_settings.get("database_disable_prepared_statements", False)
+            )
             db_extra_connection_params = general_settings.get(
                 "database_extra_connection_params"
             )
@@ -1114,6 +1124,7 @@ def run_server(  # noqa: PLR0915
                     pool_timeout=db_connection_timeout,
                     connect_timeout=db_connect_timeout,
                     socket_timeout=db_socket_timeout,
+                    disable_prepared_statements=db_disable_prepared_statements,
                     extra_params=db_extra_connection_params,
                 )
                 if os.getenv("DATABASE_URL", None) is not None:

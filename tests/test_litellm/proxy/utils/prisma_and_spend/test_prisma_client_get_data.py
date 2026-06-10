@@ -450,6 +450,40 @@ async def test_get_data_user_find_unique_returns_user_row(
 
 
 @pytest.mark.asyncio
+async def test_get_data_combined_view_binds_token_as_parameter(
+    prisma_client: PrismaClient,
+) -> None:
+    """The combined_view token lookup must pass the token as a bind parameter
+    ($1), never interpolate it into the SQL text. String interpolation
+    (``WHERE v.token = '{token}'``) is a SQL-injection vector and also breaks
+    plan caching. Asserts the hashed token is the second positional arg and
+    never appears inside the query string.
+    """
+    token = "sk-key-xyz"
+    hashed = hashlib.sha256(token.encode()).hexdigest()
+    prisma_client.db.query_first = AsyncMock(return_value=None)
+    prisma_client.db.execute_raw = AsyncMock(return_value=0)
+
+    result = await prisma_client.get_data(
+        token=token, table_name="combined_view", check_deprecated=False
+    )
+
+    sql_arg, *bind_args = prisma_client.db.query_first.await_args.args
+    actual = {
+        "result": result,
+        "uses_placeholder": "WHERE v.token = $1" in sql_arg,
+        "bind_args": tuple(bind_args),
+        "token_not_interpolated": hashed not in sql_arg and token not in sql_arg,
+    }
+    assert actual == {
+        "result": None,
+        "uses_placeholder": True,
+        "bind_args": (hashed,),
+        "token_not_interpolated": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_get_data_logs_and_raises_on_db_error(
     prisma_client: PrismaClient,
 ) -> None:
