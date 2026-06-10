@@ -2074,5 +2074,106 @@
     "dailyActiveUsers": "每日活跃用户 - 近 7 天",
     "weeklyActiveUsers": "每周活跃用户 - 近 7 周",
     "monthlyActiveUsers": "每月活跃用户 - 近 7 个月"
+  },
+  "viewLogs": {
+    "compliancePanel": {
+      "checkingCompliance": "正在检查合规性...",
+      "compliant": "合规",
+      "nonCompliant": "不合规",
+      "unavailable": "不可用",
+      "regulatoryCompliance": "监管合规",
+      "euAiActCheckFailed": "检查 EU AI Act 合规性失败",
+      "gdprCheckFailed": "检查 GDPR 合规性失败"
+    },
+    "contentFilterDetails": {
+      "errorTitle": "错误",
+      "noDetectionsFound": "未发现任何检测结果",
+      "totalDetections": "检测总数：",
+      "actions": "操作：",
+      "byType": "按类型：",
+      "patternsMatched": "匹配的模式",
+      "blockedWordsDetected": "检测到的屏蔽词",
+      "categoryKeywordsDetected": "检测到的分类关键词",
+      "rawDetectionData": "原始检测数据",
+      "patternLabel": "模式：",
+      "keywordLabel": "关键词：",
+      "descriptionLabel": "描述：",
+      "categoryLabel": "分类：",
+      "severityLabel": "严重程度：",
+      "actionLabel": "操作：",
+      "unknown": "未知",
+      "passed": "通过",
+      "blocked_one": "{{count}} 个已屏蔽",
+      "blocked_other": "{{count}} 个已屏蔽",
+      "masked_one": "{{count}} 个已脱敏",
+      "masked_other": "{{count}} 个已脱敏",
+      "patterns_one": "{{count}} 个模式",
+      "patterns_other": "{{count}} 个模式",
+      "keywords_one": "{{count}} 个关键词",
+      "keywords_other": "{{count}} 个关键词",
+      "categories_one": "{{count}} 个分类",
+      "categories_other": "{{count}} 个分类"
+    },
+    "guardrailViewer": {
+      "requestLifecycle": "请求生命周期",
+      "evaluationDetails": "评估详情",
+      "requestReceived": "收到请求",
+      "llmCall": "LLM 调用",
+      "responseReturned": "返回响应",
+      "preCallGuardrail": "前置护栏：{{name}}",
+      "duringCallGuardrail": "调用中护栏：{{name}}",
+      "postCallGuardrail": "后置护栏：{{name}}",
+      "passed": "通过",
+      "failed": "失败",
+      "rawGuardrailResponse": "原始护栏响应",
+      "matchDetails": "匹配详情（{{count}}）",
+      "matchDetailsHeader": {
+        "type": "类型",
+        "method": "方法",
+        "action": "操作",
+        "detail": "详情"
+      },
+      "classification": "分类",
+      "classificationCategory": "分类：",
+      "classificationReference": "引用：",
+      "classificationConfidence": "置信度：",
+      "classificationReason": "原因：",
+      "maskedEntities": "已脱敏实体",
+      "headerTitle": "护栏与策略合规",
+      "guardrailsEvaluated_one": "已评估 {{count}} 个护栏",
+      "guardrailsEvaluated_other": "已评估 {{count}} 个护栏",
+      "passedCount": "{{count}} 个通过",
+      "totalOverhead": "总计：{{ms}}ms 开销",
+      "exportComplianceLog": "导出合规日志",
+      "riskScore": "风险 {{score}}/10",
+      "riskScoreTooltip": "风险评分：{{score}}/10",
+      "confidencePercent": "{{percent}}% 置信度"
+    },
+    "presidioDetectedEntities": {
+      "detectedEntities": "检测到的实体（{{count}}）",
+      "scoreLabel": "得分：{{score}}",
+      "positionRange": "位置：{{start}}-{{end}}",
+      "entityTypeLabel": "实体类型：",
+      "positionLabel": "位置：",
+      "characters": "字符 {{start}}-{{end}}",
+      "confidenceLabel": "置信度：",
+      "recognizerLabel": "识别器：",
+      "identifierLabel": "标识符：",
+      "explanationLabel": "说明："
+    },
+    "collapsibleMessage": {
+      "charCount": "（{{count}} 字符）"
+    },
+    "drawerHeader": {
+      "copyRequestId": "复制请求 ID",
+      "copiedRequestId": "已复制！",
+      "escToClose": "按 ESC 关闭",
+      "envTag": "环境：{{env}}",
+      "providerAlt": "提供商"
+    },
+    "historyTree": {
+      "history_one": "历史（{{count}} 条消息）",
+      "history_other": "历史（{{count}} 条消息）"
+    }
   }
 }

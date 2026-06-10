@@ -6,6 +6,7 @@
 import { useState } from "react";
 import { Typography } from "antd";
 import { DownOutlined, RightOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 
@@ -16,6 +17,7 @@ interface CollapsibleMessageProps {
 }
 
 export function CollapsibleMessage({ label, content, defaultExpanded = false }: CollapsibleMessageProps) {
+  const { t } = useTranslation();
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [isHovered, setIsHovered] = useState(false);
   const charCount = content?.length || 0;
@@ -52,7 +54,7 @@ export function CollapsibleMessage({ label, content, defaultExpanded = false }: 
           {label}
         </Text>
         <Text type="secondary" style={{ fontSize: 10 }}>
-          ({charCount.toLocaleString()} chars)
+          {t("viewLogs.collapsibleMessage.charCount", { count: charCount.toLocaleString() })}
         </Text>
       </div>
 

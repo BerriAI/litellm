@@ -2074,5 +2074,106 @@
     "dailyActiveUsers": "Daily Active Users - Last 7 Days",
     "weeklyActiveUsers": "Weekly Active Users - Last 7 Weeks",
     "monthlyActiveUsers": "Monthly Active Users - Last 7 Months"
+  },
+  "viewLogs": {
+    "compliancePanel": {
+      "checkingCompliance": "Checking compliance...",
+      "compliant": "COMPLIANT",
+      "nonCompliant": "NON-COMPLIANT",
+      "unavailable": "UNAVAILABLE",
+      "regulatoryCompliance": "Regulatory Compliance",
+      "euAiActCheckFailed": "Failed to check EU AI Act compliance",
+      "gdprCheckFailed": "Failed to check GDPR compliance"
+    },
+    "contentFilterDetails": {
+      "errorTitle": "Error",
+      "noDetectionsFound": "No detections found",
+      "totalDetections": "Total Detections:",
+      "actions": "Actions:",
+      "byType": "By Type:",
+      "patternsMatched": "Patterns Matched",
+      "blockedWordsDetected": "Blocked Words Detected",
+      "categoryKeywordsDetected": "Category Keywords Detected",
+      "rawDetectionData": "Raw Detection Data",
+      "patternLabel": "Pattern:",
+      "keywordLabel": "Keyword:",
+      "descriptionLabel": "Description:",
+      "categoryLabel": "Category:",
+      "severityLabel": "Severity:",
+      "actionLabel": "Action:",
+      "unknown": "unknown",
+      "passed": "passed",
+      "blocked_one": "{{count}} blocked",
+      "blocked_other": "{{count}} blocked",
+      "masked_one": "{{count}} masked",
+      "masked_other": "{{count}} masked",
+      "patterns_one": "{{count}} patterns",
+      "patterns_other": "{{count}} patterns",
+      "keywords_one": "{{count}} keywords",
+      "keywords_other": "{{count}} keywords",
+      "categories_one": "{{count}} categories",
+      "categories_other": "{{count}} categories"
+    },
+    "guardrailViewer": {
+      "requestLifecycle": "Request Lifecycle",
+      "evaluationDetails": "Evaluation Details",
+      "requestReceived": "Request received",
+      "llmCall": "LLM call",
+      "responseReturned": "Response returned",
+      "preCallGuardrail": "Pre-call guardrail: {{name}}",
+      "duringCallGuardrail": "During-call guardrail: {{name}}",
+      "postCallGuardrail": "Post-call guardrail: {{name}}",
+      "passed": "PASSED",
+      "failed": "FAILED",
+      "rawGuardrailResponse": "Raw Guardrail Response",
+      "matchDetails": "Match Details ({{count}})",
+      "matchDetailsHeader": {
+        "type": "Type",
+        "method": "Method",
+        "action": "Action",
+        "detail": "Detail"
+      },
+      "classification": "Classification",
+      "classificationCategory": "Category:",
+      "classificationReference": "Reference:",
+      "classificationConfidence": "Confidence:",
+      "classificationReason": "Reason:",
+      "maskedEntities": "Masked Entities",
+      "headerTitle": "Guardrails & Policy Compliance",
+      "guardrailsEvaluated_one": "{{count}} guardrail evaluated",
+      "guardrailsEvaluated_other": "{{count}} guardrails evaluated",
+      "passedCount": "{{count}} Passed",
+      "totalOverhead": "Total: {{ms}}ms overhead",
+      "exportComplianceLog": "Export Compliance Log",
+      "riskScore": "Risk {{score}}/10",
+      "riskScoreTooltip": "Risk score: {{score}}/10",
+      "confidencePercent": "{{percent}}% conf"
+    },
+    "presidioDetectedEntities": {
+      "detectedEntities": "Detected Entities ({{count}})",
+      "scoreLabel": "Score: {{score}}",
+      "positionRange": "Position: {{start}}-{{end}}",
+      "entityTypeLabel": "Entity Type:",
+      "positionLabel": "Position:",
+      "characters": "Characters {{start}}-{{end}}",
+      "confidenceLabel": "Confidence:",
+      "recognizerLabel": "Recognizer:",
+      "identifierLabel": "Identifier:",
+      "explanationLabel": "Explanation:"
+    },
+    "collapsibleMessage": {
+      "charCount": "({{count}} chars)"
+    },
+    "drawerHeader": {
+      "copyRequestId": "Copy Request ID",
+      "copiedRequestId": "Copied!",
+      "escToClose": "ESC to close",
+      "envTag": "Env: {{env}}",
+      "providerAlt": "Provider"
+    },
+    "historyTree": {
+      "history_one": "HISTORY ({{count}} message)",
+      "history_other": "HISTORY ({{count}} messages)"
+    }
   }
 }
