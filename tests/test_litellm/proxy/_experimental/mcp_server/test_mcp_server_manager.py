@@ -311,7 +311,7 @@ class TestMCPServerManager:
         _normalize_mcp_server_cost_info(mcp_info)
 
         cost_info = mcp_info["mcp_server_cost_info"]
-        assert cost_info["default_cost_per_query"] is None
+        assert "default_cost_per_query" not in cost_info
         assert cost_info["tool_name_to_cost_per_query"] == {"geocode": 2e-4}
 
     def test_normalize_mcp_server_cost_info_leaves_missing_cost_info_alone(self):

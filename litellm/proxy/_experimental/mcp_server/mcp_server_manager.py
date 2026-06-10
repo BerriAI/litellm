@@ -380,7 +380,7 @@ def _normalize_mcp_server_cost_info(mcp_info: MCPInfo) -> None:
                 server_name,
                 default_cost,
             )
-            normalized["default_cost_per_query"] = None
+            del normalized["default_cost_per_query"]
 
     tool_costs = normalized.get("tool_name_to_cost_per_query")
     if isinstance(tool_costs, dict):
