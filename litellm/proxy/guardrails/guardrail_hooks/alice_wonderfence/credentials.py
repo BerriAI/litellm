@@ -20,8 +20,6 @@ gone — see ``stash_resolved`` for the full rationale.
 
 from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
-from litellm._logging import verbose_proxy_logger
-
 from .exceptions import WonderFenceMissingSecrets
 
 if TYPE_CHECKING:
@@ -30,18 +28,22 @@ if TYPE_CHECKING:
     )
 
 
-logger = verbose_proxy_logger.getChild("alice_wonderfence")
+# Prefix for the per-guardrail attribute on the request-scoped logging_obj where
+# the resolved (api_key, app_id) is stashed so post_call can recover it. The
+# guardrail name is baked into the attribute so each instance has a physically
+# separate slot — one instance can never read another's credentials.
+#
+# These are private instance attributes, NOT model_call_details keys, because
+# model_call_details is forwarded verbatim as ``kwargs`` to every logging
+# callback / exporter (litellm_logging.py) — stashing the resolved WonderFence
+# api_key there would leak a tenant secret into logs. A private attribute on the
+# same object gives the identical cross-hook / cross-task visibility (see
+# stash_resolved) without entering the logged payload.
+_STASH_ATTR_PREFIX = "_alice_wonderfence_resolved__"
 
 
-# Attribute on the request-scoped logging_obj where the resolved
-# (api_key, app_id) is stashed so post_call can recover it. This is a private
-# instance attribute, NOT a model_call_details key, because model_call_details
-# is forwarded verbatim as ``kwargs`` to every logging callback / exporter
-# (litellm_logging.py) — stashing the resolved WonderFence api_key there would
-# leak a tenant secret into logs. A private attribute on the same object gives
-# the identical cross-hook / cross-task visibility (see stash_resolved) without
-# entering the logged payload.
-_STASH_ATTR = "_alice_wonderfence_resolved"
+def _stash_attr(guardrail_name: str) -> str:
+    return _STASH_ATTR_PREFIX + guardrail_name
 
 
 def get_metadata(request_data: dict) -> dict:
@@ -175,58 +177,31 @@ def stash_resolved(
         and post_call), so mutations to it are visible regardless of task
         boundary.
 
-    Keyed by ``guardrail_name`` so multiple alice_wonderfence instances
-    configured on the same proxy don't collide.
+    The attribute is per-guardrail (see ``_stash_attr``) so multiple
+    alice_wonderfence instances on the same request each get an isolated slot.
     """
     if logging_obj is None:
         return
-    container = getattr(logging_obj, _STASH_ATTR, None)
-    if not isinstance(container, dict):
-        container = {}
-        setattr(logging_obj, _STASH_ATTR, container)
-    container[guardrail_name] = (api_key, app_id)
+    setattr(logging_obj, _stash_attr(guardrail_name), (api_key, app_id))
 
 
 def recover_resolved(
     logging_obj: Optional["LiteLLMLoggingObj"], guardrail_name: str
 ) -> Optional[Tuple[str, str]]:
-    """Look up (api_key, app_id) stashed earlier in this request.
+    """Look up the (api_key, app_id) this guardrail stashed earlier in this
+    request, or ``None``.
 
-    Prefer this instance's own stash. If absent, fall back to any sibling
-    alice_wonderfence instance's stash on the same request.
-
-    Why the sibling fallback exists:
-        LiteLLM serializes parallel during_call hooks through a single shared
-        slot ``data["guardrail_to_apply"]`` (``proxy/utils.py:1483``). That
-        slot is overwritten in a loop *before* any gather() task runs, so
-        only the last-registered guardrail callback actually executes its
-        during_call — the others see ``None`` and bail. Post_call, by
-        contrast, iterates sequentially and *all* registered guardrails run.
-        Net effect when a single request lists multiple alice_wonderfence
-        guardrails (e.g. ``guardrails: ["wonderfence", "alice-wonderfence"]``
-        against a config that defines both): only one writes a stash, but
-        every one tries to read one in post_call. Since every
-        alice_wonderfence instance resolves api_key / app_id from the same
-        request-body / key / team metadata fields, sibling stashes carry
-        equivalent values.
+    Returns only this instance's own stash. It deliberately does NOT fall back
+    to another alice_wonderfence instance's stash: a sibling may have resolved
+    under a different policy (e.g. ``allow_request_metadata_override=True``,
+    carrying caller-supplied request-body credentials) that a stricter instance
+    must not inherit. When this instance has no own stash, the caller fails
+    closed rather than borrowing.
     """
     if logging_obj is None:
         return None
-    container = getattr(logging_obj, _STASH_ATTR, None)
-    if not isinstance(container, dict) or not container:
-        return None
-    own = container.get(guardrail_name)
-    if own is not None:
-        return own
-    sibling_name, sibling_value = next(iter(container.items()))
-    logger.warning(
-        "Alice WonderFence: post_call recovering stash from sibling "
-        "guardrail '%s' (own name '%s' not in stash). See recover_resolved "
-        "docstring for why.",
-        sibling_name,
-        guardrail_name,
-    )
-    return sibling_value
+    value = getattr(logging_obj, _stash_attr(guardrail_name), None)
+    return value if isinstance(value, tuple) else None
 
 
 def resolve_credentials(

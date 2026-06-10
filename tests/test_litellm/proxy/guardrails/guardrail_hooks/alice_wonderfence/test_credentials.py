@@ -310,20 +310,23 @@ def test_responses_route_admin_pin_beats_caller_metadata_api_key():
 # --------------- stash storage: secret must not leak to logged payload ---------------
 
 
-def test_logging_obj_allows_private_stash_attr_off_model_call_details(make_logging_obj):
-    """Guard: the real LiteLLMLoggingObj must accept a private attribute that is
-    NOT part of model_call_details. Fails if Logging becomes slotted/pydantic or
-    the stash is moved back into the logged dict."""
-    obj = make_logging_obj()
-    obj._alice_wonderfence_resolved = {"g": ("k", "a")}
-    assert obj._alice_wonderfence_resolved == {"g": ("k", "a")}
-    assert "_alice_wonderfence_resolved" not in obj.model_call_details
-
-
 def test_stash_round_trips_on_real_logging_obj(make_logging_obj):
+    """Guard: the real LiteLLMLoggingObj must accept the per-guardrail stash
+    attribute. Fails if Logging becomes slotted/pydantic."""
     obj = make_logging_obj()
     stash_resolved(obj, "guard-1", "wf-key-abc", "app-1")
     assert recover_resolved(obj, "guard-1") == ("wf-key-abc", "app-1")
+
+
+def test_recover_does_not_borrow_a_sibling_guardrails_stash(make_logging_obj):
+    """Each guardrail's stash is isolated: a name that never stashed recovers
+    None even when a sibling stashed on the same logging_obj. This is what makes
+    a stricter instance fail closed instead of inheriting a permissive sibling's
+    caller-supplied credentials."""
+    obj = make_logging_obj()
+    stash_resolved(obj, "writer", "writer-key", "writer-app")
+    assert recover_resolved(obj, "reader") is None
+    assert recover_resolved(obj, "writer") == ("writer-key", "writer-app")
 
 
 def test_stashed_api_key_not_present_in_model_call_details(make_logging_obj):

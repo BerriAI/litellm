@@ -122,13 +122,16 @@ async def test_post_call_without_prior_stash_raises(make_guardrail, make_logging
 
 
 @pytest.mark.asyncio
-async def test_post_call_recovers_via_sibling_stash(
+async def test_post_call_does_not_borrow_sibling_stash(
     make_guardrail, make_request_data, make_logging_obj
 ):
-    """When two alice_wonderfence instances are listed in one request's
-    ``guardrails`` array, LiteLLM only invokes one's during_call — but every
-    instance runs post_call. The instance whose during_call did NOT fire
-    must recover the stash written by the sibling that did."""
+    """A stricter instance must NOT inherit a sibling's stashed credentials.
+
+    Exploit being closed: a permissive writer (allow_request_metadata_override
+    =True) stashes caller-supplied request-body credentials; a stricter reader
+    (allow_request_metadata_override=False) that has no own stash must fail
+    closed in post_call rather than scan with the writer's caller-controlled
+    creds."""
     g_writer, c_writer = make_guardrail(
         guardrail_name="writer",
         allow_request_metadata_override=True,
@@ -136,7 +139,7 @@ async def test_post_call_recovers_via_sibling_stash(
     g_writer._client_cache["default-api-key"] = c_writer
     g_reader, c_reader = make_guardrail(
         guardrail_name="reader",
-        allow_request_metadata_override=True,
+        allow_request_metadata_override=False,
     )
     g_reader._client_cache["default-api-key"] = c_reader
     for c in (c_writer, c_reader):
@@ -149,25 +152,28 @@ async def test_post_call_recovers_via_sibling_stash(
 
     logging_obj = make_logging_obj()
 
-    # Only the writer's during_call fires (simulating LiteLLM's
-    # data["guardrail_to_apply"] last-write-wins behavior).
+    # Writer stashes caller-supplied request-body app_id (override allowed).
     await g_writer.apply_guardrail(
         inputs={"texts": ["hi"]},
         request_data=make_request_data(
-            metadata={"alice_wonderfence_app_id": "shared-app"}
+            metadata={"alice_wonderfence_app_id": "caller-supplied-app"}
         ),
         input_type="request",
         logging_obj=logging_obj,
     )
 
-    # Reader's post_call: own name not in stash, must fall back to writer's.
-    await g_reader.apply_guardrail(
-        inputs={"texts": ["resp"]},
-        request_data={"model": "gpt-4", "metadata": {}},
-        input_type="response",
-        logging_obj=logging_obj,
-    )
-    assert c_reader.evaluate_response.call_args.kwargs["app_id"] == "shared-app"
+    # Reader's post_call: no own stash, request_data resolves nothing, and it
+    # must NOT borrow the writer's stash -> fail closed.
+    with pytest.raises(HTTPException) as exc:
+        await g_reader.apply_guardrail(
+            inputs={"texts": ["resp"]},
+            request_data={"model": "gpt-4", "metadata": {}},
+            input_type="response",
+            logging_obj=logging_obj,
+        )
+    assert exc.value.status_code == 500
+    assert "alice_wonderfence_app_id" in exc.value.detail["exception"]
+    c_reader.evaluate_response.assert_not_awaited()
 
 
 @pytest.mark.asyncio
