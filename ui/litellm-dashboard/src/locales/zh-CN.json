@@ -8073,5 +8073,52 @@
       "loadingTeams": "🚅 正在加载团队...",
       "noDeletedTeams": "未找到已删除团队"
     }
+  },
+  "memoryView": {
+    "memoryEditModal": {
+      "titleCreate": "创建记忆",
+      "titleEdit": "编辑 {{key}}",
+      "labelKey": "键",
+      "keyRequired": "键不能为空",
+      "keyTooltip": "全局唯一——两条记忆不能共用同一个键。如需按用户隔离，请为键添加命名空间前缀（如 user:123:notes）。",
+      "keyPlaceholder": "例如 user_role",
+      "labelValue": "值",
+      "valueRequired": "值不能为空",
+      "valueTooltip": "注入 LLM 上下文的 Markdown/文本内容，普通字符串即可。",
+      "valuePlaceholder": "Agent 需要记住的内容……",
+      "labelMetadata": "元数据 <secondary>（可选 JSON）</secondary>",
+      "metadataTooltip": "可选的结构化元数据——如填写必须为有效 JSON。"
+    },
+    "memoryView": {
+      "pageTitle": "记忆",
+      "pageDescription": "查看 Agent 存储在 <code>/v1/memory</code> 下的内容。仅显示当前用户/团队可见的记忆（管理员可查看全部）。",
+      "createdSuccess": "已创建 {{key}}",
+      "updatedSuccess": "已更新 {{key}}",
+      "deletedSuccess": "已删除 {{key}}",
+      "saveFailed": "保存失败：{{message}}",
+      "deleteFailed": "删除失败：{{message}}",
+      "metadataInvalidJson": "元数据必须为有效 JSON（或留空）。",
+      "filterPlaceholder": "按键前缀筛选，例如 \"user:\"",
+      "newMemory": "新建记忆",
+      "colId": "ID",
+      "colName": "名称",
+      "colPreview": "预览",
+      "colUserId": "用户 ID",
+      "colTeamId": "团队 ID",
+      "colUpdated": "更新时间",
+      "showTotal": "{{start}}–{{end}} / 共 {{total}} 条",
+      "emptyFiltered": "没有键以 \"{{search}}\" 开头的记忆",
+      "emptyNoData": "暂无存储的记忆",
+      "labelMemoryId": "记忆 ID",
+      "labelValue": "值",
+      "labelMetadata": "元数据",
+      "labelKey": "键",
+      "createdAt": "创建于 {{timestamp}}",
+      "createdAtBy": "{{timestamp}} 由 {{by}} 创建",
+      "updatedAt": "更新于 {{timestamp}}",
+      "updatedAtBy": "{{timestamp}} 由 {{by}} 更新",
+      "deleteTitle": "删除记忆",
+      "deleteMessage": "此操作不可撤销。"
+    }
   }
 }

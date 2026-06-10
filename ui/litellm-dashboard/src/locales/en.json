@@ -8073,5 +8073,52 @@
       "loadingTeams": "🚅 Loading teams...",
       "noDeletedTeams": "No deleted teams found"
     }
+  },
+  "memoryView": {
+    "memoryEditModal": {
+      "titleCreate": "Create memory",
+      "titleEdit": "Edit {{key}}",
+      "labelKey": "Key",
+      "keyRequired": "Key is required",
+      "keyTooltip": "Globally unique — two memories cannot share a key. Namespace your own keys if you need per-user isolation (e.g. user:123:notes).",
+      "keyPlaceholder": "e.g. user_role",
+      "labelValue": "Value",
+      "valueRequired": "Value is required",
+      "valueTooltip": "Markdown/text injected into LLM context. Plain strings are fine.",
+      "valuePlaceholder": "What the agent should remember…",
+      "labelMetadata": "Metadata <secondary>(optional JSON)</secondary>",
+      "metadataTooltip": "Optional structured metadata — must be valid JSON if provided."
+    },
+    "memoryView": {
+      "pageTitle": "Memory",
+      "pageDescription": "Inspect what your agents have stored under <code>/v1/memory</code>. Scoped to memories visible to your user / team (admins see all).",
+      "createdSuccess": "Created {{key}}",
+      "updatedSuccess": "Updated {{key}}",
+      "deletedSuccess": "Deleted {{key}}",
+      "saveFailed": "Save failed: {{message}}",
+      "deleteFailed": "Delete failed: {{message}}",
+      "metadataInvalidJson": "Metadata must be valid JSON (or leave empty).",
+      "filterPlaceholder": "Filter by key prefix, e.g. \"user:\"",
+      "newMemory": "New memory",
+      "colId": "ID",
+      "colName": "Name",
+      "colPreview": "Preview",
+      "colUserId": "User ID",
+      "colTeamId": "Team ID",
+      "colUpdated": "Updated",
+      "showTotal": "{{start}}–{{end}} of {{total}}",
+      "emptyFiltered": "No memories with keys starting with \"{{search}}\"",
+      "emptyNoData": "No memories stored yet",
+      "labelMemoryId": "Memory ID",
+      "labelValue": "Value",
+      "labelMetadata": "Metadata",
+      "labelKey": "Key",
+      "createdAt": "Created {{timestamp}}",
+      "createdAtBy": "Created {{timestamp}} by {{by}}",
+      "updatedAt": "Updated {{timestamp}}",
+      "updatedAtBy": "Updated {{timestamp}} by {{by}}",
+      "deleteTitle": "Delete memory",
+      "deleteMessage": "This action cannot be undone."
+    }
   }
 }
