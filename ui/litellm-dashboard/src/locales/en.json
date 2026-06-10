@@ -8492,5 +8492,25 @@
       "roleInternalUser": "Internal User",
       "roleInternalUserViewer": "Internal User Viewer"
     }
+  },
+  "workflowRuns": {
+    "index": {
+      "pageTitle": "Workflow Runs",
+      "pageSubtitle": "Durable state tracking for agents and automated workflows",
+      "colRun": "Run",
+      "colType": "Type",
+      "colStatus": "Status",
+      "colCreated": "Created",
+      "noRunsYet": "No workflow runs yet",
+      "closeDrawer": "← close",
+      "timeline": "Timeline",
+      "messages": "Messages",
+      "eventCount_one": "{{count}} event",
+      "eventCount_other": "{{count}} events",
+      "noEvents": "No events recorded",
+      "noMessages": "No messages",
+      "less": "less",
+      "more": "more"
+    }
   }
 }

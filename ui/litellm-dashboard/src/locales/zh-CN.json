@@ -8492,5 +8492,25 @@
       "roleInternalUser": "内部用户",
       "roleInternalUserViewer": "内部用户（只读）"
     }
+  },
+  "workflowRuns": {
+    "index": {
+      "pageTitle": "工作流运行",
+      "pageSubtitle": "为 Agent 和自动化工作流提供持久状态追踪",
+      "colRun": "运行",
+      "colType": "类型",
+      "colStatus": "状态",
+      "colCreated": "创建时间",
+      "noRunsYet": "暂无工作流运行记录",
+      "closeDrawer": "← 关闭",
+      "timeline": "时间线",
+      "messages": "消息",
+      "eventCount_one": "{{count}} 个事件",
+      "eventCount_other": "{{count}} 个事件",
+      "noEvents": "暂无事件记录",
+      "noMessages": "暂无消息",
+      "less": "收起",
+      "more": "展开"
+    }
   }
 }
