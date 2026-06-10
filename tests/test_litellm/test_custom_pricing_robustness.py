@@ -204,9 +204,25 @@ def test_extract_custom_cost_per_second_zero():
 
 def test_extract_custom_cost_per_second_from_model_info():
     result = extract_custom_cost_per_second(
-        {"model_info": {"input_cost_per_second": 0.01}}
+        {"model_info": {"input_cost_per_second": 0.01}},
+        _model_info_from_deployment=True,
     )
     assert result == 0.01
+
+
+def test_extract_custom_cost_per_second_skips_model_info_without_gate():
+    """Top-level model_info must be ignored when _model_info_from_deployment is False."""
+    result = extract_custom_cost_per_second(
+        {"model_info": {"input_cost_per_second": 0.01}},
+    )
+    assert result is None
+
+
+def test_extract_custom_cost_per_second_from_litellm_metadata():
+    result = extract_custom_cost_per_second(
+        {"litellm_metadata": {"model_info": {"input_cost_per_second": 0.03}}}
+    )
+    assert result == 0.03
 
 
 def test_extract_custom_cost_per_second_from_metadata():
