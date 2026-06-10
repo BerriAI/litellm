@@ -7329,5 +7329,61 @@
       "updateSuccess": "路由器设置已成功更新",
       "saveChanges": "保存更改"
     }
+  },
+  "survey": {
+    "claudeCodeModal": {
+      "headerLabel": "Claude Code 反馈",
+      "title": "帮助我们改善您的体验",
+      "description": "我们很乐意了解您使用 LiteLLM 与 Claude Code 的体验。您的反馈有助于我们为所有人改进产品。",
+      "durationNote": "这份简短的调查大约需要 2-3 分钟完成。",
+      "openFormButton": "打开反馈表单"
+    },
+    "claudeCodePrompt": {
+      "title": "Claude Code 反馈",
+      "description": "帮助我们改善您在 LiteLLM 上的 Claude Code 体验！通过 4 个简短问题分享您的反馈。",
+      "buttonText": "分享反馈"
+    },
+    "nudgePrompt": {
+      "dontAskAgain": "不再询问",
+      "gotIt": "好的，我们不再询问。您可以随时在用户菜单中重新激活此功能。"
+    },
+    "surveyModal": {
+      "headerLabel": "快速反馈",
+      "stepIndicator": "第 {{current}} 步，共 {{total}} 步",
+      "step1Title": "您是否在公司中使用 LiteLLM？",
+      "step1Description": "帮助我们了解我们的产品在专业环境中的使用情况。",
+      "yesSubLabel": "我们将其用于工作",
+      "noSubLabel": "个人项目 / 兴趣爱好",
+      "step2Title": "您在哪家公司使用 LiteLLM？",
+      "step2Description": "这有助于我们更好地了解我们的用户群。",
+      "companyPlaceholder": "请输入您的公司名称",
+      "step3Title": "您何时开始使用 LiteLLM？",
+      "lessThanMonth": "不到一个月前",
+      "oneToThreeMonths": "1-3 个月前",
+      "threeToSixMonths": "3-6 个月前",
+      "moreThanSixMonths": "超过 6 个月前",
+      "step4Title": "您为何选择 LiteLLM 而非其他 AI 网关？",
+      "step4Description": "请选择所有适用项。",
+      "otherPlaceholder": "请详细说明...",
+      "reasonOssLabel": "OSS 采用",
+      "reasonOssDesc": "Star 数、贡献者、Fork 数、社区支持",
+      "reasonAiIntegrationLabel": "AI 集成",
+      "reasonAiIntegrationDesc": "LiteLLM 拥有我们所需的日志/护栏集成 - Langfuse、OTEL、S3 日志、Azure Content Safety 护栏",
+      "reasonUnifiedApiLabel": "统一 API",
+      "reasonUnifiedApiDesc": "LiteLLM 在各提供商中拥有最佳的 OpenAI 兼容 API - OpenAI、Anthropic、Gemini 等",
+      "reasonBreadthLabel": "模型/提供商广度",
+      "reasonBreadthDesc": "LiteLLM 拥有我们所需的提供商 + 端点组合 - 使用 Mistral OCR 的 /ocr 端点、使用 Bedrock API 的 /batches 端点等",
+      "reasonOtherLabel": "其他",
+      "reasonOtherDesc": "上面未列出的其他原因",
+      "step5Title": "想分享更多吗？",
+      "step5Description": "留下您的邮箱，我们可能会联系您了解更多关于您体验的信息。这完全是可选的。",
+      "emailPlaceholder": "your@email.com（可选）",
+      "emailNote": "我们只会用此邮箱跟进您的反馈。绝不发送垃圾邮件。"
+    },
+    "surveyPrompt": {
+      "title": "快速反馈",
+      "description": "帮助我们改进 LiteLLM！通过 5 个简短问题分享您的使用体验。",
+      "buttonText": "分享反馈"
+    }
   }
 }

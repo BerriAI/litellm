@@ -7329,5 +7329,61 @@
       "updateSuccess": "router settings updated successfully",
       "saveChanges": "Save Changes"
     }
+  },
+  "survey": {
+    "claudeCodeModal": {
+      "headerLabel": "Claude Code Feedback",
+      "title": "Help us improve your experience",
+      "description": "We'd love to hear about your experience using LiteLLM with Claude Code. Your feedback helps us improve the product for everyone.",
+      "durationNote": "This brief survey takes about 2-3 minutes to complete.",
+      "openFormButton": "Open Feedback Form"
+    },
+    "claudeCodePrompt": {
+      "title": "Claude Code Feedback",
+      "description": "Help us improve your Claude Code experience with LiteLLM! Share your feedback in 4 quick questions.",
+      "buttonText": "Share feedback"
+    },
+    "nudgePrompt": {
+      "dontAskAgain": "Don't ask me again",
+      "gotIt": "Got it, we will not ask again. Reactivate this at any time in the User Menu."
+    },
+    "surveyModal": {
+      "headerLabel": "Quick Feedback",
+      "stepIndicator": "Step {{current}} of {{total}}",
+      "step1Title": "Are you using LiteLLM at your company?",
+      "step1Description": "Help us understand how our product is being used in professional environments.",
+      "yesSubLabel": "We use it for work",
+      "noSubLabel": "Personal project / Hobby",
+      "step2Title": "What company are you using LiteLLM at?",
+      "step2Description": "This helps us understand our user base better.",
+      "companyPlaceholder": "Enter your company name",
+      "step3Title": "When did you start using LiteLLM?",
+      "lessThanMonth": "Less than a month ago",
+      "oneToThreeMonths": "1-3 months ago",
+      "threeToSixMonths": "3-6 months ago",
+      "moreThanSixMonths": "More than 6 months ago",
+      "step4Title": "Why did you pick LiteLLM over other AI Gateways?",
+      "step4Description": "Select all that apply.",
+      "otherPlaceholder": "Please specify...",
+      "reasonOssLabel": "OSS Adoption",
+      "reasonOssDesc": "Stars, contributors, forks, community support",
+      "reasonAiIntegrationLabel": "AI Integration",
+      "reasonAiIntegrationDesc": "LiteLLM had the logging/guardrail integration we needed - Langfuse, OTEL, S3 logging, Azure Content Safety guardrails",
+      "reasonUnifiedApiLabel": "Unified API",
+      "reasonUnifiedApiDesc": "LiteLLM had the best OpenAI-compatible API across providers - OpenAI, Anthropic, Gemini, etc.",
+      "reasonBreadthLabel": "Breadth of Models/Providers",
+      "reasonBreadthDesc": "LiteLLM had the provider + endpoint combinations we needed - /ocr endpoint with Mistral OCR, /batches endppint with Bedrock API, etc.",
+      "reasonOtherLabel": "Other",
+      "reasonOtherDesc": "Something else not listed above",
+      "step5Title": "Want to share more?",
+      "step5Description": "Leave your email and we may reach out to learn more about your experience. This is completely optional.",
+      "emailPlaceholder": "your@email.com (optional)",
+      "emailNote": "We will only use this to follow up on your feedback. No spam, ever."
+    },
+    "surveyPrompt": {
+      "title": "Quick feedback",
+      "description": "Help us improve LiteLLM! Share your experience in 5 quick questions.",
+      "buttonText": "Share feedback"
+    }
   }
 }

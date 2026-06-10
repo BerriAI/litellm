@@ -3,6 +3,7 @@ import { X, LucideIcon, Check } from "lucide-react";
 import { Button } from "antd";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { setLocalStorageItem, emitLocalStorageChange } from "@/utils/localStorageUtils";
+import { useTranslation } from "react-i18next";
 
 interface NudgePromptProps {
   onOpen: () => void;
@@ -30,6 +31,7 @@ export function NudgePrompt({
   accentColor,
   buttonStyle,
 }: NudgePromptProps) {
+  const { t } = useTranslation();
   const disableShowPrompts = useDisableShowPrompts();
   const [progress, setProgress] = useState(100);
   const [showConfirmation, setShowConfirmation] = useState(false);
@@ -86,9 +88,7 @@ export function NudgePrompt({
               <Check className="h-5 w-5 text-green-600" />
             </div>
             <div className="flex-1">
-              <p className="text-sm text-gray-700 font-medium">
-                Got it, we will not ask again. Reactivate this at any time in the User Menu.
-              </p>
+              <p className="text-sm text-gray-700 font-medium">{t("survey.nudgePrompt.gotIt")}</p>
             </div>
           </div>
         </div>
@@ -134,7 +134,7 @@ export function NudgePrompt({
             {buttonText}
           </Button>
           <Button variant="outlined" danger block onClick={handleDontAskAgain} className="text-xs">
-            Don&apos;t ask me again
+            {t("survey.nudgePrompt.dontAskAgain")}
           </Button>
         </div>
       </div>

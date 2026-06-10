@@ -1,6 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { X, MessageSquare, ArrowRight, ArrowLeft } from "lucide-react";
 import { Button, Input, Radio, Space, Progress, Checkbox } from "antd";
+import { useTranslation } from "react-i18next";
+import { TFunction } from "i18next";
 
 interface SurveyModalProps {
   isOpen: boolean;
@@ -8,33 +10,37 @@ interface SurveyModalProps {
   onComplete: () => void;
 }
 
-const REASONS_OPTIONS = [
+type ReasonOption = {
+  id: string;
+  label: string;
+  description: string;
+};
+
+const getReasonsOptions = (t: TFunction): ReasonOption[] => [
   {
     id: "oss_adoption",
-    label: "OSS Adoption",
-    description: "Stars, contributors, forks, community support",
+    label: t("survey.surveyModal.reasonOssLabel"),
+    description: t("survey.surveyModal.reasonOssDesc"),
   },
   {
     id: "ai_integration",
-    label: "AI Integration",
-    description:
-      "LiteLLM had the logging/guardrail integration we needed - Langfuse, OTEL, S3 logging, Azure Content Safety guardrails",
+    label: t("survey.surveyModal.reasonAiIntegrationLabel"),
+    description: t("survey.surveyModal.reasonAiIntegrationDesc"),
   },
   {
     id: "unified_api",
-    label: "Unified API",
-    description: "LiteLLM had the best OpenAI-compatible API across providers - OpenAI, Anthropic, Gemini, etc.",
+    label: t("survey.surveyModal.reasonUnifiedApiLabel"),
+    description: t("survey.surveyModal.reasonUnifiedApiDesc"),
   },
   {
     id: "breadth_of_models",
-    label: "Breadth of Models/Providers",
-    description:
-      "LiteLLM had the provider + endpoint combinations we needed - /ocr endpoint with Mistral OCR, /batches endppint with Bedrock API, etc.",
+    label: t("survey.surveyModal.reasonBreadthLabel"),
+    description: t("survey.surveyModal.reasonBreadthDesc"),
   },
   {
     id: "other",
-    label: "Other",
-    description: "Something else not listed above",
+    label: t("survey.surveyModal.reasonOtherLabel"),
+    description: t("survey.surveyModal.reasonOtherDesc"),
   },
 ];
 
@@ -48,6 +54,7 @@ type SurveyData = {
 };
 
 export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
+  const { t } = useTranslation();
   const [step, setStep] = useState(1);
   const [data, setData] = useState<SurveyData>({
     usingAtCompany: null,
@@ -58,6 +65,8 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     email: "",
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const reasonsOptions = useMemo(() => getReasonsOptions(t), [t]);
 
   // Steps: 1=company?, 2=company name (conditional), 3=when, 4=why, 5=email
   // If not at company: skip step 2, so total is 4
@@ -169,15 +178,20 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     return step;
   };
 
+  const startDateOptions = [
+    { value: "Less than a month ago", label: t("survey.surveyModal.lessThanMonth") },
+    { value: "1-3 months ago", label: t("survey.surveyModal.oneToThreeMonths") },
+    { value: "3-6 months ago", label: t("survey.surveyModal.threeToSixMonths") },
+    { value: "More than 6 months ago", label: t("survey.surveyModal.moreThanSixMonths") },
+  ];
+
   const renderStepContent = () => {
     // Step 1: Using at company?
     if (step === 1) {
       return (
         <div className="space-y-6">
-          <h2 className="text-2xl font-bold text-gray-900">Are you using LiteLLM at your company?</h2>
-          <p className="text-gray-500">
-            Help us understand how our product is being used in professional environments.
-          </p>
+          <h2 className="text-2xl font-bold text-gray-900">{t("survey.surveyModal.step1Title")}</h2>
+          <p className="text-gray-500">{t("survey.surveyModal.step1Description")}</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-4">
             <button
               onClick={() => updateData("usingAtCompany", true)}
@@ -187,8 +201,8 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
                   : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
               }`}
             >
-              <span className="block text-lg font-semibold text-gray-900 mb-1">Yes</span>
-              <span className="text-sm text-gray-500">We use it for work</span>
+              <span className="block text-lg font-semibold text-gray-900 mb-1">{t("common.yes")}</span>
+              <span className="text-sm text-gray-500">{t("survey.surveyModal.yesSubLabel")}</span>
             </button>
             <button
               onClick={() => updateData("usingAtCompany", false)}
@@ -198,8 +212,8 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
                   : "border-gray-200 hover:border-blue-300 hover:bg-gray-50"
               }`}
             >
-              <span className="block text-lg font-semibold text-gray-900 mb-1">No</span>
-              <span className="text-sm text-gray-500">Personal project / Hobby</span>
+              <span className="block text-lg font-semibold text-gray-900 mb-1">{t("common.no")}</span>
+              <span className="text-sm text-gray-500">{t("survey.surveyModal.noSubLabel")}</span>
             </button>
           </div>
         </div>
@@ -210,11 +224,11 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     if (step === 2 && data.usingAtCompany === true) {
       return (
         <div className="space-y-6">
-          <h2 className="text-2xl font-bold text-gray-900">What company are you using LiteLLM at?</h2>
-          <p className="text-gray-500">This helps us understand our user base better.</p>
+          <h2 className="text-2xl font-bold text-gray-900">{t("survey.surveyModal.step2Title")}</h2>
+          <p className="text-gray-500">{t("survey.surveyModal.step2Description")}</p>
           <Input
             size="large"
-            placeholder="Enter your company name"
+            placeholder={t("survey.surveyModal.companyPlaceholder")}
             value={data.companyName}
             onChange={(e) => updateData("companyName", e.target.value)}
             autoFocus
@@ -227,23 +241,23 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     if (step === 3) {
       return (
         <div className="space-y-6">
-          <h2 className="text-2xl font-bold text-gray-900">When did you start using LiteLLM?</h2>
+          <h2 className="text-2xl font-bold text-gray-900">{t("survey.surveyModal.step3Title")}</h2>
           <Radio.Group
             value={data.startDate}
             onChange={(e) => updateData("startDate", e.target.value)}
             className="w-full"
           >
             <Space direction="vertical" className="w-full">
-              {["Less than a month ago", "1-3 months ago", "3-6 months ago", "More than 6 months ago"].map((option) => (
+              {startDateOptions.map((option) => (
                 <label
-                  key={option}
+                  key={option.value}
                   className={`flex items-center p-4 rounded-lg border cursor-pointer transition-all w-full ${
-                    data.startDate === option
+                    data.startDate === option.value
                       ? "border-blue-600 bg-blue-50 ring-1 ring-blue-600"
                       : "border-gray-200 hover:bg-gray-50"
                   }`}
                 >
-                  <Radio value={option}>{option}</Radio>
+                  <Radio value={option.value}>{option.label}</Radio>
                 </label>
               ))}
             </Space>
@@ -256,10 +270,10 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     if (step === 4) {
       return (
         <div className="space-y-6">
-          <h2 className="text-2xl font-bold text-gray-900">Why did you pick LiteLLM over other AI Gateways?</h2>
-          <p className="text-gray-500">Select all that apply.</p>
+          <h2 className="text-2xl font-bold text-gray-900">{t("survey.surveyModal.step4Title")}</h2>
+          <p className="text-gray-500">{t("survey.surveyModal.step4Description")}</p>
           <div className="space-y-3">
-            {REASONS_OPTIONS.map((option) => {
+            {reasonsOptions.map((option) => {
               const isSelected = data.reasons.includes(option.id);
               return (
                 <div key={option.id}>
@@ -289,7 +303,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
                   {option.id === "other" && isSelected && (
                     <Input
                       className="mt-2 ml-7"
-                      placeholder="Please specify..."
+                      placeholder={t("survey.surveyModal.otherPlaceholder")}
                       value={data.otherReason}
                       onChange={(e) => updateData("otherReason", e.target.value)}
                       onClick={(e) => e.stopPropagation()}
@@ -308,19 +322,17 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
     if (step === 5) {
       return (
         <div className="space-y-6">
-          <h2 className="text-2xl font-bold text-gray-900">Want to share more?</h2>
-          <p className="text-gray-500">
-            Leave your email and we may reach out to learn more about your experience. This is completely optional.
-          </p>
+          <h2 className="text-2xl font-bold text-gray-900">{t("survey.surveyModal.step5Title")}</h2>
+          <p className="text-gray-500">{t("survey.surveyModal.step5Description")}</p>
           <Input
             size="large"
             type="email"
-            placeholder="your@email.com (optional)"
+            placeholder={t("survey.surveyModal.emailPlaceholder")}
             value={data.email}
             onChange={(e) => updateData("email", e.target.value)}
             autoFocus
           />
-          <p className="text-xs text-gray-400">We will only use this to follow up on your feedback. No spam, ever.</p>
+          <p className="text-xs text-gray-400">{t("survey.surveyModal.emailNote")}</p>
         </div>
       );
     }
@@ -341,7 +353,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
           <div className="flex items-center gap-2 text-blue-600">
             <MessageSquare className="h-5 w-5" />
-            <span className="font-semibold text-sm tracking-wide uppercase">Quick Feedback</span>
+            <span className="font-semibold text-sm tracking-wide uppercase">{t("survey.surveyModal.headerLabel")}</span>
           </div>
           <button
             onClick={onClose}
@@ -365,12 +377,12 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         {/* Footer */}
         <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
           <div className="text-sm text-gray-500 font-medium">
-            Step {getStepNumber()} of {totalSteps}
+            {t("survey.surveyModal.stepIndicator", { current: getStepNumber(), total: totalSteps })}
           </div>
           <div className="flex gap-3">
             {step > 1 && (
               <Button onClick={handleBack} disabled={isSubmitting} icon={<ArrowLeft className="h-4 w-4" />}>
-                Back
+                {t("common.back")}
               </Button>
             )}
             <Button
@@ -380,7 +392,7 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
               loading={isSubmitting}
               className="min-w-[100px]"
             >
-              {isLastStep ? "Submit" : "Next"}
+              {isLastStep ? t("common.submit") : t("common.next")}
               {!isLastStep && <ArrowRight className="ml-2 h-4 w-4" />}
             </Button>
           </div>
