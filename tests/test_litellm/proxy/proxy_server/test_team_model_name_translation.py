@@ -212,3 +212,105 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
         m for m in resp["data"] if m["model_name"] == "team-claude-sonnet"
     )
     assert team_model["model_info"]["access_via_team_ids"] == ["team-abc-123"]
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_no_user_id_with_db_skips_team_access_filter(monkeypatch):
+    """Service/CI keys without user_id must not hit the team-membership filter."""
+    deployment = {
+        "model_name": "gpt-4",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.model_list = [deployment]
+    router.get_model_names.return_value = ["gpt-4"]
+    router.get_model_access_groups.return_value = {}
+
+    get_team_access = AsyncMock()
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "llm_model_list", router.model_list)
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "get_all_team_and_direct_access_models", get_team_access)
+    monkeypatch.setattr(
+        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(
+        mlh,
+        "append_agents_to_model_info",
+        AsyncMock(side_effect=lambda models, **kw: models),
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id=None,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_models=[],
+    )
+    resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
+
+    assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
+    get_team_access.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_restricted_key_filters_after_team_enrichment(monkeypatch):
+    """Key-level model allowlists must apply after DB team-access enrichment."""
+    team_row = _team_row()
+    global_row = {
+        "model_name": "gpt-4",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.model_list = [team_row, global_row]
+    router.get_model_names.return_value = ["gpt-4", "team-claude-sonnet"]
+    router.get_model_access_groups.return_value = {}
+
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "llm_model_list", router.model_list)
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(
+        ps,
+        "get_all_team_and_direct_access_models",
+        AsyncMock(
+            side_effect=lambda all_models, **kwargs: [
+                {
+                    **m,
+                    "model_info": {
+                        **m.get("model_info", {}),
+                        **(
+                            {"access_via_team_ids": ["team-abc-123"]}
+                            if m.get("model_info", {}).get("team_id")
+                            else {"direct_access": True}
+                        ),
+                    },
+                }
+                for m in all_models
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(
+        mlh,
+        "append_agents_to_model_info",
+        AsyncMock(side_effect=lambda models, **kw: models),
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id="user-1",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["gpt-4"],
+        team_models=[],
+    )
+    resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
+
+    assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
