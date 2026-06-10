@@ -3,6 +3,7 @@ import React from "react";
 import { Text, Tab, TabGroup, TabList, TabPanel, TabPanels, Grid } from "@tremor/react";
 import CodeBlock from "./components/CodeBlock";
 import DocLink from "@/app/(dashboard)/api-reference/components/DocLink";
+import { useTranslation } from "react-i18next";
 
 interface ApiRefProps {
   proxySettings: {
@@ -12,6 +13,7 @@ interface ApiRefProps {
 }
 
 const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
+  const { t } = useTranslation();
   let base_url = "<your_proxy_base_url>";
   const customDocBaseUrl = proxySettings?.LITELLM_UI_API_DOC_BASE_URL;
   if (customDocBaseUrl && customDocBaseUrl.trim()) {
@@ -27,21 +29,18 @@ const APIReferenceView: React.FC<ApiRefProps> = ({ proxySettings }) => {
           {/* Header row with Docs link on the right */}
           <div className="flex items-center justify-between">
             <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
-              OpenAI Compatible Proxy: API Reference
+              {t("pages.apiReference.title")}
             </p>
             <DocLink className="ml-3 shrink-0" href="https://docs.litellm.ai/docs/proxy/user_keys" />
           </div>
 
-          <Text className="mt-2 mb-2">
-            LiteLLM is OpenAI Compatible. This means your API Key works with the OpenAI SDK. Just replace the base_url
-            to point to your litellm proxy. Example Below{" "}
-          </Text>
+          <Text className="mt-2 mb-2">{t("pages.apiReference.description")}</Text>
 
           <TabGroup>
             <TabList>
-              <Tab>OpenAI Python SDK</Tab>
-              <Tab>LlamaIndex</Tab>
-              <Tab>Langchain Py</Tab>
+              <Tab>{t("pages.apiReference.tabOpenAI")}</Tab>
+              <Tab>{t("pages.apiReference.tabLlamaIndex")}</Tab>
+              <Tab>{t("pages.apiReference.tabLangchain")}</Tab>
             </TabList>
             <TabPanels>
               <TabPanel>

@@ -20,6 +20,7 @@ import type { UploadProps } from "antd";
 import { Form } from "antd";
 import { PlusCircleOutlined } from "@ant-design/icons";
 import React, { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
 import ModelGroupAliasSettings from "../../../components/model_group_alias_settings";
@@ -49,6 +50,7 @@ interface GlobalRetryPolicyObject {
 const HEALTH_PAGE_SIZE = 50;
 
 const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, teams }) => {
+  const { t } = useTranslation();
   const { accessToken, token, userRole, userId: userID } = useAuthorized();
   const [addModelForm] = Form.useForm();
   const [lastRefreshed, setLastRefreshed] = useState("");
@@ -178,9 +180,9 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
     },
     onChange(info) {
       if (info.file.status === "done") {
-        NotificationsManager.success(`${info.file.name} file uploaded successfully`);
+        NotificationsManager.success(t("pages.modelsAndEndpoints.fileUploadSuccess", { name: info.file.name }));
       } else if (info.file.status === "error") {
-        NotificationsManager.fromBackend(`${info.file.name} file upload failed.`);
+        NotificationsManager.fromBackend(t("pages.modelsAndEndpoints.fileUploadFailed", { name: info.file.name }));
       }
     },
   };
@@ -207,17 +209,19 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
         if (globalRetryPolicy) {
           payload.router_settings.retry_policy = globalRetryPolicy;
         }
-        NotificationsManager.success("Global retry settings saved successfully");
+        NotificationsManager.success(t("pages.modelsAndEndpoints.globalRetrySaved"));
       } else {
         if (modelGroupRetryPolicy) {
           payload.router_settings.model_group_retry_policy = modelGroupRetryPolicy;
         }
-        NotificationsManager.success(`Retry settings saved successfully for ${selectedModelGroup}`);
+        NotificationsManager.success(
+          t("pages.modelsAndEndpoints.modelGroupRetrySaved", { modelGroup: selectedModelGroup }),
+        );
       }
 
       await setCallbacksCall(accessToken, payload);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to save retry settings");
+      NotificationsManager.fromBackend(t("pages.modelsAndEndpoints.failedToSaveRetry"));
     }
   };
 
@@ -266,7 +270,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
             return `${field.name.join(".")}: ${field.errors.join(", ")}`;
           })
           .join(" | ") || "Unknown validation error";
-      NotificationsManager.fromBackend(`Please fill in the following required fields: ${errorMessages}`);
+      NotificationsManager.fromBackend(t("pages.modelsAndEndpoints.validationError", { fields: errorMessages }));
     }
   };
 
@@ -297,11 +301,11 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
           {/* Model Management Header */}
           <div className="flex justify-between items-center mb-4">
             <div>
-              <h2 className="text-lg font-semibold">Model Management</h2>
+              <h2 className="text-lg font-semibold">{t("pages.modelsAndEndpoints.modelManagement")}</h2>
               {!all_admin_roles.includes(userRole) ? (
-                <p className="text-sm text-gray-600">Add models for teams you are an admin for.</p>
+                <p className="text-sm text-gray-600">{t("pages.modelsAndEndpoints.addModelsForTeams")}</p>
               ) : (
-                <p className="text-sm text-gray-600">Add and manage models for the proxy</p>
+                <p className="text-sm text-gray-600">{t("pages.modelsAndEndpoints.addAndManageModels")}</p>
               )}
             </div>
             {!showMissingProviderBanner && (
@@ -312,7 +316,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#6366f1] hover:text-[#5558e3] border border-[#6366f1] hover:border-[#5558e3] rounded-lg transition-colors"
               >
                 <PlusCircleOutlined style={{ fontSize: "12px" }} />
-                Request Provider
+                {t("pages.modelsAndEndpoints.requestProvider")}
               </a>
             )}
           </div>
@@ -324,11 +328,10 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 <PlusCircleOutlined style={{ fontSize: "18px", color: "#6366f1" }} />
               </div>
               <div className="flex-1 min-w-0">
-                <h4 className="text-gray-900 font-semibold text-sm m-0">Missing a provider?</h4>
-                <p className="text-gray-500 text-xs m-0 mt-0.5">
-                  The LiteLLM engineering team is constantly adding support for new LLM models, providers, endpoints. If
-                  you don&apos;t see the one you need, let us know and we&apos;ll prioritize it.
-                </p>
+                <h4 className="text-gray-900 font-semibold text-sm m-0">
+                  {t("pages.modelsAndEndpoints.missingProviderTitle")}
+                </h4>
+                <p className="text-gray-500 text-xs m-0 mt-0.5">{t("pages.modelsAndEndpoints.missingProviderDesc")}</p>
               </div>
               <a
                 href="https://models.litellm.ai/?request=true"
@@ -336,7 +339,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 rel="noopener noreferrer"
                 className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
               >
-                Request Provider
+                {t("pages.modelsAndEndpoints.requestProvider")}
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   className="h-4 w-4"
@@ -358,7 +361,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                   localStorage.setItem("hideMissingProviderBanner", "true");
                 }}
                 className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
-                aria-label="Dismiss banner"
+                aria-label={t("pages.modelsAndEndpoints.dismissBanner")}
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -399,7 +402,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               const isAdmin = all_admin_roles.includes(userRole);
               const visibleTabs: Array<{ tab: React.ReactElement; panel: React.ReactElement }> = [
                 {
-                  tab: <Tab key="all-models">{isAdmin ? "All Models" : "Your Models"}</Tab>,
+                  tab: (
+                    <Tab key="all-models">
+                      {isAdmin
+                        ? t("pages.modelsAndEndpoints.tabAllModels")
+                        : t("pages.modelsAndEndpoints.tabYourModels")}
+                    </Tab>
+                  ),
                   panel: (
                     <AllModelsTab
                       key="all-models"
@@ -415,7 +424,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               ];
               if (!shouldHideAddModelTab) {
                 visibleTabs.push({
-                  tab: <Tab key="add-model">Add Model</Tab>,
+                  tab: <Tab key="add-model">{t("pages.modelsAndEndpoints.tabAddModel")}</Tab>,
                   panel: (
                     <TabPanel key="add-model" className="h-full">
                       <AddModelTab
@@ -441,7 +450,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               if (isAdmin) {
                 visibleTabs.push(
                   {
-                    tab: <Tab key="llm-credentials">LLM Credentials</Tab>,
+                    tab: <Tab key="llm-credentials">{t("pages.modelsAndEndpoints.tabLLMCredentials")}</Tab>,
                     panel: (
                       <TabPanel key="llm-credentials">
                         <CredentialsPanel uploadProps={uploadProps} />
@@ -449,7 +458,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     ),
                   },
                   {
-                    tab: <Tab key="pass-through">Pass-Through Endpoints</Tab>,
+                    tab: <Tab key="pass-through">{t("pages.modelsAndEndpoints.tabPassThrough")}</Tab>,
                     panel: (
                       <TabPanel key="pass-through">
                         <PassThroughSettings
@@ -463,7 +472,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     ),
                   },
                   {
-                    tab: <Tab key="health-status">Health Status</Tab>,
+                    tab: <Tab key="health-status">{t("pages.modelsAndEndpoints.tabHealthStatus")}</Tab>,
                     panel: (
                       <TabPanel key="health-status">
                         <HealthCheckComponent
@@ -483,7 +492,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     ),
                   },
                   {
-                    tab: <Tab key="model-retry-settings">Model Retry Settings</Tab>,
+                    tab: <Tab key="model-retry-settings">{t("pages.modelsAndEndpoints.tabModelRetrySettings")}</Tab>,
                     panel: (
                       <ModelRetrySettingsTab
                         key="model-retry-settings"
@@ -500,7 +509,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     ),
                   },
                   {
-                    tab: <Tab key="model-group-alias">Model Group Alias</Tab>,
+                    tab: <Tab key="model-group-alias">{t("pages.modelsAndEndpoints.tabModelGroupAlias")}</Tab>,
                     panel: (
                       <TabPanel key="model-group-alias">
                         <ModelGroupAliasSettings
@@ -512,7 +521,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     ),
                   },
                   {
-                    tab: <Tab key="price-data-reload">Price Data Reload</Tab>,
+                    tab: <Tab key="price-data-reload">{t("pages.modelsAndEndpoints.tabPriceDataReload")}</Tab>,
                     panel: <PriceDataManagementTab key="price-data-reload" />,
                   },
                 );
@@ -527,7 +536,11 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                     <div className="flex">{visibleTabs.map((t) => t.tab)}</div>
 
                     <div className="flex items-center space-x-2 self-center">
-                      {lastRefreshed && <span className="text-xs text-gray-500">Last Refreshed: {lastRefreshed}</span>}
+                      {lastRefreshed && (
+                        <span className="text-xs text-gray-500">
+                          {t("pages.modelsAndEndpoints.lastRefreshed", { time: lastRefreshed })}
+                        </span>
+                      )}
                       <Icon
                         icon={RefreshIcon}
                         variant="shadow"
