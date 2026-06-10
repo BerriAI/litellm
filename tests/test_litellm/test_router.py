@@ -4095,6 +4095,82 @@ def test_get_fully_blocked_model_names_treats_missing_key_as_unblocked():
     assert router.get_fully_blocked_model_names() == set()
 
 
+def _seed_unhealthy_states(router, unhealthy_ids, timestamp=None):
+    import time
+
+    ts = timestamp if timestamp is not None else time.time()
+    router.health_state_cache.set_deployment_health_states(
+        {
+            uid: {"is_healthy": False, "timestamp": ts, "reason": "test_unhealthy"}
+            for uid in unhealthy_ids
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_marks_name_when_all_unhealthy():
+    router = _router_with_two_deployments([False, False])
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"})
+    assert await router.async_get_fully_unhealthy_model_names() == {"gpt-4o"}
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_keeps_name_when_partial():
+    router = _router_with_two_deployments([False, False])
+    _seed_unhealthy_states(router, {"dep-0"})
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_empty_without_health_state():
+    router = _router_with_two_deployments([False, False])
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_ignores_stale_state():
+    import time
+
+    router = _router_with_two_deployments([False, False])
+    stale_ts = time.time() - (router.health_state_cache.staleness_threshold + 10)
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"}, timestamp=stale_ts)
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_includes_team_alias():
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o"},
+                "model_info": {
+                    "id": "dep-0",
+                    "team_id": "team-1",
+                    "team_public_model_name": "team-gpt",
+                },
+            }
+        ]
+    )
+    _seed_unhealthy_states(router, {"dep-0"})
+    assert await router.async_get_fully_unhealthy_model_names() == {
+        "gpt-4o",
+        "team-gpt",
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_get_fully_unhealthy_model_names_noop_with_allowed_fails_policy():
+    from litellm.types.router import AllowedFailsPolicy
+
+    router = _router_with_two_deployments([False, False])
+    router.allowed_fails_policy = AllowedFailsPolicy(BadRequestErrorAllowedFails=1)
+    _seed_unhealthy_states(router, {"dep-0", "dep-1"})
+    assert await router.async_get_fully_unhealthy_model_names() == set()
+
+
 @pytest.mark.asyncio
 async def test_async_get_healthy_deployments_skips_blocked_deployment():
     router = _router_with_two_deployments([True, False])

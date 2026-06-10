@@ -9874,6 +9874,62 @@ class Router:
             name for name, fully_blocked in blocked_by_name.items() if fully_blocked
         }
 
+    async def async_get_fully_unhealthy_model_names(self) -> Set[str]:
+        """
+        Returns the set of model names where every backing deployment is currently
+        marked unhealthy by background health checks (and the health state is not stale).
+
+        Used by `/v1/models?healthy_only=true` to hide models that cannot serve any
+        request. A model with at least one healthy (or unknown-health) deployment
+        remains visible. Returns an empty set when no health state is available, so
+        callers fail open to the unfiltered listing.
+
+        Notes:
+            - Mirrors `_async_filter_health_check_unhealthy_deployments`: when
+              `allowed_fails_policy` is set, cooldown is the sole routing exclusion
+              mechanism, so nothing is hidden here either.
+            - Team-specific public model names (`team_public_model_name`) are
+              aggregated alongside `model_name`, so team aliases of fully-unhealthy
+              deployments are hidden too.
+            - Wildcard routes (e.g. `openai/*`) are matched by their literal
+              deployment name only; models expanded from a wildcard route are not
+              hidden (fail open).
+            - Intentionally diverges from the routing-time safety net (which
+              bypasses the health filter when every candidate is unhealthy and
+              still attempts the request): hiding here is presentation-only —
+              it answers "should this model be advertised?", not "should a
+              request for it still be attempted?". A hidden model can still be
+              called directly.
+        """
+        if self.allowed_fails_policy is not None:
+            return set()
+        unhealthy_ids = (
+            await self.health_state_cache.async_get_unhealthy_deployment_ids()
+        )
+        if not unhealthy_ids:
+            return set()
+        deployments = self.get_model_list() or []
+        unhealthy_by_name: Dict[str, bool] = {}
+        for deployment in deployments:
+            model_info = deployment.get("model_info") or {}
+            names = [deployment.get("model_name") or ""]
+            team_public_model_name = model_info.get("team_public_model_name")
+            if team_public_model_name:
+                names.append(team_public_model_name)
+            is_unhealthy = model_info.get("id") in unhealthy_ids
+            for name in names:
+                if not name:
+                    continue
+                if name in unhealthy_by_name:
+                    unhealthy_by_name[name] = unhealthy_by_name[name] and is_unhealthy
+                else:
+                    unhealthy_by_name[name] = is_unhealthy
+        return {
+            name
+            for name, fully_unhealthy in unhealthy_by_name.items()
+            if fully_unhealthy
+        }
+
     def _get_team_specific_model(
         self, deployment: DeploymentTypedDict, team_id: Optional[str] = None
     ) -> Optional[str]:
