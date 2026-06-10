@@ -3768,5 +3768,95 @@
       "emptyNoMatch": "没有服务器匹配当前过滤条件或搜索。",
       "deleteSuccess": "MCP 服务器已成功删除"
     }
+  },
+  "playground": {
+    "a2AMetrics": {
+      "header": "A2A 元数据",
+      "totalLatency": "总延迟",
+      "timeToFirstToken": "首 Token 时间",
+      "clickToCopy": "点击复制：{{id}}",
+      "taskPrefix": "任务：",
+      "sessionPrefix": "会话：",
+      "details": "详情",
+      "statusMessage": "状态消息：",
+      "taskId": "任务 ID：",
+      "sessionId": "会话 ID：",
+      "customMetadata": "自定义元数据："
+    },
+    "additionalModelSettings": {
+      "useAdvancedParams": "使用高级参数",
+      "simulateFailure": "模拟失败以测试回退",
+      "simulateFailureDesc": "使第一个请求失败，以便路由器尝试回退（如已配置）。用于验证您的回退设置。",
+      "simulateFailureNote": "当配置了密钥、团队或路由器设置时，行为可能有所不同。<learnMoreLink>了解更多</learnMoreLink>",
+      "simulateFailureAriaLabel": "帮助：模拟失败以测试回退",
+      "temperature": "Temperature",
+      "temperatureTooltip": "控制随机性。值越低输出越确定，值越高输出越有创意。",
+      "maxTokens": "最大 Token 数",
+      "maxTokensTooltip": "响应中生成的最大 Token 数。"
+    },
+    "agentBuilderView": {
+      "title": "Agent Builder",
+      "saveAgent": "保存 Agent",
+      "buildAgentsSubtitle": "构建符合合规要求的 Agent。",
+      "experimentalBanner": "Agent Builder 为实验性功能，可能随时更改或移除。欢迎反馈——请发送邮件至 <emailLink>product@berri.ai</emailLink>。",
+      "agentsLabel": "Agents",
+      "addAgentAriaLabel": "添加 Agent",
+      "newAgent": "新建 Agent",
+      "noAgentsYet": "暂无 Agent。添加一个 Agent 以开始使用。",
+      "signInRequired": "请登录以使用 Agent Builder。",
+      "tabConfigure": "配置",
+      "tabChat": "聊天",
+      "tabBatchTest": "批量测试",
+      "tabConnect": "连接",
+      "missingModelIdWarning": "此 Agent 无法在此处更新或删除（缺少模型 ID）。请从模型与端点页面管理。",
+      "agentNameLabel": "Agent 名称",
+      "agentNamePlaceholder": "我的 Agent",
+      "systemPromptLabel": "系统提示词",
+      "systemPromptPlaceholder": "你是一个有帮助的助手...",
+      "defaultSystemPrompt": "You are a helpful assistant.",
+      "underlyingLlmLabel": "底层 LLM",
+      "temperatureLabel": "Temperature",
+      "maxTokensLabel": "最大 Token 数",
+      "mcpServersLabel": "MCP 服务器",
+      "mcpServersPlaceholder": "选择要附加的 MCP 服务器（格式与 chat completions API 相同）",
+      "mcpServersSaved_one": "已保存 {{count}} 个 MCP 服务器。调用此 Agent 时，请在 chat completions 中使用相同的 <toolsCode>tools</toolsCode> 数组。",
+      "mcpServersSaved_other": "已保存 {{count}} 个 MCP 服务器。调用此 Agent 时，请在 chat completions 中使用相同的 <toolsCode>tools</toolsCode> 数组。",
+      "updateAgent": "更新 Agent",
+      "testInChat": "在聊天中测试",
+      "saveAgentFirst": "请先保存 Agent 以在聊天中测试。",
+      "selectAgentForBatchTest": "请选择一个 Agent 以运行批量测试。",
+      "selectAgentToConnect": "请选择一个 Agent 以查看连接方式。",
+      "proxyBaseUrl": "代理基础 URL",
+      "callYourAgent": "调用您的 Agent（cURL）",
+      "createKeyTitle": "为此 Agent 创建密钥",
+      "createKeyDesc": "创建一个只能调用此 Agent 的虚拟密钥。该密钥将绑定到您（user_id），并限制为模型 <agentCode>{{agentName}}</agentCode>。",
+      "createKeyButton": "为此 Agent 创建密钥",
+      "keyCreationDisabled": "您的账户已禁用密钥创建。",
+      "keyCreated": "密钥已创建。它显示在上方的 cURL 示例中——复制代码片段以使用。",
+      "failedToLoadAgents": "加载 Agent 失败",
+      "nameAndModelRequired": "名称和底层模型为必填项",
+      "failedToSaveAgent": "保存 Agent 失败",
+      "agentUpdated": "Agent 已成功更新",
+      "failedToUpdateAgent": "更新 Agent 失败",
+      "virtualKeyCreated": "虚拟密钥已创建。请在下方的 curl 示例中使用。",
+      "keyCreatedNoValue": "密钥已创建但未返回值",
+      "failedToCreateKey": "为 Agent 创建密钥失败",
+      "deleteAgentTitle": "删除 Agent",
+      "deleteAgentConfirm": "确定要删除 \"{{name}}\"？此操作无法撤销。",
+      "agentDeleted": "Agent 已删除",
+      "failedToDeleteAgent": "删除 Agent 失败"
+    },
+    "audioRenderer": {
+      "browserNotSupported": "您的浏览器不支持音频元素。"
+    },
+    "chatImageRenderer": {
+      "uploadedImageAlt": "用户上传的图片"
+    },
+    "chatImageUpload": {
+      "attachTooltip": "附加图片或 PDF"
+    },
+    "chatMessageBubble": {
+      "generatedImageAlt": "生成的图片"
+    }
   }
 }

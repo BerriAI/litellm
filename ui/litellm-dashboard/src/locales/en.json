@@ -3768,5 +3768,95 @@
       "emptyNoMatch": "No servers match the current filters or search.",
       "deleteSuccess": "Deleted MCP Server successfully"
     }
+  },
+  "playground": {
+    "a2AMetrics": {
+      "header": "A2A Metadata",
+      "totalLatency": "Total latency",
+      "timeToFirstToken": "Time to first token",
+      "clickToCopy": "Click to copy: {{id}}",
+      "taskPrefix": "Task: ",
+      "sessionPrefix": "Session: ",
+      "details": "Details",
+      "statusMessage": "Status Message:",
+      "taskId": "Task ID:",
+      "sessionId": "Session ID:",
+      "customMetadata": "Custom Metadata:"
+    },
+    "additionalModelSettings": {
+      "useAdvancedParams": "Use Advanced Parameters",
+      "simulateFailure": "Simulate failure to test fallbacks",
+      "simulateFailureDesc": "Causes the first request to fail so the router tries fallbacks (if configured). Use this to verify your fallback setup.",
+      "simulateFailureNote": "Behavior can differ when keys, teams, or router settings are configured. <learnMoreLink>Learn more</learnMoreLink>",
+      "simulateFailureAriaLabel": "Help: Simulate failure to test fallbacks",
+      "temperature": "Temperature",
+      "temperatureTooltip": "Controls randomness. Lower values make output more deterministic, higher values more creative.",
+      "maxTokens": "Max Tokens",
+      "maxTokensTooltip": "Maximum number of tokens to generate in the response."
+    },
+    "agentBuilderView": {
+      "title": "Agent Builder",
+      "saveAgent": "Save Agent",
+      "buildAgentsSubtitle": "Build Agents that pass your compliance requirements.",
+      "experimentalBanner": "Agent Builder is experimental and may change or be removed without notice. We'd love your feedback—email us at <emailLink>product@berri.ai</emailLink>.",
+      "agentsLabel": "Agents",
+      "addAgentAriaLabel": "Add agent",
+      "newAgent": "New agent",
+      "noAgentsYet": "No agents yet. Add an agent to get started.",
+      "signInRequired": "Sign in to use Agent Builder.",
+      "tabConfigure": "Configure",
+      "tabChat": "Chat",
+      "tabBatchTest": "Batch Test",
+      "tabConnect": "Connect",
+      "missingModelIdWarning": "This agent cannot be updated or deleted here (missing model id). Manage it from Models & Endpoints.",
+      "agentNameLabel": "Agent name",
+      "agentNamePlaceholder": "My Agent",
+      "systemPromptLabel": "System prompt",
+      "systemPromptPlaceholder": "You are a helpful assistant...",
+      "defaultSystemPrompt": "You are a helpful assistant.",
+      "underlyingLlmLabel": "Underlying LLM",
+      "temperatureLabel": "Temperature",
+      "maxTokensLabel": "Max tokens",
+      "mcpServersLabel": "MCP servers",
+      "mcpServersPlaceholder": "Select MCP servers to attach (same format as chat completions API)",
+      "mcpServersSaved_one": "{{count}} MCP server saved. Use the same <toolsCode>tools</toolsCode> array in chat completions when calling this agent.",
+      "mcpServersSaved_other": "{{count}} MCP servers saved. Use the same <toolsCode>tools</toolsCode> array in chat completions when calling this agent.",
+      "updateAgent": "Update Agent",
+      "testInChat": "Test in Chat",
+      "saveAgentFirst": "Save an agent first to test in Chat.",
+      "selectAgentForBatchTest": "Select an agent to run batch tests.",
+      "selectAgentToConnect": "Select an agent to see how to connect.",
+      "proxyBaseUrl": "Proxy base URL",
+      "callYourAgent": "Call your agent (cURL)",
+      "createKeyTitle": "Create a key for this agent",
+      "createKeyDesc": "Create a virtual key that can only call this agent. The key will be scoped to you (user_id) and restricted to the model <agentCode>{{agentName}}</agentCode>.",
+      "createKeyButton": "Create key for this agent",
+      "keyCreationDisabled": "Key creation is disabled for your account.",
+      "keyCreated": "Key created. It is shown in the cURL example above — copy the snippet to use it.",
+      "failedToLoadAgents": "Failed to load agents",
+      "nameAndModelRequired": "Name and underlying model are required",
+      "failedToSaveAgent": "Failed to save agent",
+      "agentUpdated": "Agent updated successfully",
+      "failedToUpdateAgent": "Failed to update agent",
+      "virtualKeyCreated": "Virtual key created. Use it in the curl example below.",
+      "keyCreatedNoValue": "Key created but value not returned",
+      "failedToCreateKey": "Failed to create key for agent",
+      "deleteAgentTitle": "Delete agent",
+      "deleteAgentConfirm": "Are you sure you want to delete \"{{name}}\"? This cannot be undone.",
+      "agentDeleted": "Agent deleted",
+      "failedToDeleteAgent": "Failed to delete agent"
+    },
+    "audioRenderer": {
+      "browserNotSupported": "Your browser does not support the audio element."
+    },
+    "chatImageRenderer": {
+      "uploadedImageAlt": "User uploaded image"
+    },
+    "chatImageUpload": {
+      "attachTooltip": "Attach image or PDF"
+    },
+    "chatMessageBubble": {
+      "generatedImageAlt": "Generated image"
+    }
   }
 }

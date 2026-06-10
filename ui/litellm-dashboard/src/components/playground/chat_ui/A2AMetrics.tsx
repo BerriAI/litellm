@@ -12,6 +12,7 @@ import {
   FileTextOutlined,
   RobotOutlined,
 } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 export interface A2ATaskMetadata {
   taskId?: string;
@@ -80,6 +81,7 @@ const copyToClipboard = (text: string) => {
 };
 
 const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, totalLatency }) => {
+  const { t } = useTranslation();
   const [showDetails, setShowDetails] = useState(false);
 
   if (!a2aMetadata && !timeToFirstToken && !totalLatency) return null;
@@ -92,7 +94,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
       {/* A2A Metadata Header */}
       <div className="flex items-center mb-2 text-gray-600">
         <RobotOutlined className="mr-1.5 text-blue-500" />
-        <span className="font-medium text-gray-700">A2A Metadata</span>
+        <span className="font-medium text-gray-700">{t("playground.a2AMetrics.header")}</span>
       </div>
 
       {/* Main metrics row */}
@@ -119,7 +121,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
 
         {/* Latency */}
         {totalLatency !== undefined && (
-          <Tooltip title="Total latency">
+          <Tooltip title={t("playground.a2AMetrics.totalLatency")}>
             <span className="flex items-center text-blue-600">
               <ClockCircleOutlined className="mr-1" />
               {(totalLatency / 1000).toFixed(2)}s
@@ -129,7 +131,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
 
         {/* Time to first token */}
         {timeToFirstToken !== undefined && (
-          <Tooltip title="Time to first token">
+          <Tooltip title={t("playground.a2AMetrics.timeToFirstToken")}>
             <span className="flex items-center text-green-600">TTFT: {(timeToFirstToken / 1000).toFixed(2)}s</span>
           </Tooltip>
         )}
@@ -139,13 +141,14 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
       <div className="flex flex-wrap items-center gap-3 text-gray-500 ml-4 mt-1.5">
         {/* Task ID */}
         {taskId && (
-          <Tooltip title={`Click to copy: ${taskId}`}>
+          <Tooltip title={t("playground.a2AMetrics.clickToCopy", { id: taskId })}>
             <span
               className="flex items-center cursor-pointer hover:text-gray-700"
               onClick={() => copyToClipboard(taskId)}
             >
               <FileTextOutlined className="mr-1" />
-              Task: {truncateId(taskId)}
+              {t("playground.a2AMetrics.taskPrefix")}
+              {truncateId(taskId)}
               <CopyOutlined className="ml-1 text-gray-400 hover:text-gray-600" />
             </span>
           </Tooltip>
@@ -153,13 +156,14 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
 
         {/* Context/Session ID */}
         {contextId && (
-          <Tooltip title={`Click to copy: ${contextId}`}>
+          <Tooltip title={t("playground.a2AMetrics.clickToCopy", { id: contextId })}>
             <span
               className="flex items-center cursor-pointer hover:text-gray-700"
               onClick={() => copyToClipboard(contextId)}
             >
               <LinkOutlined className="mr-1" />
-              Session: {truncateId(contextId)}
+              {t("playground.a2AMetrics.sessionPrefix")}
+              {truncateId(contextId)}
               <CopyOutlined className="ml-1 text-gray-400 hover:text-gray-600" />
             </span>
           </Tooltip>
@@ -174,7 +178,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
             onClick={() => setShowDetails(!showDetails)}
           >
             {showDetails ? <DownOutlined /> : <RightOutlined />}
-            <span className="ml-1">Details</span>
+            <span className="ml-1">{t("playground.a2AMetrics.details")}</span>
           </Button>
         )}
       </div>
@@ -185,7 +189,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           {/* Status message */}
           {status?.message && (
             <div className="mb-2">
-              <span className="font-medium text-gray-700">Status Message:</span>
+              <span className="font-medium text-gray-700">{t("playground.a2AMetrics.statusMessage")}</span>
               <span className="ml-2">{status.message}</span>
             </div>
           )}
@@ -193,7 +197,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           {/* Full IDs */}
           {taskId && (
             <div className="mb-1.5 flex items-center">
-              <span className="font-medium text-gray-700 w-24">Task ID:</span>
+              <span className="font-medium text-gray-700 w-24">{t("playground.a2AMetrics.taskId")}</span>
               <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded text-xs font-mono">{taskId}</code>
               <CopyOutlined
                 className="ml-2 cursor-pointer text-gray-400 hover:text-blue-500"
@@ -204,7 +208,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
 
           {contextId && (
             <div className="mb-1.5 flex items-center">
-              <span className="font-medium text-gray-700 w-24">Session ID:</span>
+              <span className="font-medium text-gray-700 w-24">{t("playground.a2AMetrics.sessionId")}</span>
               <code className="ml-2 px-2 py-1 bg-white border border-gray-200 rounded text-xs font-mono">
                 {contextId}
               </code>
@@ -218,7 +222,7 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
           {/* Metadata fields */}
           {metadata && Object.keys(metadata).length > 0 && (
             <div className="mt-3">
-              <span className="font-medium text-gray-700">Custom Metadata:</span>
+              <span className="font-medium text-gray-700">{t("playground.a2AMetrics.customMetadata")}</span>
               <pre className="mt-1.5 p-2 bg-white border border-gray-200 rounded text-xs font-mono overflow-x-auto whitespace-pre-wrap">
                 {JSON.stringify(metadata, null, 2)}
               </pre>
