@@ -18,6 +18,36 @@ sys.path.insert(
 
 
 @pytest.fixture
+def admin_client_and_mocks(monkeypatch):
+    mock_prisma = MagicMock()
+    mock_table = MagicMock()
+    mock_table.create = AsyncMock(side_effect=lambda *, data: data)
+    mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
+    mock_table.delete = AsyncMock(side_effect=lambda *, where: where)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_table.find_first = AsyncMock(return_value=None)
+
+    mock_prisma.db = types.SimpleNamespace(
+        litellm_budgettable=mock_table,
+        litellm_dailyspend=mock_table,
+    )
+
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+
+    fake_user = UserAPIKeyAuth(
+        user_id="admin_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: fake_user
+
+    client = TestClient(app)
+
+    yield client, mock_prisma, mock_table
+
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
 def client_and_mocks(monkeypatch):
     # Setup MagicMock Prisma
     mock_prisma = MagicMock()
@@ -44,9 +74,7 @@ def client_and_mocks(monkeypatch):
 
     yield client, mock_prisma, mock_table
 
-    # teardown
     app.dependency_overrides.clear()
-    monkeypatch.setattr(ps, "prisma_client", ps.prisma_client)
 
 
 @pytest.mark.asyncio
@@ -265,3 +293,137 @@ async def test_new_budget_invalid_model_max_budget(client_and_mocks, monkeypatch
     assert resp.status_code in (400, 422), resp.text
     detail = resp.json()["detail"]
     assert "model_max_budget" in str(detail) or "dictionary" in str(detail).lower()
+
+
+@pytest.mark.asyncio
+async def test_info_budget_success(admin_client_and_mocks):
+    client, _, mock_table = admin_client_and_mocks
+
+    mock_table.find_many = AsyncMock(
+        return_value=[
+            {
+                "budget_id": "budget-info-1",
+                "max_budget": 10.0,
+                "budget_duration": "30d",
+            }
+        ]
+    )
+
+    resp = client.post("/budget/info", json={"budgets": ["budget-info-1"]})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["budget_id"] == "budget-info-1"
+    mock_table.find_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_info_budget_empty_list_rejected(admin_client_and_mocks):
+    client, _, _ = admin_client_and_mocks
+
+    resp = client.post("/budget/info", json={"budgets": []})
+    assert resp.status_code == 400, resp.text
+    assert "Specify list of budget id" in str(resp.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_info_budget_db_not_connected(admin_client_and_mocks, monkeypatch):
+    client, _, _ = admin_client_and_mocks
+    monkeypatch.setattr(ps, "prisma_client", None)
+
+    resp = client.post("/budget/info", json={"budgets": ["budget-info-1"]})
+    assert resp.status_code == 500
+    assert resp.json()["detail"]["error"] == "No db connected"
+
+
+@pytest.mark.asyncio
+async def test_list_budget_success(admin_client_and_mocks):
+    client, _, mock_table = admin_client_and_mocks
+
+    mock_table.find_many = AsyncMock(
+        return_value=[
+            {"budget_id": "budget-a", "max_budget": 1.0},
+            {"budget_id": "budget-b", "max_budget": 2.0},
+        ]
+    )
+
+    resp = client.get("/budget/list")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body) == 2
+    mock_table.find_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_budget_rejects_non_admin(client_and_mocks):
+    client, _, _ = client_and_mocks
+
+    resp = client.get("/budget/list")
+    assert resp.status_code == 400, resp.text
+    assert CommonProxyErrors.not_allowed_access.value in str(resp.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_budget_settings_success(admin_client_and_mocks):
+    client, _, mock_table = admin_client_and_mocks
+
+    mock_row = types.SimpleNamespace(
+        model_dump=lambda exclude_none=True: {
+            "budget_id": "budget-settings-1",
+            "max_budget": 25.0,
+            "soft_budget": 20.0,
+            "budget_duration": "7d",
+        }
+    )
+    mock_table.find_first = AsyncMock(return_value=mock_row)
+
+    resp = client.get("/budget/settings", params={"budget_id": "budget-settings-1"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    field_names = {item["field_name"] for item in body}
+    assert "max_budget" in field_names
+    assert "soft_budget" in field_names
+    max_budget_field = next(item for item in body if item["field_name"] == "max_budget")
+    assert max_budget_field["field_value"] == 25.0
+
+
+@pytest.mark.asyncio
+async def test_budget_settings_rejects_non_admin(client_and_mocks):
+    client, _, _ = client_and_mocks
+
+    resp = client.get("/budget/settings", params={"budget_id": "budget-settings-1"})
+    assert resp.status_code == 400, resp.text
+    assert CommonProxyErrors.not_allowed_access.value in str(resp.json()["detail"])
+
+
+@pytest.mark.asyncio
+async def test_delete_budget_success(admin_client_and_mocks):
+    client, _, mock_table = admin_client_and_mocks
+
+    mock_table.delete = AsyncMock(return_value={"budget_id": "budget-delete-1"})
+
+    resp = client.post("/budget/delete", json={"id": "budget-delete-1"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["budget_id"] == "budget-delete-1"
+    mock_table.delete.assert_awaited_once_with(
+        where={"budget_id": "budget-delete-1"}
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_budget_rejects_non_admin(client_and_mocks):
+    client, _, mock_table = client_and_mocks
+
+    fake_viewer = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+    )
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: fake_viewer
+
+    try:
+        resp = client.post("/budget/delete", json={"id": "budget-delete-1"})
+        assert resp.status_code == 400, resp.text
+        assert CommonProxyErrors.not_allowed_access.value in str(resp.json()["detail"])
+        mock_table.delete.assert_not_called()
+    finally:
+        app.dependency_overrides.clear()

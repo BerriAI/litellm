@@ -30,6 +30,138 @@ from litellm.proxy.auth.auth_checks import common_checks
 from litellm.proxy.utils import ProxyLogging
 
 
+def _org_over_budget_object(
+    org_id: str,
+    *,
+    spend: float,
+    max_budget: float,
+) -> LiteLLM_OrganizationTable:
+    return LiteLLM_OrganizationTable(
+        organization_id=org_id,
+        budget_id=f"budget-{org_id}",
+        spend=spend,
+        models=["gpt-4"],
+        created_by="test",
+        updated_by="test",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=max_budget),
+    )
+
+
+async def _assert_org_budget_blocks_request(
+    *,
+    valid_token: UserAPIKeyAuth,
+    org_object: LiteLLM_OrganizationTable,
+    team_object: Optional[LiteLLM_TeamTable] = None,
+    org_counter_spend: Optional[float] = None,
+):
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/chat/completions"
+
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.budget_alerts = AsyncMock()
+
+    org_id = org_object.organization_id
+    counter_spend = (
+        org_counter_spend
+        if org_counter_spend is not None
+        else org_object.spend or 0.0
+    )
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        if counter_key == f"spend:org:{org_id}":
+            return counter_spend
+        return fallback_spend
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_org_object",
+            new_callable=AsyncMock,
+            return_value=org_object,
+        ),
+        patch(
+            "litellm.proxy.proxy_server.get_current_spend",
+            new_callable=AsyncMock,
+            side_effect=mock_get_current_spend,
+        ),
+    ):
+        with pytest.raises(litellm.BudgetExceededError) as exc_info:
+            await common_checks(
+                request_body={"model": "gpt-4"},
+                team_object=team_object,
+                user_object=None,
+                end_user_object=None,
+                global_proxy_spend=None,
+                general_settings={},
+                route="/v1/chat/completions",
+                llm_router=None,
+                proxy_logging_obj=mock_proxy_logging,
+                valid_token=valid_token,
+                request=mock_request,
+            )
+
+        assert "Organization" in str(exc_info.value.message)
+        assert exc_info.value.current_cost == counter_spend
+        assert (
+            exc_info.value.max_budget
+            == org_object.litellm_budget_table.max_budget
+        )
+
+
+@pytest.mark.asyncio
+async def test_org_key_blocks_when_org_spend_exceeds_max_budget():
+    """Org-scoped key with no team is blocked when org spend >= org max_budget."""
+    org_id = "org-key-only"
+
+    await _assert_org_budget_blocks_request(
+        valid_token=UserAPIKeyAuth(
+            token="sk-org-key-only",
+            org_id=org_id,
+            team_id=None,
+            spend=50.0,
+            max_budget=200.0,
+        ),
+        org_object=_org_over_budget_object(
+            org_id, spend=120.0, max_budget=100.0
+        ),
+        team_object=None,
+        org_counter_spend=120.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_all_keys_with_same_org_id_share_org_budget_enforcement():
+    """Every key with the same org_id is blocked once org spend hits max_budget."""
+    org_id = "shared-org-budget"
+    org_object = _org_over_budget_object(org_id, spend=150.0, max_budget=100.0)
+
+    org_keys = [
+        UserAPIKeyAuth(
+            token="sk-org-key-alpha",
+            org_id=org_id,
+            team_id=None,
+            spend=10.0,
+            max_budget=500.0,
+        ),
+        UserAPIKeyAuth(
+            token="sk-org-key-beta",
+            org_id=org_id,
+            team_id=None,
+            spend=80.0,
+            max_budget=500.0,
+        ),
+    ]
+
+    for valid_token in org_keys:
+        await _assert_org_budget_blocks_request(
+            valid_token=valid_token,
+            org_object=org_object,
+            team_object=None,
+            org_counter_spend=150.0,
+        )
+
+
 @pytest.mark.asyncio
 async def test_organization_budget_exceeded_blocks_request():
     """

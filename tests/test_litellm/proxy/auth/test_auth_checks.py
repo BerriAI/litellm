@@ -1,5 +1,6 @@
 import asyncio
 import json
+import math
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -2407,6 +2408,74 @@ async def test_virtual_key_budget_check_fallback_no_counter():
                 proxy_logging_obj=proxy_logging_obj,
             )
         assert exc_info.value.current_cost == 15.0
+
+
+@pytest.mark.parametrize(
+    "non_finite_max_budget",
+    [float("nan"), float("inf"), float("-inf")],
+    ids=["nan", "positive_infinity", "negative_infinity"],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_check_non_finite_max_budget_does_not_bypass(
+    non_finite_max_budget,
+):
+    """Non-finite max_budget must not disable enforcement (GHSA-2rv4-xv66-fpjg)."""
+    from litellm.proxy.utils import ProxyLogging
+
+    valid_token = UserAPIKeyAuth(
+        token="test-hashed-token",
+        spend=0.0,
+        max_budget=non_finite_max_budget,
+        user_id="test-user",
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        return 999.0
+
+    with patch(
+        "litellm.proxy.auth.auth_checks.math.isfinite", wraps=math.isfinite
+    ) as mock_isfinite:
+        with patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ):
+            await _virtual_key_max_budget_check(
+                valid_token=valid_token,
+                proxy_logging_obj=proxy_logging_obj,
+            )
+
+    mock_isfinite.assert_called_once_with(non_finite_max_budget)
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_check_negative_infinity_blocks_without_isfinite_guard():
+    """Removing math.isfinite would wrongly block keys with max_budget=-inf."""
+    from litellm.proxy.utils import ProxyLogging
+
+    valid_token = UserAPIKeyAuth(
+        token="test-hashed-token",
+        spend=0.0,
+        max_budget=float("-inf"),
+        user_id="test-user",
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=None)
+    proxy_logging_obj.budget_alerts = AsyncMock()
+
+    async def mock_get_current_spend(counter_key, fallback_spend):
+        return 999.0
+
+    with patch("litellm.proxy.auth.auth_checks.math.isfinite", return_value=True):
+        with patch(
+            "litellm.proxy.proxy_server.get_current_spend", mock_get_current_spend
+        ):
+            with pytest.raises(litellm.BudgetExceededError):
+                await _virtual_key_max_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
 
 
 @pytest.mark.asyncio
