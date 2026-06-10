@@ -299,6 +299,8 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({
     handleDelete,
     handleResetPassword,
     () => {}, // placeholder function, will be overridden in UserDataTable
+    undefined,
+    t,
   );
 
   return (
