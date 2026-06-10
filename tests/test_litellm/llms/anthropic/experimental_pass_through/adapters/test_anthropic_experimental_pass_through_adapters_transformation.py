@@ -2502,7 +2502,7 @@ class TestAnthropicStreamWrapperToolArgs:
 class TestAnthropicStreamWrapperTextDeltas:
     """Regression test for Anthropic streams that switch back to text output."""
 
-    def _build_chunks(self):
+    def _build_thinking_to_text_chunks(self):
         thinking_chunk = ModelResponseStream(
             id="chatcmpl-456",
             created=1700000000,
@@ -2559,6 +2559,63 @@ class TestAnthropicStreamWrapperTextDeltas:
 
         return [thinking_chunk, text_chunk, finish_chunk]
 
+    def _build_text_to_thinking_chunks(self):
+        text_chunk = ModelResponseStream(
+            id="chatcmpl-789",
+            created=1700000000,
+            model="claude-code-proxy",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="I will check that", role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        thinking_chunk = ModelResponseStream(
+            id="chatcmpl-789",
+            created=1700000000,
+            model="claude-code-proxy",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="Reading the inputs",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "Reading the inputs",
+                                "signature": None,
+                            }
+                        ],
+                        content="",
+                        role="assistant",
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        finish_chunk = ModelResponseStream(
+            id="chatcmpl-789",
+            created=1700000000,
+            model="claude-code-proxy",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(),
+                    finish_reason="stop",
+                )
+            ],
+            usage=Usage(prompt_tokens=12, completion_tokens=4, total_tokens=16),
+        )
+
+        return [text_chunk, thinking_chunk, finish_chunk]
+
     def _make_stream_wrapper(self, chunks):
         from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
             AnthropicStreamWrapper,
@@ -2599,8 +2656,19 @@ class TestAnthropicStreamWrapperTextDeltas:
             and e["delta"].get("text")
         ]
 
+    def _find_thinking_deltas(self, events):
+        return [
+            e
+            for e in events
+            if isinstance(e, dict)
+            and e.get("type") == "content_block_delta"
+            and isinstance(e.get("delta"), dict)
+            and e["delta"].get("type") == "thinking_delta"
+            and e["delta"].get("thinking")
+        ]
+
     def test_sync_text_delta_not_dropped_when_text_block_starts(self):
-        chunks = self._build_chunks()
+        chunks = self._build_thinking_to_text_chunks()
         wrapper = self._make_stream_wrapper(chunks)
 
         events = list(wrapper)
@@ -2612,7 +2680,7 @@ class TestAnthropicStreamWrapperTextDeltas:
 
     @pytest.mark.asyncio
     async def test_async_text_delta_not_dropped_when_text_block_starts(self):
-        chunks = self._build_chunks()
+        chunks = self._build_thinking_to_text_chunks()
         wrapper = self._make_stream_wrapper(chunks)
 
         events = []
@@ -2623,6 +2691,32 @@ class TestAnthropicStreamWrapperTextDeltas:
 
         assert [delta["delta"]["text"] for delta in text_deltas] == [
             "Here is the answer"
+        ]
+
+    def test_sync_thinking_delta_not_dropped_when_thinking_block_starts(self):
+        chunks = self._build_text_to_thinking_chunks()
+        wrapper = self._make_stream_wrapper(chunks)
+
+        events = list(wrapper)
+        thinking_deltas = self._find_thinking_deltas(events)
+
+        assert [delta["delta"]["thinking"] for delta in thinking_deltas] == [
+            "Reading the inputs"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_thinking_delta_not_dropped_when_thinking_block_starts(self):
+        chunks = self._build_text_to_thinking_chunks()
+        wrapper = self._make_stream_wrapper(chunks)
+
+        events = []
+        async for event in wrapper:
+            events.append(event)
+
+        thinking_deltas = self._find_thinking_deltas(events)
+
+        assert [delta["delta"]["thinking"] for delta in thinking_deltas] == [
+            "Reading the inputs"
         ]
 
 

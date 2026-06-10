@@ -291,7 +291,10 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             "thinking_delta": "thinking",
             "signature_delta": "signature",
         }
-        payload_key = delta_payload_keys.get(delta.get("type"))
+        delta_type = delta.get("type")
+        if not isinstance(delta_type, str):
+            return False
+        payload_key = delta_payload_keys.get(delta_type)
         return bool(payload_key and delta.get(payload_key))
 
     def __next__(self):  # noqa: PLR0915
