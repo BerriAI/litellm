@@ -2,7 +2,22 @@
 Tests for Tensormesh provider configuration and integration.
 """
 
+import pytest
+
 import litellm
+
+TENSORMESH_MODELS = [
+    "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8",
+    "tensormesh/Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8",
+    "tensormesh/Qwen/Qwen3.6-27B-FP8",
+    "tensormesh/lukealonso/GLM-5.1-NVFP4-MTP",
+    "tensormesh/deepseek-ai/DeepSeek-V4-Flash",
+    "tensormesh/moonshotai/Kimi-K2.6",
+    "tensormesh/MiniMaxAI/MiniMax-M2.5",
+    "tensormesh/google/gemma-4-31B-it",
+    "tensormesh/openai/gpt-oss-120b",
+    "tensormesh/openai/gpt-oss-20b",
+]
 
 
 class TestTensormeshProviderConfig:
@@ -82,3 +97,60 @@ class TestTensormeshProviderConfig:
 
         assert len(router.model_list) == 1
         assert router.model_list[0]["model_name"] == "tensormesh-chat"
+
+
+class TestTensormeshCostMap:
+    """The serverless models are registered in the cost map so LiteLLM can
+    price requests and unblock tool-calling params on the JSON provider path."""
+
+    @pytest.fixture(autouse=True)
+    def _use_local_model_cost_map(self, monkeypatch):
+        original_model_cost = litellm.model_cost
+        monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+        litellm.get_model_info.cache_clear()
+        try:
+            yield
+        finally:
+            litellm.model_cost = original_model_cost
+            litellm.get_model_info.cache_clear()
+
+    def test_models_registered_with_capabilities(self):
+        for model in TENSORMESH_MODELS:
+            info = litellm.get_model_info(model)
+            assert info["litellm_provider"] == "tensormesh"
+            assert info["mode"] == "chat"
+            assert litellm.supports_function_calling(model) is True, model
+            assert litellm.supports_response_schema(model) is True, model
+            assert litellm.model_cost[model]["supports_tool_choice"] is True, model
+            assert litellm.model_cost[model]["supports_prompt_caching"] is True, model
+
+    def test_reasoning_flag_matches_expected_set(self):
+        reasoning_models = {
+            "tensormesh/deepseek-ai/DeepSeek-V4-Flash",
+            "tensormesh/Qwen/Qwen3.5-397B-A17B-FP8",
+            "tensormesh/Qwen/Qwen3.6-27B-FP8",
+            "tensormesh/lukealonso/GLM-5.1-NVFP4-MTP",
+            "tensormesh/MiniMaxAI/MiniMax-M2.5",
+            "tensormesh/moonshotai/Kimi-K2.6",
+            "tensormesh/openai/gpt-oss-120b",
+            "tensormesh/openai/gpt-oss-20b",
+            "tensormesh/google/gemma-4-31B-it",
+        }
+        for model in TENSORMESH_MODELS:
+            assert litellm.supports_reasoning(model) is (model in reasoning_models), model
+
+    def test_cost_is_wired_and_cache_reads_are_free(self):
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model="tensormesh/openai/gpt-oss-120b",
+            prompt_tokens=1_000_000,
+            completion_tokens=1_000_000,
+        )
+        assert prompt_cost == pytest.approx(0.15)
+        assert completion_cost == pytest.approx(0.60)
+        assert (
+            litellm.model_cost["tensormesh/openai/gpt-oss-120b"][
+                "cache_read_input_token_cost"
+            ]
+            == 0
+        )

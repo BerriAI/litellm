@@ -25081,6 +25081,12 @@ export interface components {
              * @default false
              */
             use_litellm_proxy: boolean | null;
+            /**
+             * Use Xai Oauth
+             * @description Use stored xAI OAuth credentials when no xAI API key is configured.
+             * @default false
+             */
+            use_xai_oauth: boolean | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */
@@ -32679,6 +32685,12 @@ export interface components {
              * @default false
              */
             use_litellm_proxy: boolean | null;
+            /**
+             * Use Xai Oauth
+             * @description Use stored xAI OAuth credentials when no xAI API key is configured.
+             * @default false
+             */
+            use_xai_oauth: boolean | null;
             /** Vector Store Id */
             vector_store_id?: string | null;
             /** Vertex Credentials */

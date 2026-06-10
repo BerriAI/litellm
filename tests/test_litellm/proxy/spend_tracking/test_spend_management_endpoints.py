@@ -1314,7 +1314,8 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
             assert session_id == "session-123"
             assert page_size == 1
             assert skip == 1  # page=2, page_size=1
-            return [mock_spend_logs[1]]
+            assert 'ORDER BY "startTime" DESC' in sql_query
+            return [mock_spend_logs[0]]
 
     class MockPrismaClient:
         def __init__(self):
@@ -1337,7 +1338,7 @@ async def test_ui_view_session_spend_logs_pagination(client, monkeypatch):
     assert data["page_size"] == 1
     assert data["total_pages"] == 2
     assert len(data["data"]) == 1
-    assert data["data"][0]["request_id"] == "req2"
+    assert data["data"][0]["request_id"] == "req1"
 
 
 @pytest.mark.asyncio

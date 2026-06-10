@@ -6496,6 +6496,9 @@ async def test_reset_key_spend_success(monkeypatch):
         patch(
             "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
         ) as mock_delete_cache,
+        patch(
+            "litellm.proxy.proxy_server._invalidate_spend_counter"
+        ) as mock_invalidate,
     ):
         mock_hash_token.return_value = hashed_key
         mock_check_admin.return_value = None
@@ -6520,6 +6523,76 @@ async def test_reset_key_spend_success(monkeypatch):
         assert response["max_budget"] == 200.0
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
         mock_delete_cache.assert_awaited_once()
+        mock_invalidate.assert_awaited_once_with(counter_key=f"spend:key:{hashed_key}")
+
+
+@pytest.mark.asyncio
+async def test_update_key_spend_invalidates_counter(monkeypatch):
+    """
+    Test that updating a key's spend via update_key_fn immediately invalidates the spend counter.
+    """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        update_key_fn,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = AsyncMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    hashed_key = "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b"
+    key_in_db = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=10.0,
+        max_budget=200.0,
+        litellm_budget_table=None,
+    )
+
+    mock_prisma_client.get_data = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {"spend": 0.0}})
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.store_audit_logs", False)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
+        ) as mock_delete_cache,
+        patch(
+            "litellm.proxy.proxy_server._invalidate_spend_counter"
+        ) as mock_invalidate,
+    ):
+        mock_delete_cache.return_value = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-user",
+        )
+
+        mock_request = MagicMock()
+        mock_request.query_params = {}
+
+        await update_key_fn(
+            request=mock_request,
+            data=UpdateKeyRequest(key="sk-test-key", spend=0.0),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+        mock_delete_cache.assert_awaited_once()
+        mock_invalidate.assert_awaited_once_with(counter_key=f"spend:key:{hashed_key}")
 
 
 @pytest.mark.asyncio
@@ -11668,3 +11741,84 @@ async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption(
         msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
         assert str(code) == "400"
         assert "cannot exceed" in msg.lower()
+
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_duration_null_clears_fields():
+    """
+    When budget_duration is explicitly set to null, prepare_key_update_data
+    should produce budget_duration=None and budget_reset_at=None so Prisma
+    clears them in the DB.
+    """
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=[],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", budget_duration=None)
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert "budget_duration" in result
+    assert result["budget_duration"] is None
+    assert "budget_reset_at" in result
+    assert result["budget_reset_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_duration_not_sent_excluded():
+    """
+    When budget_duration is NOT sent in the request (unset), it should not
+    appear in the result dict at all — the existing DB value stays unchanged.
+    """
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=[],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", models=["gpt-4"])
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert "budget_duration" not in result
+    assert "budget_reset_at" not in result
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_duration_valid_sets_reset():
+    """
+    When budget_duration is set to a valid duration string, both
+    budget_duration and budget_reset_at should be populated.
+    """
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=[],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", budget_duration="30d")
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert result["budget_duration"] == "30d"
+    assert result["budget_reset_at"] is not None
+
+

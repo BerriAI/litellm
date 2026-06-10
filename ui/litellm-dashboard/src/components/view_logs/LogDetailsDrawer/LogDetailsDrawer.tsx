@@ -28,6 +28,14 @@ export interface LogDetailsDrawerProps {
 
 const SIDEBAR_WIDTH_PX = 224;
 
+// Session logs are fetched page-by-page from the paginated backend and
+// accumulated so the drawer can show the whole session. page_size is the
+// backend maximum (le=100); the page cap bounds the fetch and the
+// (un-virtualized) sidebar list for pathological sessions, keeping the most
+// recent logs since the endpoint returns newest-first.
+const SESSION_PAGE_SIZE = 100;
+const MAX_SESSION_PAGES = 50;
+
 /* ------------------------------------------------------------------ */
 /*  TraceEventRow — compact event row used in both session & non-     */
 /*  session sidebar lists.  Extracted to avoid JSX duplication.       */
@@ -112,13 +120,39 @@ export function LogDetailsDrawer({
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [copiedLeftPanelId, setCopiedLeftPanelId] = useState(false);
 
-  const { data: sessionLogs = [] } = useQuery({
+  const { data: sessionData } = useQuery({
     queryKey: ["sessionLogs", sessionId],
     queryFn: async () => {
-      if (!sessionId || !accessToken) return [];
-      const response = await sessionSpendLogsCall(accessToken, sessionId);
-      const allSessionLogs: LogEntry[] = response.data || response || [];
-      return allSessionLogs
+      if (!sessionId || !accessToken) return { logs: [] as LogEntry[], total: 0 };
+
+      // Fetch the first page, then page through the rest so sessions with more
+      // than one page of logs are shown in full (capped for safety).
+      const firstPage = await sessionSpendLogsCall(accessToken, sessionId, 1, SESSION_PAGE_SIZE);
+      let rows: LogEntry[] = firstPage.data || firstPage || [];
+      const pagesToFetch = Math.min(firstPage.total_pages ?? 1, MAX_SESSION_PAGES);
+
+      if (pagesToFetch > 1) {
+        const BATCH = 5;
+        const remaining: Awaited<ReturnType<typeof sessionSpendLogsCall>>[] = [];
+        for (let start = 2; start <= pagesToFetch; start += BATCH) {
+          const end = Math.min(start + BATCH - 1, pagesToFetch);
+          const batch = await Promise.all(
+            Array.from({ length: end - start + 1 }, (_, i) =>
+              sessionSpendLogsCall(accessToken, sessionId, start + i, SESSION_PAGE_SIZE),
+            ),
+          );
+          remaining.push(...batch);
+        }
+        for (const page of remaining) {
+          rows = rows.concat(page.data || []);
+        }
+      }
+
+      // Fall back to the accumulated row count (not just the first page) when the
+      // backend omits total, so the truncation note reflects what was fetched.
+      const total: number = firstPage.total ?? rows.length;
+
+      const logs = rows
         .map((row) => ({
           ...row,
           request_duration_ms: row.request_duration_ms ?? Date.parse(row.endTime) - Date.parse(row.startTime),
@@ -127,24 +161,49 @@ export function LogDetailsDrawer({
           const aIsMcp = MCP_CALL_TYPES.includes(a.call_type) ? 1 : 0;
           const bIsMcp = MCP_CALL_TYPES.includes(b.call_type) ? 1 : 0;
           if (aIsMcp !== bIsMcp) return aIsMcp - bIsMcp;
-          return new Date(a.startTime).getTime() - new Date(b.startTime).getTime();
+          // Newest first, matching the all-sessions logs overview. MCP calls
+          // stay grouped last (above), newest-first within that group too.
+          return new Date(b.startTime).getTime() - new Date(a.startTime).getTime();
         });
+
+      return { logs, total };
     },
     enabled: Boolean(open && isSessionMode && sessionId && accessToken),
   });
 
+  const sessionLogs: LogEntry[] = sessionData?.logs ?? [];
+  // total reported by the backend; when the page cap truncates the fetch this
+  // exceeds sessionLogs.length, which drives the "showing most recent" note.
+  const sessionTotalCount = sessionData?.total ?? sessionLogs.length;
+  const sessionTruncated = sessionTotalCount > sessionLogs.length;
+
+  // Default selection for a freshly opened session: the most recent log (latest
+  // startTime). The list is sorted newest-first, but MCP calls are grouped last,
+  // so the latest log by time is not necessarily sessionLogs[0]; compute it
+  // explicitly. A clicked/remembered log still wins over this default.
+  const mostRecentLog = useMemo<LogEntry | null>(
+    () =>
+      sessionLogs.reduce<LogEntry | null>(
+        (latest, row) =>
+          !latest || new Date(row.startTime).getTime() > new Date(latest.startTime).getTime() ? row : latest,
+        null,
+      ),
+    [sessionLogs],
+  );
+
   const currentLog = useMemo(() => {
     if (!isSessionMode) return logEntry;
     if (!sessionLogs.length) return null;
+    const fallbackLog = mostRecentLog ?? sessionLogs[0];
     if (selectedSessionRequestId) {
-      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || sessionLogs[0];
+      return sessionLogs.find((row) => row.request_id === selectedSessionRequestId) || fallbackLog;
     }
     if (logEntry?.request_id) {
       const clickedLog = sessionLogs.find((row) => row.request_id === logEntry.request_id);
-      return clickedLog || sessionLogs[0];
+      return clickedLog || fallbackLog;
     }
-    return sessionLogs[0];
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+    return fallbackLog;
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   useEffect(() => {
     if (!isSessionMode || !sessionLogs.length) return;
@@ -152,10 +211,10 @@ export function LogDetailsDrawer({
       const fallbackRequestId =
         logEntry?.request_id && sessionLogs.some((row) => row.request_id === logEntry.request_id)
           ? logEntry.request_id
-          : sessionLogs[0].request_id;
+          : (mostRecentLog ?? sessionLogs[0]).request_id;
       setSelectedSessionRequestId(fallbackRequestId);
     }
-  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs]);
+  }, [isSessionMode, logEntry, selectedSessionRequestId, sessionLogs, mostRecentLog]);
 
   // Reset transient UI state when the drawer opens or closes.
   useEffect(() => {
@@ -327,6 +386,11 @@ export function LogDetailsDrawer({
                   </>
                 )}
               </div>
+              {isSessionMode && sessionTruncated && (
+                <div className="mt-1 text-[11px] text-amber-600 font-mono">
+                  Showing most recent {logsForList.length} of {sessionTotalCount}
+                </div>
+              )}
             </div>
 
             <div className="flex-1 overflow-y-auto">

@@ -220,6 +220,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_in_pass_through: Optional[bool] = False
     use_litellm_proxy: Optional[bool] = False
     use_chat_completions_api: Optional[bool] = None
+    use_xai_oauth: Optional[bool] = Field(
+        default=False,
+        description="Use stored xAI OAuth credentials when no xAI API key is configured.",
+    )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: Optional[bool] = False
     model_info: Optional[Dict] = None

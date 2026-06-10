@@ -555,6 +555,7 @@ class ProxyInitializationHelpers:
 
 
 @click.command()
+@click.argument("cli_args", nargs=-1)
 @click.option(
     "--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST"
 )
@@ -808,6 +809,7 @@ class ProxyInitializationHelpers:
     help="Enable uvicorn hot reload (dev only). Also reloads when the --config YAML file changes. Incompatible with --num_workers>1, --run_gunicorn, and --run_hypercorn.",
 )
 def run_server(  # noqa: PLR0915
+    cli_args,
     host,
     port,
     api_base,
@@ -854,6 +856,20 @@ def run_server(  # noqa: PLR0915
     use_v2_migration_resolver: bool,
     reload: bool,
 ):
+    if cli_args:
+        if cli_args == ("xai-oauth", "login"):
+            from litellm.llms.xai.oauth import XAIOAuthAuthenticator
+
+            authenticator = XAIOAuthAuthenticator()
+            auth_data = authenticator.login()
+            click.echo(
+                f"xAI OAuth login successful. Credentials saved to {authenticator.auth_file}."
+            )
+            if auth_data.get("expires_at"):
+                click.echo(f"Access token expires at {auth_data['expires_at']}.")
+            return
+        raise click.UsageError(f"Unknown command: {' '.join(cli_args)}")
+
     if setup:
         from litellm.setup_wizard import run_setup_wizard
 

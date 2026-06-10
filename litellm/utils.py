@@ -5775,6 +5775,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         ]
         split_model = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
+        model_cost_custom_llm_provider = custom_llm_provider
         #########################
         provider_config: Optional[BaseLLMModelInfo] = None
         if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
@@ -5840,7 +5841,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                 key = _matched_key
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    model_info=_model_info,
+                    custom_llm_provider=model_cost_custom_llm_provider,
                 ):
                     _model_info = None
             if _model_info is None:
@@ -5849,7 +5851,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5858,7 +5861,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5867,7 +5871,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5876,7 +5881,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
 
@@ -5884,7 +5890,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
-
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
             )
@@ -5936,6 +5941,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 cache_read_input_token_cost_above_272k_tokens=_model_info.get(
                     "cache_read_input_token_cost_above_272k_tokens", None
                 ),
+                cache_read_input_token_cost_above_512k_tokens=_model_info.get(
+                    "cache_read_input_token_cost_above_512k_tokens", None
+                ),
                 cache_read_input_token_cost_flex=_model_info.get(
                     "cache_read_input_token_cost_flex", None
                 ),
@@ -5956,6 +5964,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 input_cost_per_token_above_272k_tokens=_model_info.get(
                     "input_cost_per_token_above_272k_tokens", None
+                ),
+                input_cost_per_token_above_512k_tokens=_model_info.get(
+                    "input_cost_per_token_above_512k_tokens", None
                 ),
                 input_cost_per_query=_model_info.get("input_cost_per_query", None),
                 input_cost_per_second=_model_info.get("input_cost_per_second", None),
@@ -6011,6 +6022,9 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 output_cost_per_token_above_272k_tokens=_model_info.get(
                     "output_cost_per_token_above_272k_tokens", None
+                ),
+                output_cost_per_token_above_512k_tokens=_model_info.get(
+                    "output_cost_per_token_above_512k_tokens", None
                 ),
                 output_cost_per_second=_model_info.get("output_cost_per_second", None),
                 output_cost_per_second_1080p=_model_info.get(
@@ -8922,14 +8936,33 @@ class ProviderConfigManager:
         elif litellm.LlmProviders.HOSTED_VLLM == provider:
             return litellm.HostedVLLMResponsesAPIConfig()
         elif litellm.LlmProviders.BEDROCK_MANTLE == provider:
-            # Only OpenAI gpt frontier models (gpt-5.x, and future gpt-6 etc.) are
-            # served on the /openai/v1/responses path. gpt-oss and every non-OpenAI
-            # model on Mantle (nvidia, mistral, google, zai, ...) are chat-completions
-            # only and 400 on that path, so they fall through to None to keep the
-            # chat-completions emulation (see litellm/responses/main.py "config is None").
-            model_lower = model.lower() if model else ""
-            if "openai.gpt-" in model_lower and "gpt-oss" not in model_lower:
-                return litellm.BedrockMantleResponsesAPIConfig()
+            # Mantle serves Responses on two upstream paths. A model takes the
+            # /openai/v1/responses path when its price-map entry declares
+            # use_openai_responses_path (data-driven, so a non-gpt-named frontier
+            # model can be onboarded by JSON alone), or, as a fallback needing no
+            # price-map entry, when its name matches the openai.gpt- frontier
+            # convention (minus gpt-oss) -- this keeps a future gpt-6 routing
+            # correctly before its entry loads. Any other model declared
+            # mode=responses takes the standard /v1/responses path. Everything
+            # else returns None and keeps the chat-completions emulation (see
+            # responses/main.py "config is None").
+            if not model:
+                return None
+            model_lower = model.lower()
+            entry = litellm.model_cost.get(f"bedrock_mantle/{model}", {})
+            on_openai_path = entry.get("use_openai_responses_path") is True
+            name_is_frontier = (
+                "openai.gpt-" in model_lower and "gpt-oss" not in model_lower
+            )
+            if on_openai_path or name_is_frontier:
+                return litellm.BedrockMantleResponsesAPIConfig(use_openai_path=True)
+            try:
+                if get_model_info(model, "bedrock_mantle").get("mode") == "responses":
+                    return litellm.BedrockMantleResponsesAPIConfig(
+                        use_openai_path=False
+                    )
+            except Exception:
+                pass
             return None
         return None
 

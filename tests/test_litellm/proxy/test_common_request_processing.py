@@ -2269,6 +2269,36 @@ class TestHandleLLMApiExceptionDictDetail:
         assert proxy_exc.message == "Content blocked by guardrail"
         assert proxy_exc.provider_specific_fields is None
 
+    async def test_not_found_error_preserves_404(self):
+        """NotFoundError with status_code=404 should map to ProxyException code=404."""
+        from litellm.exceptions import NotFoundError
+
+        exc = NotFoundError(
+            message="Model gemini-3.1-flash-lite-preview not found",
+            model="gemini-3.1-flash-lite-preview",
+            llm_provider="gemini",
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.code == "404"
+        assert "NotFoundError" in proxy_exc.message
+
+    async def test_exception_with_status_code_propagates(self):
+        """Exception with a statically-set status_code should propagate it."""
+        from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+        exc = VertexAIError(
+            status_code=429,
+            message="Rate limit exceeded",
+        )
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.code == "429"
+
+    async def test_exception_without_status_code_defaults_to_500(self):
+        """Exception with no status_code attribute defaults to 500."""
+        exc = ValueError("Something broke")
+        proxy_exc = await self._invoke(exc)
+        assert proxy_exc.code == "500"
+
 
 class TestAsyncStreamingDataGeneratorFastPath:
     """Fast/slow path branching in async_streaming_data_generator."""

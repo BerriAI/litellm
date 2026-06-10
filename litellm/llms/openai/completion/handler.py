@@ -49,6 +49,8 @@ class OpenAITextCompletion(BaseLLM):
         headers: Optional[dict] = None,
     ):
         try:
+            if headers:
+                optional_params = {**optional_params, "extra_headers": headers}
             if headers is None:
                 headers = self.validate_environment(api_key=api_key)
             if model is None or messages is None:

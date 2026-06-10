@@ -86,7 +86,7 @@ class TestContextCachingEndpoints:
         cached_content = "cached_content_123"
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -129,7 +129,7 @@ class TestContextCachingEndpoints:
         mock_separate.return_value = ([], self.sample_messages)  # No cached messages
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -177,7 +177,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -254,7 +254,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = self.context_caching.check_and_create_cache(
@@ -324,7 +324,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute and Assert
         with pytest.raises(VertexAIError) as exc_info:
@@ -364,7 +364,7 @@ class TestContextCachingEndpoints:
         cached_content = "cached_content_123"
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -404,7 +404,7 @@ class TestContextCachingEndpoints:
         mock_separate.return_value = ([], self.sample_messages)
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -453,7 +453,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -535,7 +535,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute
         result = await self.context_caching.async_check_and_create_cache(
@@ -606,7 +606,7 @@ class TestContextCachingEndpoints:
 
         optional_params = self.sample_optional_params.copy()
         test_project = "test_project"
-        test_location = "test_location"
+        test_location = "us-central1"
 
         # Execute and Assert
         with pytest.raises(VertexAIError) as exc_info:
@@ -648,7 +648,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Mock the check_cache to return existing cache so we don't make HTTP calls
             with patch.object(
@@ -694,7 +694,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Execute
             result = self.context_caching.check_and_create_cache(
@@ -735,7 +735,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Execute
             result = await self.context_caching.async_check_and_create_cache(
@@ -778,7 +778,7 @@ class TestContextCachingEndpoints:
             optional_params = self.sample_optional_params.copy()
             original_tools = optional_params["tools"].copy()
             test_project = "test_project"
-            test_location = "test_location"
+            test_location = "us-central1"
 
             # Mock the async_check_cache to return existing cache so we don't make HTTP calls
             with patch.object(
@@ -837,7 +837,7 @@ class TestContextCachingEndpoints:
                     logging_obj=self.mock_logging,
                     custom_llm_provider=custom_llm_provider,
                     vertex_project="test_project",
-                    vertex_location="test_location",
+                    vertex_location="us-central1",
                     vertex_auth_header="vertext_test_token",
                 )
 
@@ -870,7 +870,7 @@ class TestContextCachingEndpoints:
                 logging_obj=self.mock_logging,
                 custom_llm_provider=custom_llm_provider,
                 vertex_project="test_project",
-                vertex_location="test_location",
+                vertex_location="us-central1",
                 vertex_auth_header="vertext_test_token",
             )
 
@@ -908,7 +908,7 @@ class TestContextCachingEndpoints:
                     logging_obj=self.mock_logging,
                     custom_llm_provider=custom_llm_provider,
                     vertex_project="test_project",
-                    vertex_location="test_location",
+                    vertex_location="us-central1",
                     vertex_auth_header="vertext_test_token",
                 )
 
@@ -942,7 +942,7 @@ class TestContextCachingEndpoints:
                 logging_obj=self.mock_logging,
                 custom_llm_provider=custom_llm_provider,
                 vertex_project="test_project",
-                vertex_location="test_location",
+                vertex_location="us-central1",
                 vertex_auth_header="vertext_test_token",
             )
 
@@ -1002,7 +1002,7 @@ class TestContextCachingEndpoints:
             logging_obj=self.mock_logging,
             custom_llm_provider=custom_llm_provider,
             vertex_project="test_project",
-            vertex_location="test_location",
+            vertex_location="us-central1",
             vertex_auth_header="vertext_test_token",
         )
 
@@ -1072,7 +1072,7 @@ class TestContextCachingEndpoints:
             logging_obj=self.mock_logging,
             custom_llm_provider=custom_llm_provider,
             vertex_project="test_project",
-            vertex_location="test_location",
+            vertex_location="us-central1",
             vertex_auth_header="vertext_test_token",
         )
 
@@ -1138,7 +1138,7 @@ class TestContextCachingEndpoints:
             logging_obj=self.mock_logging,
             custom_llm_provider=custom_llm_provider,
             vertex_project="test_project",
-            vertex_location="test_location",
+            vertex_location="us-central1",
             vertex_auth_header="vertext_test_token",
         )
 
@@ -1205,7 +1205,7 @@ class TestContextCachingEndpoints:
             logging_obj=self.mock_logging,
             custom_llm_provider=custom_llm_provider,
             vertex_project="test_project",
-            vertex_location="test_location",
+            vertex_location="us-central1",
             vertex_auth_header="vertext_test_token",
         )
 
@@ -1280,7 +1280,7 @@ class TestContextCachingEndpoints:
             logging_obj=self.mock_logging,
             custom_llm_provider=custom_llm_provider,
             vertex_project="test_project",
-            vertex_location="test_location",
+            vertex_location="us-central1",
             vertex_auth_header="vertext_test_token",
         )
 
@@ -1336,7 +1336,7 @@ class TestContextCachingEndpoints:
                 logging_obj=self.mock_logging,
                 custom_llm_provider=custom_llm_provider,
                 vertex_project="test_project",
-                vertex_location="test_location",
+                vertex_location="us-central1",
                 vertex_auth_header="vertext_test_token",
             )
 
@@ -1390,7 +1390,7 @@ class TestContextCachingEndpoints:
             cached_content=None,
             custom_llm_provider=custom_llm_provider,
             vertex_project="test_project",
-            vertex_location="test_location",
+            vertex_location="us-central1",
             vertex_auth_header="test_token",
         )
 
@@ -1441,7 +1441,7 @@ class TestContextCachingEndpoints:
             cached_content=None,
             custom_llm_provider=custom_llm_provider,
             vertex_project="test_project",
-            vertex_location="test_location",
+            vertex_location="us-central1",
             vertex_auth_header="test_token",
         )
 

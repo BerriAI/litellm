@@ -1850,11 +1850,10 @@ async def prepare_key_update_data(
 
     if "budget_duration" in non_default_values:
         budget_duration = non_default_values.pop("budget_duration")
-        if (
-            budget_duration
-            and (isinstance(budget_duration, str))
-            and len(budget_duration) > 0
-        ):
+        if budget_duration is None:
+            non_default_values["budget_duration"] = None
+            non_default_values["budget_reset_at"] = None
+        elif isinstance(budget_duration, str) and len(budget_duration) > 0:
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
@@ -2518,7 +2517,7 @@ async def update_key_fn(  # noqa: PLR0915
                 },
             )
 
-        data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
+        data_json: dict = data.model_dump(exclude_unset=True)
         key = data_json.pop("key")
 
         # get the row from db
@@ -2587,6 +2586,17 @@ async def update_key_fn(  # noqa: PLR0915
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+        if data.spend is not None:
+            try:
+                from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+                token_to_invalidate = _hash_token_if_needed(key)
+                await _invalidate_spend_counter(
+                    counter_key=f"spend:key:{token_to_invalidate}"
+                )
+            except Exception:
+                pass
 
         asyncio.create_task(
             KeyManagementEventHooks.async_key_updated_hook(
@@ -4774,6 +4784,13 @@ async def reset_key_spend_fn(
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
         )
+
+        try:
+            from litellm.proxy.proxy_server import _invalidate_spend_counter
+
+            await _invalidate_spend_counter(counter_key=f"spend:key:{hashed_api_key}")
+        except Exception:
+            pass
 
         max_budget = updated_key.max_budget
         budget_reset_at = updated_key.budget_reset_at

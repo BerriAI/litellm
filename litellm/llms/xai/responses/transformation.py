@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
+from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
@@ -221,9 +222,26 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         )
 
         if not api_key:
+            from litellm.llms.xai.oauth import (
+                XAIOAuthAuthenticator,
+                XAIOAuthError,
+                should_use_xai_oauth,
+            )
+
+            if should_use_xai_oauth(litellm_params.model_dump()):
+                try:
+                    api_key = XAIOAuthAuthenticator().get_access_token()
+                except XAIOAuthError as exc:
+                    raise AuthenticationError(
+                        model=model,
+                        llm_provider=self.custom_llm_provider.value,
+                        message=str(exc),
+                    ) from exc
+
+        if not api_key:
             raise ValueError(
                 "XAI API key is required. Set api_key, litellm.xai_key, "
-                "litellm.api_key, or XAI_API_KEY."
+                "litellm.api_key, XAI_API_KEY, or use_xai_oauth=True."
             )
 
         headers.update(
@@ -244,12 +262,20 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Returns:
             str: The full URL for the XAI /responses endpoint
         """
-        api_base = (
-            api_base
-            or litellm.api_base
-            or get_secret_str("XAI_API_BASE")
-            or XAI_API_BASE
+        from litellm.llms.xai.oauth import XAIOAuthAuthenticator, should_use_xai_oauth
+
+        api_key = XAIModelInfo.get_api_key(
+            litellm_params.get("api_key"), legacy_generic_before_env=True
         )
+        if should_use_xai_oauth(litellm_params) and not api_key:
+            api_base = XAIOAuthAuthenticator().get_api_base()
+        else:
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("XAI_API_BASE")
+                or XAI_API_BASE
+            )
 
         # Remove trailing slashes
         api_base = api_base.rstrip("/")

@@ -328,6 +328,41 @@ def test_generic_cost_per_token_gpt54_above_272k_tokens():
     assert round(completion_cost, 10) == round(expected_completion, 10)
 
 
+def test_generic_cost_per_token_minimax_m3_above_512k_tokens():
+    """MiniMax-M3: prompts >512K input tokens priced at 2x input, output, and cache read."""
+    model = "minimax/MiniMax-M3"
+    custom_llm_provider = "minimax"
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_cost_map = litellm.model_cost[model]
+    prompt_tokens = 600000
+    cached_tokens = 100000
+    completion_tokens = 1000
+    usage = Usage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=prompt_tokens + completion_tokens,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=cached_tokens),
+    )
+    prompt_cost, completion_cost = generic_cost_per_token(
+        model=model,
+        usage=usage,
+        custom_llm_provider=custom_llm_provider,
+    )
+    expected_prompt = (
+        model_cost_map["input_cost_per_token_above_512k_tokens"]
+        * (prompt_tokens - cached_tokens)
+        + model_cost_map["cache_read_input_token_cost_above_512k_tokens"]
+        * cached_tokens
+    )
+    expected_completion = (
+        model_cost_map["output_cost_per_token_above_512k_tokens"] * completion_tokens
+    )
+    assert round(prompt_cost, 10) == round(expected_prompt, 10)
+    assert round(completion_cost, 10) == round(expected_completion, 10)
+
+
 def test_generic_cost_per_token_gpt55():
     """gpt-5.5: base pricing — $5/1M input, $30/1M output, $0.50/1M cached input."""
     model = "gpt-5.5"

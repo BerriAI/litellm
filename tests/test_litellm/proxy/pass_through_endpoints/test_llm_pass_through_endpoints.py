@@ -24,11 +24,13 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     get_vertex_base_url,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
+    mistral_proxy_route,
     openai_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
 )
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.passthrough_endpoints.vertex_ai import VertexPassThroughCredentials
 
 
@@ -1092,9 +1094,9 @@ class TestVertexAIPassThroughHandler:
 
         assert result is not None
         assert result["result"] is not None
-        assert result["kwargs"].get("custom_llm_provider") == "gemini", (
-            "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
-        )
+        assert (
+            result["kwargs"].get("custom_llm_provider") == "gemini"
+        ), "Google AI Studio embedContent URLs must set custom_llm_provider=gemini, not vertex_ai"
         assert result["kwargs"].get("model") == "gemini-embedding-2-preview"
         mock_completion_cost.assert_called_once()
 
@@ -1259,6 +1261,78 @@ async def test_is_streaming_request_fn():
     mock_request.headers = {"content-type": "multipart/form-data"}
     mock_request.form = AsyncMock(return_value={"stream": "true"})
     assert await is_streaming_request_fn(mock_request) is True
+
+
+@pytest.mark.asyncio
+async def test_mistral_passthrough_accepts_multipart_without_json_parsing():
+    boundary = "----litellm-test-boundary"
+    body = (
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="purpose"\r\n\r\n'
+        "ocr\r\n"
+        f"--{boundary}\r\n"
+        'Content-Disposition: form-data; name="file"; filename="document.pdf"\r\n'
+        "Content-Type: application/pdf\r\n\r\n"
+        "%PDF-1.4 test\r\n"
+        f"--{boundary}--\r\n"
+    ).encode("utf-8")
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": body,
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mistral/v1/files",
+            "headers": [
+                (
+                    b"content-type",
+                    f"multipart/form-data; boundary={boundary}".encode("utf-8"),
+                )
+            ],
+            "query_string": b"",
+        },
+        receive=receive,
+    )
+
+    captured_kwargs = {}
+
+    async def fake_endpoint(request, fastapi_response, user_api_key_dict):
+        return {"ok": True}
+
+    def fake_create_pass_through_route(**kwargs):
+        captured_kwargs.update(kwargs)
+        return fake_endpoint
+
+    user_api_key_dict = UserAPIKeyAuth(token="test-key")
+
+    with (
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="mistral-test-key",
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=fake_create_pass_through_route,
+        ),
+    ):
+        response = await mistral_proxy_route(
+            endpoint="v1/files",
+            request=request,
+            fastapi_response=Response(),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    assert response == {"ok": True}
+    assert captured_kwargs["is_streaming_request"] is False
+    assert captured_kwargs["custom_headers"] == {
+        "Authorization": "Bearer mistral-test-key"
+    }
 
 
 class TestBedrockLLMProxyRoute:

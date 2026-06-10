@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from typing_extensions import TypedDict
 
 import litellm
-from litellm import DualCache, ModelResponse
+from litellm import DualCache, EmbeddingResponse, ModelResponse, TextCompletionResponse
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
@@ -570,7 +570,9 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
 
             total_tokens = 0
 
-            if isinstance(response_obj, ModelResponse):
+            if isinstance(
+                response_obj, (ModelResponse, EmbeddingResponse, TextCompletionResponse)
+            ):
                 total_tokens = response_obj.usage.total_tokens  # type: ignore
 
             # ------------
@@ -659,7 +661,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_user_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -692,7 +697,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_team_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
@@ -725,7 +733,10 @@ class _PROXY_MaxParallelRequestsHandler(CustomLogger):
             if user_api_key_end_user_id is not None:
                 total_tokens = 0
 
-                if isinstance(response_obj, ModelResponse):
+                if isinstance(
+                    response_obj,
+                    (ModelResponse, EmbeddingResponse, TextCompletionResponse),
+                ):
                     total_tokens = response_obj.usage.total_tokens  # type: ignore
 
                 request_count_api_key = (
