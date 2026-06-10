@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { ExternalLink, ChevronDown } from "lucide-react";
 
 interface HelpLinkProps {
@@ -40,12 +41,8 @@ interface DocsMenuProps {
  *   Custom Pricing Documentation
  * </HelpLink>
  */
-export const HelpLink: React.FC<HelpLinkProps> = ({
-  href,
-  children = "Learn more",
-  variant = "inline",
-  className = "",
-}) => {
+export const HelpLink: React.FC<HelpLinkProps> = ({ href, children, variant = "inline", className = "" }) => {
+  const { t } = useTranslation();
   const baseClasses =
     "inline-flex items-center gap-1.5 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded";
 
@@ -62,11 +59,11 @@ export const HelpLink: React.FC<HelpLinkProps> = ({
       target="_blank"
       rel="noopener noreferrer"
       className={`${baseClasses} ${variantClasses[variant]} ${className}`}
-      title="Open documentation in a new tab"
+      title={t("helpLink.openDocsTitle")}
     >
-      <span>{children}</span>
+      <span>{children ?? t("common.learnMore")}</span>
       <ExternalLink className="h-3.5 w-3.5 flex-shrink-0" aria-hidden="true" />
-      <span className="sr-only">(opens in a new tab)</span>
+      <span className="sr-only">{t("helpLink.opensInNewTab")}</span>
     </a>
   );
 };
@@ -81,7 +78,8 @@ interface HelpIconProps {
   learnMoreText?: string;
 }
 
-export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, learnMoreText = "Learn more" }) => {
+export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, learnMoreText }) => {
+  const { t } = useTranslation();
   const [showTooltip, setShowTooltip] = React.useState(false);
 
   return (
@@ -93,7 +91,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
         onMouseLeave={() => setShowTooltip(false)}
         onFocus={() => setShowTooltip(true)}
         onBlur={() => setShowTooltip(false)}
-        aria-label="Help information"
+        aria-label={t("helpLink.helpIconAriaLabel")}
       >
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <circle cx="12" cy="12" r="10" strokeWidth="1.5" />
@@ -114,7 +112,7 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
               className="inline-flex items-center gap-1 text-blue-300 hover:text-blue-200 font-medium"
               style={{ pointerEvents: "auto" }}
             >
-              {learnMoreText}
+              {learnMoreText ?? t("common.learnMore")}
               <ExternalLink className="h-3 w-3" aria-hidden="true" />
             </a>
           )}
@@ -144,7 +142,8 @@ export const HelpIcon: React.FC<HelpIconProps> = ({ content, learnMoreHref, lear
  *   Docs
  * </DocsMenu>
  */
-export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", className = "" }) => {
+export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children, className = "" }) => {
+  const { t } = useTranslation();
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -173,7 +172,7 @@ export const DocsMenu: React.FC<DocsMenuProps> = ({ items, children = "Docs", cl
         aria-expanded={isOpen}
         aria-haspopup="true"
       >
-        <span>{children}</span>
+        <span>{children ?? t("helpLink.docsMenuLabel")}</span>
         <ChevronDown className={`h-3 w-3 transition-transform ${isOpen ? "rotate-180" : ""}`} aria-hidden="true" />
       </button>
 

@@ -565,6 +565,12 @@
     "cardSubtitle": "应用于此团队的全局和团队专属护栏",
     "inlineTitle": "护栏设置"
   },
+  "helpLink": {
+    "openDocsTitle": "在新标签页中打开文档",
+    "opensInNewTab": "（在新标签页中打开）",
+    "helpIconAriaLabel": "帮助信息",
+    "docsMenuLabel": "文档"
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",

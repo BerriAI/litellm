@@ -565,6 +565,12 @@
     "cardSubtitle": "Global and team-specific guardrails applied to this team",
     "inlineTitle": "Guardrails Settings"
   },
+  "helpLink": {
+    "openDocsTitle": "Open documentation in a new tab",
+    "opensInNewTab": "(opens in a new tab)",
+    "helpIconAriaLabel": "Help information",
+    "docsMenuLabel": "Docs"
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",
