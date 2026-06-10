@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import { MarginConfig } from "./types";
@@ -30,6 +31,7 @@ export interface AddMarginParams {
 }
 
 export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMarginConfigReturn {
+  const { t } = useTranslation();
   const [marginConfig, setMarginConfig] = useState<MarginConfig>({});
 
   const fetchMarginConfig = useCallback(async () => {
@@ -53,7 +55,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       }
     } catch (error) {
       console.error("Error fetching margin config:", error);
-      NotificationsManager.fromBackend("Failed to fetch margin configuration");
+      NotificationsManager.fromBackend(t("costTracking.useMarginConfig.fetchFailed"));
     }
   }, [accessToken]);
 
@@ -73,7 +75,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
         });
 
         if (response.ok) {
-          NotificationsManager.success("Margin configuration updated successfully");
+          NotificationsManager.success(t("costTracking.useMarginConfig.updateSuccess"));
           await fetchMarginConfig();
         } else {
           const errorData = await response.json();
@@ -82,7 +84,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
         }
       } catch (error) {
         console.error("Error updating margin config:", error);
-        NotificationsManager.fromBackend("Failed to update margin configuration");
+        NotificationsManager.fromBackend(t("costTracking.useMarginConfig.updateFailed"));
       }
     },
     [accessToken, fetchMarginConfig],
@@ -93,7 +95,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       const { selectedProvider, marginType, percentageValue, fixedAmountValue } = params;
 
       if (!selectedProvider) {
-        NotificationsManager.fromBackend("Please select a provider");
+        NotificationsManager.fromBackend(t("costTracking.useMarginConfig.selectProvider"));
         return false;
       }
 
@@ -103,7 +105,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       } else {
         const backendValue = getProviderBackendValue(selectedProvider);
         if (!backendValue) {
-          NotificationsManager.fromBackend("Invalid provider selected");
+          NotificationsManager.fromBackend(t("costTracking.useMarginConfig.invalidProvider"));
           return false;
         }
         providerValue = backendValue;
@@ -112,7 +114,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       if (marginConfig[providerValue]) {
         const displayName =
           providerValue === "global" ? "Global" : Providers[selectedProvider as keyof typeof Providers];
-        NotificationsManager.fromBackend(`Margin for ${displayName} already exists. Edit it in the table above.`);
+        NotificationsManager.fromBackend(t("costTracking.useMarginConfig.marginAlreadyExists", { displayName }));
         return false;
       }
 
@@ -120,14 +122,14 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       if (marginType === "percentage") {
         const percentValue = parseFloat(percentageValue);
         if (isNaN(percentValue) || percentValue < 0 || percentValue > 1000) {
-          NotificationsManager.fromBackend("Percentage must be between 0% and 1000%");
+          NotificationsManager.fromBackend(t("costTracking.useMarginConfig.invalidPercentageRange"));
           return false;
         }
         marginValue = percentValue / 100;
       } else {
         const fixedValue = parseFloat(fixedAmountValue);
         if (isNaN(fixedValue) || fixedValue < 0) {
-          NotificationsManager.fromBackend("Fixed amount must be non-negative");
+          NotificationsManager.fromBackend(t("costTracking.useMarginConfig.invalidFixedAmount"));
           return false;
         }
         marginValue = { fixed_amount: fixedValue };

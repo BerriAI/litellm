@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import { DiscountConfig } from "./types";
@@ -20,6 +21,7 @@ export interface UseDiscountConfigReturn {
 }
 
 export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseDiscountConfigReturn {
+  const { t } = useTranslation();
   const [discountConfig, setDiscountConfig] = useState<DiscountConfig>({});
 
   const fetchDiscountConfig = useCallback(async () => {
@@ -43,7 +45,7 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
       }
     } catch (error) {
       console.error("Error fetching discount config:", error);
-      NotificationsManager.fromBackend("Failed to fetch discount configuration");
+      NotificationsManager.fromBackend(t("costTracking.useDiscountConfig.fetchFailed"));
     }
   }, [accessToken]);
 
@@ -63,7 +65,7 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
         });
 
         if (response.ok) {
-          NotificationsManager.success("Discount configuration updated successfully");
+          NotificationsManager.success(t("costTracking.useDiscountConfig.updateSuccess"));
           await fetchDiscountConfig();
         } else {
           const errorData = await response.json();
@@ -72,7 +74,7 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
         }
       } catch (error) {
         console.error("Error updating discount config:", error);
-        NotificationsManager.fromBackend("Failed to update discount configuration");
+        NotificationsManager.fromBackend(t("costTracking.useDiscountConfig.updateFailed"));
       }
     },
     [accessToken, fetchDiscountConfig],
@@ -81,26 +83,28 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
   const handleAddProvider = useCallback(
     async (selectedProvider: string | undefined, newDiscount: string): Promise<boolean> => {
       if (!selectedProvider || !newDiscount) {
-        NotificationsManager.fromBackend("Please select a provider and enter discount percentage");
+        NotificationsManager.fromBackend(t("costTracking.useDiscountConfig.selectProviderAndDiscount"));
         return false;
       }
 
       const percentageValue = parseFloat(newDiscount);
       if (isNaN(percentageValue) || percentageValue < 0 || percentageValue > 100) {
-        NotificationsManager.fromBackend("Discount must be between 0% and 100%");
+        NotificationsManager.fromBackend(t("costTracking.useDiscountConfig.invalidDiscountRange"));
         return false;
       }
 
       const providerValue = getProviderBackendValue(selectedProvider);
 
       if (!providerValue) {
-        NotificationsManager.fromBackend("Invalid provider selected");
+        NotificationsManager.fromBackend(t("costTracking.useDiscountConfig.invalidProvider"));
         return false;
       }
 
       if (discountConfig[providerValue]) {
         NotificationsManager.fromBackend(
-          `Discount for ${Providers[selectedProvider as keyof typeof Providers]} already exists. Edit it in the table above.`,
+          t("costTracking.useDiscountConfig.discountAlreadyExists", {
+            providerName: Providers[selectedProvider as keyof typeof Providers],
+          }),
         );
         return false;
       }
