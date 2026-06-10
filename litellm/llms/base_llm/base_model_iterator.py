@@ -50,6 +50,11 @@ def convert_model_response_to_streaming(
             model=model_response.model,
             choices=streaming_choices,
         )
+        # Carry usage onto the streaming chunk so fake-streamed responses
+        # (e.g. Vertex AI Gemma :predict) still report token counts.
+        usage = getattr(model_response, "usage", None)
+        if usage is not None:
+            setattr(processed_chunk, "usage", usage)
         return processed_chunk
     except Exception as e:
         raise ValueError(
