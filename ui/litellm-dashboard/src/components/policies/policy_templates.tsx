@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Card, Button, Spin, Checkbox } from "antd";
+import { useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 import {
   ShieldCheckIcon,
@@ -35,6 +36,8 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
   complexity,
   onUseTemplate,
 }) => {
+  const { t } = useTranslation();
+
   const getComplexityStyle = () => {
     switch (complexity) {
       case "Low":
@@ -56,7 +59,7 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
           <Icon className={`h-6 w-6 ${iconColor}`} />
         </div>
         <span className={`px-2.5 py-0.5 rounded-full text-xs font-medium border ${getComplexityStyle()}`}>
-          {complexity} Complexity
+          {t("policies.policyTemplates.complexityLabel", { complexity })}
         </span>
       </div>
 
@@ -78,14 +81,14 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
 
       {inherits && (
         <div className="mb-4 text-xs">
-          <span className="text-gray-500">Inherits from: </span>
+          <span className="text-gray-500">{t("policies.policyTemplates.inheritsFrom")} </span>
           <span className="font-medium text-gray-700 bg-gray-100 px-2 py-0.5 rounded">{inherits}</span>
         </div>
       )}
 
       <div className="mb-6">
         <span className="text-xs font-medium text-gray-500 uppercase tracking-wider block mb-2">
-          Included Guardrails
+          {t("policies.policyTemplates.includedGuardrails")}
         </span>
         <div className="flex flex-wrap gap-2">
           {guardrails.map((g) => (
@@ -100,7 +103,7 @@ const PolicyTemplateCard: React.FC<PolicyTemplateCardProps> = ({
       </div>
 
       <Button type="primary" block className="mt-auto" onClick={onUseTemplate}>
-        Use Template
+        {t("policies.policyTemplates.useTemplate")}
       </Button>
     </Card>
   );
@@ -128,6 +131,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
   onTemplatesLoaded,
   accessToken,
 }) => {
+  const { t } = useTranslation();
   const [templates, setTemplates] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
@@ -181,7 +185,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
         onTemplatesLoaded?.(data);
       } catch (error) {
         console.error("Error fetching policy templates:", error);
-        MessageManager.error("Failed to fetch policy templates");
+        MessageManager.error(t("policies.policyTemplates.fetchFailed"));
       } finally {
         setIsLoading(false);
       }
@@ -193,7 +197,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
   if (isLoading) {
     return (
       <div className="flex justify-center items-center py-20">
-        <Spin size="large" tip="Loading policy templates..." />
+        <Spin size="large" tip={t("policies.policyTemplates.loadingTemplates")} />
       </div>
     );
   }
@@ -202,16 +206,14 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
     <div className="space-y-6">
       <div className="flex justify-between items-end">
         <div>
-          <h2 className="text-lg font-medium text-gray-900">Policy Templates</h2>
-          <p className="text-sm text-gray-500 mt-1">
-            Start with a pre-configured policy template to quickly set up guardrails for your organization.
-          </p>
+          <h2 className="text-lg font-medium text-gray-900">{t("policies.policyTemplates.title")}</h2>
+          <p className="text-sm text-gray-500 mt-1">{t("policies.policyTemplates.subtitle")}</p>
         </div>
         <Button type="default" onClick={onOpenAiSuggestion} className="flex items-center gap-1.5">
           <svg className="w-4 h-4" viewBox="0 0 16 16" fill="currentColor">
             <path d="M8 1l1.5 3.5L13 6l-3.5 1.5L8 11 6.5 7.5 3 6l3.5-1.5L8 1zm4 7l.75 1.75L14.5 10.5l-1.75.75L12 13l-.75-1.75L9.5 10.5l1.75-.75L12 8zM4 9l.75 1.75L6.5 11.5l-1.75.75L4 14l-.75-1.75L1.5 11.5l1.75-.75L4 9z" />
           </svg>
-          Use AI to find templates
+          {t("policies.policyTemplates.useAiToFind")}
         </Button>
       </div>
 
@@ -221,10 +223,10 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
           <div className="w-52 flex-shrink-0">
             <div className="sticky top-4">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-sm font-semibold text-gray-900">Categories</span>
+                <span className="text-sm font-semibold text-gray-900">{t("policies.policyTemplates.categories")}</span>
                 {selectedTags.size > 0 && (
                   <button onClick={handleClearAll} className="text-xs text-blue-600 hover:text-blue-800">
-                    Clear all
+                    {t("common.clear")}
                   </button>
                 )}
               </div>
@@ -252,7 +254,10 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
         <div className="flex-1">
           {selectedTags.size > 0 && (
             <div className="mb-4 text-sm text-gray-500">
-              Showing {filteredTemplates.length} of {templates.length} templates
+              {t("policies.policyTemplates.showingCount", {
+                filtered: filteredTemplates.length,
+                total: templates.length,
+              })}
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
@@ -275,9 +280,9 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
 
           {filteredTemplates.length === 0 && (
             <div className="text-center py-12 text-gray-500">
-              <p>No templates match the selected filters.</p>
+              <p>{t("policies.policyTemplates.noTemplatesMatch")}</p>
               <button onClick={handleClearAll} className="text-blue-600 hover:text-blue-800 mt-2 text-sm">
-                Clear all filters
+                {t("policies.policyTemplates.clearAllFilters")}
               </button>
             </div>
           )}

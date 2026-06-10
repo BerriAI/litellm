@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Modal, Spin, Radio, Select } from "antd";
 import { Button, TextInput } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 import { modelHubCall, enrichPolicyTemplateStream } from "../networking";
 
 interface TemplateParameter {
@@ -31,6 +32,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
   isLoading = false,
   accessToken,
 }) => {
+  const { t } = useTranslation();
   const [parameterValues, setParameterValues] = useState<Record<string, string>>({});
   const [competitorMode, setCompetitorMode] = useState<"ai" | "manual">("ai");
   const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
@@ -190,7 +192,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       title={
         <div>
           <h3 className="text-lg font-semibold mb-1">{template?.title}</h3>
-          <p className="text-sm text-gray-500 font-normal">Configure competitor blocking for your brand</p>
+          <p className="text-sm text-gray-500 font-normal">{t("policies.templateParameterModal.subtitle")}</p>
         </div>
       }
       open={visible}
@@ -198,10 +200,12 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
       width={700}
       footer={[
         <Button key="cancel" variant="secondary" onClick={onCancel} disabled={isLoading}>
-          Cancel
+          {t("common.cancel")}
         </Button>,
         <Button key="confirm" onClick={handleConfirm} loading={isLoading} disabled={!canContinue || isLoading}>
-          {isLoading ? "Creating guardrails..." : "Continue"}
+          {isLoading
+            ? t("policies.templateParameterModal.creatingGuardrails")
+            : t("policies.templateParameterModal.continue")}
         </Button>,
       ]}
     >
@@ -228,7 +232,9 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
         {hasEnrichment && (
           <>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Competitor Discovery</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                {t("policies.templateParameterModal.competitorDiscovery")}
+              </label>
               <Radio.Group
                 value={competitorMode}
                 onChange={(e) => setCompetitorMode(e.target.value)}
@@ -236,10 +242,10 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               >
                 <div className="flex gap-3">
                   <Radio.Button value="ai" className="flex-1 text-center">
-                    ✨ Use AI
+                    ✨ {t("policies.templateParameterModal.useAi")}
                   </Radio.Button>
                   <Radio.Button value="manual" className="flex-1 text-center">
-                    Enter Manually
+                    {t("policies.templateParameterModal.enterManually")}
                   </Radio.Button>
                 </div>
               </Radio.Group>
@@ -248,11 +254,11 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
             {/* Brand Name */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Your Brand Name
+                {t("policies.templateParameterModal.brandName")}
                 <span className="text-red-500 ml-1">*</span>
               </label>
               <TextInput
-                placeholder="e.g. Acme Airlines"
+                placeholder={t("policies.templateParameterModal.brandNamePlaceholder")}
                 value={parameterValues[enrichmentParam || "brand_name"] || ""}
                 onChange={(e) =>
                   setParameterValues((prev) => ({
@@ -267,11 +273,11 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               <>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Select Model
+                    {t("policies.templateParameterModal.selectModel")}
                     <span className="text-red-500 ml-1">*</span>
                   </label>
                   <Select
-                    placeholder="Select a model to generate names"
+                    placeholder={t("policies.templateParameterModal.selectModelPlaceholder")}
                     value={selectedModel}
                     onChange={(value) => setSelectedModel(value)}
                     loading={isLoadingModels}
@@ -288,7 +294,9 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                   disabled={!selectedModel || !brandNameFilled || isGenerating}
                   className="w-full"
                 >
-                  {isGenerating ? "✨ Generating names..." : "✨ Generate Competitor Names"}
+                  {isGenerating
+                    ? `✨ ${t("policies.templateParameterModal.generatingNames")}`
+                    : `✨ ${t("policies.templateParameterModal.generateCompetitorNames")}`}
                 </Button>
               </>
             )}
@@ -296,7 +304,7 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
             {/* Competitor Tags */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Competitor Names
+                {t("policies.templateParameterModal.competitorNames")}
                 {competitorTags.length > 0 && (
                   <span className="text-gray-400 font-normal ml-2">({competitorTags.length})</span>
                 )}
@@ -304,14 +312,14 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               <Select
                 mode="tags"
                 style={{ width: "100%" }}
-                placeholder="Type a name and press Enter to add"
+                placeholder={t("policies.templateParameterModal.competitorNamesPlaceholder")}
                 value={competitorTags}
                 onChange={(values) => setCompetitorTags(values)}
                 tokenSeparators={[","]}
                 open={false}
                 suffixIcon={null}
               />
-              <p className="text-xs text-gray-500 mt-1">Type a name and press Enter to add. Click ✕ to remove.</p>
+              <p className="text-xs text-gray-500 mt-1">{t("policies.templateParameterModal.competitorNamesHint")}</p>
               {statusMessage && (
                 <div className="flex items-center gap-2 mt-2 p-2 bg-blue-50 rounded border border-blue-100">
                   <Spin size="small" />
@@ -320,8 +328,9 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
               )}
               {Object.keys(variationsMap).length > 0 && !statusMessage && (
                 <p className="text-xs text-green-600 mt-1">
-                  ✓ {Object.values(variationsMap).flat().length} alternate spellings & variations auto-generated for
-                  guardrail matching
+                  {t("policies.templateParameterModal.variationsGenerated", {
+                    count: Object.values(variationsMap).flat().length,
+                  })}
                 </p>
               )}
             </div>
@@ -329,10 +338,12 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
             {/* Refinement input — shown after initial generation in AI mode */}
             {competitorMode === "ai" && hasGenerated && competitorTags.length > 0 && (
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Refine List</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {t("policies.templateParameterModal.refineList")}
+                </label>
                 <div className="flex gap-2">
                   <TextInput
-                    placeholder="e.g. add 10 more from Asia, increase to 50 total..."
+                    placeholder={t("policies.templateParameterModal.refinePlaceholder")}
                     value={refinementInput}
                     onChange={(e) => setRefinementInput(e.target.value)}
                     onKeyDown={(e) => {
@@ -348,12 +359,10 @@ const TemplateParameterModal: React.FC<TemplateParameterModalProps> = ({
                     disabled={!refinementInput.trim() || isRefining}
                     size="xs"
                   >
-                    {isRefining ? "..." : "Send"}
+                    {isRefining ? "..." : t("policies.templateParameterModal.send")}
                   </Button>
                 </div>
-                <p className="text-xs text-gray-400 mt-1">
-                  Give instructions to add, remove, or change competitors. Press Enter to send.
-                </p>
+                <p className="text-xs text-gray-400 mt-1">{t("policies.templateParameterModal.refineHint")}</p>
               </div>
             )}
           </>

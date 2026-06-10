@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from "react";
 import { Card, Badge, Button } from "@tremor/react";
 import { ArrowLeftIcon, PencilIcon } from "@heroicons/react/outline";
 import { Descriptions, Tag, Spin, Divider, Typography, Alert } from "antd";
+import { useTranslation } from "react-i18next";
 import { Policy } from "./types";
 import { PipelineInfoDisplay } from "./pipeline_flow_builder";
 import { getResolvedGuardrails } from "../networking";
@@ -25,6 +26,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   isAdmin,
   getPolicy,
 }) => {
+  const { t } = useTranslation();
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [resolvedGuardrails, setResolvedGuardrails] = useState<string[]>([]);
@@ -70,10 +72,10 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   if (!policy) {
     return (
       <Card>
-        <Text type="danger">Policy not found</Text>
+        <Text type="danger">{t("policies.policyInfo.notFound")}</Text>
         <br />
         <Button onClick={onClose} className="mt-4">
-          Go Back
+          {t("common.back")}
         </Button>
       </Card>
     );
@@ -84,11 +86,11 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
       <div className="space-y-6">
         <div className="flex justify-between items-center">
           <Button variant="secondary" icon={ArrowLeftIcon} onClick={onClose}>
-            Back to Policies
+            {t("policies.policyInfo.backToPolicies")}
           </Button>
           {isAdmin && (
             <Button icon={PencilIcon} onClick={() => onEdit(policy)}>
-              Edit Policy
+              {t("policies.policyInfo.editPolicy")}
             </Button>
           )}
         </div>
@@ -96,25 +98,25 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
         <Title level={4}>{policy.policy_name}</Title>
 
         <Descriptions bordered column={1}>
-          <Descriptions.Item label="Policy ID">
+          <Descriptions.Item label={t("policies.policyInfo.policyId")}>
             <code className="text-xs bg-gray-100 px-2 py-1 rounded">{policy.policy_id}</code>
           </Descriptions.Item>
-          <Descriptions.Item label="Description">
-            {policy.description || <Text type="secondary">No description</Text>}
+          <Descriptions.Item label={t("common.description")}>
+            {policy.description || <Text type="secondary">{t("policies.policyInfo.noDescription")}</Text>}
           </Descriptions.Item>
-          <Descriptions.Item label="Inherits From">
+          <Descriptions.Item label={t("policies.policyInfo.inheritsFrom")}>
             {policy.inherit ? (
               <Badge color="blue" size="sm">
                 {policy.inherit}
               </Badge>
             ) : (
-              <Text type="secondary">None</Text>
+              <Text type="secondary">{t("common.none")}</Text>
             )}
           </Descriptions.Item>
-          <Descriptions.Item label="Created At">
+          <Descriptions.Item label={t("common.createdAt")}>
             {policy.created_at ? new Date(policy.created_at).toLocaleString() : "-"}
           </Descriptions.Item>
-          <Descriptions.Item label="Updated At">
+          <Descriptions.Item label={t("common.updatedAt")}>
             {policy.updated_at ? new Date(policy.updated_at).toLocaleString() : "-"}
           </Descriptions.Item>
         </Descriptions>
@@ -122,10 +124,13 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
         {policy.pipeline && (
           <>
             <Divider orientation="left">
-              <Text strong>Pipeline Flow</Text>
+              <Text strong>{t("policies.policyInfo.pipelineFlow")}</Text>
             </Divider>
             <Alert
-              message={`Pipeline (${policy.pipeline.mode} mode, ${policy.pipeline.steps.length} step${policy.pipeline.steps.length !== 1 ? "s" : ""})`}
+              message={t("policies.policyInfo.pipelineInfo", {
+                count: policy.pipeline.steps.length,
+                mode: policy.pipeline.mode,
+              })}
               type="info"
               showIcon
               style={{ marginBottom: 16 }}
@@ -135,16 +140,16 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
         )}
 
         <Divider orientation="left">
-          <Text strong>Guardrails Configuration</Text>
+          <Text strong>{t("policies.policyInfo.guardrailsConfiguration")}</Text>
         </Divider>
 
         {resolvedGuardrails.length > 0 && (
           <Alert
-            message="Resolved Guardrails"
+            message={t("policies.policyInfo.resolvedGuardrails")}
             description={
               <div>
                 <Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                  Final guardrails that will be applied (including inheritance):
+                  {t("policies.policyInfo.resolvedGuardrailsDesc")}
                 </Text>
                 <div className="flex flex-wrap gap-1">
                   {resolvedGuardrails.map((g) => (
@@ -162,7 +167,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
         )}
 
         <Descriptions bordered column={1}>
-          <Descriptions.Item label="Guardrails to Add">
+          <Descriptions.Item label={t("policies.policyInfo.guardrailsToAdd")}>
             <div className="flex flex-wrap gap-1">
               {policy.guardrails_add && policy.guardrails_add.length > 0 ? (
                 policy.guardrails_add.map((g) => (
@@ -171,11 +176,11 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
                   </Tag>
                 ))
               ) : (
-                <Text type="secondary">None</Text>
+                <Text type="secondary">{t("common.none")}</Text>
               )}
             </div>
           </Descriptions.Item>
-          <Descriptions.Item label="Guardrails to Remove">
+          <Descriptions.Item label={t("policies.policyInfo.guardrailsToRemove")}>
             <div className="flex flex-wrap gap-1">
               {policy.guardrails_remove && policy.guardrails_remove.length > 0 ? (
                 policy.guardrails_remove.map((g) => (
@@ -184,18 +189,18 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
                   </Tag>
                 ))
               ) : (
-                <Text type="secondary">None</Text>
+                <Text type="secondary">{t("common.none")}</Text>
               )}
             </div>
           </Descriptions.Item>
         </Descriptions>
 
         <Divider orientation="left">
-          <Text strong>Conditions</Text>
+          <Text strong>{t("policies.policyInfo.conditions")}</Text>
         </Divider>
 
         <Descriptions bordered column={1}>
-          <Descriptions.Item label="Model Condition">
+          <Descriptions.Item label={t("policies.policyInfo.modelCondition")}>
             {policy.condition?.model ? (
               <Tag color="purple">
                 {typeof policy.condition.model === "string"
@@ -203,7 +208,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
                   : JSON.stringify(policy.condition.model)}
               </Tag>
             ) : (
-              <Text type="secondary">No model condition (applies to all models)</Text>
+              <Text type="secondary">{t("policies.policyInfo.noModelCondition")}</Text>
             )}
           </Descriptions.Item>
         </Descriptions>
