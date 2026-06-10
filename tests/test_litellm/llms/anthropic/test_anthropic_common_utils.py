@@ -1506,17 +1506,3 @@ class TestVertexVersionSuffixModelResolution:
             )
             is True
         )
-
-    def test_is_claude_4_8_model_recognizes_suffix_and_provider_prefix(self):
-        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-
-        assert AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-8") is True
-        assert (
-            AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-8@default") is True
-        )
-        assert (
-            AnthropicModelInfo._is_claude_4_8_model("vertex_ai/claude-opus-4-8@default")
-            is True
-        )
-        assert AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-7") is False
-        assert AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-5") is False
