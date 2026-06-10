@@ -24,6 +24,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
+    SpecialModelNames,
     UserAPIKeyAuth,
     WebhookEvent,
 )
@@ -1052,7 +1053,14 @@ async def health_endpoint(
         # response but NOT in the background-cache /health response. This is
         # surfaced via the "warnings" field below so operators can fix the
         # missing model_info.id rather than guess at the discrepancy.
-        if len(user_api_key_dict.models) > 0:
+        # Keys granted SpecialModelNames.all_proxy_models carry the literal
+        # "all-proxy-models" entry, which matches no real model_name; treat
+        # them as unrestricted instead of filtering the list down to nothing.
+        restrict_to_allowed_models = (
+            len(user_api_key_dict.models) > 0
+            and SpecialModelNames.all_proxy_models.value not in user_api_key_dict.models
+        )
+        if restrict_to_allowed_models:
             allowed_models = set(user_api_key_dict.models)
             _llm_model_list = [
                 m for m in _llm_model_list if m.get("model_name") in allowed_models
@@ -1065,7 +1073,7 @@ async def health_endpoint(
             # other healthy model would still report healthy_count > 0 and
             # the targeted-503 path would never fire.
             targeted_ids = _resolve_targeted_model_ids(_llm_model_list, model, model_id)
-            if len(user_api_key_dict.models) > 0:
+            if restrict_to_allowed_models:
                 allowed_model_ids = {
                     (m.get("model_info") or {}).get("id")
                     for m in _llm_model_list
