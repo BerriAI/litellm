@@ -12641,15 +12641,6 @@ async def model_info_v1(  # noqa: PLR0915
         for model in all_models
     ]
 
-    from litellm.proxy.agent_endpoints.model_list_helpers import (
-        append_agents_to_model_info,
-    )
-
-    all_models = await append_agents_to_model_info(
-        models=all_models,
-        user_api_key_dict=user_api_key_dict,
-    )
-
     verbose_proxy_logger.debug("all_models: %s", all_models)
     return {"data": all_models}
 

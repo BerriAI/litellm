@@ -170,13 +170,6 @@ async def test_model_info_v1_list_path_translates_team_model_name(monkeypatch):
     monkeypatch.setattr(
         ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
     )
-    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
-
-    monkeypatch.setattr(
-        mlh,
-        "append_agents_to_model_info",
-        AsyncMock(side_effect=lambda models, **kw: models),
-    )
 
     admin = UserAPIKeyAuth(
         user_id="u", user_role=LitellmUserRoles.PROXY_ADMIN, team_models=[]
@@ -206,13 +199,6 @@ async def test_model_info_v1_unrestricted_key_returns_all_deployments(monkeypatc
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(
         ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
-    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
-
-    monkeypatch.setattr(
-        mlh,
-        "append_agents_to_model_info",
-        AsyncMock(side_effect=lambda models, **kw: models),
     )
 
     caller = UserAPIKeyAuth(
@@ -245,13 +231,6 @@ async def test_model_info_v1_restricted_key_filters_deployments(monkeypatch):
     monkeypatch.setattr(ps, "llm_router", router)
     monkeypatch.setattr(
         ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
-    )
-    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
-
-    monkeypatch.setattr(
-        mlh,
-        "append_agents_to_model_info",
-        AsyncMock(side_effect=lambda models, **kw: models),
     )
 
     caller = UserAPIKeyAuth(
