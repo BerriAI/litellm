@@ -557,10 +557,12 @@ async def delete_mcp_server(
     """
     Delete the mcp server from the db by server_id
 
-    The server-row delete is the commit point. Per-user env var rows have no FK
-    cascade, so they are cleaned up afterwards on a best-effort basis: a transient
-    failure there leaves only orphaned rows pointing at a now-missing server and
-    must not turn a successful delete into a caller-visible error.
+    The server-row delete is the commit point. Per-user credential and env var
+    rows have no FK cascade, so they are cleaned up afterwards on a best-effort
+    basis: a transient failure there leaves only orphaned rows pointing at a
+    now-missing server and must not turn a successful delete into a
+    caller-visible error. Each table is cleaned independently so a failure on one
+    still attempts the other.
 
     Returns the deleted mcp server record if it exists, otherwise None
     """
@@ -570,17 +572,20 @@ async def delete_mcp_server(
         },
     )
     if deleted_server is not None:
-        try:
-            await prisma_client.db.litellm_mcpuserenvvars.delete_many(
-                where={"server_id": server_id}
-            )
-        except Exception as e:
-            verbose_proxy_logger.warning(
-                "MCP server %s deleted but per-user env var cleanup failed; "
-                "orphaned rows can be removed on a later delete: %s",
-                server_id,
-                e,
-            )
+        for model, label in (
+            (prisma_client.db.litellm_mcpusercredentials, "credential"),
+            (prisma_client.db.litellm_mcpuserenvvars, "env var"),
+        ):
+            try:
+                await model.delete_many(where={"server_id": server_id})
+            except Exception as e:
+                verbose_proxy_logger.warning(
+                    "MCP server %s deleted but per-user %s cleanup failed; "
+                    "orphaned rows can be removed on a later delete: %s",
+                    server_id,
+                    label,
+                    e,
+                )
     return deleted_server
 
 
