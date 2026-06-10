@@ -530,6 +530,59 @@ def test_get_model_from_request_handles_managed_id_decoder_failures():
         )
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+    ],
+)
+def test_get_model_from_request_extracts_realtime_session_model(route):
+    """The effective realtime model lives in ``session.model`` (not the
+    top-level ``model``). It must be surfaced so can_key_call_model() can
+    validate the model a restricted key is actually requesting.
+
+    Regression test for the model-access bypass on the GA Realtime WebRTC
+    HTTP routes (https://github.com/BerriAI/litellm/issues/29923).
+    """
+    assert (
+        get_model_from_request(
+            request_data={"session": {"type": "realtime", "model": "gpt-realtime"}},
+            route=route,
+        )
+        == "gpt-realtime"
+    )
+
+
+def test_get_model_from_request_realtime_includes_top_level_and_session_model():
+    """When both top-level and session model are present, both are returned so
+    neither path can smuggle a disallowed model past the model-access check."""
+    models = get_model_from_request(
+        request_data={
+            "model": "gpt-4o-realtime-preview",
+            "session": {"type": "realtime", "model": "gpt-realtime"},
+        },
+        route="/v1/realtime/client_secrets",
+    )
+    assert models == ["gpt-4o-realtime-preview", "gpt-realtime"]
+
+
+def test_get_model_from_request_ignores_session_model_on_non_realtime_routes():
+    """A nested ``session.model`` must not leak into model resolution for
+    unrelated routes."""
+    assert (
+        get_model_from_request(
+            request_data={"session": {"type": "realtime", "model": "gpt-realtime"}},
+            route="/v1/chat/completions",
+        )
+        is None
+    )
+
+
 def test_abbreviate_api_key():
     assert abbreviate_api_key("sk-test-1234") == "sk-...1234"
 
