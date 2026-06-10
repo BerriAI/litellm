@@ -362,8 +362,20 @@ async def _add_model_to_db(
     if model_params.model_info.id is not None:
         _data["model_id"] = model_params.model_info.id
     if should_create_model_in_db:
-        model_response = await prisma_client.db.litellm_proxymodeltable.create(
-            data=_data  # type: ignore
+        # Use upsert so that re-registering a model with the same model_id (which
+        # becomes the primary key) is idempotent. Without this, a caller that retries
+        # after a partial failure receives a PK conflict exception that gets silently
+        # swallowed upstream, surfacing as a misleading "Failed to add model to db" 500.
+        model_response = await prisma_client.db.litellm_proxymodeltable.upsert(
+            where={"model_id": _data["model_id"]},  # type: ignore
+            data={
+                "create": _data,  # type: ignore
+                "update": {
+                    k: v
+                    for k, v in _data.items()
+                    if k not in ("model_id", "created_by")
+                },
+            },
         )
     else:
         model_response = LiteLLM_ProxyModelTable(**_data)
@@ -1173,6 +1185,12 @@ async def add_new_model(
                     )
             except Exception as e:
                 verbose_proxy_logger.exception(f"Exception in add_new_model: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail={
+                        "error": f"Failed to add model to db: {str(e)}"
+                    },
+                )
 
         else:
             raise HTTPException(
