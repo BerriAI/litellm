@@ -1848,17 +1848,18 @@ async def prepare_key_update_data(
             non_default_values["budget_reset_at"] = key_reset_at
             non_default_values["budget_duration"] = budget_duration
 
-    if "budget_limits" in non_default_values and non_default_values["budget_limits"]:
-        from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
-
-        raw_windows = non_default_values["budget_limits"]
+    if "budget_limits" in non_default_values:
+        raw_windows = non_default_values["budget_limits"] or []
         initialized_windows = []
-        for window in raw_windows:
-            w = window if isinstance(window, dict) else window.model_dump()
-            w["reset_at"] = get_budget_reset_time(
-                budget_duration=w["budget_duration"]
-            ).isoformat()
-            initialized_windows.append(w)
+        if raw_windows:
+            from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+
+            for window in raw_windows:
+                w = window if isinstance(window, dict) else window.model_dump()
+                w["reset_at"] = get_budget_reset_time(
+                    budget_duration=w["budget_duration"]
+                ).isoformat()
+                initialized_windows.append(w)
         non_default_values["budget_limits"] = json.dumps(initialized_windows)
 
     if "object_permission" in non_default_values:
