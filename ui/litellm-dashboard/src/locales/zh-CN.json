@@ -4450,6 +4450,41 @@
     "addFallbacksModal": {
       "title": "配置模型回退",
       "subtitle": "管理不同模型的多个回退链（每次最多 5 组）"
+    },
+    "fallbackGroupConfig": {
+      "primaryModelLabel": "主模型",
+      "selectPrimaryModelPlaceholder": "选择主模型",
+      "selectModelHint": "选择一个模型以开始配置回退",
+      "ifFailsTry": "若失败，尝试...",
+      "fallbackChainLabel": "回退链",
+      "maxFallbacksHint": "（每次最多 {{maxFallbacks}} 个回退）",
+      "selectFallbackPlaceholder": "选择要添加的回退模型...",
+      "maxFallbacksReached": "已达到最大 {{maxFallbacks}} 个回退",
+      "selectHint": "搜索并选择多个模型，已选模型将按顺序显示在下方。（已用 {{used}}/{{max}}）",
+      "maxReachedHint": "已达到最大 {{maxFallbacks}} 个回退，请先移除一些再添加。",
+      "noFallbacksSelected": "未选择回退模型",
+      "addFromDropdown": "从上方下拉菜单添加模型"
+    },
+    "fallbackSelectionForm": {
+      "atLeastOneGroup": "至少需要一个组",
+      "groupLabel": "组 {{number}}",
+      "noGroupsConfigured": "未配置回退组",
+      "createFirstGroup": "创建第一个组"
+    },
+    "fallbacks": {
+      "testingFallback": "正在测试回退模型响应...",
+      "testSuccess": "测试模型=<testModel>{{selectedModel}}</testModel>，收到模型=<receivedModel>{{responseModel}}</receivedModel>。查看 <curlLink>curl</curlLink>",
+      "testError": "生成模型响应时出错，请重试。错误：{{error}}",
+      "updateSuccess": "路由器设置更新成功",
+      "updateFailed": "更新路由器设置失败：{{error}}",
+      "noFallbacksConfigured": "未配置回退。添加回退可在主模型失败时自动尝试其他模型。",
+      "modelNameColumn": "模型名称",
+      "fallbacksColumn": "回退",
+      "testFallbackTooltip": "测试回退",
+      "deleteFallbackTooltip": "删除回退",
+      "deleteModalTitle": "删除回退？",
+      "deleteModalMessage": "确定要删除此回退吗？此操作无法撤销。",
+      "deleteModalResourceTitle": "回退信息"
     }
   }
 }

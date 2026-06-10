@@ -4450,6 +4450,41 @@
     "addFallbacksModal": {
       "title": "Configure Model Fallbacks",
       "subtitle": "Manage multiple fallback chains for different models (up to 5 groups at a time)"
+    },
+    "fallbackGroupConfig": {
+      "primaryModelLabel": "Primary Model",
+      "selectPrimaryModelPlaceholder": "Select primary model",
+      "selectModelHint": "Select a model to begin configuring fallbacks",
+      "ifFailsTry": "IF FAILS, TRY...",
+      "fallbackChainLabel": "Fallback Chain",
+      "maxFallbacksHint": "(Max {{maxFallbacks}} fallbacks at a time)",
+      "selectFallbackPlaceholder": "Select fallback models to add...",
+      "maxFallbacksReached": "Maximum {{maxFallbacks}} fallbacks reached",
+      "selectHint": "Search and select multiple models. Selected models will appear below in order. ({{used}}/{{max}} used)",
+      "maxReachedHint": "Maximum {{maxFallbacks}} fallbacks reached. Remove some to add more.",
+      "noFallbacksSelected": "No fallback models selected",
+      "addFromDropdown": "Add models from the dropdown above"
+    },
+    "fallbackSelectionForm": {
+      "atLeastOneGroup": "At least one group is required",
+      "groupLabel": "Group {{number}}",
+      "noGroupsConfigured": "No fallback groups configured",
+      "createFirstGroup": "Create First Group"
+    },
+    "fallbacks": {
+      "testingFallback": "Testing fallback model response...",
+      "testSuccess": "Test model=<testModel>{{selectedModel}}</testModel>, received model=<receivedModel>{{responseModel}}</receivedModel>. See <curlLink>curl</curlLink>",
+      "testError": "Error occurred while generating model response. Please try again. Error: {{error}}",
+      "updateSuccess": "Router settings updated successfully",
+      "updateFailed": "Failed to update router settings: {{error}}",
+      "noFallbacksConfigured": "No fallbacks configured. Add fallbacks to automatically try another model when the primary fails.",
+      "modelNameColumn": "Model Name",
+      "fallbacksColumn": "Fallbacks",
+      "testFallbackTooltip": "Test fallback",
+      "deleteFallbackTooltip": "Delete fallback",
+      "deleteModalTitle": "Delete Fallback?",
+      "deleteModalMessage": "Are you sure you want to delete this fallback? This action cannot be undone.",
+      "deleteModalResourceTitle": "Fallback Information"
     }
   }
 }

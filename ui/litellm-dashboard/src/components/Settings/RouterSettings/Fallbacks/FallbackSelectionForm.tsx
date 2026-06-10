@@ -8,6 +8,7 @@ import { Button } from "@tremor/react";
 import { Tabs } from "antd";
 import { Plus } from "lucide-react";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
 
@@ -26,6 +27,7 @@ export function FallbackSelectionForm({
   maxFallbacks = 10,
   maxGroups = 5,
 }: FallbackSelectionFormProps) {
+  const { t } = useTranslation();
   const [activeKey, setActiveKey] = useState(groups.length > 0 ? groups[0].id : "1");
 
   // Reset activeKey when groups change (e.g., when modal reopens)
@@ -61,7 +63,7 @@ export function FallbackSelectionForm({
 
   const handleRemoveGroup = (targetId: string) => {
     if (groups.length === 1) {
-      MessageManager.warning("At least one group is required");
+      MessageManager.warning(t("settingsPages.fallbackSelectionForm.atLeastOneGroup"));
       return;
     }
     const newGroups = groups.filter((g) => g.id !== targetId);
@@ -78,7 +80,9 @@ export function FallbackSelectionForm({
 
   // Generate tab items
   const items = groups.map((group, index) => {
-    const label = group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
+    const label = group.primaryModel
+      ? group.primaryModel
+      : t("settingsPages.fallbackSelectionForm.groupLabel", { number: index + 1 });
     return {
       key: group.id,
       label: label,
@@ -97,9 +101,9 @@ export function FallbackSelectionForm({
   if (groups.length === 0) {
     return (
       <div className="text-center py-12 bg-gray-50 rounded-lg border border-dashed border-gray-300">
-        <p className="text-gray-500 mb-4">No fallback groups configured</p>
+        <p className="text-gray-500 mb-4">{t("settingsPages.fallbackSelectionForm.noGroupsConfigured")}</p>
         <Button variant="primary" onClick={handleAddGroup} icon={() => <Plus className="w-4 h-4" />}>
-          Create First Group
+          {t("settingsPages.fallbackSelectionForm.createFirstGroup")}
         </Button>
       </div>
     );
