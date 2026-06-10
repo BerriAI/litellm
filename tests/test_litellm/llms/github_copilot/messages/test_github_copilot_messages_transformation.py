@@ -81,13 +81,16 @@ def test_github_copilot_anthropic_messages_validate_environment():
         api_base="https://attacker.example.com",
     )
 
-    # Check that Copilot headers were added
     assert "copilot-integration-id" in validated_headers
     assert validated_headers["copilot-integration-id"] == "vscode-chat"
     assert "Authorization" in validated_headers
     assert "anthropic-version" in validated_headers
     assert validated_headers["anthropic-version"] == "2023-06-01"
-    # api_base must come from the authenticator, never the caller.
+    # /v1/messages must use the messages-proxy intent so the Copilot backend
+    # enables Anthropic-native features (context_management, thinking, etc.).
+    assert validated_headers["openai-intent"] == "messages-proxy"
+    assert validated_headers["x-interaction-type"] == "messages-proxy"
+    assert validated_headers["x-github-api-version"] == "2026-06-01"
     assert api_base == "https://api.githubcopilot.com"
 
 
@@ -112,6 +115,54 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_beta_hea
 
     assert "anthropic-beta" in validated_headers
     assert "structured-outputs-2025-11-13" in validated_headers["anthropic-beta"]
+
+
+def test_github_copilot_anthropic_messages_validate_environment_preserves_caller_anthropic_version():
+    """Caller-supplied anthropic-version must be forwarded verbatim."""
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key"
+    config.authenticator.get_api_base.return_value = None
+
+    validated_headers, _ = config.validate_anthropic_messages_environment(
+        headers={"anthropic-version": "2024-10-22"},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert validated_headers["anthropic-version"] == "2024-10-22"
+
+
+def test_github_copilot_anthropic_messages_validate_environment_injects_context_management_beta():
+    """context_management in optional_params must trigger the corresponding
+    anthropic-beta header so the Copilot backend accepts the field."""
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "gh.test-key"
+    config.authenticator.get_api_base.return_value = None
+
+    validated_headers, _ = config.validate_anthropic_messages_environment(
+        headers={},
+        model="github_copilot/claude-haiku-4.5",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={
+            "context_management": {
+                "edits": [{"type": "clear_tool_uses_20250919"}]
+            }
+        },
+        litellm_params={},
+        api_key=None,
+        api_base=None,
+    )
+
+    assert validated_headers["openai-intent"] == "messages-proxy"
+    assert validated_headers["x-interaction-type"] == "messages-proxy"
+    assert "anthropic-beta" in validated_headers
+    assert "context-management-2025-06-27" in validated_headers["anthropic-beta"]
 
 
 def test_github_copilot_anthropic_messages_validate_environment_auth_error():
