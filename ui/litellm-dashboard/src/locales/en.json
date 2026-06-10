@@ -6690,5 +6690,99 @@
       "successCount_other": "Successfully made {{count}} model groups public!",
       "failedToMakePublic": "Failed to make model groups public. Please try again."
     }
+  },
+  "projects": {
+    "projectDetailsPage": {
+      "notFound": "Project not found",
+      "statusBlocked": "Blocked",
+      "editProject": "Edit Project",
+      "detailsTitle": "Project Details",
+      "by": "by",
+      "budgetTitle": "Budget",
+      "budgetOf": "of ${{budget}} budget",
+      "noBudgetLimit": "No budget limit",
+      "utilized": "{{percent}}% utilized",
+      "spendByModel": "Spend by Model",
+      "noModelSpend": "No model spend recorded yet",
+      "keysTitle": "Keys",
+      "noKeysToDisplay": "No keys to display",
+      "teamTitle": "Team",
+      "modelsLabel": "Models",
+      "allModels": "All models",
+      "spendLabel": "Spend",
+      "unlimited": "Unlimited",
+      "membersLabel": "Members",
+      "noTeamAssigned": "No team assigned"
+    },
+    "projectKeysSection": {
+      "title": "Keys",
+      "filterPlaceholder": "Filter by key name...",
+      "totalKeys": "{{count}} keys"
+    },
+    "projectKeysTable": {
+      "colKeyName": "Key Name",
+      "colOwner": "Owner",
+      "colLastActive": "Last Active",
+      "noKeysFound": "No keys found"
+    },
+    "createProjectModal": {
+      "title": "Create New Project",
+      "createBtn": "Create Project",
+      "createSuccess": "Project created successfully",
+      "createFailed": "Failed to create project"
+    },
+    "editProjectModal": {
+      "title": "Edit Project",
+      "saveBtn": "Save Changes",
+      "updateSuccess": "Project updated successfully",
+      "updateFailed": "Failed to update project"
+    },
+    "projectBaseForm": {
+      "basicInfoTitle": "Basic Information",
+      "projectNameLabel": "Project Name",
+      "projectNameRequired": "Please enter a project name",
+      "projectNamePlaceholder": "e.g. Customer Support Bot",
+      "teamLabel": "Team",
+      "teamRequired": "Please select a team",
+      "teamPlaceholder": "Search or select a team",
+      "descriptionPlaceholder": "Describe the purpose of this project",
+      "allowedModelsLabel": "Allowed Models (scoped to selected team's models)",
+      "selectTeamFirst": "Select a team first to see available models",
+      "selectModels": "Select models",
+      "selectTeamFirstPlaceholder": "Select a team first",
+      "allTeamModels": "All Team Models",
+      "maxBudgetLabel": "Max Budget (USD)",
+      "advancedSettingsTitle": "Advanced Settings",
+      "blockProjectLabel": "Block Project",
+      "blockProjectWarning": "All API requests using keys under this project will be rejected.",
+      "guardrailsLabel": "Guardrails",
+      "guardrailsHelp": "Select existing guardrails or enter new ones",
+      "guardrailsPlaceholder": "Select or enter guardrails",
+      "modelLimitsTitle": "Model-Specific Limits",
+      "missingModel": "Missing model",
+      "duplicateModel": "Duplicate model",
+      "modelNamePlaceholder": "Model name (e.g. gpt-4)",
+      "tpmPlaceholder": "TPM Limit",
+      "rpmPlaceholder": "RPM Limit",
+      "addModelLimit": "Add Model Limit",
+      "metadataTitle": "Metadata",
+      "missingKey": "Missing key",
+      "duplicateKey": "Duplicate key",
+      "keyPlaceholder": "Key",
+      "missingValue": "Missing value",
+      "valuePlaceholder": "Value",
+      "addKeyValue": "Add Key-Value Pair"
+    },
+    "projectsPage": {
+      "title": "Projects",
+      "subtitle": "Manage projects within your teams",
+      "createBtn": "Create Project",
+      "searchPlaceholder": "Search projects by name, ID, description, or team...",
+      "totalProjects": "{{count}} projects",
+      "colTeam": "Team",
+      "colModels": "Models",
+      "noModels": "No models",
+      "statusBlocked": "Blocked"
+    }
   }
 }

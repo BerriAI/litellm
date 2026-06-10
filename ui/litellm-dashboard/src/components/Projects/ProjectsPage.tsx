@@ -19,6 +19,7 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import { LayersIcon, SearchIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CreateProjectModal } from "./ProjectModals/CreateProjectModal";
 import { ProjectDetail } from "./ProjectDetailsPage";
 
@@ -26,6 +27,7 @@ const { Title, Text } = Typography;
 const { Content } = Layout;
 
 export function ProjectsPage() {
+  const { t } = useTranslation();
   const { token } = theme.useToken();
   const { data: projects, isLoading } = useProjects();
   const { data: teams, isLoading: isTeamsLoading } = useTeams();
@@ -66,87 +68,94 @@ export function ProjectsPage() {
   }, [projects, searchText, teamAliasMap]);
 
   // ---------- Ant Design columns ----------
-  const columns: ColumnsType<ProjectResponse> = [
-    {
-      title: "ID",
-      dataIndex: "project_id",
-      key: "project_id",
-      width: 170,
-      render: (id: string) => (
-        <Tooltip title={id}>
-          <Text
-            ellipsis
-            className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
-            style={{ fontSize: 14, padding: "1px 8px" }}
-            onClick={() => setSelectedProjectId(id)}
-          >
-            {id}
-          </Text>
-        </Tooltip>
-      ),
-    },
-    {
-      title: "Name",
-      dataIndex: "project_alias",
-      key: "project_alias",
-      sorter: (a, b) => (a.project_alias ?? "").localeCompare(b.project_alias ?? ""),
-      render: (alias: string | null) => alias ?? "—",
-    },
-    {
-      title: "Team",
-      key: "team",
-      sorter: (a, b) => {
-        const aAlias = teamAliasMap.get(a.team_id ?? "") ?? "";
-        const bAlias = teamAliasMap.get(b.team_id ?? "") ?? "";
-        return aAlias.localeCompare(bAlias);
-      },
-      render: (_: unknown, record: ProjectResponse) => {
-        if (!record.team_id) return "—";
-        const alias = teamAliasMap.get(record.team_id);
-        if (alias) return alias;
-        if (isTeamsLoading) return <Spin indicator={<LoadingOutlined spin />} size="small" />;
-        return record.team_id;
-      },
-    },
-    {
-      title: "Models",
-      key: "models",
-      render: (_: unknown, record: ProjectResponse) => {
-        const models = record.models ?? [];
-        return (
-          <Tooltip title={models.length > 0 ? models.join(", ") : "No models"}>
-            <Tag color="blue" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
-              <Flex align="center" gap={6}>
-                <LayersIcon size={14} />
-                {models.length}
-              </Flex>
-            </Tag>
+  const columns: ColumnsType<ProjectResponse> = useMemo(
+    () => [
+      {
+        title: "ID",
+        dataIndex: "project_id",
+        key: "project_id",
+        width: 170,
+        render: (id: string) => (
+          <Tooltip title={id}>
+            <Text
+              ellipsis
+              className="text-blue-500 bg-blue-50 hover:bg-blue-100 text-xs cursor-pointer"
+              style={{ fontSize: 14, padding: "1px 8px" }}
+              onClick={() => setSelectedProjectId(id)}
+            >
+              {id}
+            </Text>
           </Tooltip>
-        );
+        ),
       },
-    },
-    {
-      title: "Status",
-      dataIndex: "blocked",
-      key: "status",
-      render: (blocked: boolean) => <Tag color={blocked ? "red" : "green"}>{blocked ? "Blocked" : "Active"}</Tag>,
-    },
-    {
-      title: "Created",
-      dataIndex: "created_at",
-      key: "created_at",
-      sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
-      responsive: ["lg"],
-      render: (date: string) => new Date(date).toLocaleDateString(),
-    },
-    {
-      title: "Updated",
-      dataIndex: "updated_at",
-      key: "updated_at",
-      responsive: ["xl"],
-      render: (date: string) => new Date(date).toLocaleDateString(),
-    },
-  ];
+      {
+        title: t("common.name"),
+        dataIndex: "project_alias",
+        key: "project_alias",
+        sorter: (a, b) => (a.project_alias ?? "").localeCompare(b.project_alias ?? ""),
+        render: (alias: string | null) => alias ?? "—",
+      },
+      {
+        title: t("projects.projectsPage.colTeam"),
+        key: "team",
+        sorter: (a, b) => {
+          const aAlias = teamAliasMap.get(a.team_id ?? "") ?? "";
+          const bAlias = teamAliasMap.get(b.team_id ?? "") ?? "";
+          return aAlias.localeCompare(bAlias);
+        },
+        render: (_: unknown, record: ProjectResponse) => {
+          if (!record.team_id) return "—";
+          const alias = teamAliasMap.get(record.team_id);
+          if (alias) return alias;
+          if (isTeamsLoading) return <Spin indicator={<LoadingOutlined spin />} size="small" />;
+          return record.team_id;
+        },
+      },
+      {
+        title: t("projects.projectsPage.colModels"),
+        key: "models",
+        render: (_: unknown, record: ProjectResponse) => {
+          const models = record.models ?? [];
+          return (
+            <Tooltip title={models.length > 0 ? models.join(", ") : t("projects.projectsPage.noModels")}>
+              <Tag color="blue" style={{ fontSize: 14, padding: "2px 8px", margin: 0 }}>
+                <Flex align="center" gap={6}>
+                  <LayersIcon size={14} />
+                  {models.length}
+                </Flex>
+              </Tag>
+            </Tooltip>
+          );
+        },
+      },
+      {
+        title: t("common.status"),
+        dataIndex: "blocked",
+        key: "status",
+        render: (blocked: boolean) => (
+          <Tag color={blocked ? "red" : "green"}>
+            {blocked ? t("projects.projectsPage.statusBlocked") : t("common.active")}
+          </Tag>
+        ),
+      },
+      {
+        title: t("common.createdAt"),
+        dataIndex: "created_at",
+        key: "created_at",
+        sorter: (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+        responsive: ["lg"],
+        render: (date: string) => new Date(date).toLocaleDateString(),
+      },
+      {
+        title: t("common.updatedAt"),
+        dataIndex: "updated_at",
+        key: "updated_at",
+        responsive: ["xl"],
+        render: (date: string) => new Date(date).toLocaleDateString(),
+      },
+    ],
+    [t, teamAliasMap, isTeamsLoading, setSelectedProjectId],
+  );
 
   if (selectedProjectId) {
     return <ProjectDetail projectId={selectedProjectId} onBack={() => setSelectedProjectId(null)} />;
@@ -157,12 +166,12 @@ export function ProjectsPage() {
       <Flex justify="space-between" align="center" style={{ marginBottom: 16 }}>
         <Space direction="vertical" size={0}>
           <Title level={2} style={{ margin: 0 }}>
-            Projects
+            {t("projects.projectsPage.title")}
           </Title>
-          <Text type="secondary">Manage projects within your teams</Text>
+          <Text type="secondary">{t("projects.projectsPage.subtitle")}</Text>
         </Space>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsCreateModalVisible(true)}>
-          Create Project
+          {t("projects.projectsPage.createBtn")}
         </Button>
       </Flex>
 
@@ -170,7 +179,7 @@ export function ProjectsPage() {
         <Flex justify="space-between" align="center" style={{ padding: "12px 16px" }}>
           <Input
             prefix={<SearchIcon size={16} />}
-            placeholder="Search projects by name, ID, description, or team..."
+            placeholder={t("projects.projectsPage.searchPlaceholder")}
             style={{ maxWidth: 400 }}
             value={searchText}
             onChange={(e) => setSearchText(e.target.value)}
@@ -182,7 +191,7 @@ export function ProjectsPage() {
             pageSize={pageSize}
             onChange={(page) => setCurrentPage(page)}
             size="small"
-            showTotal={(total) => `${total} projects`}
+            showTotal={(total) => t("projects.projectsPage.totalProjects", { count: total })}
             showSizeChanger={false}
           />
         </Flex>

@@ -3,21 +3,24 @@ import { Empty, Table, Tooltip } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { SpinProps } from "antd";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
+import { useMemo } from "react";
 
 interface ProjectKeysTableProps {
   keys: KeyResponse[];
   loading?: boolean | SpinProps;
 }
 
-const columns: ColumnsType<KeyResponse> = [
+const getProjectKeysTableColumns = (t: TFunction): ColumnsType<KeyResponse> => [
   {
-    title: "Key Name",
+    title: t("projects.projectKeysTable.colKeyName"),
     dataIndex: "key_alias",
     key: "key_alias",
     render: (alias: string | null) => alias || "—",
   },
   {
-    title: "Owner",
+    title: t("projects.projectKeysTable.colOwner"),
     key: "owner",
     render: (_: unknown, record: KeyResponse) => {
       const email = record.user?.user_email ?? record.user_id ?? null;
@@ -30,20 +33,23 @@ const columns: ColumnsType<KeyResponse> = [
     },
   },
   {
-    title: "Created",
+    title: t("common.createdAt"),
     dataIndex: "created_at",
     key: "created_at",
     render: (date: string) => (date ? new Date(date).toLocaleDateString() : "—"),
   },
   {
-    title: "Last Active",
+    title: t("projects.projectKeysTable.colLastActive"),
     dataIndex: "last_active",
     key: "last_active",
-    render: (date: string | null) => (date ? new Date(date).toLocaleDateString() : "Never"),
+    render: (date: string | null) => (date ? new Date(date).toLocaleDateString() : t("common.never")),
   },
 ];
 
 export function ProjectKeysTable({ keys, loading }: ProjectKeysTableProps) {
+  const { t } = useTranslation();
+  const columns = useMemo(() => getProjectKeysTableColumns(t), [t]);
+
   return (
     <Table
       columns={columns}
@@ -52,7 +58,11 @@ export function ProjectKeysTable({ keys, loading }: ProjectKeysTableProps) {
       loading={loading}
       pagination={false}
       size="small"
-      locale={{ emptyText: <Empty description="No keys found" image={Empty.PRESENTED_IMAGE_SIMPLE} /> }}
+      locale={{
+        emptyText: (
+          <Empty description={t("projects.projectKeysTable.noKeysFound")} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        ),
+      }}
     />
   );
 }

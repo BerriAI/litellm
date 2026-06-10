@@ -6690,5 +6690,99 @@
       "successCount_other": "成功将 {{count}} 个模型组设为公开！",
       "failedToMakePublic": "将模型组设为公开失败，请重试。"
     }
+  },
+  "projects": {
+    "projectDetailsPage": {
+      "notFound": "项目未找到",
+      "statusBlocked": "已封锁",
+      "editProject": "编辑项目",
+      "detailsTitle": "项目详情",
+      "by": "由",
+      "budgetTitle": "预算",
+      "budgetOf": "共 ${{budget}} 预算",
+      "noBudgetLimit": "无预算限制",
+      "utilized": "已使用 {{percent}}%",
+      "spendByModel": "按模型花费",
+      "noModelSpend": "暂无模型花费记录",
+      "keysTitle": "密钥",
+      "noKeysToDisplay": "暂无密钥可显示",
+      "teamTitle": "团队",
+      "modelsLabel": "模型",
+      "allModels": "所有模型",
+      "spendLabel": "花费",
+      "unlimited": "无限制",
+      "membersLabel": "成员",
+      "noTeamAssigned": "未分配团队"
+    },
+    "projectKeysSection": {
+      "title": "密钥",
+      "filterPlaceholder": "按密钥名称筛选...",
+      "totalKeys": "共 {{count}} 个密钥"
+    },
+    "projectKeysTable": {
+      "colKeyName": "密钥名称",
+      "colOwner": "所有者",
+      "colLastActive": "最后活跃",
+      "noKeysFound": "未找到密钥"
+    },
+    "createProjectModal": {
+      "title": "新建项目",
+      "createBtn": "创建项目",
+      "createSuccess": "项目创建成功",
+      "createFailed": "创建项目失败"
+    },
+    "editProjectModal": {
+      "title": "编辑项目",
+      "saveBtn": "保存更改",
+      "updateSuccess": "项目更新成功",
+      "updateFailed": "更新项目失败"
+    },
+    "projectBaseForm": {
+      "basicInfoTitle": "基本信息",
+      "projectNameLabel": "项目名称",
+      "projectNameRequired": "请输入项目名称",
+      "projectNamePlaceholder": "例如：客服机器人",
+      "teamLabel": "团队",
+      "teamRequired": "请选择团队",
+      "teamPlaceholder": "搜索或选择团队",
+      "descriptionPlaceholder": "描述该项目的用途",
+      "allowedModelsLabel": "允许的模型（限定于所选团队的模型）",
+      "selectTeamFirst": "请先选择团队以查看可用模型",
+      "selectModels": "选择模型",
+      "selectTeamFirstPlaceholder": "请先选择团队",
+      "allTeamModels": "团队所有模型",
+      "maxBudgetLabel": "最大预算（美元）",
+      "advancedSettingsTitle": "高级设置",
+      "blockProjectLabel": "封锁项目",
+      "blockProjectWarning": "该项目下所有密钥的 API 请求将被拒绝。",
+      "guardrailsLabel": "护栏",
+      "guardrailsHelp": "选择已有护栏或输入新护栏",
+      "guardrailsPlaceholder": "选择或输入护栏",
+      "modelLimitsTitle": "模型专属限制",
+      "missingModel": "缺少模型名称",
+      "duplicateModel": "模型重复",
+      "modelNamePlaceholder": "模型名称（例如 gpt-4）",
+      "tpmPlaceholder": "TPM 限制",
+      "rpmPlaceholder": "RPM 限制",
+      "addModelLimit": "添加模型限制",
+      "metadataTitle": "元数据",
+      "missingKey": "缺少键名",
+      "duplicateKey": "键名重复",
+      "keyPlaceholder": "键",
+      "missingValue": "缺少值",
+      "valuePlaceholder": "值",
+      "addKeyValue": "添加键值对"
+    },
+    "projectsPage": {
+      "title": "项目",
+      "subtitle": "管理团队内的项目",
+      "createBtn": "创建项目",
+      "searchPlaceholder": "按名称、ID、描述或团队搜索项目...",
+      "totalProjects": "共 {{count}} 个项目",
+      "colTeam": "团队",
+      "colModels": "模型",
+      "noModels": "无模型",
+      "statusBlocked": "已封锁"
+    }
   }
 }
