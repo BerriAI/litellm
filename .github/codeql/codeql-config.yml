@@ -31,6 +31,12 @@ query-filters:
       id: py/weak-sensitive-data-hashing        # CWE-327/916
   - exclude:
       id: py/log-injection                      # CWE-117 — taint explosion through litellm's pervasive logging; same scaling class as the excluded py/clear-text-logging-sensitive-data
+  # py/stack-trace-exposure: tracebacks only reach loggers; ProxyException.to_dict() never serializes a traceback field; CodeQL cannot distinguish log sinks from HTTP response sinks
+  - exclude:
+      id: py/stack-trace-exposure               # CWE-209
+  # py/incomplete-url-substring-sanitization: security-critical URL validation uses urlparse() tuple comparison; flagged startswith/endswith are non-security normalization (JWT heuristic, trailing-slash strip)
+  - exclude:
+      id: py/incomplete-url-substring-sanitization  # CWE-184
 
 paths-ignore:
   - tests
