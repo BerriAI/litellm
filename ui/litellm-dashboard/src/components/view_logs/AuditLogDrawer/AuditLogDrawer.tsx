@@ -2,6 +2,7 @@ import { Drawer, Tag, Typography } from "antd";
 import { CloseOutlined, CopyOutlined, CheckOutlined } from "@ant-design/icons";
 import { useState, useCallback } from "react";
 import moment from "moment";
+import { useTranslation } from "react-i18next";
 import { AuditLogEntry } from "../columns";
 import DefaultProxyAdminTag from "../../common_components/DefaultProxyAdminTag";
 
@@ -13,14 +14,6 @@ interface AuditLogDrawerProps {
   log: AuditLogEntry | null;
 }
 
-const TABLE_NAME_DISPLAY: Record<string, string> = {
-  LiteLLM_VerificationToken: "Keys",
-  LiteLLM_TeamTable: "Teams",
-  LiteLLM_UserTable: "Users",
-  LiteLLM_OrganizationTable: "Organizations",
-  LiteLLM_ProxyModelTable: "Models",
-};
-
 const ACTION_COLOR: Record<string, string> = {
   created: "green",
   updated: "blue",
@@ -29,6 +22,7 @@ const ACTION_COLOR: Record<string, string> = {
 };
 
 function CopyableJsonBlock({ label, value }: { label: string; value: Record<string, any> }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = useCallback(async () => {
@@ -61,7 +55,7 @@ function CopyableJsonBlock({ label, value }: { label: string; value: Record<stri
         <button
           onClick={handleCopy}
           className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-gray-700 transition-colors"
-          title="Copy JSON"
+          title={t("viewLogs.auditLogDrawer.copyJson")}
         >
           {copied ? <CheckOutlined className="text-green-600" /> : <CopyOutlined />}
         </button>
@@ -83,6 +77,7 @@ function MetadataRow({ label, value }: { label: string; value: React.ReactNode }
 }
 
 function DiffSection({ log }: { log: AuditLogEntry }) {
+  const { t } = useTranslation();
   const { action, table_name, before_value, updated_values } = log;
   const isKeyTable = table_name === "LiteLLM_VerificationToken";
   const isUpdateAction = action === "updated" || action === "rotated";
@@ -120,8 +115,10 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
       }
     });
 
-    displayBefore = Object.keys(changedBefore).length > 0 ? changedBefore : { note: "No differing fields detected" };
-    displayAfter = Object.keys(changedAfter).length > 0 ? changedAfter : { note: "No differing fields detected" };
+    displayBefore =
+      Object.keys(changedBefore).length > 0 ? changedBefore : { note: t("viewLogs.auditLogDrawer.noDifferingFields") };
+    displayAfter =
+      Object.keys(changedAfter).length > 0 ? changedAfter : { note: t("viewLogs.auditLogDrawer.noDifferingFields") };
   }
 
   const renderValue = (label: string, value: Record<string, any> | null | undefined) => {
@@ -149,17 +146,20 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
             <div className="px-3 py-3 space-y-1 text-xs">
               {value.token !== undefined && (
                 <p>
-                  <span className="text-gray-500">Token:</span> {value.token ?? "N/A"}
+                  <span className="text-gray-500">{t("viewLogs.auditLogDrawer.tokenLabel")}</span>{" "}
+                  {value.token ?? "N/A"}
                 </p>
               )}
               {value.spend !== undefined && (
                 <p>
-                  <span className="text-gray-500">Spend:</span> ${Number(value.spend).toFixed(6)}
+                  <span className="text-gray-500">{t("viewLogs.auditLogDrawer.spendLabel")}</span> $
+                  {Number(value.spend).toFixed(6)}
                 </p>
               )}
               {value.max_budget !== undefined && (
                 <p>
-                  <span className="text-gray-500">Max Budget:</span> ${Number(value.max_budget).toFixed(6)}
+                  <span className="text-gray-500">{t("viewLogs.auditLogDrawer.maxBudgetLabel")}</span> $
+                  {Number(value.max_budget).toFixed(6)}
                 </p>
               )}
             </div>
@@ -173,13 +173,23 @@ function DiffSection({ log }: { log: AuditLogEntry }) {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-      {renderValue("Before", displayBefore)}
-      {renderValue("After", displayAfter)}
+      {renderValue(t("viewLogs.auditLogDrawer.before"), displayBefore)}
+      {renderValue(t("viewLogs.auditLogDrawer.after"), displayAfter)}
     </div>
   );
 }
 
 export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
+  const { t } = useTranslation();
+
+  const TABLE_NAME_DISPLAY: Record<string, string> = {
+    LiteLLM_VerificationToken: t("viewLogs.auditLogDrawer.tableKeys"),
+    LiteLLM_TeamTable: t("viewLogs.auditLogDrawer.tableTeams"),
+    LiteLLM_UserTable: t("viewLogs.auditLogDrawer.tableUsers"),
+    LiteLLM_OrganizationTable: t("viewLogs.auditLogDrawer.tableOrganizations"),
+    LiteLLM_ProxyModelTable: t("viewLogs.auditLogDrawer.tableModels"),
+  };
+
   if (!log) return null;
 
   const tableDisplay = TABLE_NAME_DISPLAY[log.table_name] ?? log.table_name;
@@ -209,7 +219,7 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
         <button
           onClick={onClose}
           className="w-8 h-8 flex items-center justify-center rounded hover:bg-gray-100 text-gray-500"
-          aria-label="Close"
+          aria-label={t("common.close")}
         >
           <CloseOutlined />
         </button>
@@ -219,19 +229,22 @@ export function AuditLogDrawer({ open, onClose, log }: AuditLogDrawerProps) {
       <div className="px-6 py-5">
         {/* Metadata */}
         <div className="bg-gray-50 border rounded-lg p-4 mb-5">
-          <p className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">Details</p>
-          <MetadataRow label="Table" value={tableDisplay} />
+          <p className="text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wide">{t("common.details")}</p>
+          <MetadataRow label={t("viewLogs.auditLogDrawer.labelTable")} value={tableDisplay} />
           <MetadataRow
-            label="Object ID"
+            label={t("viewLogs.auditLogDrawer.labelObjectId")}
             value={
               <Text copyable className="font-mono text-xs">
                 {log.object_id}
               </Text>
             }
           />
-          <MetadataRow label="Changed By" value={<DefaultProxyAdminTag userId={log.changed_by} />} />
           <MetadataRow
-            label="API Key (Hash)"
+            label={t("viewLogs.auditLogDrawer.labelChangedBy")}
+            value={<DefaultProxyAdminTag userId={log.changed_by} />}
+          />
+          <MetadataRow
+            label={t("viewLogs.auditLogDrawer.labelApiKeyHash")}
             value={
               log.changed_by_api_key ? (
                 <Text copyable className="font-mono text-xs break-all">

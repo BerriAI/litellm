@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 
 interface ErrorViewerProps {
   errorInfo: {
@@ -11,6 +12,7 @@ interface ErrorViewerProps {
 }
 
 export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
+  const { t } = useTranslation();
   const [expandedFrames, setExpandedFrames] = React.useState<{ [key: number]: boolean }>({});
   const [allExpanded, setAllExpanded] = React.useState(false);
 
@@ -89,20 +91,20 @@ export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
               d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
             />
           </svg>
-          Error Details
+          {t("viewLogs.errorViewer.title")}
         </h3>
       </div>
 
       <div className="p-4">
         <div className="bg-red-50 rounded-md p-4 mb-4">
           <div className="flex">
-            <span className="text-red-800 font-medium w-20">Type:</span>
-            <span className="text-red-700">{errorInfo.error_class || "Unknown Error"}</span>
+            <span className="text-red-800 font-medium w-20">{t("viewLogs.errorViewer.type")}:</span>
+            <span className="text-red-700">{errorInfo.error_class || t("viewLogs.errorViewer.unknownError")}</span>
           </div>
           <div className="flex mt-2">
-            <span className="text-red-800 font-medium w-20 flex-shrink-0">Message:</span>
+            <span className="text-red-800 font-medium w-20 flex-shrink-0">{t("viewLogs.errorViewer.message")}:</span>
             <span className="text-red-700 break-words whitespace-pre-wrap">
-              {errorInfo.error_message || "Unknown error occurred"}
+              {errorInfo.error_message || t("viewLogs.errorViewer.unknownErrorOccurred")}
             </span>
           </div>
         </div>
@@ -110,18 +112,18 @@ export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
         {errorInfo.traceback && (
           <div className="mt-4">
             <div className="flex justify-between items-center mb-2">
-              <h4 className="font-medium">Traceback</h4>
+              <h4 className="font-medium">{t("viewLogs.errorViewer.traceback")}</h4>
               <div className="flex items-center space-x-4">
                 <button
                   onClick={toggleAllFrames}
                   className="text-gray-500 hover:text-gray-700 flex items-center text-sm"
                 >
-                  {allExpanded ? "Collapse All" : "Expand All"}
+                  {allExpanded ? t("viewLogs.errorViewer.collapseAll") : t("viewLogs.errorViewer.expandAll")}
                 </button>
                 <button
                   onClick={() => navigator.clipboard.writeText(errorInfo.traceback || "")}
                   className="text-gray-500 hover:text-gray-700 flex items-center"
-                  title="Copy traceback"
+                  title={t("viewLogs.errorViewer.copyTraceback")}
                 >
                   <svg
                     xmlns="http://www.w3.org/2000/svg"
@@ -137,7 +139,7 @@ export const ErrorViewer: React.FC<ErrorViewerProps> = ({ errorInfo }) => {
                     <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                   </svg>
-                  <span className="ml-1">Copy</span>
+                  <span className="ml-1">{t("common.copy")}</span>
                 </button>
               </div>
             </div>
