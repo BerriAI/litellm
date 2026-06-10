@@ -289,13 +289,14 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
   );
 }
 
-function toolsetColumns(
-  t: TFunction,
-  isAdmin: boolean,
-  onEdit: (toolset: MCPToolset) => void,
-  onDelete: (id: string) => void,
-  proxyBaseUrl: string,
-): ColumnDef<MCPToolset>[] {
+function toolsetColumns(opts: {
+  t: TFunction;
+  isAdmin: boolean;
+  onEdit: (toolset: MCPToolset) => void;
+  onDelete: (id: string) => void;
+  proxyBaseUrl: string;
+}): ColumnDef<MCPToolset>[] {
+  const { t, isAdmin, onEdit, onDelete, proxyBaseUrl } = opts;
   return [
     {
       header: t("mcpTools.mCPToolsetsTab.colToolsetId"),
@@ -485,7 +486,7 @@ export function MCPToolsetsTab({ accessToken, userRole }: MCPToolsetsTabProps) {
   };
 
   const proxyBaseUrl = getProxyBaseUrl();
-  const columns = toolsetColumns(t, isAdmin, setEditToolset, setDeleteId, proxyBaseUrl);
+  const columns = toolsetColumns({ t, isAdmin, onEdit: setEditToolset, onDelete: setDeleteId, proxyBaseUrl });
 
   return (
     <div className="mt-4">
