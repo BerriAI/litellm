@@ -786,6 +786,26 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return AnthropicTokenCounter()
 
 
+def _advisor_result_text(content: Any) -> str:
+    """Extract advice text from an advisor_tool_result's content, which Anthropic
+    emits as an {"type": "advisor_result", "text": ...} dict but which may also
+    arrive as a plain string or a list of content blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, dict):
+        return content.get("text", "")
+    if isinstance(content, list):
+        return next(
+            (
+                b.get("text", "")
+                for b in content
+                if isinstance(b, dict) and b.get("text")
+            ),
+            "",
+        )
+    return ""
+
+
 def strip_advisor_blocks_from_messages(
     messages: List[Any], replace_with_text: bool = False
 ) -> List[Any]:
@@ -834,20 +854,9 @@ def strip_advisor_blocks_from_messages(
                     and block.get("type") == "advisor_tool_result"
                     and block.get("tool_use_id") in advisor_id_to_text
                 ):
-                    raw = block.get("content") or ""
-                    text = (
-                        raw
-                        if isinstance(raw, str)
-                        else next(
-                            (
-                                b.get("text", "")
-                                for b in raw
-                                if isinstance(b, dict) and b.get("type") == "text"
-                            ),
-                            "",
-                        )
+                    advisor_id_to_text[block["tool_use_id"]] = _advisor_result_text(
+                        block.get("content")
                     )
-                    advisor_id_to_text[block["tool_use_id"]] = text
 
         new_content = []
         for block in content:

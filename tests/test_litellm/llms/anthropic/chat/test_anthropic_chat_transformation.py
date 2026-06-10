@@ -4106,6 +4106,37 @@ def test_strip_advisor_blocks_when_no_advisor_tool():
     assert len(assistant_content) == 2
 
 
+def test_strip_advisor_blocks_replace_with_text_extracts_advisor_result_dict():
+    """replace_with_text=True must recover the advice from the native
+    advisor_result content shape ({"type":"advisor_result","text":...}); a prior
+    bug only handled str/list content and silently dropped the dict's text."""
+    from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_abc123",
+                    "name": "advisor",
+                    "input": {},
+                },
+                {
+                    "type": "advisor_tool_result",
+                    "tool_use_id": "srvtoolu_abc123",
+                    "content": {"type": "advisor_result", "text": "Use channels."},
+                },
+            ],
+        }
+    ]
+    result = strip_advisor_blocks_from_messages(messages, replace_with_text=True)
+    blocks = result[0]["content"]
+    assert all(b["type"] == "text" for b in blocks)
+    assert "<advisor_feedback>" in blocks[0]["text"]
+    assert "Use channels." in blocks[0]["text"]
+
+
 def test_strip_advisor_blocks_no_op_when_no_advisor_blocks():
     """strip_advisor_blocks_from_messages is a no-op when no advisor blocks exist."""
     from litellm.llms.anthropic.common_utils import strip_advisor_blocks_from_messages

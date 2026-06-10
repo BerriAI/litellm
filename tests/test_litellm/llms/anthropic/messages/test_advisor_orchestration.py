@@ -255,16 +255,14 @@ async def test_loop_max_uses_raises():
 
 
 # ---------------------------------------------------------------------------
-# 6. Streaming: final response wrapped in FakeAnthropicMessagesStreamIterator
+# 6. Streaming: returns a valid Anthropic SSE stream
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_loop_streaming_wraps_response():
-    """stream=True: final response must be wrapped in FakeAnthropicMessagesStreamIterator."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
-        FakeAnthropicMessagesStreamIterator,
-    )
+async def test_loop_streaming_returns_sse_stream():
+    """stream=True must return an async SSE stream that opens with message_start,
+    carries the executor's text, and closes with message_stop."""
     from litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor import (
         AdvisorOrchestrationHandler,
     )
@@ -286,15 +284,19 @@ async def test_loop_streaming_wraps_response():
             custom_llm_provider="openai",
         )
 
-    assert isinstance(result, FakeAnthropicMessagesStreamIterator)
+        assert hasattr(result, "__aiter__")
 
-    chunks = []
-    async for chunk in result:
-        chunks.append(chunk)
+        # Streaming is lazy: the executor call runs while the stream is consumed,
+        # so iterate inside the patch context.
+        chunks = []
+        async for chunk in result:
+            chunks.append(chunk.decode() if isinstance(chunk, bytes) else str(chunk))
 
     assert len(chunks) > 0
-    first = chunks[0].decode() if isinstance(chunks[0], bytes) else str(chunks[0])
-    assert "message_start" in first
+    assert "message_start" in chunks[0]
+    joined = "".join(chunks)
+    assert "Hello, world!" in joined
+    assert "message_stop" in joined
 
 
 # ---------------------------------------------------------------------------

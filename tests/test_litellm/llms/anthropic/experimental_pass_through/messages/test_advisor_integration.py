@@ -8,6 +8,7 @@ The only thing mocked is _call_messages_handler (the outbound LLM call), so the
 interceptor detection, loop logic, and message assembly all run for real.
 """
 
+import json
 from typing import Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -113,7 +114,30 @@ async def test_full_dispatch_interceptor_fires_and_loop_completes():
     assert len(text_blocks) >= 1, "Final response must have text"
     assert (
         len(advisor_uses) == 0
-    ), "No advisor tool_use blocks must appear in final output"
+    ), "No raw tool_use advisor blocks must appear in final output"
+
+    # The advisor exchange must surface as native server-side advisor blocks so
+    # clients (e.g. Claude Code) render the advisor activity. Pre-fix the loop
+    # flattened these away and the final content had no advisor blocks at all.
+    server_tool_uses = [
+        b
+        for b in content
+        if b.get("type") == "server_tool_use" and b.get("name") == "advisor"
+    ]
+    advisor_results = [b for b in content if b.get("type") == "advisor_tool_result"]
+    assert len(server_tool_uses) == 1, "advisor call must surface as server_tool_use"
+    assert (
+        len(advisor_results) == 1
+    ), "advisor reply must surface as advisor_tool_result"
+
+    call_block, result_block = server_tool_uses[0], advisor_results[0]
+    assert call_block["id"] == "tid_01"
+    assert call_block["input"] == {}
+    assert result_block["tool_use_id"] == call_block["id"]
+    assert result_block["content"] == {
+        "type": "advisor_result",
+        "text": "Use trial division.",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -615,3 +639,130 @@ async def test_advisor_subcall_forwards_litellm_metadata_but_not_executor_params
     assert captured_advisor_kwargs.get("system") == ADVISOR_SYSTEM_PROMPT
     assert captured_advisor_kwargs.get("system") != executor_system
     assert "tool_choice" not in captured_advisor_kwargs
+
+
+# ---------------------------------------------------------------------------
+# 9. Round-trip: the advisor blocks we emit are consumable on the next turn
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emitted_advisor_blocks_round_trip_through_strip():
+    """The server_tool_use / advisor_tool_result blocks we surface must be the
+    exact shape strip_advisor_blocks_from_messages recognizes, so when the client
+    echoes them back in history the next turn folds them into an <advisor_feedback>
+    text block for the executor rather than 400-ing on a dangling advisor block."""
+    from litellm.llms.anthropic.common_utils import (
+        strip_advisor_blocks_from_messages,
+    )
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            return _text_resp("Prefer a sieve.", model="claude-opus-4-6")
+        return _text_resp("Done.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=False,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+    history = [{"role": "assistant", "content": result["content"]}]
+    stripped = strip_advisor_blocks_from_messages(history, replace_with_text=True)
+
+    blocks = stripped[0]["content"]
+    assert not any(b.get("type") == "server_tool_use" for b in blocks)
+    assert not any(b.get("type") == "advisor_tool_result" for b in blocks)
+    feedback = [
+        b
+        for b in blocks
+        if b.get("type") == "text" and "<advisor_feedback>" in b.get("text", "")
+    ]
+    assert len(feedback) == 1
+    assert "Prefer a sieve." in feedback[0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# 10. Streaming surfaces the advisor as in-progress, then done
+# ---------------------------------------------------------------------------
+
+
+def _block_type_from_start_event(raw: bytes):
+    text = raw.decode()
+    if "event: content_block_start" not in text:
+        return None
+    payload = json.loads(text.split("data: ", 1)[1].split("\n\n", 1)[0])
+    return payload["content_block"]["type"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_flushes_advisor_call_before_running_advisor():
+    """The live advisor UX (running -> done) depends on the server_tool_use block
+    reaching the client BEFORE the advisor sub-call runs, and the advisor_tool_result
+    reaching it AFTER. A burst-at-end implementation runs the whole loop first and
+    emits everything at once, so the advisor never renders as in-progress.
+
+    We interleave call markers and emitted-block markers in one list: the
+    server_tool_use must be emitted before the advisor leg is invoked, and the
+    result after."""
+    from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+        anthropic_messages,
+    )
+
+    events = []
+    call_count = 0
+
+    async def mock_handler(model, messages, tools, stream, max_tokens, **kwargs):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return _advisor_call_resp()
+        if call_count == 2:
+            events.append("advisor_leg_invoked")
+            return _text_resp("Advice text.", model="claude-opus-4-6")
+        return _text_resp("Final answer.")
+
+    with patch(
+        "litellm.llms.anthropic.experimental_pass_through.messages.interceptors.advisor._call_messages_handler",
+        side_effect=mock_handler,
+    ):
+        result = await anthropic_messages(
+            model="openai/gpt-4o-mini",
+            messages=MESSAGES,
+            tools=[ADVISOR_TOOL],
+            stream=True,
+            max_tokens=512,
+            custom_llm_provider="openai",
+        )
+
+        assert hasattr(result, "__aiter__"), "streaming must return an async iterator"
+
+        async for raw in result:
+            block_type = _block_type_from_start_event(raw)
+            if block_type in ("server_tool_use", "advisor_tool_result"):
+                events.append(f"emit:{block_type}")
+
+    assert "emit:server_tool_use" in events
+    assert "emit:advisor_tool_result" in events
+    assert events.index("emit:server_tool_use") < events.index(
+        "advisor_leg_invoked"
+    ), "advisor call block must be flushed before the advisor sub-call runs"
+    assert events.index("advisor_leg_invoked") < events.index(
+        "emit:advisor_tool_result"
+    ), "advisor result must be emitted after the advisor sub-call returns"
