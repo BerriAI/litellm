@@ -15,8 +15,10 @@ import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { ClockCircleOutlined } from "@ant-design/icons";
 import { Button, Card, Form, Input, Skeleton, Space, Switch, Typography } from "antd";
 import React, { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 const LoggingSettings: React.FC = () => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const { mutate, isPending } = useStoreRequestInSpendLogs();
   const { mutate: deleteField, isPending: isDeletingField } = useDeleteProxyConfigField();
@@ -53,9 +55,11 @@ const LoggingSettings: React.FC = () => {
 
     const submitUpdate = () =>
       mutate(updateParams, {
-        onSuccess: () => NotificationsManager.success("Spend logs settings updated successfully"),
+        onSuccess: () => NotificationsManager.success(t("settingsPages.loggingSettings.saveSuccess")),
         onError: (error) =>
-          NotificationsManager.fromBackend("Failed to save spend logs settings: " + parseErrorMessage(error)),
+          NotificationsManager.fromBackend(
+            t("settingsPages.loggingSettings.saveFailed", { error: parseErrorMessage(error) }),
+          ),
       });
 
     if (hasRetentionPeriod) {
@@ -76,10 +80,10 @@ const LoggingSettings: React.FC = () => {
   };
 
   return (
-    <Card title="Logging Settings">
+    <Card title={t("settingsPages.loggingSettings.cardTitle")}>
       <Space direction="vertical" size="large" style={{ width: "100%" }}>
         <Typography.Paragraph style={{ marginBottom: 0 }} type="secondary">
-          Proxy-wide settings that control how request and response data are written to spend logs.
+          {t("settingsPages.loggingSettings.description")}
         </Typography.Paragraph>
 
         <Form
@@ -90,11 +94,11 @@ const LoggingSettings: React.FC = () => {
           initialValues={initialValues}
         >
           <Form.Item
-            label="Store Prompts in Spend Logs"
+            label={t("settingsPages.loggingSettings.storePromptsLabel")}
             name="store_prompts_in_spend_logs"
             tooltip={
               proxyConfigData?.find((f) => f.field_name === "store_prompts_in_spend_logs")?.field_description ||
-              "When enabled, prompts will be stored in spend logs for tracking and analysis purposes."
+              t("settingsPages.loggingSettings.storePromptsTooltipDefault")
             }
             valuePropName="checked"
           >
@@ -109,23 +113,28 @@ const LoggingSettings: React.FC = () => {
           </Form.Item>
 
           <Form.Item
-            label="Maximum Spend Logs Retention Period (Optional)"
+            label={t("settingsPages.loggingSettings.retentionPeriodLabel")}
             name="maximum_spend_logs_retention_period"
             tooltip={
               proxyConfigData?.find((f) => f.field_name === "maximum_spend_logs_retention_period")?.field_description ||
-              "Set the maximum retention period for spend logs (e.g., '7d' for 7 days, '30d' for 30 days). Leave empty for no limit."
+              t("settingsPages.loggingSettings.retentionPeriodTooltipDefault")
             }
           >
             {isLoadingConfig ? (
               <Skeleton.Input active block />
             ) : (
-              <Input placeholder="e.g., 7d, 30d" prefix={<ClockCircleOutlined />} />
+              <Input
+                placeholder={t("settingsPages.loggingSettings.retentionPeriodPlaceholder")}
+                prefix={<ClockCircleOutlined />}
+              />
             )}
           </Form.Item>
 
           <Form.Item>
             <Button type="primary" htmlType="submit" loading={isPending || isDeletingField} disabled={isLoadingConfig}>
-              {isPending || isDeletingField ? "Saving..." : "Save Settings"}
+              {isPending || isDeletingField
+                ? t("common.saving")
+                : t("settingsPages.loggingSettings.saveSettingsButton")}
             </Button>
           </Form.Item>
         </Form>

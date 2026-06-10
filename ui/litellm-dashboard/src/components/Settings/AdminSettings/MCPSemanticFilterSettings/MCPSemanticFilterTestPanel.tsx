@@ -1,5 +1,6 @@
 import { CodeOutlined, PlayCircleOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Input, Space, Tabs, Typography } from "antd";
+import { useTranslation } from "react-i18next";
 import ModelSelector from "@/components/common_components/ModelSelector";
 import { TestResult } from "./semanticFilterTestUtils";
 
@@ -28,22 +29,23 @@ export default function MCPSemanticFilterTestPanel({
   testResult,
   curlCommand,
 }: MCPSemanticFilterTestPanelProps) {
+  const { t } = useTranslation();
   return (
-    <Card title="Test Configuration" style={{ marginBottom: 16 }}>
+    <Card title={t("settingsPages.mcpSemanticFilterTestPanel.testConfigCardTitle")} style={{ marginBottom: 16 }}>
       <Tabs
         defaultActiveKey="test"
         items={[
           {
             key: "test",
-            label: "Test",
+            label: t("settingsPages.mcpSemanticFilterTestPanel.testTabLabel"),
             children: (
               <Space direction="vertical" style={{ width: "100%" }} size="large">
                 <div>
                   <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                    <PlayCircleOutlined /> Test Query
+                    <PlayCircleOutlined /> {t("settingsPages.mcpSemanticFilterTestPanel.testQueryLabel")}
                   </Typography.Text>
                   <Input.TextArea
-                    placeholder="Enter a test query to see which tools would be selected..."
+                    placeholder={t("settingsPages.mcpSemanticFilterTestPanel.testQueryPlaceholder")}
                     value={testQuery}
                     onChange={(e) => setTestQuery(e.target.value)}
                     rows={4}
@@ -58,7 +60,7 @@ export default function MCPSemanticFilterTestPanel({
                     onChange={setTestModel}
                     disabled={isTesting}
                     showLabel={true}
-                    labelText="Select Model"
+                    labelText={t("settingsPages.mcpSemanticFilterTestPanel.selectModelLabel")}
                   />
                 </div>
 
@@ -70,31 +72,37 @@ export default function MCPSemanticFilterTestPanel({
                   disabled={!testQuery || !testModel || !filterEnabled}
                   block
                 >
-                  Test Filter
+                  {t("settingsPages.mcpSemanticFilterTestPanel.testFilterButton")}
                 </Button>
 
                 {!filterEnabled && (
                   <Alert
                     type="warning"
-                    message="Semantic filtering is disabled"
-                    description="Enable semantic filtering and save settings to test the filter."
+                    message={t("settingsPages.mcpSemanticFilterTestPanel.filterDisabledTitle")}
+                    description={t("settingsPages.mcpSemanticFilterTestPanel.filterDisabledDesc")}
                     showIcon
                   />
                 )}
 
                 {testResult && (
                   <div>
-                    <Typography.Title level={5}>Results</Typography.Title>
+                    <Typography.Title level={5}>
+                      {t("settingsPages.mcpSemanticFilterTestPanel.resultsTitle")}
+                    </Typography.Title>
                     <Alert
                       type="success"
-                      message={`${testResult.selectedTools} tools selected`}
-                      description={`Filtered from ${testResult.totalTools} available tools`}
+                      message={t("settingsPages.mcpSemanticFilterTestPanel.toolsSelectedMessage", {
+                        selectedTools: testResult.selectedTools,
+                      })}
+                      description={t("settingsPages.mcpSemanticFilterTestPanel.filteredFromMessage", {
+                        totalTools: testResult.totalTools,
+                      })}
                       showIcon
                       style={{ marginBottom: 16 }}
                     />
                     <div>
                       <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                        Selected Tools:
+                        {t("settingsPages.mcpSemanticFilterTestPanel.selectedToolsLabel")}
                       </Typography.Text>
                       <ul style={{ paddingLeft: 20, margin: 0 }}>
                         {testResult.tools.map((tool, index) => (
@@ -111,30 +119,36 @@ export default function MCPSemanticFilterTestPanel({
           },
           {
             key: "api",
-            label: "API Usage",
+            label: t("settingsPages.mcpSemanticFilterTestPanel.apiTabLabel"),
             children: (
               <div>
                 <Space style={{ marginBottom: 8 }}>
                   <CodeOutlined />
-                  <Typography.Text strong>API Usage</Typography.Text>
+                  <Typography.Text strong>
+                    {t("settingsPages.mcpSemanticFilterTestPanel.apiUsageTitle")}
+                  </Typography.Text>
                 </Space>
                 <Typography.Text type="secondary" style={{ display: "block", marginBottom: 8 }}>
-                  Use this curl command to test the semantic filter with your current configuration.
+                  {t("settingsPages.mcpSemanticFilterTestPanel.apiUsageDesc")}
                 </Typography.Text>
                 <Typography.Text strong style={{ display: "block", marginBottom: 8 }}>
-                  Response headers to check:
+                  {t("settingsPages.mcpSemanticFilterTestPanel.responseHeadersLabel")}
                 </Typography.Text>
                 <ul style={{ paddingLeft: 20, margin: "0 0 12px 0" }}>
                   <li>
-                    <Typography.Text>x-litellm-semantic-filter: shows total tools → selected tools</Typography.Text>
+                    <Typography.Text>
+                      {t("settingsPages.mcpSemanticFilterTestPanel.semanticFilterHeader")}
+                    </Typography.Text>
                     <Typography.Text type="secondary" style={{ display: "block" }}>
-                      Example: 10→3
+                      {t("settingsPages.mcpSemanticFilterTestPanel.semanticFilterHeaderExample")}
                     </Typography.Text>
                   </li>
                   <li>
-                    <Typography.Text>x-litellm-semantic-filter-tools: CSV of selected tool names</Typography.Text>
+                    <Typography.Text>
+                      {t("settingsPages.mcpSemanticFilterTestPanel.semanticFilterToolsHeader")}
+                    </Typography.Text>
                     <Typography.Text type="secondary" style={{ display: "block" }}>
-                      Example: wikipedia-fetch,github-search,slack-post
+                      {t("settingsPages.mcpSemanticFilterTestPanel.semanticFilterToolsHeaderExample")}
                     </Typography.Text>
                   </li>
                 </ul>

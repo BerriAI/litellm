@@ -2,6 +2,7 @@
 
 import { Button, Form, Modal, Space } from "antd";
 import React, { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import BaseSSOSettingsForm from "./BaseSSOSettingsForm";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
@@ -16,6 +17,7 @@ interface EditSSOSettingsModalProps {
 }
 
 const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
 
   // Use react-query hooks for SSO settings
@@ -104,16 +106,20 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
 
       await mutateAsync(payload, {
         onSuccess: () => {
-          NotificationsManager.success("SSO settings updated successfully");
+          NotificationsManager.success(t("settingsPages.editSSOSettingsModal.updateSuccess"));
           onSuccess();
         },
         onError: (error) => {
-          NotificationsManager.fromBackend("Failed to save SSO settings: " + parseErrorMessage(error));
+          NotificationsManager.fromBackend(
+            t("settingsPages.editSSOSettingsModal.saveFailed", { error: parseErrorMessage(error) }),
+          );
         },
       });
     } catch (error) {
       // Handle processing errors gracefully
-      NotificationsManager.fromBackend("Failed to process SSO settings: " + parseErrorMessage(error));
+      NotificationsManager.fromBackend(
+        t("settingsPages.editSSOSettingsModal.processFailed", { error: parseErrorMessage(error) }),
+      );
     }
   };
 
@@ -124,16 +130,16 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
 
   return (
     <Modal
-      title="Edit SSO Settings"
+      title={t("settingsPages.editSSOSettingsModal.title")}
       open={isVisible}
       width={800}
       footer={
         <Space>
           <Button onClick={handleCancel} disabled={isPending}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button loading={isPending} onClick={() => form.submit()}>
-            {isPending ? "Saving..." : "Save"}
+            {isPending ? t("common.saving") : t("common.save")}
           </Button>
         </Space>
       }

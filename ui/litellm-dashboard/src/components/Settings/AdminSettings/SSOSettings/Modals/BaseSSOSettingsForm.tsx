@@ -3,7 +3,10 @@
 import { TextInput } from "@tremor/react";
 import { Checkbox, Form, Input, Select } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { ssoProviderLogoMap, ssoProviderDisplayNames } from "../constants";
+
+type TranslateFn = (key: string, options?: Record<string, any>) => string;
 
 export interface BaseSSOSettingsFormProps {
   form: any; // Replace with proper Form type if available
@@ -14,22 +17,28 @@ export interface BaseSSOSettingsFormProps {
 export interface SSOProviderConfig {
   envVarMap: Record<string, string>;
   fields: Array<{
-    label: string;
+    labelKey: string;
     name: string;
     placeholder?: string;
   }>;
 }
 
 // Define configurations for each SSO provider
-export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
+export const getSSOProviderConfigs = (t: TranslateFn): Record<string, SSOProviderConfig> => ({
   google: {
     envVarMap: {
       google_client_id: "GOOGLE_CLIENT_ID",
       google_client_secret: "GOOGLE_CLIENT_SECRET",
     },
     fields: [
-      { label: "Google Client ID", name: "google_client_id" },
-      { label: "Google Client Secret", name: "google_client_secret" },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.googleClientId"),
+        name: "google_client_id",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.googleClientSecret"),
+        name: "google_client_secret",
+      },
     ],
   },
   microsoft: {
@@ -39,9 +48,18 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       microsoft_tenant: "MICROSOFT_TENANT",
     },
     fields: [
-      { label: "Microsoft Client ID", name: "microsoft_client_id" },
-      { label: "Microsoft Client Secret", name: "microsoft_client_secret" },
-      { label: "Microsoft Tenant", name: "microsoft_tenant" },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.microsoftClientId"),
+        name: "microsoft_client_id",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.microsoftClientSecret"),
+        name: "microsoft_client_secret",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.microsoftTenant"),
+        name: "microsoft_tenant",
+      },
     ],
   },
   okta: {
@@ -53,16 +71,26 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
     },
     fields: [
-      { label: "Generic Client ID", name: "generic_client_id" },
-      { label: "Generic Client Secret", name: "generic_client_secret" },
       {
-        label: "Authorization Endpoint",
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.genericClientId"),
+        name: "generic_client_id",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.genericClientSecret"),
+        name: "generic_client_secret",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.authorizationEndpoint"),
         name: "generic_authorization_endpoint",
         placeholder: "https://your-domain/authorize",
       },
-      { label: "Token Endpoint", name: "generic_token_endpoint", placeholder: "https://your-domain/token" },
       {
-        label: "Userinfo Endpoint",
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.tokenEndpoint"),
+        name: "generic_token_endpoint",
+        placeholder: "https://your-domain/token",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.userinfoEndpoint"),
         name: "generic_userinfo_endpoint",
         placeholder: "https://your-domain/userinfo",
       },
@@ -77,26 +105,47 @@ export const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
     },
     fields: [
-      { label: "Generic Client ID", name: "generic_client_id" },
-      { label: "Generic Client Secret", name: "generic_client_secret" },
-      { label: "Authorization Endpoint", name: "generic_authorization_endpoint" },
-      { label: "Token Endpoint", name: "generic_token_endpoint" },
-      { label: "Userinfo Endpoint", name: "generic_userinfo_endpoint" },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.genericClientId"),
+        name: "generic_client_id",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.genericClientSecret"),
+        name: "generic_client_secret",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.authorizationEndpoint"),
+        name: "generic_authorization_endpoint",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.tokenEndpoint"),
+        name: "generic_token_endpoint",
+      },
+      {
+        labelKey: t("settingsPages.baseSSOSettingsForm.fieldLabels.userinfoEndpoint"),
+        name: "generic_userinfo_endpoint",
+      },
     ],
   },
-};
+});
 
 // Helper function to render provider fields
-export const renderProviderFields = (provider: string) => {
-  const config = ssoProviderConfigs[provider];
+export const renderProviderFields = (provider: string, t: TranslateFn = (k: string) => k as any) => {
+  const configs = getSSOProviderConfigs(t);
+  const config = configs[provider];
   if (!config) return null;
 
   return config.fields.map((field) => (
     <Form.Item
       key={field.name}
-      label={field.label}
+      label={field.labelKey}
       name={field.name}
-      rules={[{ required: true, message: `Please enter the ${field.label.toLowerCase()}` }]}
+      rules={[
+        {
+          required: true,
+          message: t("settingsPages.baseSSOSettingsForm.fieldRequired", { label: field.labelKey.toLowerCase() }),
+        },
+      ]}
     >
       {field.name.includes("client") ? <Input.Password /> : <TextInput placeholder={field.placeholder} />}
     </Form.Item>
@@ -104,13 +153,14 @@ export const renderProviderFields = (provider: string) => {
 };
 
 const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormSubmit }) => {
+  const { t } = useTranslation();
   return (
     <div>
       <Form form={form} onFinish={onFormSubmit} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         <Form.Item
-          label="SSO Provider"
+          label={t("settingsPages.baseSSOSettingsForm.ssoProviderLabel")}
           name="sso_provider"
-          rules={[{ required: true, message: "Please select an SSO provider" }]}
+          rules={[{ required: true, message: t("settingsPages.baseSSOSettingsForm.ssoProviderRequired") }]}
         >
           <Select>
             {Object.entries(ssoProviderLogoMap).map(([value, logo]) => (
@@ -138,32 +188,32 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
         >
           {({ getFieldValue }) => {
             const provider = getFieldValue("sso_provider");
-            return provider ? renderProviderFields(provider) : null;
+            return provider ? renderProviderFields(provider, t) : null;
           }}
         </Form.Item>
 
         <Form.Item
-          label="Proxy Admin Email"
+          label={t("settingsPages.baseSSOSettingsForm.proxyAdminEmailLabel")}
           name="user_email"
-          rules={[{ required: true, message: "Please enter the email of the proxy admin" }]}
+          rules={[{ required: true, message: t("settingsPages.baseSSOSettingsForm.proxyAdminEmailRequired") }]}
         >
           <TextInput />
         </Form.Item>
         <Form.Item
-          label="Proxy Base URL"
+          label={t("settingsPages.baseSSOSettingsForm.proxyBaseUrlLabel")}
           name="proxy_base_url"
           normalize={(value) => value?.trim()}
           rules={[
-            { required: true, message: "Please enter the proxy base url" },
+            { required: true, message: t("settingsPages.baseSSOSettingsForm.proxyBaseUrlRequired") },
             {
               pattern: /^https?:\/\/.+/,
-              message: "URL must start with http:// or https://",
+              message: t("settingsPages.baseSSOSettingsForm.proxyBaseUrlInvalidScheme"),
             },
             {
               validator: (_, value) => {
                 // Only check for trailing slash if the URL starts with http:// or https://
                 if (value && /^https?:\/\/.+/.test(value) && value.endsWith("/")) {
-                  return Promise.reject("URL must not end with a trailing slash");
+                  return Promise.reject(t("settingsPages.baseSSOSettingsForm.proxyBaseUrlTrailingSlash"));
                 }
                 return Promise.resolve();
               },
@@ -180,7 +230,11 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
           {({ getFieldValue }) => {
             const provider = getFieldValue("sso_provider");
             return provider === "okta" || provider === "generic" ? (
-              <Form.Item label="Use Role Mappings" name="use_role_mappings" valuePropName="checked">
+              <Form.Item
+                label={t("settingsPages.baseSSOSettingsForm.useRoleMappingsLabel")}
+                name="use_role_mappings"
+                valuePropName="checked"
+              >
                 <Checkbox />
               </Form.Item>
             ) : null;
@@ -200,9 +254,9 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
             const supportsRoleMappings = provider === "okta" || provider === "generic";
             return useRoleMappings && supportsRoleMappings ? (
               <Form.Item
-                label="Group Claim"
+                label={t("settingsPages.baseSSOSettingsForm.groupClaimLabel")}
                 name="group_claim"
-                rules={[{ required: true, message: "Please enter the group claim" }]}
+                rules={[{ required: true, message: t("settingsPages.baseSSOSettingsForm.groupClaimRequired") }]}
               >
                 <TextInput />
               </Form.Item>
@@ -223,28 +277,49 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
             const supportsRoleMappings = provider === "okta" || provider === "generic";
             return useRoleMappings && supportsRoleMappings ? (
               <>
-                <Form.Item label="Default Role" name="default_role" initialValue="Internal User">
+                <Form.Item
+                  label={t("settingsPages.baseSSOSettingsForm.defaultRoleLabel")}
+                  name="default_role"
+                  initialValue="Internal User"
+                >
                   <Select>
-                    <Select.Option value="internal_user_viewer">Internal Viewer</Select.Option>
-                    <Select.Option value="internal_user">Internal User</Select.Option>
-                    <Select.Option value="proxy_admin_viewer">Admin Viewer</Select.Option>
-                    <Select.Option value="proxy_admin">Proxy Admin</Select.Option>
+                    <Select.Option value="internal_user_viewer">
+                      {t("settingsPages.baseSSOSettingsForm.roleInternalViewer")}
+                    </Select.Option>
+                    <Select.Option value="internal_user">
+                      {t("settingsPages.baseSSOSettingsForm.roleInternalUser")}
+                    </Select.Option>
+                    <Select.Option value="proxy_admin_viewer">
+                      {t("settingsPages.baseSSOSettingsForm.roleAdminViewer")}
+                    </Select.Option>
+                    <Select.Option value="proxy_admin">
+                      {t("settingsPages.baseSSOSettingsForm.roleProxyAdmin")}
+                    </Select.Option>
                   </Select>
                 </Form.Item>
 
-                <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
+                <Form.Item label={t("settingsPages.baseSSOSettingsForm.proxyAdminTeamsLabel")} name="proxy_admin_teams">
                   <TextInput />
                 </Form.Item>
 
-                <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
+                <Form.Item
+                  label={t("settingsPages.baseSSOSettingsForm.adminViewerTeamsLabel")}
+                  name="admin_viewer_teams"
+                >
                   <TextInput />
                 </Form.Item>
 
-                <Form.Item label="Internal User Teams" name="internal_user_teams">
+                <Form.Item
+                  label={t("settingsPages.baseSSOSettingsForm.internalUserTeamsLabel")}
+                  name="internal_user_teams"
+                >
                   <TextInput />
                 </Form.Item>
 
-                <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
+                <Form.Item
+                  label={t("settingsPages.baseSSOSettingsForm.internalViewerTeamsLabel")}
+                  name="internal_viewer_teams"
+                >
                   <TextInput />
                 </Form.Item>
               </>
@@ -259,7 +334,11 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
           {({ getFieldValue }) => {
             const provider = getFieldValue("sso_provider");
             return provider === "okta" || provider === "generic" ? (
-              <Form.Item label="Use Team Mappings" name="use_team_mappings" valuePropName="checked">
+              <Form.Item
+                label={t("settingsPages.baseSSOSettingsForm.useTeamMappingsLabel")}
+                name="use_team_mappings"
+                valuePropName="checked"
+              >
                 <Checkbox />
               </Form.Item>
             ) : null;
@@ -279,9 +358,9 @@ const BaseSSOSettingsForm: React.FC<BaseSSOSettingsFormProps> = ({ form, onFormS
             const supportsTeamMappings = provider === "okta" || provider === "generic";
             return useTeamMappings && supportsTeamMappings ? (
               <Form.Item
-                label="Team IDs JWT Field"
+                label={t("settingsPages.baseSSOSettingsForm.teamIdsJwtFieldLabel")}
                 name="team_ids_jwt_field"
-                rules={[{ required: true, message: "Please enter the team IDs JWT field" }]}
+                rules={[{ required: true, message: t("settingsPages.baseSSOSettingsForm.teamIdsJwtFieldRequired") }]}
               >
                 <TextInput />
               </Form.Item>
