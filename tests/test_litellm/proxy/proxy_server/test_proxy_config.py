@@ -623,7 +623,7 @@ async def test_ProxyConfig_load_config_forwards_callback_specific_params(
         "      - capability\n"
         "      - platform\n"
         "      - ai_product\n"
-        'litellm_settings:\n'
+        "litellm_settings:\n"
         '  callbacks: ["datadog_cost_management"]\n'
     )
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
@@ -649,6 +649,48 @@ async def test_ProxyConfig_load_config_forwards_callback_specific_params(
             "cost_tag_keys": ["capability", "platform", "ai_product"]
         }
     }
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_load_config_blank_callback_settings_does_not_crash(
+    tmp_path, monkeypatch
+):
+    """Regression: `callback_settings:` with no body loads as None because
+    dict.get() only falls back to the default when the key is absent. The None
+    was forwarded verbatim to initialize_callbacks_on_proxy, where the first
+    `"<name>" in callback_specific_params` membership test raised
+    TypeError: argument of type 'NoneType' is not iterable, aborting startup.
+    Startup must succeed and the callback must initialize with its defaults.
+    """
+    f = tmp_path / "c.yaml"
+    f.write_text(
+        "model_list: []\n"
+        "general_settings: {}\n"
+        "callback_settings:\n"
+        "litellm_settings:\n"
+        '  callbacks: ["compression_interception"]\n'
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
+    monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
+
+    from litellm.integrations.compression_interception.handler import (
+        CompressionInterceptionLogger,
+    )
+
+    original_callbacks = (
+        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
+    )
+    litellm.callbacks = []
+    try:
+        pc = ProxyConfig()
+        await pc.load_config(router=None, config_file_path=str(f))
+
+        assert any(
+            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
+        )
+    finally:
+        litellm.callbacks = original_callbacks
 
 
 # ---------------------------------------------------------------------------

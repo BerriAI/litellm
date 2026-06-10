@@ -40,8 +40,10 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     premium_user: bool,
     config_file_path: str,
     litellm_settings: dict,
-    callback_specific_params: dict = {},
+    callback_specific_params: Optional[dict] = None,
 ):
+    if not isinstance(callback_specific_params, dict):
+        callback_specific_params = {}
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.logging_callback_manager import (
         LoggingCallbackManager,

@@ -3,6 +3,8 @@ import sys
 import os
 from types import ModuleType, SimpleNamespace
 
+import pytest
+
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
@@ -363,5 +365,44 @@ def test_initialize_callbacks_on_proxy_lakera_ignores_non_dict_callback_settings
         )
         assert captured["kwargs"] == {}
         assert any(isinstance(c, _DummyLakera) for c in litellm.callbacks)
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.parametrize("bad_root", [None, True])
+def test_initialize_callbacks_on_proxy_non_dict_callback_specific_params_root(
+    monkeypatch, bad_root
+):
+    """Regression: a blank `callback_settings:` key in YAML loads as None (and
+    `callback_settings: true` as a bool); load_config forwards that value
+    verbatim as callback_specific_params. Membership tests like
+    `"compression_interception" in callback_specific_params` then raise
+    TypeError and abort proxy startup. A non-dict root must be normalized to {}
+    so the callback initializes with its defaults.
+    """
+    monkeypatch.setitem(
+        sys.modules,
+        "litellm.proxy.proxy_server",
+        SimpleNamespace(prisma_client=None),
+    )
+    from litellm.integrations.compression_interception.handler import (
+        CompressionInterceptionLogger,
+    )
+
+    original_callbacks = (
+        list(litellm.callbacks) if isinstance(litellm.callbacks, list) else []
+    )
+    litellm.callbacks = []
+    try:
+        initialize_callbacks_on_proxy(
+            value=["compression_interception"],
+            premium_user=False,
+            config_file_path=".",
+            litellm_settings={},
+            callback_specific_params=bad_root,
+        )
+        assert any(
+            isinstance(c, CompressionInterceptionLogger) for c in litellm.callbacks
+        )
     finally:
         litellm.callbacks = original_callbacks
