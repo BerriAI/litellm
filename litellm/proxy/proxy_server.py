@@ -12450,16 +12450,6 @@ def _filter_v1_model_info_deployments(
     ]
 
 
-def _should_apply_v1_team_access_filter(
-    user_api_key_dict: UserAPIKeyAuth,
-) -> bool:
-    """Team membership filtering requires a resolvable user or admin role."""
-    return (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_id is not None
-    )
-
-
 def _translate_model_name_for_response(model: dict) -> dict:
     """For team-scoped DB rows, replace `model_name` with the public name
     in `model_info.team_public_model_name` before returning. The DB column
@@ -12638,16 +12628,6 @@ async def model_info_v1(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
         llm_router=llm_router,
     )
-
-    if prisma_client is not None and _should_apply_v1_team_access_filter(
-        user_api_key_dict=user_api_key_dict
-    ):
-        all_models = await get_all_team_and_direct_access_models(
-            user_api_key_dict=user_api_key_dict,
-            prisma_client=prisma_client,
-            llm_router=llm_router,
-            all_models=all_models,
-        )
 
     all_models = _filter_v1_model_info_deployments(
         all_models=all_models,
