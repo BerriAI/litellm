@@ -3507,9 +3507,7 @@ class Logging(LiteLLMLoggingBaseClass):
         else:
             return None
 
-    def _handle_anthropic_messages_response_logging(
-        self, result: Any
-    ) -> Union[ModelResponse, ResponsesAPIResponse]:
+    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
         """
         Handles logging for Anthropic messages responses.
 
@@ -3528,15 +3526,14 @@ class Logging(LiteLLMLoggingBaseClass):
             return result
         elif isinstance(result, ModelResponse):
             return result
-        elif isinstance(
+
+        if isinstance(
             result,
             (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent),
         ):
-            # anthropic_messages() can route to OpenAI Responses API; in that path
-            # the assembled streaming result is one of these terminal events rather than
-            # a ModelResponse. Return the inner response so downstream handlers
-            # (_transform_usage_objects, normalize_logging_result) can process it.
-            return result.response
+            result = result.response
+        if isinstance(result, ResponsesAPIResponse):
+            return self._translate_responses_api_response_to_model_response(result)
 
         httpx_response = self.model_call_details.get("httpx_response", None)
         if httpx_response and isinstance(httpx_response, httpx.Response):
@@ -3569,6 +3566,55 @@ class Logging(LiteLLMLoggingBaseClass):
                 json_mode=None,
             )
         return result
+
+    def _translate_responses_api_response_to_model_response(
+        self, result: ResponsesAPIResponse
+    ) -> ModelResponse:
+        """
+        Convert a Responses API response into a ModelResponse for spend_logs.
+
+        The proxy UI parses spend_log rows expecting chat-completion shape
+        (response.choices[0].message); a raw ResponsesAPIResponse dump (output[...])
+        would render as empty in the Logs tab. Translation also yields full
+        choices/message detail downstream consumers can rely on.
+        """
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
+
+        try:
+            return LiteLLMResponsesTransformationHandler().transform_response(
+                model=self.model,
+                raw_response=result,
+                model_response=litellm.ModelResponse(),
+                logging_obj=self,
+                request_data={},
+                messages=[],
+                optional_params={},
+                litellm_params={},
+                encoding=litellm.encoding,
+            )
+        except Exception as e:
+            verbose_logger.debug(
+                "Responses API -> ModelResponse translation failed for "
+                "anthropic_messages logging (%s); falling back to minimal "
+                "usage-only ModelResponse to keep the spend_logs row.",
+                str(e),
+            )
+            model_response = litellm.ModelResponse()
+            model_response.model = self.model
+            usage = getattr(result, "usage", None)
+            if usage is not None and ResponseAPILoggingUtils._is_response_api_usage(
+                usage
+            ):
+                setattr(
+                    model_response,
+                    "usage",
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        usage
+                    ),
+                )
+            return model_response
 
     def _handle_non_streaming_google_genai_generate_content_response_logging(
         self, result: Any
