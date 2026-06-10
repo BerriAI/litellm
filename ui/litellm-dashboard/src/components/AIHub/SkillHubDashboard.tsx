@@ -4,7 +4,8 @@ import { SearchOutlined } from "@ant-design/icons";
 import { Input, Select } from "antd";
 import { Plugin } from "@/components/claude_code_plugins/types";
 import { ModelDataTable } from "@/components/model_dashboard/table";
-import { skillHubColumns } from "@/components/skill_hub_table_columns";
+import { useTranslation } from "react-i18next";
+import { getSkillHubColumns } from "@/components/skill_hub_table_columns";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
 
 interface SkillHubDashboardProps {
@@ -24,6 +25,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
   publicPage = false,
   onPublishSuccess,
 }) => {
+  const { t } = useTranslation();
   const [search, setSearch] = useState("");
   const [domainFilter, setDomainFilter] = useState<string | undefined>(undefined);
   const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
@@ -115,7 +117,7 @@ const SkillHubDashboard: React.FC<SkillHubDashboardProps> = ({
           </div>
         </div>
         <ModelDataTable
-          columns={skillHubColumns((skill) => setSelectedSkill(skill), copyToClipboard, publicPage)}
+          columns={getSkillHubColumns(t, (skill) => setSelectedSkill(skill), copyToClipboard, publicPage)}
           data={filteredSkills}
           isLoading={false}
           defaultSorting={[{ id: "name", desc: false }]}
