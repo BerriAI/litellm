@@ -272,6 +272,55 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
+    def _supports_sampling_params(model: str) -> bool:
+        """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
+        rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
+        a 400 ("`temperature` is deprecated for this model")."""
+        model_lower = model.lower()
+        return not any(
+            v in model_lower
+            for v in (
+                "fable",
+                "opus-4-7",
+                "opus_4_7",
+                "opus-4.7",
+                "opus_4.7",
+                "opus-4-8",
+                "opus_4_8",
+                "opus-4.8",
+                "opus_4.8",
+            )
+        )
+
+    @staticmethod
+    def _apply_sampling_param(
+        optional_params: dict,
+        model: str,
+        param: str,
+        value: Any,
+        drop_params: bool,
+        output_key: str,
+    ) -> None:
+        """Forward ``temperature``/``top_p`` to ``optional_params[output_key]``
+        unless the model removed sampling params, in which case drop the param
+        (with drop_params) or raise a clean client-side 400."""
+        if AnthropicModelInfo._supports_sampling_params(model) or (
+            param == "temperature" and value == 1
+        ):
+            optional_params[output_key] = value
+        elif not (litellm.drop_params or drop_params):
+            supported_hint = (
+                "Only temperature=1 is supported. " if param == "temperature" else ""
+            )
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} does not support {param}={value}. {supported_hint}"
+                    "To drop unsupported params, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+
+    @staticmethod
     def _supports_model_capability(model: str, key: str) -> bool:
         """Check a boolean capability ``key`` in the model map.
 

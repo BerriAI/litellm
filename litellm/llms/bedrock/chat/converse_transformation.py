@@ -920,10 +920,15 @@ class AmazonConverseConfig(BaseConfig):
                         continue
                     value = [value]
                 optional_params["stopSequences"] = value
-            if param == "temperature":
-                optional_params["temperature"] = value
-            if param == "top_p":
-                optional_params["topP"] = value
+            if param == "temperature" or param == "top_p":
+                AnthropicConfig._apply_sampling_param(
+                    optional_params=optional_params,
+                    model=model,
+                    param=param,
+                    value=value,
+                    drop_params=drop_params,
+                    output_key="topP" if param == "top_p" else param,
+                )
             if param == "tools" and isinstance(value, list):
                 self._apply_tool_call_transformation(
                     tools=cast(List[OpenAIChatCompletionToolParam], value),

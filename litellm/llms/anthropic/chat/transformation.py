@@ -1455,10 +1455,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _value = self._map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
-            elif param == "temperature":
-                optional_params["temperature"] = value
-            elif param == "top_p":
-                optional_params["top_p"] = value
+            elif param == "temperature" or param == "top_p":
+                AnthropicConfig._apply_sampling_param(
+                    optional_params=optional_params,
+                    model=model,
+                    param=param,
+                    value=value,
+                    drop_params=drop_params,
+                    output_key=param,
+                )
             elif param == "response_format" and isinstance(value, dict):
                 if any(
                     substring in model
