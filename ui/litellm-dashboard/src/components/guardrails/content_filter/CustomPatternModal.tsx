@@ -1,5 +1,6 @@
 import React from "react";
 import { Typography, Select, Modal, Space, Button, Input } from "antd";
+import { useTranslation } from "react-i18next";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -27,13 +28,20 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
   onAdd,
   onCancel,
 }) => {
+  const { t } = useTranslation();
   return (
-    <Modal title="Add custom regex pattern" open={visible} onCancel={onCancel} footer={null} width={800}>
+    <Modal
+      title={t("guardrails.customPatternModal.title")}
+      open={visible}
+      onCancel={onCancel}
+      footer={null}
+      width={800}
+    >
       <Space direction="vertical" style={{ width: "100%" }} size="large">
         <div>
-          <Text strong>Pattern name</Text>
+          <Text strong>{t("guardrails.customPatternModal.patternNameLabel")}</Text>
           <Input
-            placeholder="e.g., internal_id, employee_code"
+            placeholder={t("guardrails.customPatternModal.patternNamePlaceholder")}
             value={patternName}
             onChange={(e) => onNameChange(e.target.value)}
             style={{ marginTop: 8 }}
@@ -41,34 +49,34 @@ const CustomPatternModal: React.FC<CustomPatternModalProps> = ({
         </div>
 
         <div>
-          <Text strong>Regex pattern</Text>
+          <Text strong>{t("guardrails.customPatternModal.regexPatternLabel")}</Text>
           <Input
-            placeholder="e.g., ID-[0-9]{6}"
+            placeholder={t("guardrails.customPatternModal.regexPatternPlaceholder")}
             value={patternRegex}
             onChange={(e) => onRegexChange(e.target.value)}
             style={{ marginTop: 8 }}
           />
           <Text type="secondary" style={{ fontSize: 12 }}>
-            Enter a valid regular expression to match sensitive data
+            {t("guardrails.customPatternModal.regexPatternHelp")}
           </Text>
         </div>
 
         <div>
-          <Text strong>Action</Text>
+          <Text strong>{t("guardrails.customPatternModal.actionLabel")}</Text>
           <Text type="secondary" style={{ display: "block", marginTop: 4, marginBottom: 8 }}>
-            Choose what action the guardrail should take when this pattern is detected
+            {t("guardrails.customPatternModal.actionHelp")}
           </Text>
           <Select value={patternAction} onChange={onActionChange} style={{ width: "100%" }}>
-            <Option value="BLOCK">Block</Option>
-            <Option value="MASK">Mask</Option>
+            <Option value="BLOCK">{t("guardrails.customPatternModal.actionBlock")}</Option>
+            <Option value="MASK">{t("guardrails.customPatternModal.actionMask")}</Option>
           </Select>
         </div>
       </Space>
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "24px" }}>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel}>{t("common.cancel")}</Button>
         <Button type="primary" onClick={onAdd}>
-          Add
+          {t("common.add")}
         </Button>
       </div>
     </Modal>
