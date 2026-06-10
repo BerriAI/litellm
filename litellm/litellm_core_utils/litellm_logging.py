@@ -1,6 +1,8 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+from __future__ import annotations
+
 import copy
 import datetime
 import json
@@ -99,7 +101,6 @@ from litellm.types.utils import (
     CachingDetails,
     CallTypes,
     CostBreakdown,
-    CostPerToken,
     CostResponseTypes,
     CustomPricingLiteLLMParams,
     DynamicPromptManagementParamLiteral,
@@ -176,6 +177,7 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
+    from litellm.types.utils import CostPerToken
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
@@ -1525,7 +1527,14 @@ class Logging(LiteLLMLoggingBaseClass):
         # calculator so pricing does not depend on the deployment-id entry
         # surviving in the process-global litellm.model_cost (which is wiped on
         # model-cost-map reloads). See GitHub issue #30081.
+        # Only trust litellm_params['model_info'] when injected by the router
+        # (not client-supplied), to prevent zero-cost billing bypass.
+        _is_router_deployment = self.get_router_model_id() is not None
         custom_cost_per_token = extract_custom_cost_per_token(
+            litellm_params=_litellm_params_for_cost,
+            _model_info_from_deployment=_is_router_deployment,
+        )
+        custom_cost_per_second = extract_custom_cost_per_second(
             litellm_params=_litellm_params_for_cost
         )
 
@@ -1552,6 +1561,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
                 "custom_cost_per_token": custom_cost_per_token,
+                "custom_cost_per_second": custom_cost_per_second,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
@@ -4905,6 +4915,8 @@ def _custom_cost_per_token_from_source(
 
 def extract_custom_cost_per_token(
     litellm_params: Optional[dict],
+    *,
+    _model_info_from_deployment: bool = False,
 ) -> Optional[CostPerToken]:
     """Extract a deployment's explicit per-token pricing from ``litellm_params``.
 
@@ -4912,7 +4924,11 @@ def extract_custom_cost_per_token(
     cache rates) in the following sources, in priority order:
 
     1. The top-level ``litellm_params`` (per-request custom pricing).
-    2. ``litellm_params['model_info']`` (router deployment custom pricing).
+    2. ``litellm_params['model_info']`` — **only when
+       ``_model_info_from_deployment`` is True** (set by the router when it
+       injected the deployment configuration). Gated to prevent proxy clients
+       from supplying a client-controlled ``model_info`` dict with zero rates
+       that bypasses spend tracking and budget enforcement.
     3. ``litellm_params['metadata']['model_info']``.
     4. ``litellm_params['litellm_metadata']['model_info']`` (used by
        ``/responses`` and ``/messages`` generic-api routes).
@@ -4930,10 +4946,11 @@ def extract_custom_cost_per_token(
     if result is not None:
         return result
 
-    # 2. litellm_params['model_info']
-    result = _custom_cost_per_token_from_source(litellm_params.get("model_info"))
-    if result is not None:
-        return result
+    # 2. litellm_params['model_info'] — only when injected by the router
+    if _model_info_from_deployment:
+        result = _custom_cost_per_token_from_source(litellm_params.get("model_info"))
+        if result is not None:
+            return result
 
     # 3 + 4. model_info nested under metadata / litellm_metadata
     for metadata_key in ("metadata", "litellm_metadata"):
@@ -4942,6 +4959,57 @@ def extract_custom_cost_per_token(
             result = _custom_cost_per_token_from_source(metadata.get("model_info"))
             if result is not None:
                 return result
+
+    return None
+
+
+def _coerce_cost_value_per_second(value: Any) -> Optional[float]:
+    """Coerce a per-second cost value to float, returning None when absent/invalid.
+
+    ``0`` / ``0.0`` are valid, only ``None`` and non-numeric values are treated as missing.
+    """
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def extract_custom_cost_per_second(
+    litellm_params: Optional[dict],
+) -> Optional[float]:
+    """Extract a deployment's explicit per-second pricing from ``litellm_params``.
+
+    Looks for ``input_cost_per_second`` in the same sources as
+    ``extract_custom_cost_per_token``, in priority order:
+
+    1. Top-level ``litellm_params``.
+    2. ``litellm_params['model_info']`` (router deployment, gated).
+    3. ``litellm_params['metadata']['model_info']``.
+    4. ``litellm_params['litellm_metadata']['model_info']``.
+
+    Returns the first non-None value, or ``None`` if no per-second rate is
+    configured. This is threaded through to ``completion_cost`` so that
+    per-second custom pricing survives model-cost-map reloads (same root cause
+    as issue #30081).
+    """
+    if litellm_params is None:
+        return None
+
+    for metadata_key in (None, "model_info", "metadata", "litellm_metadata"):
+        if metadata_key is None:
+            source = litellm_params
+        else:
+            container = litellm_params.get(metadata_key) or {}
+            if not isinstance(container, dict):
+                continue
+            source = container.get("model_info") if metadata_key in ("metadata", "litellm_metadata") else container
+
+        if source and isinstance(source, dict):
+            cost = _coerce_cost_value_per_second(source.get("input_cost_per_second"))
+            if cost is not None:
+                return cost
 
     return None
 
