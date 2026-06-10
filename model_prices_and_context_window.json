@@ -24406,7 +24406,7 @@
         "supports_reasoning": true,
         "supports_system_messages": true,
         "supports_vision": true,
-        "max_input_tokens": 512000,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 128000
     },
     "mistral.devstral-2-123b": {
