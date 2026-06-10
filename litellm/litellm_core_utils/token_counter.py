@@ -744,6 +744,17 @@ def _count_content_list(
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
+            elif c["type"] == "file":
+                # Document/file content block (e.g. a PDF input).
+                # The provider parses the file server-side, so the resulting
+                # token count is not known here. Count only human-readable
+                # metadata (e.g. filename) and skip the opaque file payload
+                # (file_data/file_id) so we don't crash or wildly overcount.
+                file_obj = c.get("file") or {}
+                if isinstance(file_obj, dict):
+                    filename = str(file_obj.get("filename", ""))
+                    if filename:
+                        num_tokens += count_function(filename)
             else:
                 content_type = (
                     c.get("type", type(c).__name__)
@@ -752,7 +763,7 @@ def _count_content_list(
                 )
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
+                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, file)."
                 )
         return num_tokens
     except Exception as e:

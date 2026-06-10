@@ -1010,3 +1010,72 @@ def test_token_counter_with_thinking_content():
     assert (
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+
+
+def test_token_counter_with_file_content():
+    """
+    Test that _count_content_list() handles the "file" content block type.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/28409 where
+    a PDF/document "file" content block (a valid OpenAI/Anthropic content type)
+    caused token_counter() / trim_messages() to raise a ValueError.
+
+    Validates that:
+    - a "file" content block does not raise
+    - the opaque base64 file_data blob is not counted as text tokens
+    - human-readable metadata (filename) is still counted
+    """
+    base64_pdf = "data:application/pdf;base64," + ("JVBERi0xLjQ=" * 50)
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this document"},
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "draconomicon.pdf",
+                        "file_data": base64_pdf,
+                    },
+                },
+            ],
+        }
+    ]
+
+    tokens = token_counter(model="gpt-4o", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+
+    # The large base64 blob must not be counted as text, otherwise the count
+    # would balloon. Compare against the same message without the file block.
+    messages_text_only = [
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Summarize this document"}],
+        }
+    ]
+    tokens_text_only = token_counter(model="gpt-4o", messages=messages_text_only)
+    assert (
+        tokens - tokens_text_only < 50
+    ), f"file block should not count the base64 blob, got delta {tokens - tokens_text_only}"
+
+    # A file block without any text fields (e.g. file_id reference) must also
+    # not raise and should add no meaningful token cost.
+    messages_file_id = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "file", "file": {"file_id": "file-abc123"}},
+            ],
+        }
+    ]
+    tokens_file_id = token_counter(model="gpt-4o", messages=messages_file_id)
+    assert (
+        tokens_file_id >= 0
+    ), f"Expected non-negative token count for file_id block, got {tokens_file_id}"
+
+    # The reported entry point (trim_messages) must not silently fail either.
+    trimmed = litellm.utils.trim_messages(
+        messages=messages, model="gpt-4o", max_tokens=4096
+    )
+    assert trimmed is not None
