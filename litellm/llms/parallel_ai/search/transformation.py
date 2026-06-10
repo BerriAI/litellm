@@ -112,17 +112,20 @@ class ParallelAISearchConfig(BaseSearchConfig):
                 - If string: maps to `search_queries` (single item) and `objective`
                 - If list: maps to `search_queries` (keyword queries)
             optional_params: Optional parameters for the request
-                - mode: Search mode ('turbo', 'basic', 'advanced'; API default 'advanced')
+                - mode: Search mode ('turbo', 'basic', 'advanced'); defaults to 'basic'
+                - processor: Legacy v1beta param; 'base' maps to mode 'basic', 'pro' to 'advanced'
                 - max_results: Maximum number of search results -> `advanced_settings.max_results`
                 - search_domain_filter: Domains to include -> `advanced_settings.source_policy.include_domains`
                 - exclude_domains: Domains to exclude -> `advanced_settings.source_policy.exclude_domains`
                 - country: ISO 3166-1 alpha-2 code -> `advanced_settings.location`
                 - max_chars_per_result: -> `advanced_settings.excerpt_settings.max_chars_per_result`
-                - processor: Legacy v1beta param; 'base' maps to mode 'basic', 'pro' to 'advanced'
+                - Any other params are passed through to the request body as-is
 
         Returns:
-            Dict with typed request data following ParallelAISearchRequest spec
+            Dict with request data following the v1 search request spec
         """
+        params = dict(optional_params)
+
         request_data: ParallelAISearchRequest = {}
 
         if isinstance(query, list):
@@ -131,56 +134,49 @@ class ParallelAISearchConfig(BaseSearchConfig):
             request_data["search_queries"] = [query]
             request_data["objective"] = query
 
-        if "mode" in optional_params:
-            request_data["mode"] = optional_params["mode"]
-        elif "processor" in optional_params:
-            request_data["mode"] = LEGACY_PROCESSOR_TO_MODE.get(
-                optional_params["processor"], optional_params["processor"]
-            )
+        mode = params.pop("mode", None)
+        processor = params.pop("processor", None)
+        if mode is None and processor is not None:
+            mode = LEGACY_PROCESSOR_TO_MODE.get(processor, processor)
+        # the v1 API defaults to 'advanced' when mode is omitted; default to 'basic'
+        # instead to keep v1beta's default tier (processor 'base') and litellm's
+        # $0.004/query cost map entry for `parallel_ai/search` accurate
+        request_data["mode"] = mode or "basic"
 
         advanced_settings: _ParallelAIAdvancedSettings = {}
 
-        if "max_results" in optional_params:
-            advanced_settings["max_results"] = optional_params["max_results"]
+        if "max_results" in params:
+            advanced_settings["max_results"] = params.pop("max_results")
 
-        if "country" in optional_params:
-            advanced_settings["location"] = optional_params["country"]
+        if "country" in params:
+            advanced_settings["location"] = params.pop("country")
 
-        if "max_chars_per_result" in optional_params:
+        if "max_chars_per_result" in params:
             advanced_settings["excerpt_settings"] = {
-                "max_chars_per_result": optional_params["max_chars_per_result"]
+                "max_chars_per_result": params.pop("max_chars_per_result")
             }
 
         source_policy: _ParallelAISourcePolicy = {}
 
-        if "search_domain_filter" in optional_params:
-            source_policy["include_domains"] = optional_params["search_domain_filter"]
+        if "search_domain_filter" in params:
+            source_policy["include_domains"] = params.pop("search_domain_filter")
 
-        if "exclude_domains" in optional_params:
-            source_policy["exclude_domains"] = optional_params["exclude_domains"]
+        if "exclude_domains" in params:
+            source_policy["exclude_domains"] = params.pop("exclude_domains")
 
         if source_policy:
             advanced_settings["source_policy"] = source_policy
 
-        if "advanced_settings" in optional_params:
-            advanced_settings.update(optional_params["advanced_settings"])
+        advanced_settings.update(params.pop("advanced_settings", {}))
 
         if advanced_settings:
             request_data["advanced_settings"] = advanced_settings
 
-        result_data = dict(request_data)
+        # unified-spec param with no v1 equivalent
+        params.pop("max_tokens_per_page", None)
 
-        handled_params = self.get_supported_perplexity_optional_params() | {
-            "mode",
-            "processor",
-            "exclude_domains",
-            "max_chars_per_result",
-            "advanced_settings",
-        }
-        for param, value in optional_params.items():
-            if param not in handled_params and param not in result_data:
-                result_data[param] = value
-
+        result_data: Dict = dict(request_data)
+        result_data.update(params)
         return result_data
 
     def transform_search_response(

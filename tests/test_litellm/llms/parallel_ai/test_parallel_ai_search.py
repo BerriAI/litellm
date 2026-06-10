@@ -115,14 +115,15 @@ class TestParallelAISearch:
             await litellm.asearch(
                 query="AI developments",
                 search_provider="parallel_ai",
-                mode="basic",
+                mode="turbo",
             )
 
             json_data = mock_post.call_args.kwargs.get("json")
-            assert json_data["mode"] == "basic"
+            assert json_data["mode"] == "turbo"
 
     @pytest.mark.asyncio
-    async def test_legacy_processor_maps_to_mode(self):
+    async def test_default_mode_is_basic(self):
+        """v1 defaults to 'advanced' server-side; litellm must send 'basic' to keep v1beta's default tier and cost tracking accurate."""
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             new_callable=AsyncMock,
@@ -132,12 +133,71 @@ class TestParallelAISearch:
             await litellm.asearch(
                 query="AI developments",
                 search_provider="parallel_ai",
+            )
+
+            json_data = mock_post.call_args.kwargs.get("json")
+            assert json_data["mode"] == "basic"
+
+    @pytest.mark.parametrize(
+        "processor,expected_mode", [("base", "basic"), ("pro", "advanced")]
+    )
+    @pytest.mark.asyncio
+    async def test_legacy_processor_maps_to_mode(self, processor, expected_mode):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response()
+
+            await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                processor=processor,
+            )
+
+            json_data = mock_post.call_args.kwargs.get("json")
+            assert json_data["mode"] == expected_mode
+            assert "processor" not in json_data
+
+    @pytest.mark.asyncio
+    async def test_explicit_mode_wins_over_processor(self):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response()
+
+            await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                mode="turbo",
                 processor="pro",
             )
 
             json_data = mock_post.call_args.kwargs.get("json")
-            assert json_data["mode"] == "advanced"
+            assert json_data["mode"] == "turbo"
             assert "processor" not in json_data
+
+    @pytest.mark.asyncio
+    async def test_top_level_v1_params_pass_through(self):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            new_callable=AsyncMock,
+        ) as mock_post:
+            mock_post.return_value = _mock_response()
+
+            await litellm.asearch(
+                query="AI developments",
+                search_provider="parallel_ai",
+                session_id="session_123",
+                max_chars_total=4000,
+                max_tokens_per_page=1024,
+            )
+
+            json_data = mock_post.call_args.kwargs.get("json")
+            assert json_data["session_id"] == "session_123"
+            assert json_data["max_chars_total"] == 4000
+            assert "max_tokens_per_page" not in json_data
 
     @pytest.mark.asyncio
     async def test_optional_params_nest_under_advanced_settings(self):
