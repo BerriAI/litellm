@@ -62,6 +62,8 @@ Follow these coding conventions for new/updated code (a three-line fix in a lega
 - Fully typed; no `Any` or coarse types like dict[str, Any]. Every function parameter must be strongly typed
 - Use tagged unions + match
 - No monster files or god objects
+- No file sprawl: deliberate file and folder structure
+- Standard over hand-rolled: use the official SDK or a library where one exists; where none does, follow the spec instead of inventing local convention
 
 Follow conventional commits for commit names and PR titles
 
