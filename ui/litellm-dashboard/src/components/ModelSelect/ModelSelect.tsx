@@ -3,6 +3,7 @@ import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrgani
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { Select, Skeleton, Tooltip, type SelectProps } from "antd";
+import { useTranslation } from "react-i18next";
 import { Organization, Team } from "../networking";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -92,6 +93,7 @@ const filterModels = (
 };
 
 export const ModelSelect = (props: ModelSelectProps) => {
+  const { t } = useTranslation();
   const { teamID, organizationID, options, context, dataTestId, value = [], onChange, style } = props;
   const { includeUserModels, showAllTeamModelsOption, showAllProxyModelsOverride, includeSpecialOptions } =
     options || {};
@@ -148,13 +150,13 @@ export const ModelSelect = (props: ModelSelectProps) => {
         ...(includeSpecialOptions
           ? [
               {
-                label: <span>Special Options</span>,
-                title: "Special Options",
+                label: <span>{t("modelSelect.modelSelect.specialOptions")}</span>,
+                title: t("modelSelect.modelSelect.specialOptions"),
                 options: [
                   ...(shouldShowAllProxyModels
                     ? [
                         {
-                          label: <span>All Proxy Models</span>,
+                          label: <span>{t("modelSelect.modelSelect.allProxyModels")}</span>,
                           value: MODEL_SELECT_ALL_PROXY_MODELS_SPECIAL_VALUE.value,
                           disabled:
                             value.length > 0 &&
@@ -166,7 +168,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
                       ]
                     : []),
                   {
-                    label: <span>No Default Models</span>,
+                    label: <span>{t("modelSelect.modelSelect.noDefaultModels")}</span>,
                     value: MODEL_SELECT_NO_DEFAULT_MODELS_SPECIAL_VALUE.value,
                     disabled:
                       value.length > 0 &&
@@ -180,14 +182,16 @@ export const ModelSelect = (props: ModelSelectProps) => {
         ...(wildcard.length > 0
           ? [
               {
-                label: <span>Wildcard Options</span>,
-                title: "Wildcard Options",
+                label: <span>{t("modelSelect.modelSelect.wildcardOptions")}</span>,
+                title: t("modelSelect.modelSelect.wildcardOptions"),
                 options: wildcard.map((model) => {
                   const provider = model.replace("/*", "");
                   const capitalizedProvider = provider.charAt(0).toUpperCase() + provider.slice(1);
 
                   return {
-                    label: <span>{`All ${capitalizedProvider} models`}</span>,
+                    label: (
+                      <span>{t("modelSelect.modelSelect.allProviderModels", { provider: capitalizedProvider })}</span>
+                    ),
                     value: model,
                     disabled: hasSpecialOptionSelected,
                   };
@@ -196,8 +200,8 @@ export const ModelSelect = (props: ModelSelectProps) => {
             ]
           : []),
         {
-          label: <span>Models</span>,
-          title: "Models",
+          label: <span>{t("modelSelect.modelSelect.models")}</span>,
+          title: t("modelSelect.modelSelect.models"),
           options: regular.map((model) => ({
             label: <span>{model}</span>,
             value: model,
@@ -206,7 +210,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
         },
       ]}
       mode="multiple"
-      placeholder="Select Models"
+      placeholder={t("modelSelect.modelSelect.selectModels")}
       allowClear
       maxTagCount="responsive"
       maxTagPlaceholder={(omittedValues) => (
@@ -214,7 +218,7 @@ export const ModelSelect = (props: ModelSelectProps) => {
           styles={{ root: { pointerEvents: "none" } }}
           title={omittedValues.map(({ value }) => value).join(", ")}
         >
-          <span>+{omittedValues.length} more</span>
+          <span>{t("modelSelect.modelSelect.moreModels", { count: omittedValues.length })}</span>
         </Tooltip>
       )}
     />

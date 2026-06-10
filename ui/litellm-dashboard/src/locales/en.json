@@ -8120,5 +8120,23 @@
       "deleteTitle": "Delete memory",
       "deleteMessage": "This action cannot be undone."
     }
+  },
+  "modelSelect": {
+    "modelSelect": {
+      "allProxyModels": "All Proxy Models",
+      "noDefaultModels": "No Default Models",
+      "specialOptions": "Special Options",
+      "wildcardOptions": "Wildcard Options",
+      "allProviderModels": "All {{provider}} models",
+      "models": "Models",
+      "selectModels": "Select Models",
+      "moreModels": "+{{count}} more"
+    },
+    "paginatedModelSelect": {
+      "placeholder": "Select a model",
+      "modelNameLabel": "Model name:",
+      "modelIdLabel": "Model ID:",
+      "noModelsFound": "No models found"
+    }
   }
 }

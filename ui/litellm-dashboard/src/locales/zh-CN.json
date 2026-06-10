@@ -8120,5 +8120,23 @@
       "deleteTitle": "删除记忆",
       "deleteMessage": "此操作不可撤销。"
     }
+  },
+  "modelSelect": {
+    "modelSelect": {
+      "allProxyModels": "所有代理模型",
+      "noDefaultModels": "无默认模型",
+      "specialOptions": "特殊选项",
+      "wildcardOptions": "通配符选项",
+      "allProviderModels": "所有 {{provider}} 模型",
+      "models": "模型",
+      "selectModels": "选择模型",
+      "moreModels": "+{{count}} 个更多"
+    },
+    "paginatedModelSelect": {
+      "placeholder": "选择模型",
+      "modelNameLabel": "模型名称：",
+      "modelIdLabel": "模型 ID：",
+      "noModelsFound": "未找到模型"
+    }
   }
 }
