@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Modal, Form, Input, Select } from "antd";
+import { useTranslation } from "react-i18next";
 import MessageManager from "@/components/molecules/message_manager";
 import { Button } from "@tremor/react";
 import { registerClaudeCodePlugin } from "../networking";
@@ -101,6 +102,7 @@ function parseGitHubUrl(raw: string): ParsePreview | null {
 }
 
 const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [urlPreview, setUrlPreview] = useState<ParsePreview | null>(null);
@@ -120,32 +122,32 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
 
   const handleSubmit = async (values: any) => {
     if (!accessToken) {
-      MessageManager.error("No access token available");
+      MessageManager.error(t("claudeCodePluginsPage.addPluginForm.noAccessToken"));
       return;
     }
 
     if (!urlPreview) {
-      MessageManager.error("Please enter a valid GitHub URL");
+      MessageManager.error(t("claudeCodePluginsPage.addPluginForm.enterValidGithubUrl"));
       return;
     }
 
     if (!validatePluginName(values.name)) {
-      MessageManager.error("Skill name must be kebab-case (lowercase letters, numbers, and hyphens only)");
+      MessageManager.error(t("claudeCodePluginsPage.addPluginForm.invalidSkillName"));
       return;
     }
 
     if (values.version && !isValidSemanticVersion(values.version)) {
-      MessageManager.error("Version must be in semantic versioning format (e.g., 1.0.0)");
+      MessageManager.error(t("claudeCodePluginsPage.addPluginForm.invalidVersion"));
       return;
     }
 
     if (values.authorEmail && !isValidEmail(values.authorEmail)) {
-      MessageManager.error("Invalid email format");
+      MessageManager.error(t("claudeCodePluginsPage.addPluginForm.invalidEmail"));
       return;
     }
 
     if (values.homepage && !isValidUrl(values.homepage)) {
-      MessageManager.error("Invalid homepage URL format");
+      MessageManager.error(t("claudeCodePluginsPage.addPluginForm.invalidHomepageUrl"));
       return;
     }
 
@@ -170,14 +172,14 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
       if (values.namespace) pluginData.namespace = values.namespace.trim();
 
       await registerClaudeCodePlugin(accessToken, pluginData);
-      MessageManager.success("Skill registered successfully");
+      MessageManager.success(t("claudeCodePluginsPage.addPluginForm.registerSuccess"));
       form.resetFields();
       setUrlPreview(null);
       onSuccess();
       onClose();
     } catch (error) {
       console.error("Error registering skill:", error);
-      MessageManager.error("Failed to register skill");
+      MessageManager.error(t("claudeCodePluginsPage.addPluginForm.registerFailed"));
     } finally {
       setIsSubmitting(false);
     }
@@ -190,14 +192,21 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   };
 
   return (
-    <Modal title="Add New Skill" open={visible} onCancel={handleCancel} footer={null} width={700} className="top-8">
+    <Modal
+      title={t("claudeCodePluginsPage.addPluginForm.modalTitle")}
+      open={visible}
+      onCancel={handleCancel}
+      footer={null}
+      width={700}
+      className="top-8"
+    >
       <Form form={form} layout="vertical" onFinish={handleSubmit} className="mt-4">
         {/* Smart URL Input */}
         <Form.Item
-          label="GitHub URL"
+          label={t("claudeCodePluginsPage.addPluginForm.githubUrlLabel")}
           name="skillUrl"
-          rules={[{ required: true, message: "Please enter a GitHub URL" }]}
-          tooltip="Paste a GitHub URL — repo, folder, or file link. E.g. github.com/org/repo or github.com/org/repo/tree/main/my-skill"
+          rules={[{ required: true, message: t("claudeCodePluginsPage.addPluginForm.githubUrlRequired") }]}
+          tooltip={t("claudeCodePluginsPage.addPluginForm.githubUrlTooltip")}
         >
           <Input
             placeholder="https://github.com/org/repo/tree/main/my-skill"
@@ -209,22 +218,22 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
         {/* Parsed preview */}
         {urlPreview && (
           <div className="mb-4 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-700">
-            Detected: {urlPreview.label}
+            {t("claudeCodePluginsPage.addPluginForm.detected", { label: urlPreview.label })}
           </div>
         )}
 
         {/* Skill Name */}
         <Form.Item
-          label="Skill Name"
+          label={t("claudeCodePluginsPage.addPluginForm.skillNameLabel")}
           name="name"
           rules={[
-            { required: true, message: "Please enter skill name" },
+            { required: true, message: t("claudeCodePluginsPage.addPluginForm.skillNameRequired") },
             {
               pattern: /^[a-z0-9-]+$/,
-              message: "Name must be kebab-case (lowercase, numbers, hyphens only)",
+              message: t("claudeCodePluginsPage.addPluginForm.skillNamePattern"),
             },
           ]}
-          tooltip="Unique identifier in kebab-case format (e.g., my-skill)"
+          tooltip={t("claudeCodePluginsPage.addPluginForm.skillNameTooltip")}
         >
           <Input placeholder="my-skill" className="rounded-lg" />
         </Form.Item>
@@ -232,32 +241,45 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
         {/* Domain and Namespace — side by side */}
         <div className="flex gap-4">
           <Form.Item
-            label="Domain (Optional)"
+            label={t("claudeCodePluginsPage.addPluginForm.domainLabel")}
             name="domain"
-            tooltip="Top-level grouping in the Skill Hub (e.g., Productivity)"
+            tooltip={t("claudeCodePluginsPage.addPluginForm.domainTooltip")}
             className="flex-1"
           >
-            <Input placeholder="Productivity" className="rounded-lg" />
+            <Input placeholder={t("claudeCodePluginsPage.addPluginForm.domainPlaceholder")} className="rounded-lg" />
           </Form.Item>
           <Form.Item
-            label="Namespace (Optional)"
+            label={t("claudeCodePluginsPage.addPluginForm.namespaceLabel")}
             name="namespace"
-            tooltip="Sub-grouping within domain (e.g., workflows)"
+            tooltip={t("claudeCodePluginsPage.addPluginForm.namespaceTooltip")}
             className="flex-1"
           >
-            <Input placeholder="workflows" className="rounded-lg" />
+            <Input placeholder={t("claudeCodePluginsPage.addPluginForm.namespacePlaceholder")} className="rounded-lg" />
           </Form.Item>
         </div>
 
         {/* Description */}
-        <Form.Item label="Description (Optional)" name="description" tooltip="Brief description of what the skill does">
-          <TextArea rows={3} placeholder="A skill that helps with..." maxLength={500} className="rounded-lg" />
+        <Form.Item
+          label={t("claudeCodePluginsPage.addPluginForm.descriptionLabel")}
+          name="description"
+          tooltip={t("claudeCodePluginsPage.addPluginForm.descriptionTooltip")}
+        >
+          <TextArea
+            rows={3}
+            placeholder={t("claudeCodePluginsPage.addPluginForm.descriptionPlaceholder")}
+            maxLength={500}
+            className="rounded-lg"
+          />
         </Form.Item>
 
         {/* Category */}
-        <Form.Item label="Category (Optional)" name="category" tooltip="Select a category or enter a custom one">
+        <Form.Item
+          label={t("claudeCodePluginsPage.addPluginForm.categoryLabel")}
+          name="category"
+          tooltip={t("claudeCodePluginsPage.addPluginForm.categoryTooltip")}
+        >
           <Select
-            placeholder="Select or type a category"
+            placeholder={t("claudeCodePluginsPage.addPluginForm.categoryPlaceholder")}
             allowClear
             showSearch
             optionFilterProp="children"
@@ -272,26 +294,38 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
         </Form.Item>
 
         {/* Keywords */}
-        <Form.Item label="Keywords (Optional)" name="keywords" tooltip="Comma-separated list of keywords for search">
-          <Input placeholder="search, web, api" className="rounded-lg" />
+        <Form.Item
+          label={t("claudeCodePluginsPage.addPluginForm.keywordsLabel")}
+          name="keywords"
+          tooltip={t("claudeCodePluginsPage.addPluginForm.keywordsTooltip")}
+        >
+          <Input placeholder={t("claudeCodePluginsPage.addPluginForm.keywordsPlaceholder")} className="rounded-lg" />
         </Form.Item>
 
         {/* Version */}
-        <Form.Item label="Version (Optional)" name="version" tooltip="Semantic version (e.g., 1.0.0)">
+        <Form.Item
+          label={t("claudeCodePluginsPage.addPluginForm.versionLabel")}
+          name="version"
+          tooltip={t("claudeCodePluginsPage.addPluginForm.versionTooltip")}
+        >
           <Input placeholder="1.0.0" className="rounded-lg" />
         </Form.Item>
 
         {/* Author Name */}
-        <Form.Item label="Author Name (Optional)" name="authorName" tooltip="Name of the skill author or organization">
-          <Input placeholder="Your Name or Organization" className="rounded-lg" />
+        <Form.Item
+          label={t("claudeCodePluginsPage.addPluginForm.authorNameLabel")}
+          name="authorName"
+          tooltip={t("claudeCodePluginsPage.addPluginForm.authorNameTooltip")}
+        >
+          <Input placeholder={t("claudeCodePluginsPage.addPluginForm.authorNamePlaceholder")} className="rounded-lg" />
         </Form.Item>
 
         {/* Author Email */}
         <Form.Item
-          label="Author Email (Optional)"
+          label={t("claudeCodePluginsPage.addPluginForm.authorEmailLabel")}
           name="authorEmail"
-          rules={[{ type: "email", message: "Please enter a valid email" }]}
-          tooltip="Contact email for the skill author"
+          rules={[{ type: "email", message: t("claudeCodePluginsPage.addPluginForm.authorEmailRule") }]}
+          tooltip={t("claudeCodePluginsPage.addPluginForm.authorEmailTooltip")}
         >
           <Input type="email" placeholder="author@example.com" className="rounded-lg" />
         </Form.Item>
@@ -300,10 +334,12 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
         <Form.Item className="mb-0 mt-6">
           <div className="flex justify-end gap-2">
             <Button variant="secondary" onClick={handleCancel} disabled={isSubmitting}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" loading={isSubmitting}>
-              {isSubmitting ? "Adding..." : "Add Skill"}
+              {isSubmitting
+                ? t("claudeCodePluginsPage.addPluginForm.adding")
+                : t("claudeCodePluginsPage.addPluginForm.addSkill")}
             </Button>
           </div>
         </Form.Item>

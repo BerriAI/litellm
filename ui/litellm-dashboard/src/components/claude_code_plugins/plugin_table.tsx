@@ -11,6 +11,7 @@ import {
 import { Badge, Button, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import NotificationsManager from "../molecules/notifications_manager";
 import { getCategoryBadgeColor } from "./helpers";
 import { Plugin } from "./types";
@@ -32,6 +33,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
   isAdmin,
   onPluginClick,
 }) => {
+  const { t } = useTranslation();
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
 
   const formatDate = (dateString?: string) => {
@@ -42,12 +44,12 @@ const PluginTable: React.FC<PluginTableProps> = ({
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    NotificationsManager.success("Copied to clipboard!");
+    NotificationsManager.success(t("claudeCodePluginsPage.pluginTable.copiedToClipboard"));
   };
 
   const columns: ColumnDef<Plugin>[] = [
     {
-      header: "Skill Name",
+      header: t("claudeCodePluginsPage.pluginTable.colSkillName"),
       accessorKey: "name",
       cell: ({ row }) => {
         const plugin = row.original;
@@ -64,7 +66,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
                 {name}
               </Button>
             </Tooltip>
-            <Tooltip title="Copy Plugin ID">
+            <Tooltip title={t("claudeCodePluginsPage.pluginTable.copyPluginId")}>
               <CopyOutlined
                 onClick={(e) => {
                   e.stopPropagation();
@@ -78,18 +80,18 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
-      header: "Version",
+      header: t("claudeCodePluginsPage.pluginTable.colVersion"),
       accessorKey: "version",
       cell: ({ row }) => {
-        const version = row.original.version || "N/A";
+        const version = row.original.version || t("claudeCodePluginsPage.pluginTable.versionNA");
         return <span className="text-xs text-gray-600">{version}</span>;
       },
     },
     {
-      header: "Description",
+      header: t("common.description"),
       accessorKey: "description",
       cell: ({ row }) => {
-        const description = row.original.description || "No description";
+        const description = row.original.description || t("claudeCodePluginsPage.pluginTable.noDescription");
         return (
           <Tooltip title={description}>
             <span className="text-xs text-gray-600 block max-w-[300px] truncate">{description}</span>
@@ -98,14 +100,14 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
-      header: "Category",
+      header: t("claudeCodePluginsPage.pluginTable.colCategory"),
       accessorKey: "category",
       cell: ({ row }) => {
         const category = row.original.category;
         if (!category) {
           return (
             <Badge color="gray" className="text-xs font-normal" size="xs">
-              Uncategorized
+              {t("claudeCodePluginsPage.pluginTable.uncategorized")}
             </Badge>
           );
         }
@@ -118,19 +120,19 @@ const PluginTable: React.FC<PluginTableProps> = ({
       },
     },
     {
-      header: "Public",
+      header: t("claudeCodePluginsPage.pluginTable.colPublic"),
       accessorKey: "enabled",
       cell: ({ row }) => {
         const plugin = row.original;
         return (
           <Badge color={plugin.enabled ? "green" : "gray"} className="text-xs font-normal" size="xs">
-            {plugin.enabled ? "Yes" : "No"}
+            {plugin.enabled ? t("common.yes") : t("common.no")}
           </Badge>
         );
       },
     },
     {
-      header: "Created At",
+      header: t("common.createdAt"),
       accessorKey: "created_at",
       cell: ({ row }) => {
         const plugin = row.original;
@@ -144,7 +146,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
     ...(isAdmin
       ? [
           {
-            header: "Actions",
+            header: t("common.actions"),
             id: "actions",
             enableSorting: false,
             cell: ({ row }: any) => {
@@ -152,7 +154,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
 
               return (
                 <div className="flex items-center gap-1">
-                  <Tooltip title="Delete skill">
+                  <Tooltip title={t("claudeCodePluginsPage.pluginTable.deleteSkill")}>
                     <Button
                       size="xs"
                       variant="light"
@@ -227,7 +229,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-8 text-center">
                   <div className="text-center text-gray-500">
-                    <p>Loading...</p>
+                    <p>{t("common.loading")}</p>
                   </div>
                 </TableCell>
               </TableRow>
@@ -256,7 +258,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
               <TableRow>
                 <TableCell colSpan={columns.length} className="h-8 text-center">
                   <div className="text-center text-gray-500">
-                    <p>No skills found. Add one to get started.</p>
+                    <p>{t("claudeCodePluginsPage.pluginTable.noSkillsFound")}</p>
                   </div>
                 </TableCell>
               </TableRow>
