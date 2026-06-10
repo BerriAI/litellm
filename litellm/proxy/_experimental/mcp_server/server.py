@@ -346,9 +346,18 @@ if MCP_AVAILABLE:
         stateless=True,
     )
 
+    from litellm.proxy._experimental.mcp_server.event_store import (
+        InMemoryMCPEventStore,
+    )
+
+    # Event store enables spec-compliant resumability: the transport tags SSE
+    # events with ids and replays missed events when a stateful client
+    # reconnects with Last-Event-ID.
+    _stateful_event_store = InMemoryMCPEventStore()
+
     session_manager_stateful = StreamableHTTPSessionManager(
         app=server,
-        event_store=None,  # TODO: Add EventStore for reconnection/event replay if needed
+        event_store=_stateful_event_store,
         json_response=False,  # enables SSE streaming
         stateless=False,
     )
