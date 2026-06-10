@@ -1450,3 +1450,73 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model) is False
+
+
+class TestVertexVersionSuffixModelResolution:
+    """Regression for #30101.
+
+    Vertex appends ``@<version>`` (``@default``, ``@20251101``, ...) to the
+    routed model id. ``_model_map_lookup_candidates`` stripped bedrock/vertex
+    prefixes but not the trailing suffix, so a request id like
+    ``vertex_ai/claude-opus-4-8@default`` never resolved to the bare
+    ``claude-opus-4-8`` map entry that carries the ``supports_adaptive_thinking``
+    and ``supports_output_config`` flags. Downstream adaptive-thinking +
+    effort detection fell through to the partial name-substring path.
+    """
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-7@default",
+            "claude-opus-4-8@default",
+            "claude-opus-4-8@20251101",
+            "vertex_ai/claude-opus-4-7@default",
+            "vertex_ai/claude-opus-4-8@default",
+        ],
+    )
+    def test_adaptive_thinking_detected_with_vertex_version_suffix(
+        self, local_model_cost_map, model
+    ):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_adaptive_thinking_model(model) is True
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-7@default",
+            "claude-opus-4-8@default",
+            "vertex_ai/claude-opus-4-8@default",
+        ],
+    )
+    def test_capability_resolves_through_version_suffix(
+        self, local_model_cost_map, model
+    ):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert (
+            AnthropicModelInfo._supports_model_capability(
+                model, "supports_adaptive_thinking"
+            )
+            is True
+        )
+        assert (
+            AnthropicModelInfo._supports_model_capability(
+                model, "supports_output_config"
+            )
+            is True
+        )
+
+    def test_is_claude_4_8_model_recognizes_suffix_and_provider_prefix(self):
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        assert AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-8") is True
+        assert (
+            AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-8@default") is True
+        )
+        assert (
+            AnthropicModelInfo._is_claude_4_8_model("vertex_ai/claude-opus-4-8@default")
+            is True
+        )
+        assert AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-7") is False
+        assert AnthropicModelInfo._is_claude_4_8_model("claude-opus-4-5") is False

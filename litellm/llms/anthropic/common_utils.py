@@ -3,6 +3,7 @@ This file contains common utils for anthropic calls.
 """
 
 import copy
+import re
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -272,6 +273,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
     @staticmethod
+    def _is_claude_4_8_model(model: str) -> bool:
+        """Check if the model is a Claude 4.8 model (Opus 4.8)."""
+        model_lower = model.lower()
+        return any(
+            v in model_lower
+            for v in (
+                "opus-4-8",
+                "opus_4_8",
+                "opus-4.8",
+                "opus_4.8",
+            )
+        )
+
+    @staticmethod
     def _supports_sampling_params(model: str) -> bool:
         """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
         rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
@@ -335,6 +350,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         """Model-map keys to try for ``model``, stripping bedrock/vertex
         prefixes so a provider-routed Claude still resolves to its entry."""
         candidates = [model]
+        # Vertex appends ``@<version>`` (e.g. ``@default``, ``@20251101``) to
+        # the model id; the bare name is what carries the capability flags in
+        # the model map. Without this strip, ``claude-opus-4-8@default``
+        # misses ``claude-opus-4-8`` and downstream
+        # ``supports_adaptive_thinking`` / ``supports_output_config`` checks
+        # silently fall back to the partial name-substring path (#30101).
+        suffix_stripped = re.sub(r"@[^@/]+$", "", model)
+        if suffix_stripped != model:
+            candidates.append(suffix_stripped)
         for prefix in (
             "bedrock/converse/",
             "bedrock/invoke/",
@@ -343,6 +367,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         ):
             if model.startswith(prefix):
                 candidates.append(model[len(prefix) :])
+            if suffix_stripped != model and suffix_stripped.startswith(prefix):
+                candidates.append(suffix_stripped[len(prefix) :])
         try:
             from litellm.llms.bedrock.common_utils import BedrockModelInfo
 
@@ -399,9 +425,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             model, "supports_adaptive_thinking"
         ):
             return True
-        return AnthropicModelInfo._is_claude_4_6_model(
-            model
-        ) or AnthropicModelInfo._is_claude_4_7_model(model)
+        return (
+            AnthropicModelInfo._is_claude_4_6_model(model)
+            or AnthropicModelInfo._is_claude_4_7_model(model)
+            or AnthropicModelInfo._is_claude_4_8_model(model)
+        )
 
     def is_effort_used(
         self, optional_params: Optional[dict], model: Optional[str] = None
