@@ -767,7 +767,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_output(
         self,
-        response: "ResponsesAPIResponse",
+        response: Union["ResponsesAPIResponse", Dict[Any, Any]],
         responses: List[str],
         task_mappings: List[Tuple[int, int]],
     ) -> None:
