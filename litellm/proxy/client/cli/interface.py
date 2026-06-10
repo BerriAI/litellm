@@ -80,6 +80,8 @@ def styled_prompt():
 
 def show_commands():
     """Display available commands."""
+    from .commands.agents import agent_commands
+
     commands = [
         ("login", "Authenticate with the LiteLLM proxy server"),
         ("logout", "Clear stored authentication"),
@@ -91,6 +93,9 @@ def show_commands():
         ("keys", "Manage API keys"),
         ("teams", "Manage teams and team assignments"),
         ("users", "Manage users"),
+    ]
+    commands += [(c.name, c.get_short_help_str()) for c in agent_commands()]
+    commands += [
         ("version", "Show version information"),
         ("help", "Show this help message"),
         ("quit", "Exit the interactive session"),
@@ -156,7 +161,7 @@ def execute_command(user_input: str, ctx: click.Context):
     # Execute the command
     try:
         # Create a new argument list for click to parse
-        sys.argv = ["litellm-proxy"] + [command] + args
+        sys.argv = ["lite"] + [command] + args
 
         # Get the command object and invoke it
         cmd = cli.commands[command]

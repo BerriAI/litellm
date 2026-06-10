@@ -517,7 +517,7 @@ class TestWhoamiCommand:
 
             assert result.exit_code == 0
             assert "❌ Not authenticated" in result.output
-            assert "Run 'litellm-proxy login'" in result.output
+            assert "Run 'lite login'" in result.output
 
     def test_whoami_old_token(self):
         """Test whoami with old token showing warning"""
