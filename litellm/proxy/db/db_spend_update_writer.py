@@ -245,12 +245,15 @@ class DBSpendUpdateWriter:
         Extract tool names from the LLM request and response and enqueue them
         for upsert into LiteLLM_ToolTable via ToolDiscoveryQueue.
 
-        Handles four sources:
+        Handles five sources:
         - MCP tools: standard_logging_object.mcp_tool_call_metadata.namespaced_tool_name
         - Response tool_calls (OpenAI / Anthropic pass-through converted to OpenAI format):
             completion_response.choices[].message.tool_calls[].function.name
-        - Request tools array (OpenAI format): kwargs["tools"][].function.name
-        - Request tools array (Anthropic /messages format): kwargs["passthrough_logging_payload"]
+        - Response tool_use blocks (anthropic_messages route, dict response):
+            completion_response["content"][].name where type == "tool_use"
+        - Request tools array (OpenAI format: tools[].function.name,
+            Anthropic /messages format: tools[].name)
+        - Request tools array (Anthropic pass-through): kwargs["passthrough_logging_payload"]
             ["request_body"]["tools"][].name
         """
         try:
@@ -290,13 +293,16 @@ class DBSpendUpdateWriter:
                     if tool_name:
                         _enqueue(tool_name, origin=mcp_server_name or "user_defined")
 
-            # --- Tools from request body (OpenAI format: tools[].function.name) ---
+            # --- Tools from request body (OpenAI format: tools[].function.name,
+            #     Anthropic /messages format: tools[].name) ---
             request_tools = kwargs.get("tools") or []
             for tool_def in request_tools:
                 if not isinstance(tool_def, dict):
                     continue
                 fn = tool_def.get("function") or {}
-                name = fn.get("name") if isinstance(fn, dict) else None
+                name = (
+                    fn.get("name") if isinstance(fn, dict) else None
+                ) or tool_def.get("name")
                 if name:
                     _enqueue(name)
 
@@ -333,6 +339,15 @@ class DBSpendUpdateWriter:
                         tool_name = getattr(fn, "name", None)
                         if tool_name:
                             _enqueue(tool_name)
+
+            # --- Response tool_use blocks (anthropic_messages route returns
+            #     AnthropicMessagesResponse, a TypedDict / plain dict) ---
+            elif isinstance(completion_response, dict):
+                for block in completion_response.get("content") or []:
+                    if isinstance(block, dict) and block.get("type") == "tool_use":
+                        name = block.get("name")
+                        if name:
+                            _enqueue(name)
         except Exception as e:
             verbose_proxy_logger.debug(
                 "_enqueue_tool_registry_upsert error (non-blocking): %s", e

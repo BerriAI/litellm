@@ -1656,3 +1656,52 @@ async def test_commit_spend_updates_iterates_in_sorted_order(
     )
 
     assert captured_where_values == expected_order
+
+
+def test_enqueue_tool_registry_upsert_anthropic_format_request_tools():
+    writer = DBSpendUpdateWriter()
+    writer.tool_discovery_queue.add_update = MagicMock()
+
+    writer._enqueue_tool_registry_upsert(
+        kwargs={
+            "tools": [
+                {"name": "get_weather", "input_schema": {"type": "object"}},
+                {"name": "search_docs", "input_schema": {"type": "object"}},
+            ]
+        },
+        completion_response=None,
+    )
+
+    enqueued = [
+        c.args[0]["tool_name"]
+        for c in writer.tool_discovery_queue.add_update.call_args_list
+    ]
+    assert enqueued == ["get_weather", "search_docs"]
+
+
+def test_enqueue_tool_registry_upsert_dict_response_tool_use_blocks():
+    writer = DBSpendUpdateWriter()
+    writer.tool_discovery_queue.add_update = MagicMock()
+
+    writer._enqueue_tool_registry_upsert(
+        kwargs={},
+        completion_response={
+            "id": "msg_123",
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Let me check the weather."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01",
+                    "name": "get_weather",
+                    "input": {"city": "San Francisco"},
+                },
+            ],
+        },
+    )
+
+    enqueued = [
+        c.args[0]["tool_name"]
+        for c in writer.tool_discovery_queue.add_update.call_args_list
+    ]
+    assert enqueued == ["get_weather"]
