@@ -8360,5 +8360,27 @@
       "filterUserId": "用户 ID",
       "filterKeyHash": "密钥哈希"
     }
+  },
+  "editAutoRouter": {
+    "editAutoRouterModal": {
+      "title": "编辑自动路由器配置",
+      "saveChanges": "保存更改",
+      "description": "编辑自动路由器配置，包括路由逻辑、默认模型和访问设置。",
+      "fieldAutoRouterName": "自动路由器名称",
+      "placeholderAutoRouterName": "例如：auto_router_1, smart_routing",
+      "ruleAutoRouterName": "自动路由器名称为必填项",
+      "fieldDefaultModel": "默认模型",
+      "placeholderDefaultModel": "选择默认模型",
+      "ruleDefaultModel": "默认模型为必填项",
+      "fieldEmbeddingModel": "嵌入模型",
+      "placeholderEmbeddingModel": "选择嵌入模型（可选）",
+      "enterCustomModelName": "输入自定义模型名称",
+      "fieldModelAccessGroups": "模型访问组",
+      "tooltipModelAccessGroups": "控制谁可以访问此自动路由器",
+      "placeholderModelAccessGroups": "选择现有组或输入以创建新组",
+      "errorLoadingConfig": "加载自动路由器配置时出错",
+      "updateSuccess": "自动路由器配置更新成功",
+      "updateFailed": "更新自动路由器配置失败"
+    }
   }
 }

@@ -8360,5 +8360,27 @@
       "filterUserId": "User ID",
       "filterKeyHash": "Key Hash"
     }
+  },
+  "editAutoRouter": {
+    "editAutoRouterModal": {
+      "title": "Edit Auto Router Configuration",
+      "saveChanges": "Save Changes",
+      "description": "Edit the auto router configuration including routing logic, default models, and access settings.",
+      "fieldAutoRouterName": "Auto Router Name",
+      "placeholderAutoRouterName": "e.g., auto_router_1, smart_routing",
+      "ruleAutoRouterName": "Auto router name is required",
+      "fieldDefaultModel": "Default Model",
+      "placeholderDefaultModel": "Select a default model",
+      "ruleDefaultModel": "Default model is required",
+      "fieldEmbeddingModel": "Embedding Model",
+      "placeholderEmbeddingModel": "Select an embedding model (optional)",
+      "enterCustomModelName": "Enter custom model name",
+      "fieldModelAccessGroups": "Model Access Groups",
+      "tooltipModelAccessGroups": "Control who can access this auto router",
+      "placeholderModelAccessGroups": "Select existing groups or type to create new ones",
+      "errorLoadingConfig": "Error loading auto router configuration",
+      "updateSuccess": "Auto router configuration updated successfully",
+      "updateFailed": "Failed to update auto router configuration"
+    }
   }
 }

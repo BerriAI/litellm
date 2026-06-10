@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Modal, Form, Button, Select as AntdSelect } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { modelAvailableCall, modelPatchUpdateCall } from "../networking";
@@ -23,6 +24,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
   accessToken,
   userRole,
 }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [modelAccessGroups, setModelAccessGroups] = useState<string[]>([]);
@@ -92,7 +94,7 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
       setShowCustomEmbeddingModel(!allModelGroups.has(modelData.litellm_params?.auto_router_embedding_model));
     } catch (error) {
       console.error("Error parsing auto router config:", error);
-      NotificationsManager.fromBackend("Error loading auto router configuration");
+      NotificationsManager.fromBackend(t("editAutoRouter.editAutoRouterModal.errorLoadingConfig"));
     }
   };
 
@@ -130,12 +132,12 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
         model_info: updatedModelInfo,
       };
 
-      NotificationsManager.success("Auto router configuration updated successfully");
+      NotificationsManager.success(t("editAutoRouter.editAutoRouterModal.updateSuccess"));
       onSuccess(updatedModelData);
       onCancel();
     } catch (error) {
       console.error("Error updating auto router:", error);
-      NotificationsManager.fromBackend("Failed to update auto router configuration");
+      NotificationsManager.fromBackend(t("editAutoRouter.editAutoRouterModal.updateFailed"));
     } finally {
       setLoading(false);
     }
@@ -148,33 +150,31 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
   return (
     <Modal
-      title="Edit Auto Router Configuration"
+      title={t("editAutoRouter.editAutoRouterModal.title")}
       open={isVisible}
       onCancel={onCancel}
       footer={[
         <Button key="cancel" onClick={onCancel}>
-          Cancel
+          {t("common.cancel")}
         </Button>,
         <Button key="submit" loading={loading} onClick={handleSubmit}>
-          Save Changes
+          {t("editAutoRouter.editAutoRouterModal.saveChanges")}
         </Button>,
       ]}
       width={1000}
       destroyOnHidden
     >
       <div className="space-y-6">
-        <Text className="text-gray-600">
-          Edit the auto router configuration including routing logic, default models, and access settings.
-        </Text>
+        <Text className="text-gray-600">{t("editAutoRouter.editAutoRouterModal.description")}</Text>
 
         <Form form={form} layout="vertical" className="space-y-4">
           {/* Auto Router Name */}
           <Form.Item
-            label="Auto Router Name"
+            label={t("editAutoRouter.editAutoRouterModal.fieldAutoRouterName")}
             name="auto_router_name"
-            rules={[{ required: true, message: "Auto router name is required" }]}
+            rules={[{ required: true, message: t("editAutoRouter.editAutoRouterModal.ruleAutoRouterName") }]}
           >
-            <TextInput placeholder="e.g., auto_router_1, smart_routing" />
+            <TextInput placeholder={t("editAutoRouter.editAutoRouterModal.placeholderAutoRouterName")} />
           </Form.Item>
 
           {/* Router Configuration Builder */}
@@ -190,28 +190,37 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
 
           {/* Default Model */}
           <Form.Item
-            label="Default Model"
+            label={t("editAutoRouter.editAutoRouterModal.fieldDefaultModel")}
             name="auto_router_default_model"
-            rules={[{ required: true, message: "Default model is required" }]}
+            rules={[{ required: true, message: t("editAutoRouter.editAutoRouterModal.ruleDefaultModel") }]}
           >
             <AntdSelect
-              placeholder="Select a default model"
+              placeholder={t("editAutoRouter.editAutoRouterModal.placeholderDefaultModel")}
               onChange={(value) => {
                 setShowCustomDefaultModel(value === "custom");
               }}
-              options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
+              options={[
+                ...modelOptions,
+                { value: "custom", label: t("editAutoRouter.editAutoRouterModal.enterCustomModelName") },
+              ]}
               showSearch={true}
             />
           </Form.Item>
 
           {/* Embedding Model */}
-          <Form.Item label="Embedding Model" name="auto_router_embedding_model">
+          <Form.Item
+            label={t("editAutoRouter.editAutoRouterModal.fieldEmbeddingModel")}
+            name="auto_router_embedding_model"
+          >
             <AntdSelect
-              placeholder="Select an embedding model (optional)"
+              placeholder={t("editAutoRouter.editAutoRouterModal.placeholderEmbeddingModel")}
               onChange={(value) => {
                 setShowCustomEmbeddingModel(value === "custom");
               }}
-              options={[...modelOptions, { value: "custom", label: "Enter custom model name" }]}
+              options={[
+                ...modelOptions,
+                { value: "custom", label: t("editAutoRouter.editAutoRouterModal.enterCustomModelName") },
+              ]}
               showSearch={true}
               allowClear
             />
@@ -220,14 +229,14 @@ const EditAutoRouterModal: React.FC<EditAutoRouterModalProps> = ({
           {/* Model Access Groups - Admin only */}
           {userRole === "Admin" && (
             <Form.Item
-              label="Model Access Groups"
+              label={t("editAutoRouter.editAutoRouterModal.fieldModelAccessGroups")}
               name="model_access_group"
-              tooltip="Control who can access this auto router"
+              tooltip={t("editAutoRouter.editAutoRouterModal.tooltipModelAccessGroups")}
             >
               <AntdSelect
                 mode="tags"
                 showSearch
-                placeholder="Select existing groups or type to create new ones"
+                placeholder={t("editAutoRouter.editAutoRouterModal.placeholderModelAccessGroups")}
                 optionFilterProp="children"
                 tokenSeparators={[","]}
                 options={modelAccessGroups.map((group) => ({
