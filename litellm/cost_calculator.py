@@ -1567,6 +1567,7 @@ def completion_cost(  # noqa: PLR0915
                         custom_llm_provider=custom_llm_provider,
                         litellm_model_name=model,
                         data_residency=data_residency,
+                        litellm_logging_obj=litellm_logging_obj,
                     )
                 elif call_type == _MCP_CALL_TYPE:
                     from litellm.proxy._experimental.mcp_server.cost_calculator import (
@@ -2494,6 +2495,7 @@ def handle_realtime_stream_cost_calculation(
     custom_llm_provider: str,
     litellm_model_name: str,
     data_residency: Optional[str] = None,
+    litellm_logging_obj: Optional[LitellmLoggingObject] = None,
 ) -> float:
     """
     Handles the cost calculation for realtime stream responses.
@@ -2532,5 +2534,13 @@ def handle_realtime_stream_cost_calculation(
         output_cost_per_token += _output_cost_per_token
         break  # exit if we find a valid model
     total_cost = input_cost_per_token + output_cost_per_token
+
+    _store_cost_breakdown_in_logging_obj(
+        litellm_logging_obj=litellm_logging_obj,
+        prompt_tokens_cost_usd_dollar=input_cost_per_token,
+        completion_tokens_cost_usd_dollar=output_cost_per_token,
+        cost_for_built_in_tools_cost_usd_dollar=0.0,
+        total_cost_usd_dollar=total_cost,
+    )
 
     return total_cost

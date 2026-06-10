@@ -385,7 +385,65 @@ def test_handle_realtime_stream_cost_calculation():
     )
     assert cost == 0.0  # No usage, no cost
 
-    
+
+def test_handle_realtime_stream_cost_calculation_stores_cost_breakdown():
+    """Regression: realtime cost must populate logging_obj.cost_breakdown so the
+    spend logs / UI show input vs output cost (issue: cost_breakdown was None for
+    /v1/realtime even though a total spend was computed)."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    results: OpenAIRealtimeStreamList = [
+        {"type": "session.created", "session": {"model": "gpt-4o-realtime-preview"}},
+        {
+            "type": "response.done",
+            "response": {
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                }
+            },
+        },
+    ]
+    combined_usage_object = RealtimeAPITokenUsageProcessor.collect_and_combine_usage_from_realtime_stream_results(
+        results=results,
+    )
+
+    logging_obj = Logging(
+        model="gpt-4o-realtime-preview",
+        messages=[],
+        stream=False,
+        call_type="_arealtime",
+        start_time=datetime.now(),
+        litellm_call_id="realtime-cost-breakdown-test",
+        function_id="realtime-cost-breakdown-test",
+    )
+
+    total_cost = handle_realtime_stream_cost_calculation(
+        results=results,
+        combined_usage_object=combined_usage_object,
+        custom_llm_provider="openai",
+        litellm_model_name="gpt-4o-realtime-preview",
+        litellm_logging_obj=logging_obj,
+    )
+
+    assert total_cost > 0
+    assert logging_obj.cost_breakdown is not None
+    assert logging_obj.cost_breakdown["input_cost"] > 0
+    assert logging_obj.cost_breakdown["output_cost"] > 0
+    assert (
+        abs(
+            logging_obj.cost_breakdown["input_cost"]
+            + logging_obj.cost_breakdown["output_cost"]
+            - total_cost
+        )
+        < 1e-9
+    )
+    assert abs(logging_obj.cost_breakdown["total_cost"] - total_cost) < 1e-9
+
+
 def test_realtime_stream_combines_text_and_audio_token_details():
     """Realtime response.done usage with input_token_details / output_token_details."""
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
