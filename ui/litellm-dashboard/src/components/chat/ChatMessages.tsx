@@ -3,6 +3,7 @@
 import { ToolOutlined, CopyOutlined, CheckOutlined, EditOutlined } from "@ant-design/icons";
 import { Collapse, Tooltip } from "antd";
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
@@ -78,6 +79,7 @@ interface UserBubbleProps {
 }
 
 function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
+  const { t } = useTranslation();
   const [hovered, setHovered] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editValue, setEditValue] = useState(message.content);
@@ -174,7 +176,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
                 cursor: "pointer",
               }}
             >
-              Cancel
+              {t("common.cancel")}
             </button>
             <button
               onClick={handleSave}
@@ -190,7 +192,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
                 cursor: editValue.trim() ? "pointer" : "not-allowed",
               }}
             >
-              Save &amp; Send
+              {t("chat.chatMessages.saveAndSend")}
             </button>
           </div>
         </div>
@@ -207,7 +209,7 @@ function UserBubble({ message, onEdit, isStreaming }: UserBubbleProps) {
       <div style={{ display: "flex", alignItems: "flex-end", gap: 6, maxWidth: "72%" }}>
         {/* Edit button — appears on hover, to the left of the bubble */}
         {hovered && !isStreaming && onEdit && (
-          <Tooltip title="Edit message">
+          <Tooltip title={t("chat.chatMessages.editMessage")}>
             <button
               onClick={() => {
                 setEditValue(message.content);
@@ -345,6 +347,7 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
 }
 
 function CopyButton({ text }: { text: string }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const handleCopy = () => {
@@ -361,7 +364,7 @@ function CopyButton({ text }: { text: string }) {
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 6 }}>
-      <Tooltip title={copied ? "Copied!" : "Copy"}>
+      <Tooltip title={copied ? t("common.copied") : t("common.copy")}>
         <button
           onClick={handleCopy}
           style={{
@@ -392,6 +395,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function ThinkingPlaceholder() {
+  const { t } = useTranslation();
   return (
     <>
       <style>{`
@@ -417,7 +421,7 @@ function ThinkingPlaceholder() {
           color: "#6b7280",
         }}
       >
-        <span className="chat-thinking-text">Thinking...</span>
+        <span className="chat-thinking-text">{t("chat.chatMessages.thinking")}</span>
       </div>
     </>
   );
@@ -453,6 +457,7 @@ interface ToolCardProps {
 }
 
 function ToolCard({ message }: ToolCardProps) {
+  const { t } = useTranslation();
   const redactedArgs = message.toolArgs ? redactSensitiveValues(message.toolArgs) : undefined;
 
   return (
@@ -469,7 +474,9 @@ function ToolCard({ message }: ToolCardProps) {
           header={
             <span style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13 }}>
               <ToolOutlined style={{ color: "#6b7280" }} />
-              <span style={{ color: "#374151", fontWeight: 500 }}>{message.toolName ?? "Tool call"}</span>
+              <span style={{ color: "#374151", fontWeight: 500 }}>
+                {message.toolName ?? t("chat.chatMessages.toolCall")}
+              </span>
             </span>
           }
           key="tool"
@@ -486,7 +493,7 @@ function ToolCard({ message }: ToolCardProps) {
                   marginBottom: 4,
                 }}
               >
-                Arguments
+                {t("chat.chatMessages.arguments")}
               </div>
               <pre
                 style={{
@@ -519,7 +526,7 @@ function ToolCard({ message }: ToolCardProps) {
                   marginBottom: 4,
                 }}
               >
-                Result
+                {t("chat.chatMessages.result")}
               </div>
               <div
                 style={{

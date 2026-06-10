@@ -6883,5 +6883,15 @@
       "title": "Request Outcomes Over Time",
       "noData": "No chart data for this period"
     }
+  },
+  "chat": {
+    "chatMessages": {
+      "saveAndSend": "Save & Send",
+      "editMessage": "Edit message",
+      "thinking": "Thinking...",
+      "toolCall": "Tool call",
+      "arguments": "Arguments",
+      "result": "Result"
+    }
   }
 }

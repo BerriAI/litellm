@@ -6883,5 +6883,15 @@
       "title": "请求结果随时间变化",
       "noData": "该时段暂无图表数据"
     }
+  },
+  "chat": {
+    "chatMessages": {
+      "saveAndSend": "保存并发送",
+      "editMessage": "编辑消息",
+      "thinking": "思考中...",
+      "toolCall": "工具调用",
+      "arguments": "参数",
+      "result": "结果"
+    }
   }
 }
