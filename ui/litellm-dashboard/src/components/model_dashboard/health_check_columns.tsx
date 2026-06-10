@@ -3,6 +3,7 @@ import { Tooltip, Checkbox } from "antd";
 import { Text } from "@tremor/react";
 import { InformationCircleIcon, PlayIcon, RefreshIcon } from "@heroicons/react/outline";
 import { Team } from "@/components/key_team_helpers/key_list";
+import { TFunction } from "i18next";
 
 interface HealthCheckData {
   model_name: string;
@@ -32,6 +33,7 @@ interface HealthStatus {
 }
 
 export const healthCheckColumns = (
+  t: TFunction,
   modelHealthStatuses: { [key: string]: HealthStatus },
   selectedModelsForHealth: string[],
   allModelsSelected: boolean,
@@ -54,7 +56,7 @@ export const healthCheckColumns = (
           onChange={(e) => handleSelectAll(e.target.checked)}
           onClick={(e) => e.stopPropagation()}
         />
-        <span>Model ID</span>
+        <span>{t("modelDashboard.healthCheckColumns.modelId")}</span>
       </div>
     ),
     accessorKey: "model_info.id",
@@ -85,7 +87,7 @@ export const healthCheckColumns = (
     },
   },
   {
-    header: "Model Name",
+    header: () => t("modelDashboard.healthCheckColumns.modelName"),
     accessorKey: "model_name",
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -103,7 +105,7 @@ export const healthCheckColumns = (
     },
   },
   {
-    header: "Team Alias",
+    header: () => t("modelDashboard.healthCheckColumns.teamAlias"),
     accessorKey: "model_info.team_id",
     enableSorting: true,
     sortingFn: "alphanumeric",
@@ -128,7 +130,7 @@ export const healthCheckColumns = (
     },
   },
   {
-    header: "Health Status",
+    header: () => t("modelDashboard.healthCheckColumns.healthStatus"),
     accessorKey: "health_status",
     enableSorting: true,
     sortingFn: (rowA, rowB, columnId) => {
@@ -164,7 +166,7 @@ export const healthCheckColumns = (
                 style={{ animationDelay: "0.4s" }}
               ></div>
             </div>
-            <Text className="text-gray-600 text-sm">Checking...</Text>
+            <Text className="text-gray-600 text-sm">{t("modelDashboard.healthCheckColumns.checking")}</Text>
           </div>
         );
       }
@@ -177,7 +179,7 @@ export const healthCheckColumns = (
         <div className="flex items-center space-x-2">
           {getStatusBadge(healthStatus.status)}
           {hasSuccessResponse && showSuccessModal && (
-            <Tooltip title="View response details" placement="top">
+            <Tooltip title={t("modelDashboard.healthCheckColumns.viewResponseDetails")} placement="top">
               <button
                 onClick={() => showSuccessModal(displayName, modelHealthStatuses[modelId]?.successResponse)}
                 className="p-1 text-green-600 hover:text-green-800 hover:bg-green-50 rounded cursor-pointer transition-colors"
@@ -191,7 +193,7 @@ export const healthCheckColumns = (
     },
   },
   {
-    header: "Error Details",
+    header: () => t("modelDashboard.healthCheckColumns.errorDetailsHeader"),
     accessorKey: "health_error",
     enableSorting: false,
     cell: ({ row }) => {
@@ -201,7 +203,7 @@ export const healthCheckColumns = (
       const healthStatus = modelHealthStatuses[modelId];
 
       if (!healthStatus?.error) {
-        return <Text className="text-gray-400 text-sm">No errors</Text>;
+        return <Text className="text-gray-400 text-sm">{t("modelDashboard.healthCheckColumns.noErrors")}</Text>;
       }
 
       const cleanedError = healthStatus.error;
@@ -215,7 +217,7 @@ export const healthCheckColumns = (
             </Tooltip>
           </div>
           {showErrorModal && fullError !== cleanedError && (
-            <Tooltip title="View full error details" placement="top">
+            <Tooltip title={t("modelDashboard.healthCheckColumns.viewFullErrorDetails")} placement="top">
               <button
                 onClick={() => showErrorModal(displayName, cleanedError, fullError)}
                 className="p-1 text-red-600 hover:text-red-800 hover:bg-red-50 rounded cursor-pointer transition-colors"
@@ -229,7 +231,7 @@ export const healthCheckColumns = (
     },
   },
   {
-    header: "Last Check",
+    header: () => t("modelDashboard.healthCheckColumns.lastCheck"),
     accessorKey: "last_check",
     enableSorting: true,
     sortingFn: (rowA, rowB, columnId) => {
@@ -261,13 +263,13 @@ export const healthCheckColumns = (
 
       return (
         <Text className="text-gray-600 text-sm">
-          {model.health_loading ? "Check in progress..." : model.last_check}
+          {model.health_loading ? t("modelDashboard.healthCheckColumns.checkInProgress") : model.last_check}
         </Text>
       );
     },
   },
   {
-    header: "Last Success",
+    header: () => t("modelDashboard.healthCheckColumns.lastSuccess"),
     accessorKey: "last_success",
     enableSorting: true,
     sortingFn: (rowA, rowB, columnId) => {
@@ -304,7 +306,7 @@ export const healthCheckColumns = (
     },
   },
   {
-    header: "Actions",
+    header: () => t("common.actions"),
     id: "actions",
     cell: ({ row }) => {
       const model = row.original;
@@ -312,10 +314,10 @@ export const healthCheckColumns = (
 
       const hasExistingStatus = model.health_status && model.health_status !== "none";
       const tooltipText = model.health_loading
-        ? "Checking..."
+        ? t("modelDashboard.healthCheckColumns.checking")
         : hasExistingStatus
-          ? "Re-run Health Check"
-          : "Run Health Check";
+          ? t("modelDashboard.healthCheckColumns.rerunHealthCheck")
+          : t("modelDashboard.healthCheckColumns.runHealthCheck");
 
       return (
         <Tooltip title={tooltipText} placement="top">

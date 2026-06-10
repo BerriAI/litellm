@@ -7253,5 +7253,57 @@
       "updateSuccess": "搜索工具更新成功",
       "updateFailed": "更新搜索工具失败"
     }
+  },
+  "modelDashboard": {
+    "table": {
+      "loadingModels": "🚅 正在加载模型...",
+      "noModels": "未找到模型"
+    },
+    "allModelsTable": {
+      "loadingModels": "🚅 正在加载模型...",
+      "noModels": "未找到模型"
+    },
+    "healthCheckComponent": {
+      "title": "模型健康检查状态",
+      "subtitle": "对各模型运行健康检查，验证其是否正常工作",
+      "clearSelection": "清除选择",
+      "runSelectedChecks": "运行所选检查",
+      "runAllChecks": "运行所有检查",
+      "showingResults": "显示第 {{start}} - {{end}} 条，共 {{total}} 条结果",
+      "showingZeroResults": "显示 0 条结果",
+      "errorModalTitle": "健康检查错误 - {{modelName}}",
+      "errorModalFallbackTitle": "错误详情",
+      "errorLabel": "错误：",
+      "fullErrorLabel": "完整错误详情：",
+      "successModalTitle": "健康检查响应 - {{modelName}}",
+      "successModalFallbackTitle": "响应详情",
+      "statusLabel": "状态：",
+      "healthCheckPassed": "健康检查通过",
+      "responseDetailsLabel": "响应详情："
+    },
+    "healthCheckColumns": {
+      "modelId": "模型 ID",
+      "modelName": "模型名称",
+      "teamAlias": "团队别名",
+      "healthStatus": "健康状态",
+      "checking": "检查中...",
+      "viewResponseDetails": "查看响应详情",
+      "errorDetailsHeader": "错误详情",
+      "noErrors": "无错误",
+      "viewFullErrorDetails": "查看完整错误详情",
+      "lastCheck": "最近检查",
+      "checkInProgress": "检查进行中...",
+      "lastSuccess": "最近成功",
+      "rerunHealthCheck": "重新运行健康检查",
+      "runHealthCheck": "运行健康检查"
+    },
+    "modelSettingsModal": {
+      "title": "模型设置",
+      "saveSettings": "保存设置",
+      "storeModelInDb": "将模型存储到数据库",
+      "storeModelInDbTooltip": "启用后，模型和配置将存储到数据库并从数据库加载。",
+      "updateSuccess": "模型存储设置已成功更新",
+      "updateFailed": "保存模型存储设置失败：{{error}}"
+    }
   }
 }

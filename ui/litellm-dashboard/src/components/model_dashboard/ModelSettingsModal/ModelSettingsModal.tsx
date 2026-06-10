@@ -6,6 +6,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { Button, Form, Modal, Skeleton, Space, Switch, Typography } from "antd";
 import React, { useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 interface ModelSettingsModalProps {
   isVisible: boolean;
@@ -14,6 +15,7 @@ interface ModelSettingsModalProps {
 }
 
 const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const { mutateAsync, isPending } = useStoreModelInDB();
   const { data: proxyConfigData, isLoading: isLoadingConfig, refetch } = useProxyConfig(ConfigType.GENERAL_SETTINGS);
@@ -44,16 +46,20 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
     try {
       await mutateAsync(formValues, {
         onSuccess: () => {
-          NotificationsManager.success("Model storage settings updated successfully");
+          NotificationsManager.success(t("modelDashboard.modelSettingsModal.updateSuccess"));
           refetch();
           onSuccess?.();
         },
         onError: (error) => {
-          NotificationsManager.fromBackend("Failed to save model storage settings: " + parseErrorMessage(error));
+          NotificationsManager.fromBackend(
+            t("modelDashboard.modelSettingsModal.updateFailed", { error: parseErrorMessage(error) }),
+          );
         },
       });
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to save model storage settings: " + parseErrorMessage(error));
+      NotificationsManager.fromBackend(
+        t("modelDashboard.modelSettingsModal.updateFailed", { error: parseErrorMessage(error) }),
+      );
     }
   };
 
@@ -64,15 +70,15 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
 
   return (
     <Modal
-      title={<Typography.Title level={5}>Model Settings</Typography.Title>}
+      title={<Typography.Title level={5}>{t("modelDashboard.modelSettingsModal.title")}</Typography.Title>}
       open={isVisible}
       footer={
         <Space>
           <Button onClick={handleCancel} disabled={isPending || isLoadingConfig}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button type="primary" loading={isPending} disabled={isLoadingConfig} onClick={() => form.submit()}>
-            {isPending ? "Saving..." : "Save Settings"}
+            {isPending ? t("common.saving") : t("modelDashboard.modelSettingsModal.saveSettings")}
           </Button>
         </Space>
       }
@@ -86,11 +92,11 @@ const ModelSettingsModal: React.FC<ModelSettingsModalProps> = ({ isVisible, onCa
         initialValues={initialValues}
       >
         <Form.Item
-          label="Store Model in DB"
+          label={t("modelDashboard.modelSettingsModal.storeModelInDb")}
           name="store_model_in_db"
           tooltip={
             proxyConfigData?.find((f) => f.field_name === "store_model_in_db")?.field_description ||
-            "If enabled, models and config are stored in and loaded from the database."
+            t("modelDashboard.modelSettingsModal.storeModelInDbTooltip")
           }
           valuePropName="checked"
         >

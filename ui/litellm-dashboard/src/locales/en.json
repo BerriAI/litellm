@@ -7253,5 +7253,57 @@
       "updateSuccess": "Search tool updated successfully",
       "updateFailed": "Failed to update search tool"
     }
+  },
+  "modelDashboard": {
+    "table": {
+      "loadingModels": "🚅 Loading models...",
+      "noModels": "No models found"
+    },
+    "allModelsTable": {
+      "loadingModels": "🚅 Loading models...",
+      "noModels": "No models found"
+    },
+    "healthCheckComponent": {
+      "title": "Model Health Status",
+      "subtitle": "Run health checks on individual models to verify they are working correctly",
+      "clearSelection": "Clear Selection",
+      "runSelectedChecks": "Run Selected Checks",
+      "runAllChecks": "Run All Checks",
+      "showingResults": "Showing {{start}} - {{end}} of {{total}} results",
+      "showingZeroResults": "Showing 0 results",
+      "errorModalTitle": "Health Check Error - {{modelName}}",
+      "errorModalFallbackTitle": "Error Details",
+      "errorLabel": "Error:",
+      "fullErrorLabel": "Full Error Details:",
+      "successModalTitle": "Health Check Response - {{modelName}}",
+      "successModalFallbackTitle": "Response Details",
+      "statusLabel": "Status:",
+      "healthCheckPassed": "Health check passed successfully",
+      "responseDetailsLabel": "Response Details:"
+    },
+    "healthCheckColumns": {
+      "modelId": "Model ID",
+      "modelName": "Model Name",
+      "teamAlias": "Team Alias",
+      "healthStatus": "Health Status",
+      "checking": "Checking...",
+      "viewResponseDetails": "View response details",
+      "errorDetailsHeader": "Error Details",
+      "noErrors": "No errors",
+      "viewFullErrorDetails": "View full error details",
+      "lastCheck": "Last Check",
+      "checkInProgress": "Check in progress...",
+      "lastSuccess": "Last Success",
+      "rerunHealthCheck": "Re-run Health Check",
+      "runHealthCheck": "Run Health Check"
+    },
+    "modelSettingsModal": {
+      "title": "Model Settings",
+      "saveSettings": "Save Settings",
+      "storeModelInDb": "Store Model in DB",
+      "storeModelInDbTooltip": "If enabled, models and config are stored in and loaded from the database.",
+      "updateSuccess": "Model storage settings updated successfully",
+      "updateFailed": "Failed to save model storage settings: {{error}}"
+    }
   }
 }
