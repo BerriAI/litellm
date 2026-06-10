@@ -62,6 +62,168 @@ from litellm.utils import (
     ModelResponseStream,
 )
 
+# Anthropic SSE delta types that carry model-generated text, mapped to
+# (payload field, needs JSON escaping). partial_json fragments need
+# replacements JSON-escaped so the assembled tool input stays valid JSON.
+_ANTHROPIC_SSE_DELTA_FIELDS: Dict[str, Tuple[str, bool]] = {
+    "text_delta": ("text", False),
+    "thinking_delta": ("thinking", False),
+    "input_json_delta": ("partial_json", True),
+}
+
+# Event types that terminate the current content block / message: any held
+# partial-token carry is literal text and must be flushed before them.
+# Deliberately excludes "ping" — keepalives interleave mid-block and a
+# placeholder may continue right after one.
+_ANTHROPIC_SSE_CARRY_FLUSH_EVENTS = {
+    "content_block_start",
+    "content_block_stop",
+    "message_delta",
+    "message_stop",
+    "error",
+}
+
+
+class _AnthropicSSEUnmasker:
+    """Incremental PII unmasker for an Anthropic native SSE byte stream.
+
+    feed() accepts arbitrarily split byte chunks and buffers to complete
+    lines, so a ``data:`` line (or a multi-byte UTF-8 character) split
+    across chunks is never parsed partially. Placeholder tokens may also be
+    split across delta *events* (``"…<PERS"`` then ``"ON_1>…"``): a trailing
+    fragment that is still a strict prefix of a known token is carried and
+    prepended to the next delta of the same content block; carries are
+    flushed as a synthetic delta event when the block ends without
+    completing one. Call flush() once the stream is exhausted.
+    """
+
+    def __init__(self, pii_tokens: Dict[str, str]) -> None:
+        self._tokens: Dict[str, str] = dict(pii_tokens)
+        self._buffer: bytes = b""
+        self._carry: str = ""
+        self._carry_ctx: Optional[Tuple[Any, str]] = None  # (index, delta_type)
+
+    def feed(self, chunk: bytes) -> bytes:
+        self._buffer += chunk
+        out: List[bytes] = []
+        while True:
+            newline_idx = self._buffer.find(b"\n")
+            if newline_idx == -1:
+                break
+            line = self._buffer[: newline_idx + 1]
+            self._buffer = self._buffer[newline_idx + 1 :]
+            out.append(self._process_line(line))
+        return b"".join(out)
+
+    def flush(self) -> bytes:
+        """Emit any held carry and unterminated trailing bytes at stream end."""
+        out = self._flush_carry() + self._buffer
+        self._buffer = b""
+        return out
+
+    def _process_line(self, line: bytes) -> bytes:
+        if line.startswith(b"event: "):
+            # Flush a held carry *before* the event line so the synthetic
+            # delta does not split the next event's `event:`/`data:` framing.
+            event_name = (
+                line[len(b"event: ") :].strip().decode("utf-8", errors="replace")
+            )
+            if event_name in _ANTHROPIC_SSE_CARRY_FLUSH_EVENTS:
+                return self._flush_carry() + line
+            return line
+        if not line.startswith(b"data: "):
+            return line
+
+        try:
+            text = line.decode("utf-8")
+        except UnicodeDecodeError:
+            return line
+        stripped = text.rstrip("\r\n")
+        line_ending = text[len(stripped) :]
+        raw_json = stripped[len("data: ") :]
+        if raw_json == "[DONE]":
+            return line
+        try:
+            event = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return line
+        if not isinstance(event, dict):
+            return line
+
+        event_type = event.get("type")
+        delta = event.get("delta")
+        delta_type = delta.get("type") if isinstance(delta, dict) else None
+        field_spec = _ANTHROPIC_SSE_DELTA_FIELDS.get(delta_type) if delta_type else None
+        if (
+            event_type == "content_block_delta"
+            and delta is not None
+            and field_spec is not None
+            and isinstance(delta.get(field_spec[0]), str)
+        ):
+            field, json_escape = field_spec
+            prefix = b""
+            ctx = (event.get("index"), str(delta_type))
+            if self._carry and self._carry_ctx != ctx:
+                # Safety net: Anthropic blocks are sequential, so a context
+                # switch without an intervening block stop should not happen.
+                prefix = self._flush_carry()
+            delta_text = self._carry + delta[field]
+            self._carry = ""
+            self._carry_ctx = None
+            unmasked = self._replace(delta_text, json_escape)
+            emit_text, carry = self._split_partial_token(unmasked)
+            if carry:
+                self._carry = carry
+                self._carry_ctx = ctx
+            delta[field] = emit_text
+            new_line = "data: " + json.dumps(event, ensure_ascii=False) + line_ending
+            return prefix + new_line.encode("utf-8")
+
+        if event_type in _ANTHROPIC_SSE_CARRY_FLUSH_EVENTS:
+            # Fallback for streams without `event:` lines (already a no-op
+            # when the preceding event line flushed the carry).
+            return self._flush_carry() + line
+        return line
+
+    def _replace(self, text: str, json_escape: bool) -> str:
+        for token, original in self._tokens.items():
+            if token in text:
+                if json_escape:
+                    original = json.dumps(original, ensure_ascii=False)[1:-1]
+                text = text.replace(token, original)
+        return text
+
+    def _split_partial_token(self, text: str) -> Tuple[str, str]:
+        """Split off a trailing fragment that may still grow into a token."""
+        idx = text.rfind("<")
+        if idx == -1:
+            return text, ""
+        candidate = text[idx:]
+        if ">" not in candidate and any(
+            len(token) > len(candidate) and token.startswith(candidate)
+            for token in self._tokens
+        ):
+            return text[:idx], candidate
+        return text, ""
+
+    def _flush_carry(self) -> bytes:
+        if not self._carry:
+            return b""
+        index, delta_type = self._carry_ctx or (0, "text_delta")
+        field, _ = _ANTHROPIC_SSE_DELTA_FIELDS[delta_type]
+        event = {
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": delta_type, field: self._carry},
+        }
+        self._carry = ""
+        self._carry_ctx = None
+        return (
+            "event: content_block_delta\ndata: "
+            + json.dumps(event, ensure_ascii=False)
+            + "\n\n"
+        ).encode("utf-8")
+
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     user_api_key_cache = None
@@ -1225,39 +1387,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
-    @staticmethod
-    def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: Dict[str, str]) -> bytes:
-        try:
-            text = chunk.decode("utf-8")
-        except UnicodeDecodeError:
-            return chunk
-
-        result_lines: List[str] = []
-        for line in text.split("\n"):
-            line = line.rstrip("\r")
-            if line.startswith("data: ") and line != "data: [DONE]":
-                raw_json = line[6:]
-                try:
-                    event = json.loads(raw_json)
-                    delta = event.get("delta") if isinstance(event, dict) else None
-                    if (
-                        isinstance(delta, dict)
-                        and event.get("type") == "content_block_delta"
-                        and delta.get("type") == "text_delta"
-                        and isinstance(delta.get("text"), str)
-                    ):
-                        unmasked = _OPTIONAL_PresidioPIIMasking._unmask_pii_text(
-                            delta["text"], pii_tokens
-                        )
-                        if unmasked != delta["text"]:
-                            event["delta"]["text"] = unmasked
-                            line = "data: " + json.dumps(event, ensure_ascii=False)
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass
-            result_lines.append(line)
-
-        return "\n".join(result_lines).encode("utf-8")
-
     async def _stream_pii_unmasking(
         self,
         response: Any,
@@ -1273,6 +1402,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         metadata = (request_data.get("metadata") or {}) if request_data else {}
         pii_tokens: Dict[str, str] = metadata.get("pii_tokens", {})
 
+        sse_unmasker: Optional[_AnthropicSSEUnmasker] = None
         remaining_chunks: List[ModelResponseStream] = []
         try:
             async for chunk in response:
@@ -1280,10 +1410,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     remaining_chunks.append(chunk)
                 elif isinstance(chunk, bytes):
                     if pii_tokens:
-                        yield self._unmask_sse_bytes_chunk(chunk, pii_tokens)  # type: ignore[misc]
+                        if sse_unmasker is None:
+                            sse_unmasker = _AnthropicSSEUnmasker(pii_tokens)
+                        unmasked_bytes = sse_unmasker.feed(chunk)
+                        if unmasked_bytes:
+                            yield unmasked_bytes  # type: ignore[misc]
                     else:
                         yield chunk  # type: ignore[misc]
                     continue
+
+            if sse_unmasker is not None:
+                trailing_bytes = sse_unmasker.flush()
+                if trailing_bytes:
+                    yield trailing_bytes  # type: ignore[misc]
 
             if not remaining_chunks:
                 return
@@ -1314,6 +1453,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         except Exception as e:
             verbose_proxy_logger.error(f"Error in PII streaming processing: {str(e)}")
+            if sse_unmasker is not None:
+                trailing_bytes = sse_unmasker.flush()
+                if trailing_bytes:
+                    yield trailing_bytes  # type: ignore[misc]
             for chunk in remaining_chunks:
                 yield chunk
 
