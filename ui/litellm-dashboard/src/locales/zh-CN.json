@@ -98,6 +98,41 @@
     "adminUiDisabledBody": "管理员已禁用管理界面。如需重新启用，请更新以下环境变量：",
     "ssoEnabledNotice": "单点登录（SSO）已启用。LiteLLM 不再在加载此页面时自动跳转到 SSO 登录流程。如需重新启用自动跳转，请在环境配置中设置 <code>AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</code>。"
   },
+  "shared": {
+    "createdKeyDisplay": {
+      "copiedToClipboard": "密钥已复制到剪贴板",
+      "saveWarning": "请将此密钥保存在安全且易于访问的地方。出于安全原因，<b>您将无法通过 LiteLLM 账户再次查看它</b>。如果丢失此密钥，您需要重新生成一个。",
+      "virtualKeyLabel": "虚拟密钥：",
+      "copyButton": "复制虚拟密钥"
+    },
+    "advancedDatePicker": {
+      "selectTimeRange": "选择时间范围",
+      "selectDateRange": "选择日期范围",
+      "relativeTime": "相对时间",
+      "startAndEndDates": "开始和结束日期",
+      "startDate": "开始日期",
+      "endDate": "结束日期",
+      "invalidDateFormat": "日期格式无效",
+      "endBeforeStart": "结束日期不能早于开始日期",
+      "from": "从：",
+      "to": "至：",
+      "today": "今天",
+      "todayShort": "今天",
+      "last7Days": "过去 7 天",
+      "last7DaysShort": "7天",
+      "last30Days": "过去 30 天",
+      "last30DaysShort": "30天",
+      "monthToDate": "本月至今",
+      "monthToDateShort": "MTD",
+      "yearToDate": "今年至今",
+      "yearToDateShort": "YTD"
+    },
+    "usageDatePicker": {
+      "selectTimeRange": "选择时间范围",
+      "selectDateRange": "选择日期范围",
+      "selected": "已选择"
+    }
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",

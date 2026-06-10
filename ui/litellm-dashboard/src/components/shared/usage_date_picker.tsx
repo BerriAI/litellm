@@ -1,5 +1,6 @@
 import React, { useCallback, useState, useRef } from "react";
 import { DateRangePicker, DateRangePickerValue, Text } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 
 interface UsageDatePickerProps {
   value: DateRangePickerValue;
@@ -15,10 +16,12 @@ interface UsageDatePickerProps {
 const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
   value,
   onValueChange,
-  label = "Select Time Range",
+  label,
   className = "",
   showTimeRange = true,
 }) => {
+  const { t } = useTranslation();
+  const resolvedLabel = label !== undefined ? label : t("shared.usageDatePicker.selectTimeRange");
   const [showSelectedFeedback, setShowSelectedFeedback] = useState(false);
   const datePickerRef = useRef<HTMLDivElement>(null);
 
@@ -110,22 +113,20 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
 
   return (
     <div className={className}>
-      {label && <Text className="mb-2">{label}</Text>}
+      {resolvedLabel && <Text className="mb-2">{resolvedLabel}</Text>}
 
-      {/* Container with relative positioning for absolute placement */}
       <div className="relative w-fit">
         <div ref={datePickerRef}>
           <DateRangePicker
             enableSelect={true}
             value={value}
-            onValueChange={handleDateChange} // Only triggers on actual selection
-            placeholder="Select date range"
+            onValueChange={handleDateChange}
+            placeholder={t("shared.usageDatePicker.selectDateRange")}
             enableClear={false}
             style={{ zIndex: 100 }}
           />
         </div>
 
-        {/* ONLY SHOW AFTER ACTUAL SELECTION IS COMPLETED */}
         {showSelectedFeedback && (
           <div
             className="absolute top-1/2 animate-pulse"
@@ -139,13 +140,12 @@ const UsageDatePicker: React.FC<UsageDatePickerProps> = ({
               <div className="w-3 h-3 bg-green-500 text-white rounded-full flex items-center justify-center text-xs">
                 ✓
               </div>
-              <span className="text-xs">Selected</span>
+              <span className="text-xs">{t("shared.usageDatePicker.selected")}</span>
             </div>
           </div>
         )}
       </div>
 
-      {/* Time range display */}
       {showTimeRange && value.from && value.to && (
         <Text className="mt-2 text-xs text-gray-500">{formatTimeRange(value.from, value.to)}</Text>
       )}
