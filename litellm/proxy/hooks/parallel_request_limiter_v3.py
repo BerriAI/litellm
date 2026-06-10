@@ -39,7 +39,13 @@ from litellm.proxy.common_utils.proxy_rate_limit_error import (
 from litellm.proxy.hooks.rate_limiter_utils import resolve_llm_provider_for_rate_limit
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
-from litellm.types.utils import CallTypes, ModelResponse, Usage
+from litellm.types.utils import (
+    CallTypes,
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -2736,9 +2742,14 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
         # Get total tokens from response
         total_tokens = 0
-        # spot fix for /responses api
-        if isinstance(response_obj, ModelResponse) or isinstance(
-            response_obj, BaseLiteLLMOpenAIResponseObject
+        if isinstance(
+            response_obj,
+            (
+                ModelResponse,
+                EmbeddingResponse,
+                TextCompletionResponse,
+                BaseLiteLLMOpenAIResponseObject,
+            ),
         ):
             _usage = getattr(response_obj, "usage", None)
             total_tokens = self._get_total_tokens_from_usage(
