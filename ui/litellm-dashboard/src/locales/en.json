@@ -2265,6 +2265,47 @@
     "tokenFlow": {
       "breakdown": "{{total}} ({{prompt}} prompt tokens + {{completion}} completion tokens)"
     },
+    "constants": {
+      "errorCode400": "400 - Bad Request",
+      "errorCode401": "401 - Invalid Authentication",
+      "errorCode403": "403 - Permission Denied",
+      "errorCode404": "404 - Not Found",
+      "errorCode408": "408 - Request Timeout",
+      "errorCode422": "422 - Unprocessable Entity",
+      "errorCode429": "429 - Rate Limited",
+      "errorCode500": "500 - Internal Server Error",
+      "errorCode502": "502 - Bad Gateway",
+      "errorCode503": "503 - Service Unavailable",
+      "errorCode529": "529 - Overloaded",
+      "quickSelectLastMinute": "Last Minute",
+      "quickSelectLast15Minutes": "Last 15 Minutes",
+      "quickSelectLastHour": "Last Hour",
+      "quickSelectLast4Hours": "Last 4 Hours",
+      "quickSelectLast24Hours": "Last 24 Hours",
+      "quickSelectLast7Days": "Last 7 Days"
+    },
+    "filterOptions": {
+      "teamIdLabel": "Team ID",
+      "statusLabel": "Status",
+      "statusSuccess": "Success",
+      "statusFailure": "Failure",
+      "keyAliasLabel": "Key Alias",
+      "endUserLabel": "End User",
+      "errorCodeLabel": "Error Code",
+      "customCodeLabel": "Use custom code: {{code}}",
+      "errorMessageLabel": "Error Message",
+      "keyHashLabel": "Key Hash",
+      "modelLabel": "Model",
+      "publicModelLabel": "Public model / search tool"
+    },
+    "index": {
+      "tabRequestLogs": "Request Logs",
+      "tabAuditLogs": "Audit Logs",
+      "tabDeletedKeys": "Deleted Keys",
+      "tabDeletedTeams": "Deleted Teams",
+      "requestLogsTitle": "Request Logs",
+      "backToLogs": "Back to Logs"
+    },
     "logsTableToolbar": {
       "searchPlaceholder": "Search by Request ID",
       "customRange": "Custom Range",

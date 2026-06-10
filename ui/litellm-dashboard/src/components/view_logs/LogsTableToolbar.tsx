@@ -1,9 +1,9 @@
 import moment from "moment";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SyncOutlined } from "@ant-design/icons";
 import { Button, Switch } from "antd";
 import { useTranslation } from "react-i18next";
-import { QUICK_SELECT_OPTIONS } from "./constants";
+import { getQuickSelectOptions } from "./constants";
 import { getTimeRangeDisplay } from "./logs_utils";
 import type { PaginatedResponse } from "./log_filter_logic";
 
@@ -51,6 +51,7 @@ export function LogsTableToolbar({
   filteredLogs,
 }: LogsTableToolbarProps) {
   const { t } = useTranslation();
+  const quickSelectOptions = useMemo(() => getQuickSelectOptions(t), [t]);
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
   const quickSelectRef = useRef<HTMLDivElement>(null);
 
@@ -64,7 +65,7 @@ export function LogsTableToolbar({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const selectedOption = QUICK_SELECT_OPTIONS.find(
+  const selectedOption = quickSelectOptions.find(
     (option) => option.value === selectedTimeInterval.value && option.unit === selectedTimeInterval.unit,
   );
   const displayLabel = isCustomDate ? getTimeRangeDisplay(isCustomDate, startTime, endTime) : selectedOption?.label;
@@ -117,7 +118,7 @@ export function LogsTableToolbar({
                 {quickSelectOpen && (
                   <div className="absolute left-0 mt-2 w-64 bg-white rounded-lg shadow-lg border p-2 z-50">
                     <div className="space-y-1">
-                      {QUICK_SELECT_OPTIONS.map((option) => (
+                      {quickSelectOptions.map((option) => (
                         <button
                           key={option.label}
                           className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""}`}

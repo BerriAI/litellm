@@ -2265,6 +2265,47 @@
     "tokenFlow": {
       "breakdown": "{{total}}（{{prompt}} 提示词 Token + {{completion}} 补全 Token）"
     },
+    "constants": {
+      "errorCode400": "400 - 错误请求",
+      "errorCode401": "401 - 身份验证无效",
+      "errorCode403": "403 - 权限被拒绝",
+      "errorCode404": "404 - 未找到",
+      "errorCode408": "408 - 请求超时",
+      "errorCode422": "422 - 无法处理的实体",
+      "errorCode429": "429 - 速率受限",
+      "errorCode500": "500 - 内部服务器错误",
+      "errorCode502": "502 - 错误网关",
+      "errorCode503": "503 - 服务不可用",
+      "errorCode529": "529 - 过载",
+      "quickSelectLastMinute": "最近 1 分钟",
+      "quickSelectLast15Minutes": "最近 15 分钟",
+      "quickSelectLastHour": "最近 1 小时",
+      "quickSelectLast4Hours": "最近 4 小时",
+      "quickSelectLast24Hours": "最近 24 小时",
+      "quickSelectLast7Days": "最近 7 天"
+    },
+    "filterOptions": {
+      "teamIdLabel": "团队 ID",
+      "statusLabel": "状态",
+      "statusSuccess": "成功",
+      "statusFailure": "失败",
+      "keyAliasLabel": "密钥别名",
+      "endUserLabel": "终端用户",
+      "errorCodeLabel": "错误码",
+      "customCodeLabel": "使用自定义错误码：{{code}}",
+      "errorMessageLabel": "错误消息",
+      "keyHashLabel": "密钥哈希",
+      "modelLabel": "模型",
+      "publicModelLabel": "公共模型 / 搜索工具"
+    },
+    "index": {
+      "tabRequestLogs": "请求日志",
+      "tabAuditLogs": "审计日志",
+      "tabDeletedKeys": "已删除密钥",
+      "tabDeletedTeams": "已删除团队",
+      "requestLogsTitle": "请求日志",
+      "backToLogs": "返回日志"
+    },
     "logsTableToolbar": {
       "searchPlaceholder": "按请求 ID 搜索",
       "customRange": "自定义范围",
