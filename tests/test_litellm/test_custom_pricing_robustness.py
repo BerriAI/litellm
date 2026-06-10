@@ -53,7 +53,9 @@ def test_response_cost_calculator_honors_zero_custom_cost_per_token():
     ``custom_cost_per_token`` the cost is 0, instead of falling back to the
     model's public price.
     """
-    response = _make_model_response("gpt-4o", prompt_tokens=100_000, completion_tokens=10_000)
+    response = _make_model_response(
+        "gpt-4o", prompt_tokens=100_000, completion_tokens=10_000
+    )
 
     cost = litellm.response_cost_calculator(
         response_object=response,
@@ -79,7 +81,9 @@ def test_response_cost_calculator_falls_back_without_custom_cost_per_token():
     :func:`test_response_cost_calculator_honors_zero_custom_cost_per_token` is
     what fixes the silent mis-billing.
     """
-    response = _make_model_response("gpt-4o", prompt_tokens=100_000, completion_tokens=10_000)
+    response = _make_model_response(
+        "gpt-4o", prompt_tokens=100_000, completion_tokens=10_000
+    )
 
     cost = litellm.response_cost_calculator(
         response_object=response,
@@ -96,7 +100,9 @@ def test_response_cost_calculator_falls_back_without_custom_cost_per_token():
 
 def test_response_cost_calculator_honors_nonzero_custom_cost_per_token():
     """Explicit non-zero rates are applied exactly, regardless of model_cost."""
-    response = _make_model_response("gpt-4o", prompt_tokens=1_000, completion_tokens=2_000)
+    response = _make_model_response(
+        "gpt-4o", prompt_tokens=1_000, completion_tokens=2_000
+    )
 
     cost = litellm.response_cost_calculator(
         response_object=response,
@@ -174,9 +180,7 @@ def test_extract_includes_cache_rates_when_present():
 
 def test_extract_returns_none_for_partial_pricing():
     # Only input set -> stay on the standard pricing path (don't assume 0 output).
-    assert (
-        extract_custom_cost_per_token({"input_cost_per_token": 0}) is None
-    )
+    assert extract_custom_cost_per_token({"input_cost_per_token": 0}) is None
 
 
 def test_extract_returns_none_when_absent():
@@ -189,16 +193,12 @@ def test_extract_returns_none_when_absent():
 # extract_custom_cost_per_second
 # ---------------------------------------------------------------------------
 def test_extract_custom_cost_per_second_top_level():
-    result = extract_custom_cost_per_second(
-        {"input_cost_per_second": 0.005}
-    )
+    result = extract_custom_cost_per_second({"input_cost_per_second": 0.005})
     assert result == 0.005
 
 
 def test_extract_custom_cost_per_second_zero():
-    result = extract_custom_cost_per_second(
-        {"input_cost_per_second": 0}
-    )
+    result = extract_custom_cost_per_second({"input_cost_per_second": 0})
     assert result == 0.0
 
 
@@ -303,8 +303,7 @@ def test_per_request_custom_pricing_does_not_poison_canonical_entry():
 
     # The canonical entry must not be mutated.
     assert (
-        litellm.model_cost[model]["input_cost_per_token"]
-        == canonical_input_cost_before
+        litellm.model_cost[model]["input_cost_per_token"] == canonical_input_cost_before
     )
     assert (
         litellm.model_cost[model]["output_cost_per_token"]

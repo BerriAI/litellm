@@ -1083,9 +1083,7 @@ def _build_custom_pricing_entry(
     return entry
 
 
-def _model_has_known_pricing(
-    model: str, custom_llm_provider: Optional[str]
-) -> bool:
+def _model_has_known_pricing(model: str, custom_llm_provider: Optional[str]) -> bool:
     """Return True if ``model`` already resolves to a priced entry in litellm.model_cost.
 
     Per-request custom pricing must not overwrite the shared canonical
