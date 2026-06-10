@@ -5001,11 +5001,11 @@ def extract_custom_cost_per_second(
         if metadata_key is None:
             source = litellm_params
         else:
-            container = litellm_params.get(metadata_key) or {}
+            container = cast(dict, litellm_params.get(metadata_key) or {})
             if not isinstance(container, dict):
                 continue
             source = (
-                container.get("model_info")
+                cast(dict, container.get("model_info"))
                 if metadata_key in ("metadata", "litellm_metadata")
                 else container
             )
