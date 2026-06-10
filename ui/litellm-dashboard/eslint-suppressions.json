@@ -243,14 +243,6 @@
       "count": 1
     }
   },
-  "src/components/AIHub/ClaudeCodeMarketplaceTab.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
-      "count": 1
-    }
-  },
   "src/components/AIHub/ModelHubTable.test.tsx": {
     "max-params": {
       "count": 1
@@ -300,11 +292,6 @@
       "count": 1
     },
     "react-hooks/set-state-in-effect": {
-      "count": 1
-    }
-  },
-  "src/components/AIHub/marketplace_table_columns.tsx": {
-    "no-restricted-imports": {
       "count": 1
     }
   },
@@ -816,11 +803,6 @@
       "count": 1
     }
   },
-  "src/components/agents/agent_table.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    }
-  },
   "src/components/alerting/dynamic_form.tsx": {
     "no-restricted-imports": {
       "count": 1
@@ -953,14 +935,6 @@
   },
   "src/components/claude_code_plugins/helpers.test.ts": {
     "unused-imports/no-unused-imports": {
-      "count": 1
-    }
-  },
-  "src/components/claude_code_plugins/plugin_info.tsx": {
-    "no-restricted-imports": {
-      "count": 1
-    },
-    "react-hooks/immutability": {
       "count": 1
     }
   },
@@ -1138,9 +1112,6 @@
   "src/components/guardrails/add_guardrail_form.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 1
-    },
-    "react/no-unescaped-entities": {
-      "count": 2
     }
   },
   "src/components/guardrails/content_filter/CompetitorIntentConfiguration.tsx": {
@@ -1331,14 +1302,6 @@
   "src/components/mcp_tools/mcp_discovery.tsx": {
     "react-hooks/set-state-in-effect": {
       "count": 2
-    }
-  },
-  "src/components/mcp_tools/mcp_server_columns.tsx": {
-    "max-params": {
-      "count": 1
-    },
-    "no-restricted-imports": {
-      "count": 1
     }
   },
   "src/components/mcp_tools/mcp_server_cost_config.tsx": {
