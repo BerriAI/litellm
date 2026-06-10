@@ -22013,6 +22013,11 @@ export interface components {
              */
             database_connection_timeout: number | null;
             /**
+             * Database Disable Prepared Statements
+             * @description Disable server-side prepared statements by setting `pgbouncer=true` on the Prisma DATABASE_URL / DIRECT_URL. Set this when running behind a transaction-mode pooler (PgBouncer, RDS Proxy) or to avoid the 'cached plan must not change result type' failures that pooled prepared statements hit when a schema changes during a rolling deploy.
+             */
+            database_disable_prepared_statements?: boolean | null;
+            /**
              * Database Extra Connection Params
              * @description Escape hatch: extra key/value pairs appended verbatim to the Prisma DATABASE_URL / DIRECT_URL query string (e.g. `sslmode`, `pgbouncer`, `statement_cache_size`). Keys here override any default LiteLLM sets.
              */
