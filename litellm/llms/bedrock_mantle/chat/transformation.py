@@ -40,8 +40,8 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         aws_region_name: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         region = (
-            get_secret_str("BEDROCK_MANTLE_REGION")
-            or aws_region_name
+            aws_region_name
+            or get_secret_str("BEDROCK_MANTLE_REGION")
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )

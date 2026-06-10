@@ -186,11 +186,7 @@ def get_llm_provider(  # noqa: PLR0915
 
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params:
-            if (
-                custom_llm_provider is None
-                and api_base is None
-                and api_key is None
-            ):
+            if custom_llm_provider is None and api_base is None and api_key is None:
                 custom_llm_provider = litellm_params.custom_llm_provider
                 api_base = litellm_params.api_base
                 api_key = litellm_params.api_key
