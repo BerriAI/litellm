@@ -844,9 +844,9 @@ async def fetch_upstream_oauth_protected_resource(
     """Fetch the upstream MCP server's ``.well-known/oauth-protected-resource``
     metadata for a pass-through server.
 
-    Tries host-only first, then falls back to the RFC 9728 §3.1 path-suffix
-    form (e.g. ``https://host/.well-known/oauth-protected-resource/mcp``) to
-    cover upstreams that scope metadata per resource path.
+    Tries the RFC 9728 §3.1 path-suffix form first (e.g.
+    ``https://host/.well-known/oauth-protected-resource/mcp``) so upstreams
+    that scope metadata per resource path win, then falls back to host-root.
 
     Responses are cached in-process for ~5 minutes keyed on
     ``(server_id, resource_url)`` so we do not hammer the IdP.
@@ -876,14 +876,14 @@ async def fetch_upstream_oauth_protected_resource(
         if cached is not None and cached[0] > now:
             return cached[1]
 
-        host_base = f"{upstream.scheme}://{upstream.netloc}"
-        candidates = [f"{host_base}/.well-known/oauth-protected-resource"]
-        # RFC 9728 §3.1 path fallback
-        if upstream.path and upstream.path not in ("", "/"):
-            candidates.append(
-                f"{host_base}/.well-known/oauth-protected-resource"
-                f"{upstream.path.rstrip('/')}"
-            )
+        from mcp.client.auth.utils import (
+            build_protected_resource_metadata_discovery_urls,
+        )
+
+        # RFC 9728 §3.1 ordering: path-suffix form first, host-root fallback.
+        candidates = build_protected_resource_metadata_discovery_urls(
+            None, mcp_server.url
+        )
 
         async_client = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.Oauth2Check

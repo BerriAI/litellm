@@ -20,6 +20,12 @@ import anyio
 from fastapi import HTTPException
 from httpx import HTTPStatusError
 from mcp import ReadResourceResult, Resource
+from mcp.client.auth.utils import (
+    build_oauth_authorization_server_metadata_discovery_urls,
+    build_protected_resource_metadata_discovery_urls,
+    extract_field_from_www_auth,
+)
+from mcp.shared.auth import OAuthMetadata, ProtectedResourceMetadata
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import (
     CallToolResult,
@@ -29,7 +35,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl
+from pydantic import AnyUrl, ValidationError
 
 import litellm
 from litellm._logging import verbose_logger
@@ -2407,15 +2413,15 @@ class MCPServerManager:
                 exc,
             )
 
-            header_value: Optional[str] = None
+            resource_metadata_url: Optional[str] = None
+            scopes: Optional[List[str]] = None
             if exc.response is not None:
-                header_value = exc.response.headers.get(
-                    "WWW-Authenticate"
-                ) or exc.response.headers.get("www-authenticate")
-
-            resource_metadata_url, scopes = self._parse_www_authenticate_header(
-                header_value
-            )
+                resource_metadata_url = extract_field_from_www_auth(
+                    exc.response, "resource_metadata"
+                )
+                scopes = self._extract_scopes(
+                    extract_field_from_www_auth(exc.response, "scope")
+                )
 
             authorization_servers = []
             resource_scopes = None
@@ -2461,29 +2467,6 @@ class MCPServerManager:
             )
             return None
 
-    def _parse_www_authenticate_header(
-        self, header_value: Optional[str]
-    ) -> Tuple[Optional[str], Optional[List[str]]]:
-        if not header_value:
-            return None, None
-
-        _, _, params_section = header_value.partition(" ")
-        params_section = params_section or header_value
-
-        param_pattern = re.compile(r"([a-zA-Z0-9_]+)\s*=\s*\"?([^\",]+)\"?")
-        params: Dict[str, str] = {
-            match.group(1).lower(): match.group(2).strip()
-            for match in param_pattern.finditer(params_section)
-        }
-
-        resource_metadata_url = params.get("resource_metadata")
-
-        scope_value = params.get("scope")
-        scopes_list = [s for s in (scope_value.split() if scope_value else []) if s]
-        scopes = scopes_list or None
-
-        return resource_metadata_url, scopes
-
     async def _fetch_oauth_metadata_from_resource(
         self, resource_metadata_url: str, server_url: str
     ) -> Tuple[List[str], Optional[List[str]]]:
@@ -2513,19 +2496,32 @@ class MCPServerManager:
             )
             return [], None
 
-        raw_servers = data.get("authorization_servers")
-        if isinstance(raw_servers, list):
-            authorization_servers = [
-                entry
-                for entry in raw_servers
-                if isinstance(entry, str) and entry.strip() != ""
-            ]
-        else:
-            authorization_servers = []
+        if not isinstance(data, dict):
+            return [], None
 
-        scopes = self._extract_scopes(
-            data.get("scopes_supported") or data.get("scopes")
-        )
+        try:
+            metadata = ProtectedResourceMetadata.model_validate(data)
+            authorization_servers = [
+                str(entry) for entry in metadata.authorization_servers
+            ]
+            scopes = self._extract_scopes(metadata.scopes_supported)
+        except ValidationError:
+            # Lenient fallback: real upstreams routinely omit RFC 9728
+            # required fields (e.g. ``resource``) while still advertising
+            # usable authorization_servers.
+            raw_servers = data.get("authorization_servers")
+            if isinstance(raw_servers, list):
+                authorization_servers = [
+                    entry
+                    for entry in raw_servers
+                    if isinstance(entry, str) and entry.strip() != ""
+                ]
+            else:
+                authorization_servers = []
+            scopes = self._extract_scopes(data.get("scopes_supported"))
+
+        if scopes is None:
+            scopes = self._extract_scopes(data.get("scopes"))
 
         return authorization_servers, scopes
 
@@ -2540,16 +2536,7 @@ class MCPServerManager:
         if not parsed.scheme or not parsed.netloc:
             return [], None
 
-        base = f"{parsed.scheme}://{parsed.netloc}"
-        path = parsed.path or ""
-        path = path.strip("/")
-
-        candidate_urls: List[str] = []
-        if path:
-            candidate_urls.append(f"{base}/.well-known/oauth-protected-resource/{path}")
-        candidate_urls.append(f"{base}/.well-known/oauth-protected-resource")
-
-        for url in candidate_urls:
+        for url in build_protected_resource_metadata_discovery_urls(None, server_url):
             (
                 authorization_servers,
                 scopes,
@@ -2581,21 +2568,20 @@ class MCPServerManager:
         if not parsed.scheme or not parsed.netloc:
             return None
 
+        candidate_urls = build_oauth_authorization_server_metadata_discovery_urls(
+            issuer_url, server_url
+        )
+        # Legacy fallbacks beyond the SDK's RFC 8414 ordered list: root
+        # endpoints for path-ful issuers, and the bare issuer URL (some IdPs
+        # serve their OIDC document directly at the issuer).
         base = f"{parsed.scheme}://{parsed.netloc}"
-        path = (parsed.path or "").strip("/")
-
-        candidate_urls: List[str] = []
-        if path:
-            candidate_urls.append(
-                f"{base}/.well-known/oauth-authorization-server/{path}"
-            )
-            candidate_urls.append(f"{base}/.well-known/openid-configuration/{path}")
-            candidate_urls.append(
-                f"{issuer_url.rstrip('/')}/.well-known/openid-configuration"
-            )
-        candidate_urls.append(f"{base}/.well-known/oauth-authorization-server")
-        candidate_urls.append(f"{base}/.well-known/openid-configuration")
-        candidate_urls.append(issuer_url.rstrip("/"))
+        for legacy_url in (
+            f"{base}/.well-known/oauth-authorization-server",
+            f"{base}/.well-known/openid-configuration",
+            issuer_url.rstrip("/"),
+        ):
+            if legacy_url not in candidate_urls:
+                candidate_urls.append(legacy_url)
 
         for url in candidate_urls:
             try:
@@ -2619,25 +2605,51 @@ class MCPServerManager:
                 )
                 continue
 
-            scopes = self._extract_scopes(data.get("scopes_supported"))
+            metadata = self._oauth_metadata_from_asm_payload(data)
+            if metadata is not None:
+                return metadata
+
+        return self._build_azure_authorization_server_metadata(parsed)
+
+    def _oauth_metadata_from_asm_payload(self, data: Any) -> Optional[MCPOAuthMetadata]:
+        """Map an RFC 8414 / OIDC discovery payload onto MCPOAuthMetadata.
+
+        Validates with the SDK's strict OAuthMetadata model first; falls back
+        to lenient field extraction for IdPs that serve partial documents
+        (e.g. missing ``issuer``).
+        """
+        if not isinstance(data, dict):
+            return None
+        try:
+            asm = OAuthMetadata.model_validate(data)
             metadata = MCPOAuthMetadata(
-                scopes=scopes,
+                scopes=self._extract_scopes(asm.scopes_supported),
+                authorization_url=str(asm.authorization_endpoint),
+                token_url=str(asm.token_endpoint),
+                registration_url=(
+                    str(asm.registration_endpoint)
+                    if asm.registration_endpoint
+                    else None
+                ),
+            )
+        except ValidationError:
+            metadata = MCPOAuthMetadata(
+                scopes=self._extract_scopes(data.get("scopes_supported")),
                 authorization_url=data.get("authorization_endpoint"),
                 token_url=data.get("token_endpoint"),
                 registration_url=data.get("registration_endpoint"),
             )
 
-            if any(
-                [
-                    metadata.scopes,
-                    metadata.authorization_url,
-                    metadata.token_url,
-                    metadata.registration_url,
-                ]
-            ):
-                return metadata
-
-        return self._build_azure_authorization_server_metadata(parsed)
+        if any(
+            [
+                metadata.scopes,
+                metadata.authorization_url,
+                metadata.token_url,
+                metadata.registration_url,
+            ]
+        ):
+            return metadata
+        return None
 
     @staticmethod
     def _build_azure_authorization_server_metadata(

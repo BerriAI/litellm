@@ -27,6 +27,9 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy._experimental.mcp_server.auth import token_exchange
+from litellm.proxy._experimental.mcp_server.auth.token_exchange import (
+    parse_oauth_token_response as _parse_oauth_token_response,
+)
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
 if TYPE_CHECKING:
@@ -125,32 +128,12 @@ class MCPOAuth2TokenCache(InMemoryCache):
                 f"failed with status {exc.response.status_code}"
             ) from exc
 
-        body = response.json()
-
-        if not isinstance(body, dict):
-            raise ValueError(
-                f"OAuth2 token response for MCP server '{server.server_id}' "
-                f"returned non-object JSON (got {type(body).__name__})"
-            )
-
-        access_token = body.get("access_token")
-        if not access_token:
-            raise ValueError(
-                f"OAuth2 token response for MCP server '{server.server_id}' "
-                f"missing 'access_token'"
-            )
-
-        # Safely parse expires_in — providers may return null or non-numeric values
-        raw_expires_in = body.get("expires_in")
-        try:
-            expires_in = (
-                int(raw_expires_in)
-                if raw_expires_in is not None
-                else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-            )
-        except (TypeError, ValueError):
-            expires_in = MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
-
+        token = _parse_oauth_token_response(response, server.server_id)
+        expires_in = (
+            token.expires_in
+            if token.expires_in is not None
+            else MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL
+        )
         ttl = max(
             expires_in - MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS,
             MCP_OAUTH2_TOKEN_CACHE_MIN_TTL,
@@ -161,7 +144,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
             server.server_id,
             expires_in,
         )
-        return access_token, ttl
+        return token.access_token, ttl
 
     def invalidate(self, server_id: str) -> None:
         """Remove a cached token (e.g. after a 401)."""
