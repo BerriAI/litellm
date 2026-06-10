@@ -146,12 +146,8 @@ MCP_PER_USER_TOKEN_EXPIRY_BUFFER_SECONDS = int(
 
 # Bounds for the in-memory Streamable HTTP event store backing MCP session
 # resumability (Last-Event-ID replay).
-MCP_EVENT_STORE_MAX_STREAMS = int(
-    os.getenv("LITELLM_MCP_EVENT_STORE_MAX_STREAMS", "1000")
-)
-MCP_EVENT_STORE_MAX_EVENTS_PER_STREAM = int(
-    os.getenv("LITELLM_MCP_EVENT_STORE_MAX_EVENTS_PER_STREAM", "100")
-)
+MCP_EVENT_STORE_MAX_STREAMS = 1000
+MCP_EVENT_STORE_MAX_EVENTS_PER_STREAM = 100
 
 # MCP timeout defaults (seconds). Override via env vars for slow/custom MCP servers.
 MCP_CLIENT_TIMEOUT = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"))
