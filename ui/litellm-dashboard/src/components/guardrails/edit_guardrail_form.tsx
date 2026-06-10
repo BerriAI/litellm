@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Form, Typography, Select, Input, Switch, Modal } from "antd";
 import { Button, TextInput } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 import {
   guardrail_provider_map,
   guardrailLogoMap,
@@ -54,6 +55,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
   fullLitellmParams,
   initialValues,
 }) => {
+  const { t } = useTranslation();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState<string | null>(initialValues?.provider || null);
@@ -71,7 +73,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         setGuardrailSettings(data);
       } catch (error) {
         console.error("Error fetching guardrail settings:", error);
-        NotificationsManager.fromBackend("Failed to load guardrail settings");
+        NotificationsManager.fromBackend(t("guardrails.editGuardrailForm.loadSettingsFailed"));
       }
     };
 
@@ -178,7 +180,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
             guardrail_info = configObj;
           }
         } catch (error) {
-          NotificationsManager.fromBackend("Invalid JSON in configuration");
+          NotificationsManager.fromBackend(t("guardrails.editGuardrailForm.invalidJsonConfig"));
           setLoading(false);
           return;
         }
@@ -222,7 +224,7 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         throw new Error(errorData || "Failed to update guardrail");
       }
 
-      NotificationsManager.success("Guardrail updated successfully");
+      NotificationsManager.success(t("guardrails.editGuardrailForm.updateSuccess"));
 
       // Reset and close
       onSuccess();
@@ -230,7 +232,9 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
     } catch (error) {
       console.error("Failed to update guardrail:", error);
       NotificationsManager.fromBackend(
-        "Failed to update guardrail: " + (error instanceof Error ? error.message : String(error)),
+        t("guardrails.editGuardrailForm.updateFailed", {
+          error: error instanceof Error ? error.message : String(error),
+        }),
       );
     } finally {
       setLoading(false);
@@ -264,7 +268,11 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
     switch (selectedProvider) {
       case "Aporia":
         return (
-          <Form.Item label="Aporia Configuration" name="config" tooltip="JSON configuration for Aporia">
+          <Form.Item
+            label={t("guardrails.editGuardrailForm.aporiaConfigLabel")}
+            name="config"
+            tooltip={t("guardrails.editGuardrailForm.aporiaConfigTooltip")}
+          >
             <Input.TextArea
               rows={4}
               placeholder={`{
@@ -276,7 +284,11 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         );
       case "AimSecurity":
         return (
-          <Form.Item label="Aim Security Configuration" name="config" tooltip="JSON configuration for Aim Security">
+          <Form.Item
+            label={t("guardrails.editGuardrailForm.aimConfigLabel")}
+            name="config"
+            tooltip={t("guardrails.editGuardrailForm.aimConfigTooltip")}
+          >
             <Input.TextArea
               rows={4}
               placeholder={`{
@@ -288,9 +300,9 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
       case "Bedrock":
         return (
           <Form.Item
-            label="Amazon Bedrock Configuration"
+            label={t("guardrails.editGuardrailForm.bedrockConfigLabel")}
             name="config"
-            tooltip="JSON configuration for Amazon Bedrock guardrails"
+            tooltip={t("guardrails.editGuardrailForm.bedrockConfigTooltip")}
           >
             <Input.TextArea
               rows={4}
@@ -303,7 +315,11 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         );
       case "CatoNetworks":
         return (
-          <Form.Item label="Cato Networks Configuration" name="config" tooltip="JSON configuration for Cato Networks">
+          <Form.Item
+            label={t("guardrails.editGuardrailForm.catoConfigLabel")}
+            name="config"
+            tooltip={t("guardrails.editGuardrailForm.catoConfigTooltip")}
+          >
             <Input.TextArea
               rows={4}
               placeholder={`{
@@ -314,7 +330,11 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         );
       case "GuardrailsAI":
         return (
-          <Form.Item label="Guardrails.ai Configuration" name="config" tooltip="JSON configuration for Guardrails.ai">
+          <Form.Item
+            label={t("guardrails.editGuardrailForm.guardrailsAiConfigLabel")}
+            name="config"
+            tooltip={t("guardrails.editGuardrailForm.guardrailsAiConfigTooltip")}
+          >
             <Input.TextArea
               rows={4}
               placeholder={`{
@@ -326,7 +346,11 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         );
       case "LakeraAI":
         return (
-          <Form.Item label="Lakera AI Configuration" name="config" tooltip="JSON configuration for Lakera AI">
+          <Form.Item
+            label={t("guardrails.editGuardrailForm.lakeraConfigLabel")}
+            name="config"
+            tooltip={t("guardrails.editGuardrailForm.lakeraConfigTooltip")}
+          >
             <Input.TextArea
               rows={4}
               placeholder={`{
@@ -338,9 +362,9 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
       case "PromptInjection":
         return (
           <Form.Item
-            label="Prompt Injection Configuration"
+            label={t("guardrails.editGuardrailForm.promptInjectionConfigLabel")}
             name="config"
-            tooltip="JSON configuration for prompt injection detection"
+            tooltip={t("guardrails.editGuardrailForm.promptInjectionConfigTooltip")}
           >
             <Input.TextArea
               rows={4}
@@ -352,7 +376,11 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
         );
       default:
         return (
-          <Form.Item label="Custom Configuration" name="config" tooltip="JSON configuration for your custom guardrail">
+          <Form.Item
+            label={t("guardrails.editGuardrailForm.customConfigLabel")}
+            name="config"
+            tooltip={t("guardrails.editGuardrailForm.customConfigTooltip")}
+          >
             <Input.TextArea
               rows={4}
               placeholder={`{
@@ -366,25 +394,31 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
   };
 
   return (
-    <Modal title="Edit Guardrail" open={visible} onCancel={onClose} footer={null} width={700}>
+    <Modal
+      title={t("guardrails.editGuardrailForm.modalTitle")}
+      open={visible}
+      onCancel={onClose}
+      footer={null}
+      width={700}
+    >
       <Form form={form} layout="vertical" initialValues={initialValues}>
         <Form.Item
           name="guardrail_name"
-          label="Guardrail Name"
-          rules={[{ required: true, message: "Please enter a guardrail name" }]}
+          label={t("guardrails.editGuardrailForm.guardrailNameLabel")}
+          rules={[{ required: true, message: t("guardrails.editGuardrailForm.guardrailNameRequired") }]}
         >
-          <TextInput placeholder="Enter a name for this guardrail" />
+          <TextInput placeholder={t("guardrails.editGuardrailForm.guardrailNamePlaceholder")} />
         </Form.Item>
 
         <Form.Item
           name="provider"
-          label="Guardrail Provider"
-          rules={[{ required: true, message: "Please select a provider" }]}
+          label={t("guardrails.editGuardrailForm.providerLabel")}
+          rules={[{ required: true, message: t("guardrails.editGuardrailForm.providerRequired") }]}
         >
           <Select
-            placeholder="Select a guardrail provider"
+            placeholder={t("guardrails.editGuardrailForm.providerPlaceholder")}
             onChange={handleProviderChange}
-            disabled={true} // Disable changing provider in edit mode
+            disabled={true}
             optionLabelProp="label"
           >
             {Object.entries(getGuardrailProviders()).map(([key, value]) => (
@@ -415,9 +449,9 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
 
         <Form.Item
           name="mode"
-          label="Mode"
-          tooltip="How the guardrail should be applied"
-          rules={[{ required: true, message: "Please select a mode" }]}
+          label={t("guardrails.editGuardrailForm.modeLabel")}
+          tooltip={t("guardrails.editGuardrailForm.modeTooltip")}
+          rules={[{ required: true, message: t("guardrails.editGuardrailForm.modeRequired") }]}
         >
           <Select>
             {guardrailSettings?.supported_modes?.map((mode) => (
@@ -435,8 +469,8 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
 
         <Form.Item
           name="default_on"
-          label="Always On"
-          tooltip="If enabled, this guardrail will be applied to all requests by default"
+          label={t("guardrails.editGuardrailForm.alwaysOnLabel")}
+          tooltip={t("guardrails.editGuardrailForm.alwaysOnTooltip")}
           valuePropName="checked"
         >
           <Switch />
@@ -444,25 +478,25 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
 
         <Form.Item
           name="skip_system_message_choice"
-          label="Skip system messages in guardrail"
-          tooltip="Unified guardrails only: whether role: system content is omitted from guardrail input (LLM still receives full messages). Use global default follows litellm_settings.skip_system_message_in_guardrail."
+          label={t("guardrails.editGuardrailForm.skipSystemMsgLabel")}
+          tooltip={t("guardrails.editGuardrailForm.skipSystemMsgTooltip")}
         >
           <Select>
-            <Option value="inherit">Use global default</Option>
-            <Option value="yes">Yes — exclude from guardrail scan</Option>
-            <Option value="no">No — always include in scan</Option>
+            <Option value="inherit">{t("guardrails.editGuardrailForm.useGlobalDefault")}</Option>
+            <Option value="yes">{t("guardrails.editGuardrailForm.yesExcludeFromScan")}</Option>
+            <Option value="no">{t("guardrails.editGuardrailForm.noAlwaysInclude")}</Option>
           </Select>
         </Form.Item>
 
         <Form.Item
           name="skip_tool_message_choice"
-          label="Skip tool messages in guardrail"
-          tooltip="Unified guardrails only: whether role: tool content is omitted from guardrail input (LLM still receives full messages). Use global default follows litellm_settings.skip_tool_message_in_guardrail."
+          label={t("guardrails.editGuardrailForm.skipToolMsgLabel")}
+          tooltip={t("guardrails.editGuardrailForm.skipToolMsgTooltip")}
         >
           <Select>
-            <Option value="inherit">Use global default</Option>
-            <Option value="yes">Yes — exclude from guardrail scan</Option>
-            <Option value="no">No — always include in scan</Option>
+            <Option value="inherit">{t("guardrails.editGuardrailForm.useGlobalDefault")}</Option>
+            <Option value="yes">{t("guardrails.editGuardrailForm.yesExcludeFromScan")}</Option>
+            <Option value="no">{t("guardrails.editGuardrailForm.noAlwaysInclude")}</Option>
           </Select>
         </Form.Item>
 
@@ -470,10 +504,10 @@ const EditGuardrailForm: React.FC<EditGuardrailFormProps> = ({
 
         <div className="flex justify-end space-x-2 mt-4">
           <Button variant="secondary" onClick={onClose}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button onClick={handleSubmit} loading={loading}>
-            Update Guardrail
+            {t("guardrails.editGuardrailForm.updateButton")}
           </Button>
         </div>
       </Form>
