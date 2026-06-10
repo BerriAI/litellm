@@ -7305,5 +7305,29 @@
       "updateSuccess": "模型存储设置已成功更新",
       "updateFailed": "保存模型存储设置失败：{{error}}"
     }
+  },
+  "routerSettings": {
+    "latencyBasedConfiguration": {
+      "title": "基于延迟的配置",
+      "subtitle": "精细调整基于延迟的路由行为",
+      "ttlDescription": "计算部署平均延迟时回溯的滑动窗口，默认 1 小时（单位：秒）。",
+      "lowestLatencyBufferDescription": "在最低延迟的此百分比范围内随机选择部署，默认 0（即始终选择最低延迟）。"
+    },
+    "reliabilityRetriesSection": {
+      "title": "可靠性与重试",
+      "subtitle": "配置重试逻辑和故障处理"
+    },
+    "routerSettingsForm": {
+      "title": "路由设置",
+      "subtitle": "配置请求如何路由到各部署"
+    },
+    "tagFilteringToggle": {
+      "label": "启用标签过滤"
+    },
+    "index": {
+      "updateFailed": "更新路由器设置失败：{{error}}",
+      "updateSuccess": "路由器设置已成功更新",
+      "saveChanges": "保存更改"
+    }
   }
 }

@@ -7305,5 +7305,29 @@
       "updateSuccess": "Model storage settings updated successfully",
       "updateFailed": "Failed to save model storage settings: {{error}}"
     }
+  },
+  "routerSettings": {
+    "latencyBasedConfiguration": {
+      "title": "Latency-Based Configuration",
+      "subtitle": "Fine-tune latency-based routing behavior",
+      "ttlDescription": "Sliding window to look back over when calculating the average latency of a deployment. Default - 1 hour (in seconds).",
+      "lowestLatencyBufferDescription": "Shuffle between deployments within this % of the lowest latency. Default - 0 (i.e. always pick lowest latency)."
+    },
+    "reliabilityRetriesSection": {
+      "title": "Reliability & Retries",
+      "subtitle": "Configure retry logic and failure handling"
+    },
+    "routerSettingsForm": {
+      "title": "Routing Settings",
+      "subtitle": "Configure how requests are routed to deployments"
+    },
+    "tagFilteringToggle": {
+      "label": "Enable Tag Filtering"
+    },
+    "index": {
+      "updateFailed": "Failed to update router settings: {{error}}",
+      "updateSuccess": "router settings updated successfully",
+      "saveChanges": "Save Changes"
+    }
   }
 }

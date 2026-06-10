@@ -1,5 +1,6 @@
 import React from "react";
 import { Input } from "antd";
+import { useTranslation } from "react-i18next";
 
 interface routingStrategyArgs {
   ttl?: number;
@@ -16,18 +17,19 @@ interface LatencyBasedConfigurationProps {
 }
 
 const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({ routingStrategyArgs }) => {
+  const { t } = useTranslation();
+
   const paramExplanation: { [key: string]: string } = {
-    ttl: "Sliding window to look back over when calculating the average latency of a deployment. Default - 1 hour (in seconds).",
-    lowest_latency_buffer:
-      "Shuffle between deployments within this % of the lowest latency. Default - 0 (i.e. always pick lowest latency).",
+    ttl: t("routerSettings.latencyBasedConfiguration.ttlDescription"),
+    lowest_latency_buffer: t("routerSettings.latencyBasedConfiguration.lowestLatencyBufferDescription"),
   };
 
   return (
     <>
       <div className="space-y-6">
         <div className="max-w-3xl">
-          <h3 className="text-sm font-medium text-gray-900">Latency-Based Configuration</h3>
-          <p className="text-xs text-gray-500 mt-1">Fine-tune latency-based routing behavior</p>
+          <h3 className="text-sm font-medium text-gray-900">{t("routerSettings.latencyBasedConfiguration.title")}</h3>
+          <p className="text-xs text-gray-500 mt-1">{t("routerSettings.latencyBasedConfiguration.subtitle")}</p>
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 xl:grid-cols-3">
