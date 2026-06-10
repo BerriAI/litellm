@@ -6171,6 +6171,15 @@
       "editSettingsHint": "点击「编辑设置」修改 Agent 配置。",
       "rateLimitsTitle": "速率限制",
       "saveChanges": "保存更改"
+    },
+    "dynamicAgentFormFields": {
+      "agentNameLabel": "Agent 名称",
+      "agentNameRequired": "请输入唯一的 Agent 名称",
+      "agentNameTooltip": "Agent 的唯一标识符",
+      "agentNamePlaceholder": "例如：my-langgraph-agent",
+      "descriptionTooltip": "简要描述该 Agent 的功能",
+      "descriptionPlaceholder": "描述该 Agent 的功能...",
+      "credentialFieldRequired": "请输入{{label}}"
     }
   }
 }

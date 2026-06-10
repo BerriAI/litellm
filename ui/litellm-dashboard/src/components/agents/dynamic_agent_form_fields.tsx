@@ -21,16 +21,20 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTy
   return (
     <>
       <Form.Item
-        label="Agent Name"
+        label={t("agentsPage.dynamicAgentFormFields.agentNameLabel")}
         name="agent_name"
-        rules={[{ required: true, message: "Please enter a unique agent name" }]}
-        tooltip="Unique identifier for the agent"
+        rules={[{ required: true, message: t("agentsPage.dynamicAgentFormFields.agentNameRequired") }]}
+        tooltip={t("agentsPage.dynamicAgentFormFields.agentNameTooltip")}
       >
-        <Input placeholder="e.g., my-langgraph-agent" />
+        <Input placeholder={t("agentsPage.dynamicAgentFormFields.agentNamePlaceholder")} />
       </Form.Item>
 
-      <Form.Item label="Description" name="description" tooltip="Brief description of what this agent does">
-        <Input.TextArea rows={2} placeholder="Describe what this agent does..." />
+      <Form.Item
+        label={t("common.description")}
+        name="description"
+        tooltip={t("agentsPage.dynamicAgentFormFields.descriptionTooltip")}
+      >
+        <Input.TextArea rows={2} placeholder={t("agentsPage.dynamicAgentFormFields.descriptionPlaceholder")} />
       </Form.Item>
 
       {agentTypeInfo.credential_fields.map((field: AgentCredentialFieldMetadata) => (
@@ -38,7 +42,16 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTy
           key={field.key}
           label={field.label}
           name={field.key}
-          rules={field.required ? [{ required: true, message: `Please enter ${field.label}` }] : undefined}
+          rules={
+            field.required
+              ? [
+                  {
+                    required: true,
+                    message: t("agentsPage.dynamicAgentFormFields.credentialFieldRequired", { label: field.label }),
+                  },
+                ]
+              : undefined
+          }
           tooltip={field.tooltip}
           initialValue={field.default_value}
         >

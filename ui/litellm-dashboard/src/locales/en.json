@@ -6171,6 +6171,15 @@
       "editSettingsHint": "Click \"Edit Settings\" to modify agent configuration.",
       "rateLimitsTitle": "Rate Limits",
       "saveChanges": "Save Changes"
+    },
+    "dynamicAgentFormFields": {
+      "agentNameLabel": "Agent Name",
+      "agentNameRequired": "Please enter a unique agent name",
+      "agentNameTooltip": "Unique identifier for the agent",
+      "agentNamePlaceholder": "e.g., my-langgraph-agent",
+      "descriptionTooltip": "Brief description of what this agent does",
+      "descriptionPlaceholder": "Describe what this agent does...",
+      "credentialFieldRequired": "Please enter {{label}}"
     }
   }
 }
