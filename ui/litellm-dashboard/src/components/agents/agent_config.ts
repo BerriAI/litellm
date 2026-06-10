@@ -2,6 +2,7 @@
  * Shared configuration for agent form fields
  * Used across create, view, and update operations
  */
+import type { TFunction } from "i18next";
 
 export interface FieldConfig {
   name: string;
@@ -22,7 +23,9 @@ export interface SectionConfig {
   defaultExpanded?: boolean;
 }
 
-export const AGENT_FORM_CONFIG: {
+export const getAgentFormConfig = (
+  t: TFunction,
+): {
   basic: SectionConfig;
   skills: SectionConfig;
   capabilities: SectionConfig;
@@ -30,45 +33,45 @@ export const AGENT_FORM_CONFIG: {
   litellm: SectionConfig;
   cost: SectionConfig;
   tracing: SectionConfig;
-} = {
+} => ({
   basic: {
     key: "basic",
-    title: "Basic Information",
+    title: t("agentsPage.agentConfig.basicTitle"),
     defaultExpanded: true,
     fields: [
       {
         name: "name",
-        label: "Display Name",
+        label: t("agentsPage.agentConfig.displayNameLabel"),
         type: "text",
         required: true,
-        placeholder: "e.g., Customer Support Agent",
+        placeholder: t("agentsPage.agentConfig.displayNamePlaceholder"),
       },
       {
         name: "description",
-        label: "Description",
+        label: t("common.description"),
         type: "textarea",
         required: true,
-        placeholder: "Describe what this agent does...",
+        placeholder: t("agentsPage.agentConfig.descriptionPlaceholder"),
         rows: 3,
       },
       {
         name: "url",
-        label: "URL",
+        label: t("agentsPage.agentConfig.urlLabel"),
         type: "url",
         required: false,
-        placeholder: "http://localhost:9999/",
-        tooltip: "Base URL where the agent is hosted (optional)",
+        placeholder: t("agentsPage.agentConfig.urlPlaceholder"),
+        tooltip: t("agentsPage.agentConfig.urlTooltip"),
       },
       {
         name: "version",
-        label: "Version",
+        label: t("agentsPage.agentConfig.versionLabel"),
         type: "text",
         placeholder: "1.0.0",
         defaultValue: "1.0.0",
       },
       {
         name: "protocolVersion",
-        label: "Protocol Version",
+        label: t("agentsPage.agentConfig.protocolVersionLabel"),
         type: "text",
         placeholder: "1.0",
         defaultValue: "1.0",
@@ -77,11 +80,11 @@ export const AGENT_FORM_CONFIG: {
   },
   skills: {
     key: "skills",
-    title: "Skills",
+    title: t("agentsPage.agentConfig.skillsTitle"),
     fields: [
       {
         name: "skills",
-        label: "Skills",
+        label: t("agentsPage.agentConfig.skillsTitle"),
         type: "list",
         defaultValue: [],
       },
@@ -89,159 +92,152 @@ export const AGENT_FORM_CONFIG: {
   },
   capabilities: {
     key: "capabilities",
-    title: "Capabilities",
+    title: t("agentsPage.agentConfig.capabilitiesTitle"),
     fields: [
       {
         name: "streaming",
-        label: "Streaming",
+        label: t("agentsPage.agentConfig.streamingLabel"),
         type: "switch",
         defaultValue: false,
       },
       {
         name: "pushNotifications",
-        label: "Push Notifications",
+        label: t("agentsPage.agentConfig.pushNotificationsLabel"),
         type: "switch",
       },
       {
         name: "stateTransitionHistory",
-        label: "State Transition History",
+        label: t("agentsPage.agentConfig.stateTransitionHistoryLabel"),
         type: "switch",
       },
     ],
   },
   optional: {
     key: "optional",
-    title: "Optional Settings",
+    title: t("agentsPage.agentConfig.optionalTitle"),
     fields: [
       {
         name: "iconUrl",
-        label: "Icon URL",
+        label: t("agentsPage.agentConfig.iconUrlLabel"),
         type: "url",
         placeholder: "https://example.com/icon.png",
       },
       {
         name: "documentationUrl",
-        label: "Documentation URL",
+        label: t("agentsPage.agentConfig.documentationUrlLabel"),
         type: "url",
         placeholder: "https://docs.example.com",
       },
       {
         name: "supportsAuthenticatedExtendedCard",
-        label: "Supports Authenticated Extended Card",
+        label: t("agentsPage.agentConfig.supportsAuthCardLabel"),
         type: "switch",
       },
     ],
   },
   litellm: {
     key: "litellm",
-    title: "LiteLLM Parameters",
+    title: t("agentsPage.agentConfig.litellmTitle"),
     fields: [
       {
         name: "model",
-        label: "Model (Optional)",
+        label: t("agentsPage.agentConfig.modelOptionalLabel"),
         type: "text",
       },
       {
         name: "make_public",
-        label: "Make Public",
+        label: t("agentsPage.agentConfig.makePublicLabel"),
         type: "switch",
       },
     ],
   },
   cost: {
     key: "cost",
-    title: "Cost Configuration",
+    title: t("agentsPage.agentConfig.costTitle"),
     fields: [
       {
         name: "cost_per_query",
-        label: "Cost Per Query ($)",
+        label: t("agentsPage.agentConfig.costPerQueryLabel"),
         type: "text",
         placeholder: "0.0",
-        tooltip: "Fixed cost per query",
+        tooltip: t("agentsPage.agentConfig.costPerQueryTooltip"),
       },
       {
         name: "input_cost_per_token",
-        label: "Input Cost Per Token ($)",
+        label: t("agentsPage.agentConfig.inputCostPerTokenLabel"),
         type: "text",
         placeholder: "0.000001",
-        tooltip: "Cost per input token",
+        tooltip: t("agentsPage.agentConfig.inputCostPerTokenTooltip"),
       },
       {
         name: "output_cost_per_token",
-        label: "Output Cost Per Token ($)",
+        label: t("agentsPage.agentConfig.outputCostPerTokenLabel"),
         type: "text",
         placeholder: "0.000002",
-        tooltip: "Cost per output token",
+        tooltip: t("agentsPage.agentConfig.outputCostPerTokenTooltip"),
       },
     ],
   },
   tracing: {
     key: "tracing",
-    title: "Tracing",
+    title: t("agentsPage.agentConfig.tracingTitle"),
     fields: [
       {
         name: "enable_tracing",
-        label: "Enable Tracing",
+        label: t("agentsPage.agentConfig.enableTracingLabel"),
         type: "switch",
         defaultValue: false,
-        tooltip: "Enable request tracing for this agent",
+        tooltip: t("agentsPage.agentConfig.enableTracingTooltip"),
       },
     ],
   },
-};
+});
 
-export const SKILL_FIELD_CONFIG = {
+export const getSkillFieldConfig = (t: TFunction) => ({
   id: {
     name: "id",
-    label: "Skill ID",
+    label: t("agentsPage.agentConfig.skillIdLabel"),
     required: true,
-    placeholder: "e.g., hello_world",
+    placeholder: t("agentsPage.agentConfig.skillIdPlaceholder"),
   },
   name: {
     name: "name",
-    label: "Skill Name",
+    label: t("agentsPage.agentConfig.skillNameLabel"),
     required: true,
-    placeholder: "e.g., Returns hello world",
+    placeholder: t("agentsPage.agentConfig.skillNamePlaceholder"),
   },
   description: {
     name: "description",
-    label: "Description",
+    label: t("common.description"),
     required: true,
-    placeholder: "What this skill does",
+    placeholder: t("agentsPage.agentConfig.skillDescriptionPlaceholder"),
     rows: 2,
   },
   tags: {
     name: "tags",
-    label: "Tags",
+    label: t("agentsPage.agentConfig.skillTagsLabel"),
     required: true,
-    placeholder: "Type a tag and press Enter",
+    placeholder: t("agentsPage.agentConfig.skillTagsPlaceholder"),
   },
   examples: {
     name: "examples",
-    label: "Examples",
-    placeholder: "Type an example and press Enter",
+    label: t("agentsPage.agentConfig.skillExamplesLabel"),
+    placeholder: t("agentsPage.agentConfig.skillExamplesPlaceholder"),
   },
-};
+});
 
 /**
  * Get default form values from configuration
  */
-export const getDefaultFormValues = () => {
-  const defaults: any = {
-    defaultInputModes: ["text"],
-    defaultOutputModes: ["text"],
-  };
-
-  Object.values(AGENT_FORM_CONFIG).forEach((section) => {
-    section.fields.forEach((field) => {
-      if (field.defaultValue !== undefined) {
-        defaults[field.name] = field.defaultValue;
-      }
-    });
-  });
-
-  return defaults;
-};
+export const getDefaultFormValues = () => ({
+  defaultInputModes: ["text"],
+  defaultOutputModes: ["text"],
+  version: "1.0.0",
+  protocolVersion: "1.0",
+  streaming: false,
+  skills: [],
+  enable_tracing: false,
+});
 
 /**
  * Build agent data from form values according to AgentConfig spec

@@ -1,11 +1,13 @@
 import React from "react";
 import { Form, Input } from "antd";
-import { AGENT_FORM_CONFIG } from "./agent_config";
+import { useTranslation } from "react-i18next";
+import { getAgentFormConfig } from "./agent_config";
 
 const CostConfigFields: React.FC = () => {
+  const { t } = useTranslation();
   return (
     <>
-      {AGENT_FORM_CONFIG.cost.fields.map((field) => (
+      {getAgentFormConfig(t).cost.fields.map((field) => (
         <Form.Item key={field.name} label={field.label} name={field.name} tooltip={field.tooltip}>
           <Input placeholder={field.placeholder} type="number" step="0.000001" />
         </Form.Item>

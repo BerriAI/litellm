@@ -1,7 +1,8 @@
 import React from "react";
 import { Form, Input, Select, Collapse } from "antd";
+import { useTranslation } from "react-i18next";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "../networking";
-import { AGENT_FORM_CONFIG } from "./agent_config";
+import { getAgentFormConfig } from "./agent_config";
 import CostConfigFields from "./cost_config_fields";
 
 const { Panel } = Collapse;
@@ -16,6 +17,7 @@ interface DynamicAgentFormFieldsProps {
  * credential fields defined by the agent type metadata.
  */
 const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTypeInfo }) => {
+  const { t } = useTranslation();
   return (
     <>
       <Form.Item
@@ -59,7 +61,7 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTy
       ))}
 
       <Collapse style={{ marginBottom: 16 }}>
-        <Panel header={AGENT_FORM_CONFIG.cost.title} key={AGENT_FORM_CONFIG.cost.key}>
+        <Panel header={getAgentFormConfig(t).cost.title} key={getAgentFormConfig(t).cost.key}>
           <CostConfigFields />
         </Panel>
       </Collapse>
