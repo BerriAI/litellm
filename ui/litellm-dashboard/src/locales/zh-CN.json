@@ -4870,6 +4870,32 @@
     }
   },
   "usagePage": {
+    "usageViewSelect": {
+      "title": "用量视图",
+      "description": "选择您要查看的用量数据",
+      "globalUsageLabel": "全局用量",
+      "globalUsageDesc": "查看所有资源的用量",
+      "yourUsageLabel": "我的用量",
+      "yourUsageDesc": "查看您的用量",
+      "myUsageDesc": "查看您自己的用量",
+      "organizationUsageLabel": "组织用量",
+      "yourOrganizationUsageLabel": "我的组织用量",
+      "organizationUsageDesc": "查看组织级别用量",
+      "organizationUsageAdminDesc": "查看所有组织的用量",
+      "organizationUsageNonAdminDesc": "查看您所在组织的用量",
+      "teamUsageLabel": "团队用量",
+      "teamUsageDesc": "按团队查看用量",
+      "customerUsageLabel": "客户用量",
+      "customerUsageDesc": "按客户账户查看用量",
+      "tagUsageLabel": "标签用量",
+      "tagUsageDesc": "按标签分组查看用量",
+      "agentUsageLabel": "Agent 用量 (A2A)",
+      "agentUsageDesc": "按 AI Agent 查看用量",
+      "userUsageLabel": "用户用量",
+      "userUsageDesc": "按单个用户查看用量",
+      "userAgentActivityLabel": "用户 Agent 活动",
+      "userAgentActivityDesc": "查看详细的用户 Agent 活动日志"
+    },
     "usageAiChatPanel": {
       "title": "询问 AI",
       "subtitle": "询问您的花费、模型、密钥及趋势",

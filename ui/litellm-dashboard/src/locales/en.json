@@ -4870,6 +4870,32 @@
     }
   },
   "usagePage": {
+    "usageViewSelect": {
+      "title": "Usage View",
+      "description": "Select the usage data you want to view",
+      "globalUsageLabel": "Global Usage",
+      "globalUsageDesc": "View usage across all resources",
+      "yourUsageLabel": "Your Usage",
+      "yourUsageDesc": "View your usage",
+      "myUsageDesc": "View your own usage",
+      "organizationUsageLabel": "Organization Usage",
+      "yourOrganizationUsageLabel": "Your Organization Usage",
+      "organizationUsageDesc": "View organization-level usage",
+      "organizationUsageAdminDesc": "View usage across all organizations",
+      "organizationUsageNonAdminDesc": "View your organization's usage",
+      "teamUsageLabel": "Team Usage",
+      "teamUsageDesc": "View usage by team",
+      "customerUsageLabel": "Customer Usage",
+      "customerUsageDesc": "View usage by customer accounts",
+      "tagUsageLabel": "Tag Usage",
+      "tagUsageDesc": "View usage grouped by tags",
+      "agentUsageLabel": "Agent Usage (A2A)",
+      "agentUsageDesc": "View usage by AI agents",
+      "userUsageLabel": "User Usage",
+      "userUsageDesc": "View usage by individual users",
+      "userAgentActivityLabel": "User Agent Activity",
+      "userAgentActivityDesc": "View detailed user agent activity logs"
+    },
     "usageAiChatPanel": {
       "title": "Ask AI",
       "subtitle": "Ask about your spend, models, keys, and trends",
