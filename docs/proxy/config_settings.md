@@ -714,6 +714,12 @@ router_settings:
 | EMAIL_BUDGET_ALERT_TTL | Time-to-live for budget alert deduplication in seconds. Default is 86400 (24 hours)
 | ENKRYPTAI_API_BASE | Base URL for EnkryptAI Guardrails API. **Default is https://api.enkryptai.com**
 | ENKRYPTAI_API_KEY | API key for EnkryptAI Guardrails service
+| FAROS_API_KEY | API key for sending LLM usage data to Faros AI
+| FAROS_API_URL | Base URL for the Faros AI API. Default is https://prod.api.faros.ai
+| FAROS_GRAPH | Faros graph that LiteLLM usage data is written to. Default is "default"
+| FAROS_ORIGIN | Origin recorded on rows written to Faros by LiteLLM. Default is "litellm"
+| FAROS_TOOL_CATEGORY | Tool category recorded on Faros vcs_UserTool rows. Default is "LiteLLM"
+| FAROS_USER_SOURCE | Source recorded on Faros vcs_User rows for LiteLLM users. Default is "LiteLLM"
 | FIREWORKS_AI_4_B | Size parameter for Fireworks AI 4B model. Default is 4
 | FIREWORKS_AI_16_B | Size parameter for Fireworks AI 16B model. Default is 16
 | FIREWORKS_AI_56_B_MOE | Size parameter for Fireworks AI 56B MOE model. Default is 56
