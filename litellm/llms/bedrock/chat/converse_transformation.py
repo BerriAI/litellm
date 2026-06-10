@@ -1237,7 +1237,7 @@ class AmazonConverseConfig(BaseConfig):
         elif "top_k" in inference_params:
             val_top_k = inference_params.pop("top_k")
 
-        if val_top_k:
+        if val_top_k is not None:
             if base_model.startswith("anthropic"):
                 top_k_params: dict = {}
                 AnthropicConfig._apply_sampling_param(

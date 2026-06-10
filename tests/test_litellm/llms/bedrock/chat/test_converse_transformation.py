@@ -5355,3 +5355,34 @@ def test_converse_top_k_forwarded_on_models_that_accept_it():
     )
 
     assert result["additionalModelRequestFields"]["top_k"] == 40
+
+
+def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
+    """``top_k=0`` must hit the same gating as any other value; previously the
+    truthiness check let it silently disappear on models that removed sampling
+    params, diverging from the Anthropic boundary that treats ``0`` as present."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 0},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 0},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 0
