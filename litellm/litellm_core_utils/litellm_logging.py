@@ -1525,8 +1525,12 @@ class Logging(LiteLLMLoggingBaseClass):
         # litellm.model_cost (model-cost-map reloads replace the map wholesale,
         # after which cost calc would fall back to the model's public price).
         custom_cost_per_token: Optional[CostPerToken] = None
+        custom_cost_per_second: Optional[float] = None
         if custom_pricing is True:
-            custom_cost_per_token = get_custom_cost_per_token_from_litellm_params(
+            (
+                custom_cost_per_token,
+                custom_cost_per_second,
+            ) = get_custom_cost_from_litellm_params(
                 litellm_params=(
                     self.litellm_params if hasattr(self, "litellm_params") else None
                 )
@@ -1555,6 +1559,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 "optional_params": self.optional_params,
                 "custom_pricing": custom_pricing,
                 "custom_cost_per_token": custom_cost_per_token,
+                "custom_cost_per_second": custom_cost_per_second,
                 "prompt": prompt,
                 "standard_built_in_tools_params": self.standard_built_in_tools_params,
                 "router_model_id": router_model_id,
@@ -4788,17 +4793,21 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     return False
 
 
-def get_custom_cost_per_token_from_litellm_params(
+def get_custom_cost_from_litellm_params(
     litellm_params: Optional[dict],
-) -> Optional[CostPerToken]:
+) -> Tuple[Optional[CostPerToken], Optional[float]]:
     """
-    Extract explicit per-token rates from litellm_params or its
+    Extract explicit (per-token, per-second) rates from litellm_params or its
     metadata/litellm_metadata model_info, mirroring the lookup order of
     `use_custom_pricing_for_model`. A literal 0 is a valid rate (e.g. zero-cost
-    BYOK deployments). Returns None unless both base rates are set.
+    BYOK deployments). Per-token pricing requires both base rates. Per-second
+    pricing requires input_cost_per_second (the same rule pricing registration
+    uses in main.py); an output_cost_per_second is folded into litellm's
+    single custom_cost_per_second rate so the billed total matches a
+    registered per-second cost-map entry.
     """
     if litellm_params is None:
-        return None
+        return None, None
 
     sources = [litellm_params]
     for metadata_key in ("metadata", "litellm_metadata"):
@@ -4810,21 +4819,25 @@ def get_custom_cost_per_token_from_litellm_params(
     for source in sources:
         input_cost = source.get("input_cost_per_token")
         output_cost = source.get("output_cost_per_token")
-        if input_cost is None or output_cost is None:
-            continue
-        custom_cost: CostPerToken = {
-            "input_cost_per_token": input_cost,
-            "output_cost_per_token": output_cost,
-        }
-        for cache_key in (
-            "cache_read_input_token_cost",
-            "cache_creation_input_token_cost",
-        ):
-            if source.get(cache_key) is not None:
-                custom_cost[cache_key] = source[cache_key]  # type: ignore[literal-required]
-        return custom_cost
+        if input_cost is not None and output_cost is not None:
+            custom_cost: CostPerToken = {
+                "input_cost_per_token": input_cost,
+                "output_cost_per_token": output_cost,
+            }
+            for cache_key in (
+                "cache_read_input_token_cost",
+                "cache_creation_input_token_cost",
+            ):
+                if source.get(cache_key) is not None:
+                    custom_cost[cache_key] = source[cache_key]  # type: ignore[literal-required]
+            return custom_cost, None
+        input_cost_per_second = source.get("input_cost_per_second")
+        if input_cost_per_second is not None:
+            return None, input_cost_per_second + (
+                source.get("output_cost_per_second") or 0.0
+            )
 
-    return None
+    return None, None
 
 
 def is_valid_sha256_hash(value: str) -> bool:

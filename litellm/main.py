@@ -1092,8 +1092,10 @@ def _model_has_known_pricing(model: str, custom_llm_provider: str) -> bool:
     shared entry and re-prices every other request for that model in the
     process (e.g. a zero-cost BYOK deployment zeroing the real model's
     billing). Known models get their per-request rates via
-    custom_cost_per_token at cost-calculation time instead; registration is
-    only needed so unknown models can be priced at all.
+    custom_cost_per_token / custom_cost_per_second at cost-calculation time
+    instead (see get_custom_cost_from_litellm_params, which covers the same
+    pricing dimensions checked here); registration is only needed so unknown
+    models can be priced at all.
     """
     for key in (model, f"{custom_llm_provider}/{model}"):
         entry = litellm.model_cost.get(key)

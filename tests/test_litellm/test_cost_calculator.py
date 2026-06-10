@@ -2639,3 +2639,27 @@ def test_response_cost_calculator_custom_pricing_survives_model_cost_reload(
         result=_response_with_usage("claude-opus-4-6")
     )
     assert cost_after_reload == pytest.approx(expected)
+
+
+def test_response_cost_calculator_uses_deployment_per_second_rates():
+    """A deployment priced per second must be billed at its own rates, not the
+    concrete model's public per-token price (same custom-pricing path as the
+    per-token tests above, for the other pricing dimension)."""
+    logging_obj = _logging_obj_with_custom_pricing(
+        litellm_params={
+            "metadata": {
+                "model_info": {
+                    "id": "per-second-deployment-id-not-in-model-cost",
+                    "input_cost_per_second": 0.001,
+                    "output_cost_per_second": 0.002,
+                }
+            }
+        },
+        model="anthropic/claude-opus-4-6",
+    )
+    response = _response_with_usage("claude-opus-4-6")
+    response._response_ms = 5_000
+
+    cost = logging_obj._response_cost_calculator(result=response)
+
+    assert cost == pytest.approx((0.001 + 0.002) * 5)

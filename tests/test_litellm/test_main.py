@@ -1988,19 +1988,24 @@ def test_completion_custom_pricing_does_not_overwrite_canonical_model_cost(
     assert response._hidden_params["response_cost"] == 0.0
 
 
-def test_completion_custom_pricing_still_registers_unknown_model():
+def test_completion_custom_pricing_still_registers_unknown_model(monkeypatch):
     model = "openai/unknown-custom-priced-model-xyz"
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    monkeypatch.setattr(
+        litellm,
+        "open_ai_chat_completion_models",
+        set(litellm.open_ai_chat_completion_models),
+    )
     litellm.model_cost.pop(model, None)
-    try:
-        litellm.completion(
-            model=model,
-            messages=[{"role": "user", "content": "hi"}],
-            mock_response="ok",
-            api_key="sk-test",
-            input_cost_per_token=1e-07,
-            output_cost_per_token=2e-07,
-        )
-        assert litellm.model_cost[model]["input_cost_per_token"] == 1e-07
-        assert litellm.model_cost[model]["output_cost_per_token"] == 2e-07
-    finally:
-        litellm.model_cost.pop(model, None)
+
+    litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ok",
+        api_key="sk-test",
+        input_cost_per_token=1e-07,
+        output_cost_per_token=2e-07,
+    )
+
+    assert litellm.model_cost[model]["input_cost_per_token"] == 1e-07
+    assert litellm.model_cost[model]["output_cost_per_token"] == 2e-07
