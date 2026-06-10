@@ -7250,6 +7250,29 @@ export interface paths {
         patch: operations["mistral_proxy_route_mistral__endpoint__patch"];
         trace?: never;
     };
+    "/model/block": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Block Model
+         * @description Block a DB-stored model deployment from serving requests.
+         *
+         *     Parameters:
+         *     - model_id: str - The model deployment id to block.
+         */
+        post: operations["block_model_model_block_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/model/cost_map/source": {
         parameters: {
             query?: never;
@@ -7462,6 +7485,29 @@ export interface paths {
         get: operations["model_streaming_metrics_model_streaming_metrics_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/model/unblock": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Unblock Model
+         * @description Unblock a DB-stored model deployment so it can serve requests again.
+         *
+         *     Parameters:
+         *     - model_id: str - The model deployment id to unblock.
+         */
+        post: operations["unblock_model_model_unblock_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -20703,6 +20749,11 @@ export interface components {
             /** Key */
             key: string;
         };
+        /** BlockModelRequest */
+        BlockModelRequest: {
+            /** Model Id */
+            model_id: string;
+        };
         /** BlockTeamRequest */
         BlockTeamRequest: {
             /** Team Id */
@@ -25150,6 +25201,34 @@ export interface components {
             spend: number;
             /** Team Id */
             team_id?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+        };
+        /** LiteLLM_ProxyModelTable */
+        LiteLLM_ProxyModelTable: {
+            /**
+             * Blocked
+             * @default false
+             */
+            blocked: boolean;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Litellm Params */
+            litellm_params: {
+                [key: string]: unknown;
+            };
+            /** Model Id */
+            model_id: string;
+            /** Model Info */
+            model_info?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model Name */
+            model_name: string;
             /** Updated At */
             updated_at?: string | null;
             /** Updated By */
@@ -42214,6 +42293,42 @@ export interface operations {
             };
         };
     };
+    block_model_model_block_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_ProxyModelTable"] | null;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_model_cost_map_source_model_cost_map_source_get: {
         parameters: {
             query?: never;
@@ -42476,6 +42591,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    unblock_model_model_unblock_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability */
+                "litellm-changed-by"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BlockModelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LiteLLM_ProxyModelTable"] | null;
                 };
             };
             /** @description Validation Error */
