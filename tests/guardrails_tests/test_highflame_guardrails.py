@@ -7,6 +7,7 @@ Run inside the litellm checkout:
     pytest tests/guardrails_tests/test_highflame_guardrails.py -v
 """
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -203,3 +204,138 @@ async def test_pre_call_hook_no_messages_is_passthrough():
     )
     assert out is data
     gr.async_handler.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_no_user_message_is_passthrough():
+    gr = _make_guardrail(event_hook="pre_call")
+    data = {"messages": [{"role": "system", "content": "you are a bot"}]}
+    out = await gr.async_pre_call_hook(
+        UserAPIKeyAuth(), DualCache(), data, "completion"
+    )
+    assert out is data
+    gr.async_handler.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Auth edge cases
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_token_raises_without_api_key():
+    gr = _make_guardrail()
+    gr.highflame_api_key = None
+    with pytest.raises(ValueError):
+        await gr._get_token()
+
+
+@pytest.mark.asyncio
+async def test_get_token_returns_cached_without_reexchange():
+    import time as _time
+
+    gr = _make_guardrail()
+    gr._access_token = "cached-jwt"
+    gr._token_expires_at = _time.time() + 3600
+    token = await gr._get_token()
+    assert token == "cached-jwt"
+    gr.async_handler.post.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_call_guard_filters_internal_metadata_key():
+    gr = _make_guardrail(
+        metadata={"team": "x", "standard_logging_guardrail_information": "drop-me"}
+    )
+    gr.async_handler.post.side_effect = [_resp(_TOKEN_BODY), _resp(_ALLOW)]
+    await gr.call_highflame_guard("hi", "prompt", "process_prompt", None)
+    body = gr.async_handler.post.call_args_list[1].kwargs["json"]
+    assert body["metadata"] == {"team": "x"}
+
+
+# ---------------------------------------------------------------------------
+# Response extraction + post-call hook
+# ---------------------------------------------------------------------------
+
+
+def test_extract_response_text():
+    resp = SimpleNamespace(
+        choices=[
+            SimpleNamespace(message=SimpleNamespace(content="hello")),
+            SimpleNamespace(message=SimpleNamespace(content="world")),
+        ]
+    )
+    assert HighflameGuardrail._extract_response_text(resp) == "hello\nworld"
+
+
+def test_extract_response_text_empty_and_bad():
+    assert (
+        HighflameGuardrail._extract_response_text(SimpleNamespace(choices=[])) is None
+    )
+    assert HighflameGuardrail._extract_response_text(object()) is None
+
+
+def _resp_obj(text):
+    return SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=text))]
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_allows():
+    gr = _make_guardrail(event_hook="post_call")
+    gr.async_handler.post.side_effect = [_resp(_TOKEN_BODY), _resp(_ALLOW)]
+    response = _resp_obj("safe answer")
+    out = await gr.async_post_call_success_hook({}, UserAPIKeyAuth(), response)
+    assert out is response
+    body = gr.async_handler.post.call_args_list[1].kwargs["json"]
+    assert body["content_type"] == "response"
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_blocks_on_deny():
+    gr = _make_guardrail(event_hook="post_call")
+    gr.async_handler.post.side_effect = [_resp(_TOKEN_BODY), _resp(_DENY)]
+    with pytest.raises(HTTPException) as exc:
+        await gr.async_post_call_success_hook({}, UserAPIKeyAuth(), _resp_obj("bad"))
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_no_text_passthrough():
+    gr = _make_guardrail(event_hook="post_call")
+    response = SimpleNamespace(choices=[])
+    out = await gr.async_post_call_success_hook({}, UserAPIKeyAuth(), response)
+    assert out is response
+    gr.async_handler.post.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Config model + initializer
+# ---------------------------------------------------------------------------
+
+
+def test_get_config_model():
+    from litellm.types.proxy.guardrails.guardrail_hooks.highflame import (
+        HighflameGuardrailConfigModel,
+    )
+
+    assert HighflameGuardrail.get_config_model() is HighflameGuardrailConfigModel
+
+
+def test_initialize_guardrail_registers_callback():
+    from litellm.proxy.guardrails.guardrail_hooks.highflame import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    params = LitellmParams(
+        guardrail="highflame",
+        mode="pre_call",
+        api_key="hf_sk_test",
+        api_base="https://api.highflame.ai",
+        application="my-app",
+        capabilities=["prompt_injection"],
+    )
+    cb = initialize_guardrail(params, {"guardrail_name": "highflame-pre"})
+    assert isinstance(cb, HighflameGuardrail)
+    assert cb.application == "my-app"
+    assert cb.capabilities == ["prompt_injection"]
