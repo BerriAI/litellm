@@ -4061,5 +4061,50 @@
       "uiSessionActiveDesc": "UI 会话活跃 - 上下文在客户端维护",
       "copyTooltipTitle": "复制响应 ID 以继续会话："
     }
+  },
+  "playground": {
+    "compareUi": {
+      "virtualKeySourceLabel": "虚拟密钥来源",
+      "currentUiSession": "当前 UI 会话",
+      "virtualKeyOption": "虚拟密钥",
+      "enterVirtualKeyPlaceholder": "输入虚拟密钥",
+      "endpointLabel": "端点",
+      "clearAllChats": "清空所有对话",
+      "compareUpToThreeModels": "最多同时对比 3 个模型",
+      "addAnotherComparison": "添加新对比项",
+      "addComparison": "添加对比",
+      "attachmentReadyToSend": "附件已准备好发送",
+      "uploadPreviewAlt": "上传预览",
+      "pdfLabel": "PDF",
+      "imageLabel": "图片",
+      "errorFetchingResponse": "获取响应失败：{{errorMessage}}",
+      "provideVirtualKey": "请提供虚拟密钥或选择当前 UI 会话"
+    },
+    "comparisonPanel": {
+      "syncSettingsAcrossModels": "跨模型同步设置",
+      "generalSettings": "常规设置",
+      "tagsLabel": "标签",
+      "vectorStoresLabel": "向量存储",
+      "guardrailsLabel": "护栏",
+      "advancedSettings": "高级设置",
+      "useAdvancedParameters": "使用高级参数",
+      "temperatureLabel": "Temperature",
+      "maxTokensLabel": "最大 Token 数"
+    },
+    "messageDisplay": {
+      "youLabel": "你",
+      "generatingResponse": "正在生成响应...",
+      "waitingForResponse": "等待响应...",
+      "assistantFallback": "Assistant"
+    },
+    "messageInput": {
+      "placeholder": "输入消息...（Shift+Enter 换行）"
+    },
+    "compareModelSelector": {
+      "loadingModels": "加载模型中...",
+      "selectModel": "选择模型",
+      "addCustomModel": "+ 添加自定义模型",
+      "customModelPlaceholder": "自定义模型名称（回车确认）"
+    }
   }
 }

@@ -4061,5 +4061,50 @@
       "uiSessionActiveDesc": "UI session active - context maintained client-side",
       "copyTooltipTitle": "Copy response ID to continue session:"
     }
+  },
+  "playground": {
+    "compareUi": {
+      "virtualKeySourceLabel": "Virtual Key Source",
+      "currentUiSession": "Current UI Session",
+      "virtualKeyOption": "Virtual Key",
+      "enterVirtualKeyPlaceholder": "Enter Virtual Key",
+      "endpointLabel": "Endpoint",
+      "clearAllChats": "Clear All Chats",
+      "compareUpToThreeModels": "Compare up to 3 models at a time",
+      "addAnotherComparison": "Add another comparison",
+      "addComparison": "Add Comparison",
+      "attachmentReadyToSend": "Attachment ready to send",
+      "uploadPreviewAlt": "Upload preview",
+      "pdfLabel": "PDF",
+      "imageLabel": "Image",
+      "errorFetchingResponse": "Error fetching response: {{errorMessage}}",
+      "provideVirtualKey": "Please provide a Virtual Key or select Current UI Session"
+    },
+    "comparisonPanel": {
+      "syncSettingsAcrossModels": "Sync Settings Across Models",
+      "generalSettings": "General Settings",
+      "tagsLabel": "Tags",
+      "vectorStoresLabel": "Vector Stores",
+      "guardrailsLabel": "Guardrails",
+      "advancedSettings": "Advanced Settings",
+      "useAdvancedParameters": "Use Advanced Parameters",
+      "temperatureLabel": "Temperature",
+      "maxTokensLabel": "Max Tokens"
+    },
+    "messageDisplay": {
+      "youLabel": "You",
+      "generatingResponse": "Generating response...",
+      "waitingForResponse": "Waiting for a response...",
+      "assistantFallback": "Assistant"
+    },
+    "messageInput": {
+      "placeholder": "Type your message... (Shift+Enter for new line)"
+    },
+    "compareModelSelector": {
+      "loadingModels": "Loading models...",
+      "selectModel": "Select a model",
+      "addCustomModel": "+ Add custom model",
+      "customModelPlaceholder": "Custom Model Name (Enter to add)"
+    }
   }
 }

@@ -1,6 +1,7 @@
 import React from "react";
 import { Input, Button } from "antd";
 import { ArrowUpOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 const { TextArea } = Input;
 
@@ -14,6 +15,7 @@ interface MessageInputProps {
 }
 
 export function MessageInput({ value, onChange, onSend, disabled, hasAttachment, uploadComponent }: MessageInputProps) {
+  const { t } = useTranslation();
   const canSend = !disabled && (value.trim().length > 0 || Boolean(hasAttachment));
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -33,7 +35,7 @@ export function MessageInput({ value, onChange, onSend, disabled, hasAttachment,
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type your message... (Shift+Enter for new line)"
+          placeholder={t("playground.messageInput.placeholder")}
           disabled={disabled}
           className="flex-1"
           autoSize={{ minRows: 1, maxRows: 4 }}

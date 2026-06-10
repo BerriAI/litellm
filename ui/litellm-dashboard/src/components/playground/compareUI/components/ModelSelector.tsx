@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from "react";
 import { Select } from "antd";
 import { TextInput } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 interface ModelSelectorProps {
   value: string;
   onChange: (value: string) => void;
@@ -9,6 +10,7 @@ interface ModelSelectorProps {
   disabled?: boolean;
 }
 export function ModelSelector({ value, onChange, models, loading, disabled }: ModelSelectorProps) {
+  const { t } = useTranslation();
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const [customValue, setCustomValue] = useState("");
 
@@ -55,7 +57,11 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
         onChange={handleSelectChange}
         disabled={disabled}
         loading={loading}
-        placeholder={loading ? "Loading models..." : "Select a model"}
+        placeholder={
+          loading
+            ? t("playground.compareModelSelector.loadingModels")
+            : t("playground.compareModelSelector.selectModel")
+        }
         className="w-full rounded-md"
         showSearch
         optionFilterProp="children"
@@ -65,12 +71,12 @@ export function ModelSelector({ value, onChange, models, loading, disabled }: Mo
             {model}
           </Select.Option>
         ))}
-        <Select.Option value="__custom__">+ Add custom model</Select.Option>
+        <Select.Option value="__custom__">{t("playground.compareModelSelector.addCustomModel")}</Select.Option>
       </Select>
       {isAddingCustom && (
         <TextInput
           className="mt-2"
-          placeholder="Custom Model Name (Enter to add)"
+          placeholder={t("playground.compareModelSelector.customModelPlaceholder")}
           value={customValue}
           onValueChange={setCustomValue}
           onKeyDown={(event) => {
