@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
+    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
     _convert_to_bedrock_tool_call_result,
     anthropic_messages_pt,
@@ -2865,6 +2866,35 @@ def test_bedrock_converse_messages_pt_renames_duplicate_document_names():
         [messages[0]], "anthropic.claude-sonnet-4-6", "bedrock"
     )
     assert names1[0] == single_turn[0]["content"][0]["document"]["name"]
+
+
+def test_rename_duplicate_bedrock_document_names_skips_organic_suffixes():
+    """
+    A renamed duplicate must not collide with a document whose organic name
+    already carries the would-be suffix (e.g. an existing ``report_2``),
+    regardless of whether that document appears before or after the rename.
+    """
+
+    def _contents(names):
+        return [
+            {
+                "role": "user",
+                "content": [{"document": {"name": name}} for name in names],
+            }
+        ]
+
+    def _names(contents):
+        return [block["document"]["name"] for block in contents[0]["content"]]
+
+    organic_first = _rename_duplicate_bedrock_document_names(
+        _contents(["report", "report_2", "report"])
+    )
+    assert _names(organic_first) == ["report", "report_2", "report_3"]
+
+    organic_last = _rename_duplicate_bedrock_document_names(
+        _contents(["report", "report", "report_2"])
+    )
+    assert _names(organic_last) == ["report", "report_3", "report_2"]
 
 
 def test_bedrock_converse_messages_pt_document_rejects_url_source():
