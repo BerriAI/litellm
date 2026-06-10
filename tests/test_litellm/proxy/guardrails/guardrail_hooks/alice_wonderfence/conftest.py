@@ -72,11 +72,25 @@ def _request_data(**overrides):
     return base
 
 
-def _make_logging_obj() -> Mock:
-    """Mock the LiteLLMLoggingObj surface we use: only ``model_call_details``."""
-    obj = Mock()
-    obj.model_call_details = {}
-    return obj
+def _make_logging_obj():
+    """Build a real ``LiteLLMLoggingObj``.
+
+    The post_call bridge stashes resolved credentials on a private attribute of
+    this object, so tests must use the real class (not a Mock, whose attribute
+    auto-creation would mask whether the attribute is genuinely settable and
+    readable) to validate that the stash survives request -> response.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    return Logging(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=0,
+        litellm_call_id="alice-wonderfence-test",
+        function_id="alice-wonderfence-test",
+    )
 
 
 @pytest.fixture

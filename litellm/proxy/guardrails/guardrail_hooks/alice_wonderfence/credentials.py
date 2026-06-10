@@ -18,7 +18,7 @@ The stash bridges pre_call resolution into post_call where request metadata is
 gone — see ``stash_resolved`` for the full rationale.
 """
 
-from typing import TYPE_CHECKING, Dict, Literal, Optional, Tuple
+from typing import TYPE_CHECKING, Literal, Optional, Tuple
 
 from litellm._logging import verbose_proxy_logger
 
@@ -33,9 +33,15 @@ if TYPE_CHECKING:
 logger = verbose_proxy_logger.getChild("alice_wonderfence")
 
 
-# Key used to stash per-request resolved (api_key, app_id) on
-# logging_obj.model_call_details so post_call can recover it.
-_LOGGING_OBJ_STASH_KEY = "alice_wonderfence_resolved"
+# Attribute on the request-scoped logging_obj where the resolved
+# (api_key, app_id) is stashed so post_call can recover it. This is a private
+# instance attribute, NOT a model_call_details key, because model_call_details
+# is forwarded verbatim as ``kwargs`` to every logging callback / exporter
+# (litellm_logging.py) — stashing the resolved WonderFence api_key there would
+# leak a tenant secret into logs. A private attribute on the same object gives
+# the identical cross-hook / cross-task visibility (see stash_resolved) without
+# entering the logged payload.
+_STASH_ATTR = "_alice_wonderfence_resolved"
 
 
 def get_metadata(request_data: dict) -> dict:
@@ -149,32 +155,35 @@ def stash_resolved(
         lives) is dropped. Without a bridge, post_call resolution fails even
         though the request explicitly supplied the value.
 
-    Why logging_obj.model_call_details (and not a ContextVar):
+    Why a private attribute on logging_obj (and not model_call_details):
+        ``model_call_details`` is forwarded verbatim as ``kwargs`` to every
+        logging callback / exporter (``litellm_logging.py`` passes
+        ``kwargs=self.model_call_details`` to success/failure handlers and
+        logging hooks), and the redaction layer only scrubs message
+        input/output and known StandardLoggingPayload fields, not arbitrary
+        custom keys. Stashing the resolved WonderFence ``api_key`` there leaks
+        a tenant secret into logs. A private instance attribute is request
+        scoped on the same object but is not part of the logged ``kwargs``.
+
+    Why an attribute on logging_obj (and not a ContextVar):
         during_call hooks run via ``asyncio.gather`` in
         ``litellm/proxy/utils.py:1500``, which wraps each coroutine in its own
         asyncio Task with a *copied* context. ContextVar writes in a child
         Task are not visible to the parent Task that runs post_call, so a
         ContextVar bridge silently fails. ``logging_obj`` is passed through
         every hook by reference (same object across pre_call, during_call,
-        and post_call), so mutations to its ``model_call_details`` dict are
-        visible regardless of task boundary.
-
-    Why this isn't a layering hack:
-        Despite the name, ``model_call_details`` is used throughout LiteLLM
-        as a generic request-scoped state bag (see ``main.py:6444``,
-        ``proxy/utils.py:1885-1895``, every passthrough handler under
-        ``proxy/pass_through_endpoints/``). It stores things like ``model``,
-        ``custom_llm_provider``, ``response_cost``, ``messages``, ``client``,
-        ``litellm_call_id`` — well beyond log payload material.
+        and post_call), so mutations to it are visible regardless of task
+        boundary.
 
     Keyed by ``guardrail_name`` so multiple alice_wonderfence instances
     configured on the same proxy don't collide.
     """
     if logging_obj is None:
         return
-    container: Dict[str, Tuple[str, str]] = logging_obj.model_call_details.setdefault(
-        _LOGGING_OBJ_STASH_KEY, {}
-    )
+    container = getattr(logging_obj, _STASH_ATTR, None)
+    if not isinstance(container, dict):
+        container = {}
+        setattr(logging_obj, _STASH_ATTR, container)
     container[guardrail_name] = (api_key, app_id)
 
 
@@ -203,8 +212,8 @@ def recover_resolved(
     """
     if logging_obj is None:
         return None
-    container = logging_obj.model_call_details.get(_LOGGING_OBJ_STASH_KEY)
-    if not container:
+    container = getattr(logging_obj, _STASH_ATTR, None)
+    if not isinstance(container, dict) or not container:
         return None
     own = container.get(guardrail_name)
     if own is not None:

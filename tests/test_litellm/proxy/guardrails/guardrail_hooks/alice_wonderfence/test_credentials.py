@@ -6,10 +6,14 @@ directly with explicit args instead of constructing a guardrail instance.
 
 import pytest
 
+import json
+
 from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.credentials import (
     get_metadata,
+    recover_resolved,
     resolve_api_key,
     resolve_app_id,
+    stash_resolved,
 )
 from litellm.proxy.guardrails.guardrail_hooks.alice_wonderfence.exceptions import (
     WonderFenceMissingSecrets,
@@ -301,3 +305,43 @@ def test_responses_route_admin_pin_beats_caller_metadata_api_key():
         )
         == "admin-pinned"
     )
+
+
+# --------------- stash storage: secret must not leak to logged payload ---------------
+
+
+def test_logging_obj_allows_private_stash_attr_off_model_call_details(make_logging_obj):
+    """Guard: the real LiteLLMLoggingObj must accept a private attribute that is
+    NOT part of model_call_details. Fails if Logging becomes slotted/pydantic or
+    the stash is moved back into the logged dict."""
+    obj = make_logging_obj()
+    obj._alice_wonderfence_resolved = {"g": ("k", "a")}
+    assert obj._alice_wonderfence_resolved == {"g": ("k", "a")}
+    assert "_alice_wonderfence_resolved" not in obj.model_call_details
+
+
+def test_stash_round_trips_on_real_logging_obj(make_logging_obj):
+    obj = make_logging_obj()
+    stash_resolved(obj, "guard-1", "wf-key-abc", "app-1")
+    assert recover_resolved(obj, "guard-1") == ("wf-key-abc", "app-1")
+
+
+def test_stashed_api_key_not_present_in_model_call_details(make_logging_obj):
+    """Regression: model_call_details is forwarded verbatim as kwargs to logging
+    callbacks/exporters, so a resolved tenant api_key stashed there leaks. The
+    stash must live off model_call_details. Fails on the prior implementation
+    that stored it under model_call_details["alice_wonderfence_resolved"]."""
+    secret = "wf-super-secret-key-9f3a"
+    obj = make_logging_obj()
+    stash_resolved(obj, "guard-1", secret, "app-1")
+
+    dumped = json.dumps(obj.model_call_details, default=str)
+    assert secret not in dumped
+    assert "alice_wonderfence_resolved" not in obj.model_call_details
+    # recovery still works from the private attribute
+    assert recover_resolved(obj, "guard-1") == (secret, "app-1")
+
+
+def test_recover_returns_none_when_nothing_stashed(make_logging_obj):
+    obj = make_logging_obj()
+    assert recover_resolved(obj, "guard-1") is None
