@@ -12405,6 +12405,61 @@ def _deployment_matches_allowed_model_names(
     )
 
 
+def _get_v1_model_info_allowed_model_names(
+    user_api_key_dict: UserAPIKeyAuth,
+    llm_router: Router,
+) -> Optional[Set[str]]:
+    """Return key/team allowlisted public model names, or None if unrestricted."""
+    model_access_groups = llm_router.get_model_access_groups()
+    proxy_model_list = llm_router.get_model_names()
+    key_models = get_key_models(
+        user_api_key_dict=user_api_key_dict,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    team_models = get_team_models(
+        team_models=user_api_key_dict.team_models,
+        proxy_model_list=proxy_model_list,
+        model_access_groups=model_access_groups,
+    )
+    if not key_models and not team_models:
+        return None
+    return set(
+        get_complete_model_list(
+            key_models=key_models,
+            team_models=team_models,
+            proxy_model_list=proxy_model_list,
+            user_model=user_model,
+            infer_model_from_keys=general_settings.get("infer_model_from_keys", False),
+            llm_router=llm_router,
+            return_wildcard_routes=False,
+        )
+    )
+
+
+def _filter_v1_model_info_deployments(
+    all_models: List[dict],
+    allowed_model_names: Optional[Set[str]],
+) -> List[dict]:
+    if allowed_model_names is None:
+        return all_models
+    return [
+        model
+        for model in all_models
+        if _deployment_matches_allowed_model_names(model, allowed_model_names)
+    ]
+
+
+def _should_apply_v1_team_access_filter(
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """Team membership filtering requires a resolvable user or admin role."""
+    return (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_id is not None
+    )
+
+
 def _translate_model_name_for_response(model: dict) -> dict:
     """For team-scoped DB rows, replace `model_name` with the public name
     in `model_info.team_public_model_name` before returning. The DB column
@@ -12579,46 +12634,25 @@ async def model_info_v1(  # noqa: PLR0915
     # use internal routing keys (model_name_{team_id}_{uuid}) and were omitted
     # when v1 resolved models only via public model_name strings.
     all_models: List[dict] = copy.deepcopy(llm_router.model_list)
+    allowed_model_names = _get_v1_model_info_allowed_model_names(
+        user_api_key_dict=user_api_key_dict,
+        llm_router=llm_router,
+    )
 
-    if prisma_client is not None:
+    if prisma_client is not None and _should_apply_v1_team_access_filter(
+        user_api_key_dict=user_api_key_dict
+    ):
         all_models = await get_all_team_and_direct_access_models(
             user_api_key_dict=user_api_key_dict,
             prisma_client=prisma_client,
             llm_router=llm_router,
             all_models=all_models,
         )
-    else:
-        model_access_groups = llm_router.get_model_access_groups()
-        proxy_model_list = llm_router.get_model_names()
-        key_models = get_key_models(
-            user_api_key_dict=user_api_key_dict,
-            proxy_model_list=proxy_model_list,
-            model_access_groups=model_access_groups,
-        )
-        team_models = get_team_models(
-            team_models=user_api_key_dict.team_models,
-            proxy_model_list=proxy_model_list,
-            model_access_groups=model_access_groups,
-        )
-        if key_models or team_models:
-            allowed_model_names = set(
-                get_complete_model_list(
-                    key_models=key_models,
-                    team_models=team_models,
-                    proxy_model_list=proxy_model_list,
-                    user_model=user_model,
-                    infer_model_from_keys=general_settings.get(
-                        "infer_model_from_keys", False
-                    ),
-                    llm_router=llm_router,
-                    return_wildcard_routes=False,
-                )
-            )
-            all_models = [
-                model
-                for model in all_models
-                if _deployment_matches_allowed_model_names(model, allowed_model_names)
-            ]
+
+    all_models = _filter_v1_model_info_deployments(
+        all_models=all_models,
+        allowed_model_names=allowed_model_names,
+    )
 
     all_models = [
         _translate_model_name_for_response(
