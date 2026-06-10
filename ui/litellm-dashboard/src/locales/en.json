@@ -4353,6 +4353,103 @@
       "updateSuccess": "SSO settings updated successfully",
       "saveFailed": "Failed to save SSO settings: {{error}}",
       "processFailed": "Failed to process SSO settings: {{error}}"
+    },
+    "redactableField": {
+      "notConfigured": "Not configured"
+    },
+    "roleMappings": {
+      "title": "Role Mappings",
+      "roleColumn": "Role",
+      "mappedGroupsColumn": "Mapped Groups",
+      "noGroupsMapped": "No groups mapped",
+      "groupClaim": "Group Claim",
+      "defaultRole": "Default Role"
+    },
+    "sSOSettings": {
+      "title": "SSO Configuration",
+      "subtitle": "Manage Single Sign-On authentication settings",
+      "notConfigured": "Not configured",
+      "provider": "Provider",
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "proxyBaseUrl": "Proxy Base URL",
+      "tenant": "Tenant",
+      "authorizationEndpoint": "Authorization Endpoint",
+      "tokenEndpoint": "Token Endpoint",
+      "userInfoEndpoint": "User Info Endpoint",
+      "teamIdsJwtField": "Team IDs JWT Field",
+      "editSSOSettings": "Edit SSO Settings",
+      "deleteSSOSettings": "Delete SSO Settings"
+    },
+    "sSOSettingsEmptyPlaceholder": {
+      "noConfigTitle": "No SSO Configuration Found",
+      "noConfigDesc": "Configure Single Sign-On (SSO) to enable seamless authentication for your team members using your identity provider.",
+      "configureButton": "Configure SSO"
+    },
+    "pageVisibilitySettings": {
+      "title": "Internal User Page Visibility",
+      "notSet": "Not set (all pages visible)",
+      "pagesSelected_one": "{{count}} page selected",
+      "pagesSelected_other": "{{count}} pages selected",
+      "defaultHint": "By default, all pages are visible to internal users. Select specific pages to restrict visibility.",
+      "adminOnlyNote": "Note: Only pages accessible to internal user roles are shown here. Admin-only pages are excluded as they cannot be made visible to internal users regardless of this setting.",
+      "configureLabel": "Configure Page Visibility",
+      "saveButton": "Save Page Visibility Settings",
+      "resetButton": "Reset to Default (All Pages)"
+    },
+    "uISettings": {
+      "cardTitle": "UI Settings",
+      "loadError": "Could not load UI settings",
+      "updateError": "Could not update UI settings",
+      "updateSuccess": "UI settings updated successfully",
+      "updateSuccessRefreshing": "UI settings updated successfully. Refreshing page...",
+      "pageVisibilityUpdateSuccess": "Page visibility settings updated successfully",
+      "disableModelAddLabel": "Disable model add for internal users",
+      "disableTeamAdminDeleteLabel": "Disable team admin delete team user",
+      "requireAuthPublicAIHubLabel": "Require authentication for public AI Hub",
+      "forwardClientHeadersLabel": "Forward client headers to LLM API",
+      "forwardClientHeadersDesc": "Forwards client headers (Authorization, anthropic-beta, and x-* custom headers) to the upstream LLM. Enable for Claude Code with a Max subscription (forwards the OAuth token) or to pass custom/tracing headers through to the provider. Independent of the BYOK toggle — enable only the one(s) you need.",
+      "forwardLLMProviderAuthHeadersLabel": "Forward LLM provider auth headers",
+      "forwardLLMProviderAuthHeadersDesc": "Forwards provider auth headers (x-api-key, x-goog-api-key, api-key, ocp-apim-subscription-key) to the upstream LLM, overriding any deployment-configured key for that request. Enable for Claude Code BYOK (clients bring their own API key). Independent of the client-headers toggle — enable only the one(s) you need.",
+      "enableProjectsUILabel": "[BETA] Enable Projects (page will refresh)",
+      "enableProjectsUIDesc": "If enabled, shows the Projects feature in the UI sidebar and the project field in key management.",
+      "disableAgentsLabel": "Disable agents for internal users",
+      "allowAgentsTeamAdminsLabel": "Allow agents for team admins",
+      "disableVectorStoresLabel": "Disable vector stores for internal users",
+      "allowVectorStoresTeamAdminsLabel": "Allow vector stores for team admins",
+      "scopeUserSearchLabel": "Scope user search to organization",
+      "scopeUserSearchDesc": "If enabled, the user search endpoint restricts results by organization. When off, any authenticated user can search all users.",
+      "disableCustomApiKeysLabel": "Disable custom Virtual key values",
+      "disableCustomApiKeysDesc": "If true, users cannot specify custom key values. All keys must be auto-generated.",
+      "disableUINudgesLabel": "Disable UI nudges",
+      "disableUINudgesDesc": "If true, suppresses in-product UI nudges (survey and Claude Code feedback popups) for all users."
+    },
+    "loggingCallbacksTable": {
+      "addCallbackButton": "+ Add Callback",
+      "activeCallbacksTitle": "Active Logging Callbacks",
+      "callbackNameColumn": "Callback Name",
+      "modeColumn": "Mode",
+      "modeSuccess": "Success",
+      "modeFailure": "Failure",
+      "modeSuccessAndFailure": "Success & Failure",
+      "testCallbackTooltip": "Test Callback",
+      "editCallbackTooltip": "Edit Callback",
+      "deleteCallbackTooltip": "Delete Callback",
+      "emptyStateTitle": "No callbacks configured",
+      "emptyStateDesc": "Add your first callback to start logging data to external services."
+    },
+    "addFallbacks": {
+      "addButton": "Add Fallbacks",
+      "incompleteGroups_one": "Please complete configuration for all groups. {{count}} group incomplete.",
+      "incompleteGroups_other": "Please complete configuration for all groups. {{count}} groups incomplete.",
+      "addSuccess_one": "{{count}} fallback configuration added successfully!",
+      "addSuccess_other": "{{count}} fallback configurations added successfully!",
+      "savingButton": "Saving Configuration...",
+      "saveButton": "Save All Configurations"
+    },
+    "addFallbacksModal": {
+      "title": "Configure Model Fallbacks",
+      "subtitle": "Manage multiple fallback chains for different models (up to 5 groups at a time)"
     }
   }
 }

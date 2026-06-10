@@ -4353,6 +4353,103 @@
       "updateSuccess": "SSO 设置更新成功",
       "saveFailed": "保存 SSO 设置失败：{{error}}",
       "processFailed": "处理 SSO 设置失败：{{error}}"
+    },
+    "redactableField": {
+      "notConfigured": "未配置"
+    },
+    "roleMappings": {
+      "title": "角色映射",
+      "roleColumn": "角色",
+      "mappedGroupsColumn": "映射的用户组",
+      "noGroupsMapped": "未映射用户组",
+      "groupClaim": "Group Claim",
+      "defaultRole": "默认角色"
+    },
+    "sSOSettings": {
+      "title": "SSO 配置",
+      "subtitle": "管理单点登录认证设置",
+      "notConfigured": "未配置",
+      "provider": "提供商",
+      "clientId": "Client ID",
+      "clientSecret": "Client Secret",
+      "proxyBaseUrl": "代理基础 URL",
+      "tenant": "租户",
+      "authorizationEndpoint": "授权端点",
+      "tokenEndpoint": "Token 端点",
+      "userInfoEndpoint": "用户信息端点",
+      "teamIdsJwtField": "团队 ID JWT 字段",
+      "editSSOSettings": "编辑 SSO 设置",
+      "deleteSSOSettings": "删除 SSO 设置"
+    },
+    "sSOSettingsEmptyPlaceholder": {
+      "noConfigTitle": "未找到 SSO 配置",
+      "noConfigDesc": "配置单点登录（SSO）可让团队成员通过您的身份提供商进行无缝认证。",
+      "configureButton": "配置 SSO"
+    },
+    "pageVisibilitySettings": {
+      "title": "内部用户页面可见性",
+      "notSet": "未设置（所有页面可见）",
+      "pagesSelected_one": "已选择 {{count}} 个页面",
+      "pagesSelected_other": "已选择 {{count}} 个页面",
+      "defaultHint": "默认情况下，所有页面对内部用户可见。选择特定页面可限制可见性。",
+      "adminOnlyNote": "注意：此处仅显示内部用户角色可访问的页面。仅管理员可访问的页面已排除，无论此设置如何都无法对内部用户显示。",
+      "configureLabel": "配置页面可见性",
+      "saveButton": "保存页面可见性设置",
+      "resetButton": "重置为默认值（所有页面）"
+    },
+    "uISettings": {
+      "cardTitle": "界面设置",
+      "loadError": "无法加载界面设置",
+      "updateError": "无法更新界面设置",
+      "updateSuccess": "界面设置更新成功",
+      "updateSuccessRefreshing": "界面设置更新成功，正在刷新页面...",
+      "pageVisibilityUpdateSuccess": "页面可见性设置更新成功",
+      "disableModelAddLabel": "禁止内部用户添加模型",
+      "disableTeamAdminDeleteLabel": "禁止团队管理员删除团队用户",
+      "requireAuthPublicAIHubLabel": "公共 AI Hub 需要认证",
+      "forwardClientHeadersLabel": "将客户端请求头转发到 LLM API",
+      "forwardClientHeadersDesc": "将客户端请求头（Authorization、anthropic-beta 及 x-* 自定义头）转发到上游 LLM。可用于带 Max 订阅的 Claude Code（转发 OAuth Token）或将自定义/追踪头透传到提供商。与 BYOK 开关相互独立，按需启用其一。",
+      "forwardLLMProviderAuthHeadersLabel": "转发 LLM 提供商认证请求头",
+      "forwardLLMProviderAuthHeadersDesc": "将提供商认证请求头（x-api-key、x-goog-api-key、api-key、ocp-apim-subscription-key）转发到上游 LLM，覆盖该请求的部署配置密钥。可用于 Claude Code BYOK（客户端自带 API 密钥）。与客户端请求头开关相互独立，按需启用其一。",
+      "enableProjectsUILabel": "[BETA] 启用项目功能（页面将刷新）",
+      "enableProjectsUIDesc": "启用后，将在界面侧边栏显示项目功能，并在密钥管理中显示项目字段。",
+      "disableAgentsLabel": "禁止内部用户使用 Agent",
+      "allowAgentsTeamAdminsLabel": "允许团队管理员使用 Agent",
+      "disableVectorStoresLabel": "禁止内部用户使用向量存储",
+      "allowVectorStoresTeamAdminsLabel": "允许团队管理员使用向量存储",
+      "scopeUserSearchLabel": "将用户搜索范围限定到组织",
+      "scopeUserSearchDesc": "启用后，用户搜索端点将按组织限制结果。关闭时，任何已认证用户均可搜索所有用户。",
+      "disableCustomApiKeysLabel": "禁用自定义虚拟密钥值",
+      "disableCustomApiKeysDesc": "若为 true，用户无法指定自定义密钥值，所有密钥必须自动生成。",
+      "disableUINudgesLabel": "禁用界面提示",
+      "disableUINudgesDesc": "若为 true，将为所有用户屏蔽产品内界面提示（调查问卷和 Claude Code 反馈弹窗）。"
+    },
+    "loggingCallbacksTable": {
+      "addCallbackButton": "+ 添加回调",
+      "activeCallbacksTitle": "已激活的日志回调",
+      "callbackNameColumn": "回调名称",
+      "modeColumn": "模式",
+      "modeSuccess": "成功",
+      "modeFailure": "失败",
+      "modeSuccessAndFailure": "成功与失败",
+      "testCallbackTooltip": "测试回调",
+      "editCallbackTooltip": "编辑回调",
+      "deleteCallbackTooltip": "删除回调",
+      "emptyStateTitle": "未配置回调",
+      "emptyStateDesc": "添加您的第一个回调，开始将数据记录到外部服务。"
+    },
+    "addFallbacks": {
+      "addButton": "添加回退",
+      "incompleteGroups_one": "请完成所有组的配置，{{count}} 个组尚未完成。",
+      "incompleteGroups_other": "请完成所有组的配置，{{count}} 个组尚未完成。",
+      "addSuccess_one": "成功添加 {{count}} 个回退配置！",
+      "addSuccess_other": "成功添加 {{count}} 个回退配置！",
+      "savingButton": "正在保存配置...",
+      "saveButton": "保存所有配置"
+    },
+    "addFallbacksModal": {
+      "title": "配置模型回退",
+      "subtitle": "管理不同模型的多个回退链（每次最多 5 组）"
     }
   }
 }
