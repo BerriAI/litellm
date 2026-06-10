@@ -1043,19 +1043,21 @@ async def _build_oauth_protected_resource_response(
             ),
         )
 
-    return {
-        "authorization_servers": [
+    from mcp.shared.auth import ProtectedResourceMetadata
+
+    return ProtectedResourceMetadata(
+        resource=resource_url,  # type: ignore[arg-type]
+        authorization_servers=[
             (
                 f"{request_base_url}/{mcp_server_name}"
                 if mcp_server_name
                 else f"{request_base_url}"
             )
-        ],
-        "resource": resource_url,
-        "scopes_supported": (
+        ],  # type: ignore[list-item]
+        scopes_supported=(
             mcp_server.scopes if mcp_server and mcp_server.scopes else []
         ),
-    }
+    ).model_dump(mode="json", exclude_none=True)
 
 
 # Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
@@ -1145,24 +1147,26 @@ def _build_oauth_authorization_server_response(
             mcp_server_name, client_ip=client_ip
         )
 
-    return {
-        "issuer": request_base_url,  # point to your proxy
-        "authorization_endpoint": authorization_endpoint,
-        "token_endpoint": token_endpoint,
-        "response_types_supported": ["code"],
-        "scopes_supported": (
+    from mcp.shared.auth import OAuthMetadata
+
+    return OAuthMetadata(
+        issuer=request_base_url,  # type: ignore[arg-type]
+        authorization_endpoint=authorization_endpoint,  # type: ignore[arg-type]
+        token_endpoint=token_endpoint,  # type: ignore[arg-type]
+        response_types_supported=["code"],
+        scopes_supported=(
             mcp_server.scopes if mcp_server and mcp_server.scopes else []
         ),
-        "grant_types_supported": ["authorization_code", "refresh_token"],
-        "code_challenge_methods_supported": ["S256"],
-        "token_endpoint_auth_methods_supported": ["client_secret_post"],
+        grant_types_supported=["authorization_code", "refresh_token"],
+        code_challenge_methods_supported=["S256"],
+        token_endpoint_auth_methods_supported=["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": (
+        registration_endpoint=(  # type: ignore[arg-type]
             f"{request_base_url}/{mcp_server_name}/register"
             if mcp_server_name
             else f"{request_base_url}/register"
         ),
-    }
+    ).model_dump(mode="json", exclude_none=True)
 
 
 # Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
