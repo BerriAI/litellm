@@ -18,7 +18,7 @@ const EMPTY_PROXY_SETTINGS: ProxySettings = {
 
 export default function useProxySettings(accessToken: string | null): ProxySettings {
   const { data } = useQuery({
-    queryKey: proxySettingsKeys.all,
+    queryKey: [...proxySettingsKeys.all, accessToken],
     queryFn: () => fetchProxySettings(accessToken),
     enabled: Boolean(accessToken),
   });
