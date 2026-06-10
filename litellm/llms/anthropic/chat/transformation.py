@@ -1451,10 +1451,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 _value = self._map_stop_sequences(value)
                 if _value is not None:
                     optional_params["stop_sequences"] = _value
-            elif param == "temperature":
-                optional_params["temperature"] = value
-            elif param == "top_p":
-                optional_params["top_p"] = value
+            elif param == "temperature" or param == "top_p":
+                AnthropicConfig._apply_sampling_param(
+                    optional_params=optional_params,
+                    model=model,
+                    param=param,
+                    value=value,
+                    drop_params=drop_params,
+                    output_key=param,
+                )
             elif param == "response_format" and isinstance(value, dict):
                 if any(
                     substring in model
@@ -1958,6 +1963,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Remove internal LiteLLM parameters that should not be sent to Anthropic API
         optional_params.pop("is_vertex_request", None)
+
+        # ``top_k`` is a provider-specific kwarg that bypasses
+        # ``map_openai_params``; gate it here, the single boundary shared by
+        # the direct Anthropic, Bedrock invoke, Vertex, and Azure paths.
+        top_k = optional_params.pop("top_k", None)
+        if top_k is not None:
+            AnthropicConfig._apply_sampling_param(
+                optional_params=optional_params,
+                model=model,
+                param="top_k",
+                value=top_k,
+                drop_params=litellm_params.get("drop_params") is True,
+                output_key="top_k",
+            )
 
         data = {
             "model": model,
