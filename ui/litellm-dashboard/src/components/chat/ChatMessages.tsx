@@ -269,6 +269,7 @@ interface AssistantBubbleProps {
 }
 
 function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicator, mcpEvents }: AssistantBubbleProps) {
+  const { t } = useTranslation();
   // Ref to control ReasoningContent collapse on streaming end.
   // ReasoningContent manages its own expanded state; we use a key to
   // remount it (collapsed by default) when streaming finishes.

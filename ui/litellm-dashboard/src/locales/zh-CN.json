@@ -8732,5 +8732,12 @@
       "passwordHelpSignup": "为您的账户创建密码"
     },
     "loading": "加载中..."
+  },
+  "networking": {
+    "sessionExpired": "UI 会话已过期，正在退出登录。",
+    "modelCreated": "模型 {{model}} 创建成功",
+    "valueUpdated": "更新成功！",
+    "fieldReset": "字段已在代理上重置",
+    "internalUserSettingsUpdated": "内部用户设置更新成功"
   }
 }

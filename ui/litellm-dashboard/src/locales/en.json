@@ -8732,5 +8732,12 @@
       "passwordHelpSignup": "Create a password for your account"
     },
     "loading": "Loading..."
+  },
+  "networking": {
+    "sessionExpired": "UI Session Expired. Logging out.",
+    "modelCreated": "Model {{model}} created successfully",
+    "valueUpdated": "Successfully updated value!",
+    "fieldReset": "Field reset on proxy",
+    "internalUserSettingsUpdated": "Internal user settings updated successfully"
   }
 }

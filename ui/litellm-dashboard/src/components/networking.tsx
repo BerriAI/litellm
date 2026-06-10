@@ -33,6 +33,7 @@ export const getInProductNudgesCall = async (accessToken: string) => {
  * Helper file for calls being made to proxy
  */
 import MessageManager from "@/components/molecules/message_manager";
+import i18n from "@/lib/i18n";
 import { clearTokenCookies, storeLoginToken } from "@/utils/cookieUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
 import { Team } from "./key_team_helpers/key_list";
@@ -302,7 +303,7 @@ export const handleError = async (errorData: string | any) => {
     // Convert errorData to string if it isn't already
     const errorString = typeof errorData === "string" ? errorData : JSON.stringify(errorData);
     if (errorString.includes("Authentication Error - Expired Key")) {
-      NotificationsManager.info("UI Session Expired. Logging out.");
+      NotificationsManager.info(i18n.t("networking.sessionExpired"));
       lastErrorTime = currentTime;
       clearTokenCookies();
       const browserLocation = getWindowLocation();
@@ -568,7 +569,7 @@ export const modelCreateCall = async (accessToken: string, formValues: Model) =>
     MessageManager.destroy();
 
     // Sequential success messages
-    NotificationsManager.success(`Model ${formValues.model_name} created successfully`);
+    NotificationsManager.success(i18n.t("networking.modelCreated", { model: formValues.model_name }));
 
     return data;
   } catch (error) {
@@ -3423,7 +3424,7 @@ export const updateConfigFieldSetting = async (accessToken: string, fieldName: s
     //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/field/update`, { accessToken, body: formData });
     //NotificationsManager.info("Received model data");
-    NotificationsManager.success("Successfully updated value!");
+    NotificationsManager.success(i18n.t("networking.valueUpdated"));
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -3440,7 +3441,7 @@ export const deleteConfigFieldSetting = async (accessToken: string, fieldName: s
     };
     //NotificationsManager.info("Requesting model data");
     const data = await apiClient.post(`/config/field/delete`, { accessToken, body: formData });
-    NotificationsManager.success("Field reset on proxy");
+    NotificationsManager.success(i18n.t("networking.fieldReset"));
     return data;
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
@@ -4873,7 +4874,7 @@ export const updateInternalUserSettings = async (accessToken: string, settings: 
 
     const data = await response.json();
     console.log("Updated internal user settings:", data);
-    NotificationsManager.success("Internal user settings updated successfully");
+    NotificationsManager.success(i18n.t("networking.internalUserSettingsUpdated"));
     return data;
   } catch (error) {
     console.error("Failed to update internal user settings:", error);
