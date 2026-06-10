@@ -4311,6 +4311,47 @@ def test_get_available_deployment_for_pass_through_raises_when_dict_blocked():
         )
 
 
+def test_initialize_deployment_for_pass_through_keeps_bedrock_iam_deployment():
+    """
+    Bedrock deployments using IAM/OIDC auth have no api_key; pass-through
+    init must not raise and drop them from routing (#27728).
+    """
+    import litellm
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "bedrock-claude",
+                "litellm_params": {
+                    "model": "bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0",
+                    "aws_role_name": "arn:aws:iam::123456789012:role/my-role",
+                    "aws_session_name": "my-session",
+                    "use_in_pass_through": True,
+                },
+                "model_info": {"id": "bedrock-iam-pt"},
+            }
+        ]
+    )
+    assert [m["model_info"]["id"] for m in router.get_model_list()] == [
+        "bedrock-iam-pt"
+    ]
+
+
+def test_initialize_deployment_for_pass_through_sets_credentials_with_api_key():
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        passthrough_endpoint_router,
+    )
+
+    router = _router_with_two_pass_through_deployments([False, False])
+    assert len(router.get_model_list()) == 2
+    assert (
+        passthrough_endpoint_router.get_credentials(
+            custom_llm_provider="openai", region_name=None
+        )
+        == "sk-fake-for-tests"
+    )
+
+
 def test_get_deployment_credentials_returns_none_for_blocked_deployment():
     router = _router_with_two_deployments([True, False])
     assert router.get_deployment_credentials(model_id="dep-0") is None
