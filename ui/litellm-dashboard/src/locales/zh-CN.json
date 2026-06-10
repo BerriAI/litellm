@@ -1176,7 +1176,7 @@
       "publishToHub": "发布到中心"
     },
     "addPluginForm": {
-      "noAccessToken": "No access token available",
+      "noAccessToken": "没有可用的访问令牌",
       "enterValidGithubUrl": "请输入有效的 GitHub URL",
       "invalidSkillName": "技能名称必须为 kebab-case 格式（仅限小写字母、数字和连字符）",
       "invalidVersion": "版本号必须符合语义化版本格式（如 1.0.0）",
@@ -3669,7 +3669,7 @@
       "transportPlaceholder": "选择传输类型",
       "transportHttp": "Streamable HTTP（推荐）",
       "transportSse": "Server-Sent Events (SSE)",
-      "transportStdio": "Standard Input/Output (stdio)",
+      "transportStdio": "标准输入/输出（stdio）",
       "transportOpenapi": "OpenAPI Spec",
       "serverUrlLabel": "MCP 服务器 URL",
       "serverUrlRequired": "请输入服务器 URL",
@@ -5372,13 +5372,13 @@
       "connectionTestResultsTitle": "连接测试结果"
     },
     "addModelModes": {
-      "chatLabel": "Chat - /chat/completions",
+      "chatLabel": "聊天 - /chat/completions",
       "completionLabel": "Completion - /completions",
       "embeddingLabel": "Embedding - /embeddings",
-      "audioSpeechLabel": "Audio Speech - /audio/speech",
-      "audioTranscriptionLabel": "Audio Transcription - /audio/transcriptions",
-      "imageGenerationLabel": "Image Generation - /images/generations",
-      "videoGenerationLabel": "Video Generation - /videos",
+      "audioSpeechLabel": "语音合成 - /audio/speech",
+      "audioTranscriptionLabel": "语音转录 - /audio/transcriptions",
+      "imageGenerationLabel": "图像生成 - /images/generations",
+      "videoGenerationLabel": "视频生成 - /videos",
       "rerankLabel": "Rerank - /rerank",
       "realtimeLabel": "Realtime - /realtime",
       "batchLabel": "Batch - /batch",
