@@ -197,6 +197,89 @@
       "rateLimit": "Rate Limit"
     }
   },
+  "commonComponents": {
+    "accessGroupSelector": {
+      "placeholder": "Select access groups",
+      "labelText": "Access Group",
+      "loadFailed": "Failed to load access groups",
+      "notFound": "No access groups found"
+    },
+    "autoRotationView": {
+      "title": "Auto-Rotation",
+      "subtitle": "Automatic key rotation settings and status for this key",
+      "every": "Every {{interval}}",
+      "lastRotation": "Last Rotation",
+      "nextScheduledRotation": "Next Scheduled Rotation",
+      "noRotationHistory": "No rotation history available",
+      "notEnabled": "Auto-rotation is not enabled for this key"
+    },
+    "defaultProxyAdminTag": {
+      "label": "Default Proxy Admin"
+    },
+    "deleteResourceModal": {
+      "okText": "Delete",
+      "typeToConfirm": "Type <danger>{{name}}</danger> to confirm deletion:"
+    },
+    "durationSelect": {
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly"
+    },
+    "keyLifecycleSettings": {
+      "keyExpirySectionTitle": "Key Expiry Settings",
+      "expireKeyLabel": "Expire Key",
+      "expireKeyTooltip": "Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Leave empty to keep the current expiry unchanged.",
+      "neverExpire": "Never Expire",
+      "expireKeyPlaceholderCreate": "e.g., 30d or leave empty to never expire",
+      "expireKeyPlaceholderEdit": "e.g., 30d",
+      "autoRotationSectionTitle": "Auto-Rotation Settings",
+      "enableAutoRotationLabel": "Enable Auto-Rotation",
+      "enableAutoRotationTooltip": "Key will automatically regenerate at the specified interval for enhanced security.",
+      "rotationIntervalLabel": "Rotation Interval",
+      "rotationIntervalTooltip": "How often the key should be automatically rotated. Choose the interval that best fits your security requirements.",
+      "selectInterval": "Select interval",
+      "sevenDays": "7 days",
+      "thirtyDays": "30 days",
+      "ninetyDays": "90 days",
+      "oneHundredEightyDays": "180 days",
+      "threeHundredSixtyFiveDays": "365 days",
+      "customInterval": "Custom interval",
+      "customIntervalPlaceholder": "e.g., 1s, 5m, 2h, 14d",
+      "customIntervalFormats": "Supported formats: seconds (s), minutes (m), hours (h), days (d)",
+      "rotationNotice": "When rotation occurs, you'll receive a notification with the new key. The old key will be deactivated after a brief grace period."
+    },
+    "memberTable": {
+      "userEmail": "User Email",
+      "userId": "User ID",
+      "defaultProxyAdmin": "Default Proxy Admin",
+      "memberCount_one": "{{count}} Member",
+      "memberCount_other": "{{count}} Members",
+      "editMember": "Edit member",
+      "deleteMember": "Delete member",
+      "addMember": "Add Member"
+    },
+    "modelAliasManager": {
+      "bothRequired": "Please provide both alias name and target model",
+      "duplicateAlias": "An alias with this name already exists",
+      "addSuccess": "Alias added successfully",
+      "updateSuccess": "Alias updated successfully",
+      "deleteSuccess": "Alias deleted successfully",
+      "addNewAlias": "Add New Alias",
+      "aliasName": "Alias Name",
+      "targetModel": "Target Model",
+      "addAlias": "Add Alias",
+      "manageExisting": "Manage Existing Aliases",
+      "noAliases": "No aliases added yet. Add a new alias above.",
+      "configExample": "Configuration Example",
+      "configExampleDesc": "Here's how your current aliases would look in the config:"
+    },
+    "modelSelector": {
+      "placeholder": "Select a Model",
+      "labelText": "Select Model",
+      "enterCustomModel": "Enter custom model",
+      "customModelPlaceholder": "Enter custom model name"
+    }
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",

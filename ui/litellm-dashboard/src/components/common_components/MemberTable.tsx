@@ -3,6 +3,7 @@ import { CrownOutlined, InfoCircleOutlined, UserAddOutlined, UserOutlined } from
 import { Button, Space, Table, Tag, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import TableIconActionButton from "./IconActionButton/TableIconActionButtons/TableIconActionButton";
 
 const { Text } = Typography;
@@ -26,36 +27,41 @@ export default function MemberTable({
   onEdit,
   onDelete,
   onAddMember,
-  roleColumnTitle = "Role",
+  roleColumnTitle,
   roleTooltip,
   extraColumns = [],
   showDeleteForMember,
   emptyText,
 }: MemberTableProps) {
+  const { t } = useTranslation();
   const baseColumns: ColumnsType<Member> = [
     {
-      title: "User Email",
+      title: t("commonComponents.memberTable.userEmail"),
       dataIndex: "user_email",
       key: "user_email",
       render: (email: string | null) => <Text>{email || "-"}</Text>,
     },
     {
-      title: "User ID",
+      title: t("commonComponents.memberTable.userId"),
       dataIndex: "user_id",
       key: "user_id",
       render: (userId: string | null) =>
-        userId === "default_user_id" ? <Tag color="blue">Default Proxy Admin</Tag> : <Text>{userId || "-"}</Text>,
+        userId === "default_user_id" ? (
+          <Tag color="blue">{t("commonComponents.memberTable.defaultProxyAdmin")}</Tag>
+        ) : (
+          <Text>{userId || "-"}</Text>
+        ),
     },
     {
       title: roleTooltip ? (
         <Space direction="horizontal">
-          {roleColumnTitle}
+          {roleColumnTitle ?? t("user.role")}
           <Tooltip title={roleTooltip}>
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
       ) : (
-        roleColumnTitle
+        roleColumnTitle ?? t("user.role")
       ),
       dataIndex: "role",
       key: "role",
@@ -72,7 +78,7 @@ export default function MemberTable({
     },
     ...extraColumns,
     {
-      title: "Actions",
+      title: t("common.actions"),
       key: "actions",
       fixed: "right" as const,
       width: 120,
@@ -81,14 +87,14 @@ export default function MemberTable({
           <Space>
             <TableIconActionButton
               variant="Edit"
-              tooltipText="Edit member"
+              tooltipText={t("commonComponents.memberTable.editMember")}
               dataTestId="edit-member"
               onClick={() => onEdit(record)}
             />
             {(!showDeleteForMember || showDeleteForMember(record)) && (
               <TableIconActionButton
                 variant="Delete"
-                tooltipText="Delete member"
+                tooltipText={t("commonComponents.memberTable.deleteMember")}
                 dataTestId="delete-member"
                 onClick={() => onDelete(record)}
               />
@@ -101,7 +107,7 @@ export default function MemberTable({
   return (
     <Space direction="vertical" style={{ width: "100%" }}>
       <span className="inline-flex text-sm text-gray-700">
-        {members.length} Member{members.length !== 1 ? "s" : ""}
+        {t("commonComponents.memberTable.memberCount", { count: members.length })}
       </span>
       <Table
         columns={baseColumns}
@@ -114,7 +120,7 @@ export default function MemberTable({
       />
       {onAddMember && canEdit && (
         <Button icon={<UserAddOutlined />} type="primary" onClick={onAddMember}>
-          Add Member
+          {t("commonComponents.memberTable.addMember")}
         </Button>
       )}
     </Space>

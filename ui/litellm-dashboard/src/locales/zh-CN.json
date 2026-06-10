@@ -197,6 +197,89 @@
       "rateLimit": "速率限制"
     }
   },
+  "commonComponents": {
+    "accessGroupSelector": {
+      "placeholder": "选择访问组",
+      "labelText": "访问组",
+      "loadFailed": "加载访问组失败",
+      "notFound": "未找到访问组"
+    },
+    "autoRotationView": {
+      "title": "自动轮换",
+      "subtitle": "此密钥的自动轮换设置与状态",
+      "every": "每 {{interval}}",
+      "lastRotation": "上次轮换",
+      "nextScheduledRotation": "下次计划轮换",
+      "noRotationHistory": "暂无轮换历史",
+      "notEnabled": "此密钥未启用自动轮换"
+    },
+    "defaultProxyAdminTag": {
+      "label": "默认代理管理员"
+    },
+    "deleteResourceModal": {
+      "okText": "删除",
+      "typeToConfirm": "请输入 <danger>{{name}}</danger> 以确认删除："
+    },
+    "durationSelect": {
+      "daily": "每天",
+      "weekly": "每周",
+      "monthly": "每月"
+    },
+    "keyLifecycleSettings": {
+      "keyExpirySectionTitle": "密钥过期设置",
+      "expireKeyLabel": "密钥过期",
+      "expireKeyTooltip": "设置此密钥的过期时间。格式：30s（秒）、30m（分钟）、30h（小时）、30d（天）。留空则保持当前过期时间不变。",
+      "neverExpire": "永不过期",
+      "expireKeyPlaceholderCreate": "例如：30d，留空则永不过期",
+      "expireKeyPlaceholderEdit": "例如：30d",
+      "autoRotationSectionTitle": "自动轮换设置",
+      "enableAutoRotationLabel": "启用自动轮换",
+      "enableAutoRotationTooltip": "密钥将按指定间隔自动重新生成，以增强安全性。",
+      "rotationIntervalLabel": "轮换间隔",
+      "rotationIntervalTooltip": "密钥自动轮换的频率。请选择最适合您安全要求的间隔。",
+      "selectInterval": "选择间隔",
+      "sevenDays": "7 天",
+      "thirtyDays": "30 天",
+      "ninetyDays": "90 天",
+      "oneHundredEightyDays": "180 天",
+      "threeHundredSixtyFiveDays": "365 天",
+      "customInterval": "自定义间隔",
+      "customIntervalPlaceholder": "例如：1s、5m、2h、14d",
+      "customIntervalFormats": "支持格式：秒（s）、分钟（m）、小时（h）、天（d）",
+      "rotationNotice": "轮换发生时，您将收到包含新密钥的通知。旧密钥将在短暂的宽限期后停用。"
+    },
+    "memberTable": {
+      "userEmail": "用户邮箱",
+      "userId": "用户 ID",
+      "defaultProxyAdmin": "默认代理管理员",
+      "memberCount_one": "{{count}} 位成员",
+      "memberCount_other": "{{count}} 位成员",
+      "editMember": "编辑成员",
+      "deleteMember": "删除成员",
+      "addMember": "添加成员"
+    },
+    "modelAliasManager": {
+      "bothRequired": "请同时提供别名名称和目标模型",
+      "duplicateAlias": "同名别名已存在",
+      "addSuccess": "别名添加成功",
+      "updateSuccess": "别名更新成功",
+      "deleteSuccess": "别名删除成功",
+      "addNewAlias": "添加新别名",
+      "aliasName": "别名名称",
+      "targetModel": "目标模型",
+      "addAlias": "添加别名",
+      "manageExisting": "管理现有别名",
+      "noAliases": "暂无别名。请在上方添加新别名。",
+      "configExample": "配置示例",
+      "configExampleDesc": "以下是您当前别名在配置中的样子："
+    },
+    "modelSelector": {
+      "placeholder": "选择模型",
+      "labelText": "选择模型",
+      "enterCustomModel": "输入自定义模型",
+      "customModelPlaceholder": "输入自定义模型名称"
+    }
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",

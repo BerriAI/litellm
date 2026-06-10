@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { TextInput, Text } from "@tremor/react";
 import { Select } from "antd";
 import { RobotOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 
 interface ModelSelectorProps {
@@ -19,14 +20,15 @@ interface ModelSelectorProps {
 const ModelSelector: React.FC<ModelSelectorProps> = ({
   accessToken,
   value,
-  placeholder = "Select a Model",
+  placeholder,
   onChange,
   disabled = false,
   style,
   className,
   showLabel = true,
-  labelText = "Select Model",
+  labelText,
 }) => {
+  const { t } = useTranslation();
   const [selectedModel, setSelectedModel] = useState<string | undefined>(value);
   const [showCustomModelInput, setShowCustomModelInput] = useState<boolean>(false);
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
@@ -86,12 +88,12 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
     <div>
       {showLabel && (
         <Text className="font-medium block mb-2 text-gray-700 flex items-center">
-          <RobotOutlined className="mr-2" /> {labelText}
+          <RobotOutlined className="mr-2" /> {labelText ?? t("commonComponents.modelSelector.labelText")}
         </Text>
       )}
       <Select
         value={selectedModel}
-        placeholder={placeholder}
+        placeholder={placeholder ?? t("commonComponents.modelSelector.placeholder")}
         onChange={onModelChange}
         options={[
           ...Array.from(new Set(modelInfo.map((option) => option.model_group))).map((model_group, index) => ({
@@ -99,7 +101,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
             label: model_group,
             key: index,
           })),
-          { value: "custom", label: "Enter custom model", key: "custom" },
+          { value: "custom", label: t("commonComponents.modelSelector.enterCustomModel"), key: "custom" },
         ]}
         style={{ width: "100%", ...style }}
         showSearch={true}
@@ -109,7 +111,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({
       {showCustomModelInput && (
         <TextInput
           className="mt-2"
-          placeholder="Enter custom model name"
+          placeholder={t("commonComponents.modelSelector.customModelPlaceholder")}
           onValueChange={handleCustomModelChange}
           disabled={disabled}
         />
