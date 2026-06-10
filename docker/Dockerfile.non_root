@@ -16,8 +16,8 @@ COPY --from=uvbin /uvx /usr/local/bin/uvx
 
 RUN for i in 1 2 3; do \
       apk add --no-cache \
-        python3 \
-        python3-dev \
+        python-3.13 \
+        python-3.13-dev \
         gcc \
         bash \
         coreutils \
@@ -30,8 +30,10 @@ RUN for i in 1 2 3; do \
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=0 \
     PATH="/app/.venv/bin:${PATH}" \
     LITELLM_NON_ROOT=true \
+    PRISMA_USE_GLOBAL_NODE=true \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     XDG_CACHE_HOME=/app/.cache
 
@@ -47,7 +49,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
     --extra proxy-runtime \
     --extra extra_proxy \
     --extra semantic-router \
-    --python python3
+    --python python3.13
 
 # Copy full source tree
 COPY . .
@@ -67,7 +69,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
         --extra proxy-runtime \
         --extra extra_proxy \
         --extra semantic-router \
-        --python python3 \
+        --python python3.13 \
         --no-sources-package litellm-proxy-extras; \
     else \
       uv sync --frozen --no-default-groups --no-editable \
@@ -75,7 +77,7 @@ RUN --mount=type=cache,target=/app/.cache/uv,id=litellm-uv-cache \
         --extra proxy-runtime \
         --extra extra_proxy \
         --extra semantic-router \
-        --python python3; \
+        --python python3.13; \
     fi
 
 RUN prisma generate --schema=./schema.prisma
@@ -92,7 +94,7 @@ RUN for i in 1 2 3; do \
       apk upgrade --no-cache && break || sleep 5; \
     done && \
     for i in 1 2 3; do \
-      apk add --no-cache python3 bash openssl tzdata libsndfile nodejs && break || sleep 5; \
+      apk add --no-cache python-3.13 bash openssl tzdata libsndfile nodejs && break || sleep 5; \
     done
 
 COPY --from=builder /app /app
@@ -103,6 +105,7 @@ ENV PATH="/app/.venv/bin:${PATH}" \
     PRISMA_BINARY_CACHE_DIR=/app/.cache/prisma-python/binaries \
     HOME=/app \
     LITELLM_NON_ROOT=true \
+    PRISMA_USE_GLOBAL_NODE=true \
     XDG_CACHE_HOME=/app/.cache \
     PRISMA_SKIP_POSTINSTALL_GENERATE=1 \
     PRISMA_HIDE_UPDATE_MESSAGE=1 \
