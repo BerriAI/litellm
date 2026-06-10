@@ -275,7 +275,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     def _supports_sampling_params(model: str) -> bool:
         """Claude 4.7+ (Opus 4.7/4.8, Fable 5) removed sampling params: the API
         rejects ``top_p``, ``top_k``, and any ``temperature`` other than 1 with
-        a 400 ("`temperature` is deprecated for this model")."""
+        a 400 ("`temperature` is deprecated for this model").
+
+        Driven by the ``supports_sampling_params`` flag in the model map; the
+        name check remains only as a fallback for provider-routed ids whose
+        map entries predate the flag."""
+        flag = AnthropicModelInfo._get_model_capability(
+            model, "supports_sampling_params"
+        )
+        if flag is not None:
+            return flag
         model_lower = model.lower()
         return not any(
             v in model_lower
@@ -301,9 +310,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         drop_params: bool,
         output_key: str,
     ) -> None:
-        """Forward ``temperature``/``top_p`` to ``optional_params[output_key]``
-        unless the model removed sampling params, in which case drop the param
-        (with drop_params) or raise a clean client-side 400."""
+        """Forward ``temperature``/``top_p``/``top_k`` to
+        ``optional_params[output_key]`` unless the model removed sampling
+        params, in which case drop the param (with drop_params) or raise a
+        clean client-side 400."""
         if AnthropicModelInfo._supports_sampling_params(model) or (
             param == "temperature" and value == 1
         ):
@@ -319,6 +329,43 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 ),
                 status_code=400,
             )
+
+    @staticmethod
+    def _model_map_lookup_candidates(model: str) -> List[str]:
+        """Model-map keys to try for ``model``, stripping bedrock/vertex
+        prefixes so a provider-routed Claude still resolves to its entry."""
+        candidates = [model]
+        for prefix in (
+            "bedrock/converse/",
+            "bedrock/invoke/",
+            "bedrock/",
+            "vertex_ai/",
+        ):
+            if model.startswith(prefix):
+                candidates.append(model[len(prefix) :])
+        try:
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            base = BedrockModelInfo.get_base_model(model)
+            if base:
+                candidates.append(base)
+                candidates.append(f"bedrock/{base}")
+        except Exception:
+            pass
+        return candidates
+
+    @staticmethod
+    def _get_model_capability(model: str, key: str) -> Optional[bool]:
+        """Read boolean capability ``key`` from the model map, or None when
+        no entry declares it."""
+        try:
+            for cand in AnthropicModelInfo._model_map_lookup_candidates(model):
+                value = litellm.model_cost.get(cand, {}).get(key)
+                if isinstance(value, bool):
+                    return value
+        except Exception:
+            pass
+        return None
 
     @staticmethod
     def _supports_model_capability(model: str, key: str) -> bool:
@@ -338,33 +385,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
                 return True
         except Exception:
             pass
-        candidates = [model]
-        for prefix in (
-            "bedrock/converse/",
-            "bedrock/invoke/",
-            "bedrock/",
-            "vertex_ai/",
-        ):
-            if model.startswith(prefix):
-                candidates.append(model[len(prefix) :])
-        try:
-            from litellm.llms.bedrock.common_utils import BedrockModelInfo
-
-            base = BedrockModelInfo.get_base_model(model)
-            if base:
-                candidates.append(base)
-                candidates.append(f"bedrock/{base}")
-        except Exception:
-            pass
-        try:
-            for cand in candidates:
-                if cand in litellm.model_cost and (
-                    litellm.model_cost[cand].get(key) is True
-                ):
-                    return True
-        except Exception:
-            pass
-        return False
+        return AnthropicModelInfo._get_model_capability(model, key) is True
 
     @staticmethod
     def _is_adaptive_thinking_model(model: str) -> bool:

@@ -1980,6 +1980,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         optional_params.pop("is_vertex_request", None)
         optional_params.pop("client_metadata", None)
 
+        # ``top_k`` is a provider-specific kwarg that bypasses
+        # ``map_openai_params``; gate it here, the single boundary shared by
+        # the direct Anthropic, Bedrock invoke, Vertex, and Azure paths.
+        top_k = optional_params.pop("top_k", None)
+        if top_k is not None:
+            AnthropicConfig._apply_sampling_param(
+                optional_params=optional_params,
+                model=model,
+                param="top_k",
+                value=top_k,
+                drop_params=litellm_params.get("drop_params") is True,
+                output_key="top_k",
+            )
+
         data = {
             "model": model,
             "messages": anthropic_messages,
