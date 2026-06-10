@@ -8395,5 +8395,19 @@
       "descNewUserInvitation": "当新用户创建时，将向该用户的邮件地址发送一封邮件",
       "descGeneric": "当 {{words}} 时接收邮件通知"
     }
+  },
+  "keyTeamHelpers": {
+    "budgetWindowsEditor": {
+      "hourly": "每小时",
+      "daily": "每日",
+      "weekly": "每周",
+      "monthly": "每月",
+      "resetsEveryHour": "每小时重置",
+      "resetsDailyMidnight": "每日 UTC 零点重置",
+      "resetsWeeklySunday": "每周日 UTC 零点重置",
+      "resetsMonthly": "每月 1 日 UTC 零点重置",
+      "maxSpendPlaceholder": "最大花费 ($)",
+      "addBudgetWindow": "+ 添加预算窗口"
+    }
   }
 }

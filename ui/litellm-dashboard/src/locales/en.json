@@ -8395,5 +8395,19 @@
       "descNewUserInvitation": "An email will be sent to the email address of the user when a new user is created",
       "descGeneric": "Receive an email notification when {{words}}"
     }
+  },
+  "keyTeamHelpers": {
+    "budgetWindowsEditor": {
+      "hourly": "Hourly",
+      "daily": "Daily",
+      "weekly": "Weekly",
+      "monthly": "Monthly",
+      "resetsEveryHour": "Resets every hour",
+      "resetsDailyMidnight": "Resets daily at midnight UTC",
+      "resetsWeeklySunday": "Resets every Sunday at midnight UTC",
+      "resetsMonthly": "Resets on the 1st of every month at midnight UTC",
+      "maxSpendPlaceholder": "Max spend ($)",
+      "addBudgetWindow": "+ Add Budget Window"
+    }
   }
 }
