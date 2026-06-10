@@ -166,7 +166,12 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 )
 
                 init_params = {}
-                if "lakera_prompt_injection" in callback_specific_params:
+                if (
+                    "lakera_prompt_injection" in callback_specific_params
+                    and isinstance(
+                        callback_specific_params["lakera_prompt_injection"], dict
+                    )
+                ):
                     init_params = callback_specific_params["lakera_prompt_injection"]
                 lakera_moderations_object = lakeraAI_Moderation(**init_params)
                 imported_list.append(lakera_moderations_object)
