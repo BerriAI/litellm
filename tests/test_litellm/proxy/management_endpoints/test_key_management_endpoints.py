@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import types
 
 import litellm
 import pytest
@@ -6520,6 +6521,155 @@ async def test_reset_key_spend_success(monkeypatch):
         assert response["max_budget"] == 200.0
         mock_prisma_client.db.litellm_verificationtoken.update.assert_called_once()
         mock_delete_cache.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reset_key_spend_invalidates_redis_spend_counter(monkeypatch):
+    mock_prisma_client = MagicMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    hashed_key = "hashed-test-key"
+    key_in_db = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=100.0,
+        max_budget=200.0,
+        litellm_budget_table=None,
+    )
+    updated_key = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=50.0,
+        max_budget=200.0,
+        budget_reset_at=None,
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=updated_key
+    )
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.delete_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.prisma_client = mock_prisma_client
+    fake_module.hash_token = MagicMock(return_value=hashed_key)
+    fake_module.user_api_key_cache = mock_user_api_key_cache
+    fake_module.proxy_logging_obj = mock_proxy_logging_obj
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_proxy_or_team_admin_for_key"
+        ) as mock_check_admin,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
+        ) as mock_delete_cache,
+    ):
+        mock_check_admin.return_value = None
+        mock_delete_cache.return_value = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-user",
+        )
+
+        response = await reset_key_spend_fn(
+            key="sk-test-key",
+            data=ResetSpendRequest(reset_to=50.0),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+        assert response["spend"] == 50.0
+
+        counter_key = f"spend:key:{hashed_key}"
+        spend_counter_cache.in_memory_cache.delete_cache.assert_called_once_with(
+            key=counter_key
+        )
+        spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(
+            key=counter_key
+        )
+
+
+@pytest.mark.asyncio
+async def test_reset_key_spend_redis_delete_failure_does_not_raise(monkeypatch):
+    """When Redis delete fails, reset_key_spend_fn logs a warning and still succeeds."""
+    mock_prisma_client = MagicMock()
+    mock_user_api_key_cache = MagicMock()
+    mock_proxy_logging_obj = MagicMock()
+
+    hashed_key = "hashed-test-key"
+    key_in_db = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=100.0,
+        max_budget=200.0,
+        litellm_budget_table=None,
+    )
+    updated_key = LiteLLM_VerificationToken(
+        token=hashed_key,
+        user_id="test-user",
+        spend=50.0,
+        max_budget=200.0,
+        budget_reset_at=None,
+    )
+
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+        return_value=key_in_db
+    )
+    mock_prisma_client.db.litellm_verificationtoken.update = AsyncMock(
+        return_value=updated_key
+    )
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache.delete_cache = MagicMock()
+    spend_counter_cache.redis_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock(
+        side_effect=RuntimeError("redis unavailable")
+    )
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.prisma_client = mock_prisma_client
+    fake_module.hash_token = MagicMock(return_value=hashed_key)
+    fake_module.user_api_key_cache = mock_user_api_key_cache
+    fake_module.proxy_logging_obj = mock_proxy_logging_obj
+    fake_module.spend_counter_cache = spend_counter_cache
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_proxy_or_team_admin_for_key"
+        ) as mock_check_admin,
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints._delete_cache_key_object"
+        ) as mock_delete_cache,
+    ):
+        mock_check_admin.return_value = None
+        mock_delete_cache.return_value = None
+
+        user_api_key_dict = UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+            api_key="sk-admin",
+            user_id="admin-user",
+        )
+
+        response = await reset_key_spend_fn(
+            key="sk-test-key",
+            data=ResetSpendRequest(reset_to=50.0),
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=None,
+        )
+
+        assert response["spend"] == 50.0
 
 
 @pytest.mark.asyncio

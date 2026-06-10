@@ -84,10 +84,16 @@ class ResetBudgetJob:
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to reset spend counter %s in Redis: %s. "
-                        "Budget may be over-enforced until counter expires.",
+                        "Falling back to DELETE to force reseed from DB on next read.",
                         counter_key,
                         redis_err,
                     )
+                    try:
+                        await spend_counter_cache.redis_cache.async_delete_cache(
+                            key=counter_key
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             verbose_proxy_logger.warning(
                 "Failed to reset spend counter %s: %s", counter_key, e

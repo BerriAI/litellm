@@ -4775,6 +4775,22 @@ async def reset_key_spend_fn(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+        from litellm.proxy.proxy_server import spend_counter_cache
+
+        counter_key = f"spend:key:{hashed_api_key}"
+        spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
+        if spend_counter_cache.redis_cache is not None:
+            try:
+                await spend_counter_cache.redis_cache.async_delete_cache(
+                    key=counter_key
+                )
+            except Exception as redis_err:
+                verbose_proxy_logger.warning(
+                    "Failed to delete Redis spend counter %s: %s",
+                    counter_key,
+                    redis_err,
+                )
+
         max_budget = updated_key.max_budget
         budget_reset_at = updated_key.budget_reset_at
 
