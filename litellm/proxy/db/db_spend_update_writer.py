@@ -321,37 +321,53 @@ class DBSpendUpdateWriter:
                 if name:
                     _enqueue(name)
 
-            # --- Response tool_calls (OpenAI format; Anthropic pass-through converts tool_use here) ---
-            if completion_response is not None and hasattr(
-                completion_response, "choices"
+            # --- Tool calls / tool_use blocks from the response ---
+            for tool_name in self._extract_tool_names_from_response(
+                completion_response
             ):
-                for choice in completion_response.choices or []:
-                    message = getattr(choice, "message", None)
-                    if message is None:
-                        continue
-                    tool_calls = getattr(message, "tool_calls", None)
-                    if not tool_calls:
-                        continue
-                    for tc in tool_calls:
-                        fn = getattr(tc, "function", None)
-                        if fn is None:
-                            continue
-                        tool_name = getattr(fn, "name", None)
-                        if tool_name:
-                            _enqueue(tool_name)
-
-            # --- Response tool_use blocks (anthropic_messages route returns
-            #     AnthropicMessagesResponse, a TypedDict / plain dict) ---
-            elif isinstance(completion_response, dict):
-                for block in completion_response.get("content") or []:
-                    if isinstance(block, dict) and block.get("type") == "tool_use":
-                        name = block.get("name")
-                        if name:
-                            _enqueue(name)
+                _enqueue(tool_name)
         except Exception as e:
             verbose_proxy_logger.debug(
                 "_enqueue_tool_registry_upsert error (non-blocking): %s", e
             )
+
+    @staticmethod
+    def _extract_tool_names_from_response(
+        completion_response: Optional[Any],
+    ) -> List[str]:
+        """
+        Collect tool names from an LLM response: OpenAI-format objects
+        (choices[].message.tool_calls[].function.name) and anthropic_messages
+        dict responses (content[].name where type == "tool_use").
+        """
+        tool_names: List[str] = []
+        if completion_response is None:
+            return tool_names
+
+        if hasattr(completion_response, "choices"):
+            for choice in completion_response.choices or []:
+                message = getattr(choice, "message", None)
+                if message is None:
+                    continue
+                tool_calls = getattr(message, "tool_calls", None)
+                if not tool_calls:
+                    continue
+                for tc in tool_calls:
+                    fn = getattr(tc, "function", None)
+                    if fn is None:
+                        continue
+                    tool_name = getattr(fn, "name", None)
+                    if tool_name:
+                        tool_names.append(tool_name)
+        # AnthropicMessagesResponse is a TypedDict, a plain dict at runtime with
+        # no .choices attribute, so this branch never overlaps with the one above
+        elif isinstance(completion_response, dict):
+            for block in completion_response.get("content") or []:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    name = block.get("name")
+                    if name:
+                        tool_names.append(name)
+        return tool_names
 
     async def _batch_database_updates(
         self,
