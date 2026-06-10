@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { Input, Tooltip } from "antd";
 import { InfoCircleOutlined, LinkOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 
 const logos = "/ui/assets/logos/";
 
@@ -33,6 +34,7 @@ interface MCPLogoSelectorProps {
 }
 
 const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) => {
+  const { t } = useTranslation();
   const [imgErrors, setImgErrors] = useState<Set<string>>(new Set());
 
   const handleSelect = (url: string) => {
@@ -46,8 +48,8 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
   return (
     <div>
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-sm font-medium text-gray-700">Logo</span>
-        <Tooltip title="Select a well-known logo or paste a URL to any image. The logo is shown on the admin and chat pages.">
+        <span className="text-sm font-medium text-gray-700">{t("mcpTools.mcpLogoSelector.logoLabel")}</span>
+        <Tooltip title={t("mcpTools.mcpLogoSelector.logoTooltip")}>
           <InfoCircleOutlined className="text-blue-400 hover:text-blue-600 cursor-help" />
         </Tooltip>
       </div>
@@ -57,7 +59,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
         <div className="flex items-center gap-3 mb-3 p-3 bg-gray-50 rounded-lg border border-gray-200">
           <img
             src={value}
-            alt="Selected logo"
+            alt={t("mcpTools.mcpLogoSelector.selectedLogoAlt")}
             className="w-10 h-10 object-contain rounded"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = "none";
@@ -110,7 +112,7 @@ const MCPLogoSelector: React.FC<MCPLogoSelectorProps> = ({ value, onChange }) =>
       {/* Custom URL input */}
       <Input
         prefix={<LinkOutlined className="text-gray-400" />}
-        placeholder="Or paste a custom logo URL..."
+        placeholder={t("mcpTools.mcpLogoSelector.customUrlPlaceholder")}
         value={value && !WELL_KNOWN_LOGOS.some((l) => l.url === value) ? value : ""}
         onChange={(e) => {
           const v = e.target.value.trim();

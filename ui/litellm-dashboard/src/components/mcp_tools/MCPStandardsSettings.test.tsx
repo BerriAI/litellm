@@ -1,6 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
+import {
+  getFieldGroups,
+  getMcpRequiredFieldDefs,
+  SETTINGS_KEY,
+  FieldGroup,
+  RequiredFieldDef,
+} from "./MCPStandardsSettings";
+import type { TFunction } from "i18next";
 import { MCPServer } from "./types";
+
+const t = ((key: string) => key) as unknown as TFunction;
 
 const makeServer = (overrides: Partial<MCPServer> = {}): MCPServer => ({
   server_id: "s1",
@@ -11,22 +20,24 @@ const makeServer = (overrides: Partial<MCPServer> = {}): MCPServer => ({
   ...overrides,
 });
 
-describe("FIELD_GROUPS", () => {
+describe("getFieldGroups", () => {
   it("should contain four groups", () => {
-    expect(FIELD_GROUPS).toHaveLength(4);
-    expect(FIELD_GROUPS.map((g) => g.label)).toEqual(["Documentation", "Source", "Connection", "Security"]);
+    const groups = getFieldGroups(t);
+    expect(groups).toHaveLength(4);
   });
 });
 
-describe("MCP_REQUIRED_FIELD_DEFS", () => {
+describe("getMcpRequiredFieldDefs", () => {
   it("should flatten all fields from groups", () => {
-    const totalFields = FIELD_GROUPS.reduce((sum, g) => sum + g.fields.length, 0);
-    expect(MCP_REQUIRED_FIELD_DEFS).toHaveLength(totalFields);
+    const groups = getFieldGroups(t);
+    const defs = getMcpRequiredFieldDefs(t);
+    const totalFields = groups.reduce((sum: number, g: FieldGroup) => sum + g.fields.length, 0);
+    expect(defs).toHaveLength(totalFields);
   });
 });
 
 describe("field check functions", () => {
-  const findCheck = (key: string) => MCP_REQUIRED_FIELD_DEFS.find((f) => f.key === key)!.check;
+  const findCheck = (key: string) => getMcpRequiredFieldDefs(t).find((f: RequiredFieldDef) => f.key === key)!.check;
 
   it("should pass description check when description is present", () => {
     expect(findCheck("description")(makeServer({ description: "A service" }))).toBe(true);

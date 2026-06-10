@@ -19,8 +19,15 @@ import {
   updateConfigFieldSetting,
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "./types";
-import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
+import {
+  getFieldGroups,
+  getMcpRequiredFieldDefs,
+  FieldGroup,
+  RequiredFieldDef,
+  SETTINGS_KEY,
+} from "./MCPStandardsSettings";
 import NotificationsManager from "@/components/molecules/notifications_manager";
+import { useTranslation } from "react-i18next";
 
 type MCPStatus = "active" | "pending_review" | "rejected";
 
@@ -139,8 +146,11 @@ type SubmissionRulesPanelProps = {
 };
 
 function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: SubmissionRulesPanelProps) {
+  const { t } = useTranslation();
+  const fieldDefs = getMcpRequiredFieldDefs(t);
+  const fieldGroups = getFieldGroups(t);
   const [expanded, setExpanded] = useState(false);
-  const activeLabels = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key));
+  const activeLabels = fieldDefs.filter((f: RequiredFieldDef) => requiredFields.includes(f.key));
 
   const toggle = (key: string) => {
     onChange(requiredFields.includes(key) ? requiredFields.filter((k) => k !== key) : [...requiredFields, key]);
@@ -195,11 +205,11 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
             for each rule on every submission card below.
           </p>
           <div className="grid grid-cols-2 gap-x-8 gap-y-5">
-            {FIELD_GROUPS.map((group) => (
+            {fieldGroups.map((group: FieldGroup) => (
               <div key={group.label}>
                 <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{group.label}</div>
                 <div className="space-y-2">
-                  {group.fields.map((field) => {
+                  {group.fields.map((field: RequiredFieldDef) => {
                     const active = requiredFields.includes(field.key);
                     return (
                       <label key={field.key} className="flex items-start gap-2.5 cursor-pointer group">
@@ -256,15 +266,18 @@ type MCPServerCardProps = {
 };
 
 function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServerCardProps) {
+  const { t } = useTranslation();
   const approvalStatus = (server.approval_status ?? "active") as MCPStatus;
   const statusCfg = STATUS_CONFIG[approvalStatus] ?? STATUS_CONFIG["active"];
 
-  const checks = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key)).map((f) => ({
-    key: f.key,
-    label: f.label,
-    description: f.description,
-    passed: f.check(server),
-  }));
+  const checks = getMcpRequiredFieldDefs(t)
+    .filter((f: RequiredFieldDef) => requiredFields.includes(f.key))
+    .map((f: RequiredFieldDef) => ({
+      key: f.key,
+      label: f.label,
+      description: f.description,
+      passed: f.check(server),
+    }));
   const passCount = checks.filter((c) => c.passed).length;
   const failCount = checks.length - passCount;
   const allPassed = checks.length > 0 && failCount === 0;

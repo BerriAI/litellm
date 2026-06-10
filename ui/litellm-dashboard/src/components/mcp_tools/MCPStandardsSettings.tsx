@@ -1,5 +1,6 @@
 "use client";
 
+import type { TFunction } from "i18next";
 import { MCPServer } from "./types";
 
 export interface RequiredFieldDef {
@@ -14,59 +15,59 @@ export interface FieldGroup {
   fields: RequiredFieldDef[];
 }
 
-export const FIELD_GROUPS: FieldGroup[] = [
+export const getFieldGroups = (t: TFunction): FieldGroup[] => [
   {
-    label: "Documentation",
+    label: t("mcpTools.mcpStandardsSettings.groupDocumentation"),
     fields: [
       {
         key: "description",
-        label: "Description",
-        description: "Must have a non-empty description",
+        label: t("mcpTools.mcpStandardsSettings.fieldDescriptionLabel"),
+        description: t("mcpTools.mcpStandardsSettings.fieldDescriptionDesc"),
         check: (s) => !!s.description?.trim(),
       },
       {
         key: "alias",
-        label: "Alias",
-        description: "Must have a display alias",
+        label: t("mcpTools.mcpStandardsSettings.fieldAliasLabel"),
+        description: t("mcpTools.mcpStandardsSettings.fieldAliasDesc"),
         check: (s) => !!s.alias?.trim(),
       },
     ],
   },
   {
-    label: "Source",
+    label: t("mcpTools.mcpStandardsSettings.groupSource"),
     fields: [
       {
         key: "source_url",
-        label: "GitHub / Source URL",
-        description: "Must link to a source repository",
+        label: t("mcpTools.mcpStandardsSettings.fieldSourceUrlLabel"),
+        description: t("mcpTools.mcpStandardsSettings.fieldSourceUrlDesc"),
         check: (s) => !!s.source_url?.trim(),
       },
     ],
   },
   {
-    label: "Connection",
+    label: t("mcpTools.mcpStandardsSettings.groupConnection"),
     fields: [
       {
         key: "url",
-        label: "Server URL",
-        description: "Must have a URL configured",
+        label: t("mcpTools.mcpStandardsSettings.fieldServerUrlLabel"),
+        description: t("mcpTools.mcpStandardsSettings.fieldServerUrlDesc"),
         check: (s) => !!s.url?.trim(),
       },
     ],
   },
   {
-    label: "Security",
+    label: t("mcpTools.mcpStandardsSettings.groupSecurity"),
     fields: [
       {
         key: "auth_type",
-        label: "Auth configured",
-        description: "Must use authentication (not 'none')",
+        label: t("mcpTools.mcpStandardsSettings.fieldAuthLabel"),
+        description: t("mcpTools.mcpStandardsSettings.fieldAuthDesc"),
         check: (s) => !!s.auth_type && s.auth_type !== "none",
       },
     ],
   },
 ];
 
-export const MCP_REQUIRED_FIELD_DEFS: RequiredFieldDef[] = FIELD_GROUPS.flatMap((g) => g.fields);
+export const getMcpRequiredFieldDefs = (t: TFunction): RequiredFieldDef[] => getFieldGroups(t).flatMap((g) => g.fields);
 
 export const SETTINGS_KEY = "mcp_required_fields";
