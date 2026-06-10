@@ -8409,5 +8409,18 @@
       "maxSpendPlaceholder": "最大花费 ($)",
       "addBudgetWindow": "+ 添加预算窗口"
     }
+  },
+  "mcpServerManagement": {
+    "mcpToolPermissions": {
+      "failedToFetchTools": "获取工具失败",
+      "riskGroups": "风险分组",
+      "flatList": "平铺列表",
+      "selectAll": "全选",
+      "deselectAll": "取消全选",
+      "loadingTools": "正在加载工具...",
+      "unableToLoadTools": "无法加载工具",
+      "noDescription": "无描述",
+      "noToolsAvailable": "暂无可用工具"
+    }
   }
 }

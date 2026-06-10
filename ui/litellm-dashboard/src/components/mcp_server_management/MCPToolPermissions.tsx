@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { listMCPTools } from "../networking";
 import { MCPTool, MCPServer } from "../mcp_tools/types";
 import { Text } from "@tremor/react";
@@ -22,6 +23,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   onChange,
   disabled = false,
 }) => {
+  const { t } = useTranslation();
   const { data: allServers = [] } = useMCPServers();
   const [serverTools, setServerTools] = useState<Record<string, MCPTool[]>>({});
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
@@ -52,7 +54,10 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       const response = await listMCPTools(token, serverId);
 
       if (response.error) {
-        setToolErrors((prev) => ({ ...prev, [serverId]: response.message || "Failed to fetch tools" }));
+        setToolErrors((prev) => ({
+          ...prev,
+          [serverId]: response.message || t("mcpServerManagement.mcpToolPermissions.failedToFetchTools"),
+        }));
         setServerTools((prev) => ({ ...prev, [serverId]: [] }));
       } else {
         const fetchedTools: MCPTool[] = response.tools || [];
@@ -63,14 +68,17 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const latestPermissions = toolPermissionsRef.current;
         if (!latestPermissions[serverId] && fetchedTools.length > 0) {
           const nonDeleteTools = fetchedTools
-            .filter((t) => classifyToolOp(t.name, t.description || "") !== "delete")
-            .map((t) => t.name);
+            .filter((tool) => classifyToolOp(tool.name, tool.description || "") !== "delete")
+            .map((tool) => tool.name);
           onChange({ ...latestPermissions, [serverId]: nonDeleteTools });
         }
       }
     } catch (err) {
       console.error(`Error fetching tools for server ${serverId}:`, err);
-      setToolErrors((prev) => ({ ...prev, [serverId]: "Failed to fetch tools" }));
+      setToolErrors((prev) => ({
+        ...prev,
+        [serverId]: t("mcpServerManagement.mcpToolPermissions.failedToFetchTools"),
+      }));
       setServerTools((prev) => ({ ...prev, [serverId]: [] }));
     } finally {
       setLoadingTools((prev) => ({ ...prev, [serverId]: false }));
@@ -95,7 +103,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
 
   const handleSelectAll = (serverId: string) => {
     const tools = serverTools[serverId] || [];
-    onChange({ ...toolPermissions, [serverId]: tools.map((t) => t.name) });
+    onChange({ ...toolPermissions, [serverId]: tools.map((tool) => tool.name) });
   };
 
   const handleDeselectAll = (serverId: string) => {
@@ -133,8 +141,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                     optionType="button"
                     buttonStyle="solid"
                     options={[
-                      { label: "Risk Groups", value: "crud" },
-                      { label: "Flat List", value: "flat" },
+                      { label: t("mcpServerManagement.mcpToolPermissions.riskGroups"), value: "crud" },
+                      { label: t("mcpServerManagement.mcpToolPermissions.flatList"), value: "flat" },
                     ]}
                   />
                 )}
@@ -146,7 +154,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                       onClick={() => handleSelectAll(server.server_id)}
                       disabled={isLoading}
                     >
-                      Select All
+                      {t("mcpServerManagement.mcpToolPermissions.selectAll")}
                     </button>
                     <button
                       type="button"
@@ -154,7 +162,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                       onClick={() => handleDeselectAll(server.server_id)}
                       disabled={isLoading}
                     >
-                      Deselect All
+                      {t("mcpServerManagement.mcpToolPermissions.deselectAll")}
                     </button>
                   </>
                 )}
@@ -167,14 +175,16 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {isLoading && (
                 <div className="flex items-center justify-center py-8">
                   <Spin size="large" />
-                  <Text className="ml-3 text-gray-500">Loading tools...</Text>
+                  <Text className="ml-3 text-gray-500">{t("mcpServerManagement.mcpToolPermissions.loadingTools")}</Text>
                 </div>
               )}
 
               {/* Error */}
               {error && !isLoading && (
                 <div className="p-4 bg-red-50 border border-red-200 rounded-lg text-center">
-                  <Text className="text-red-600 font-medium">Unable to load tools</Text>
+                  <Text className="text-red-600 font-medium">
+                    {t("mcpServerManagement.mcpToolPermissions.unableToLoadTools")}
+                  </Text>
                   <Text className="text-sm text-red-500 mt-1">{error}</Text>
                 </div>
               )}
@@ -212,7 +222,9 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
                             <Text className="font-medium text-gray-900">{tool.name}</Text>
-                            <Text className="text-sm text-gray-500">- {tool.description || "No description"}</Text>
+                            <Text className="text-sm text-gray-500">
+                              - {tool.description || t("mcpServerManagement.mcpToolPermissions.noDescription")}
+                            </Text>
                           </div>
                         </div>
                       </div>
@@ -224,7 +236,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
               {/* Empty State */}
               {!isLoading && !error && tools.length === 0 && (
                 <div className="text-center py-6">
-                  <Text className="text-gray-500">No tools available</Text>
+                  <Text className="text-gray-500">{t("mcpServerManagement.mcpToolPermissions.noToolsAvailable")}</Text>
                 </div>
               )}
             </div>

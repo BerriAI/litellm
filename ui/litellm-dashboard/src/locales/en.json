@@ -8409,5 +8409,18 @@
       "maxSpendPlaceholder": "Max spend ($)",
       "addBudgetWindow": "+ Add Budget Window"
     }
+  },
+  "mcpServerManagement": {
+    "mcpToolPermissions": {
+      "failedToFetchTools": "Failed to fetch tools",
+      "riskGroups": "Risk Groups",
+      "flatList": "Flat List",
+      "selectAll": "Select All",
+      "deselectAll": "Deselect All",
+      "loadingTools": "Loading tools...",
+      "unableToLoadTools": "Unable to load tools",
+      "noDescription": "No description",
+      "noToolsAvailable": "No tools available"
+    }
   }
 }
