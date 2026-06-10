@@ -1,6 +1,8 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useState, useLayoutEffect } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useLayoutEffect } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Tooltip, Skeleton, Popover } from "antd";
 import MessageManager from "@/components/molecules/message_manager";
 import {
@@ -42,16 +44,22 @@ interface ChatPageProps {
   userEmail?: string;
 }
 
-const SUGGESTIONS = ["Write", "Learn", "Code", "Brainstorm"];
 const MAX_COMPARISON_MODELS = 3;
 const LOCALSTORAGE_MODEL_KEY = "litellm_chat_selected_models";
 
-function getGreeting(): string {
+function getGreetingKey(): string {
   const h = new Date().getHours();
-  if (h >= 5 && h < 12) return "Good morning";
-  if (h >= 12 && h < 17) return "Good afternoon";
-  return "Good evening";
+  if (h >= 5 && h < 12) return "chat.chatPage.goodMorning";
+  if (h >= 12 && h < 17) return "chat.chatPage.goodAfternoon";
+  return "chat.chatPage.goodEvening";
 }
+
+export const getSuggestions = (t: TFunction) => [
+  t("chat.chatPage.suggestionWrite"),
+  t("chat.chatPage.suggestionLearn"),
+  t("chat.chatPage.suggestionCode"),
+  t("chat.chatPage.suggestionBrainstorm"),
+];
 
 // Build the chat UI URL respecting server root path (e.g. /api/v1/ui/chat)
 function getChatUrl(root: string, id?: string): string {
@@ -129,6 +137,8 @@ async function streamToModel(
 }
 
 const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, userEmail }) => {
+  const { t } = useTranslation();
+  const suggestions = useMemo(() => getSuggestions(t), [t]);
   const router = useRouter();
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("id");
@@ -219,7 +229,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           localStorage.setItem(LOCALSTORAGE_MODEL_KEY, JSON.stringify([names[0]]));
         }
       })
-      .catch(() => MessageManager.error("Could not load models"))
+      .catch(() => MessageManager.error(t("chat.chatPage.couldNotLoadModels")))
       .finally(() => setIsLoadingModels(false));
   }, [accessToken]);
 
@@ -344,11 +354,11 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       } catch (err: unknown) {
         if (err instanceof Error && err.name === "AbortError") {
           updateLastAssistantMessage(convId!, {
-            content: accumulatedContent + " [stopped]",
+            content: accumulatedContent + " " + t("chat.chatPage.streamStopped"),
           });
         } else {
           updateLastAssistantMessage(convId!, {
-            content: "[Something went wrong. The partial response has been saved.]",
+            content: t("chat.chatPage.streamError"),
           });
         }
       } finally {
@@ -530,7 +540,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
     ? !activeConversation || activeConversation.messages.length === 0
     : comparisonExchanges.length === 0;
   const displayName = userEmail?.split("@")[0] ?? userId ?? "";
-  const greeting = displayName ? `${getGreeting()}, ${displayName}` : getGreeting();
+  const greeting = displayName
+    ? t("chat.chatPage.greetingWithName", { name: displayName, greeting: t(getGreetingKey()) })
+    : t(getGreetingKey());
   const dashboardUrl = getDashboardUrl(uiRoot);
 
   // Filtered models: selected ones float to the top, then alphabetical
@@ -552,7 +564,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
           autoFocus
           value={modelSearchText}
           onChange={(e) => setModelSearchText(e.target.value)}
-          placeholder="Search models..."
+          placeholder={t("chat.chatPage.searchModelsPlaceholder")}
           style={{
             width: "100%",
             padding: "6px 10px",
@@ -566,7 +578,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
       </div>
       {selectedModels.length >= MAX_COMPARISON_MODELS && (
         <div style={{ padding: "4px 12px", fontSize: 12, color: "#6b7280" }}>
-          Max {MAX_COMPARISON_MODELS} models selected — deselect one to change.
+          {t("chat.chatPage.maxModelsSelected", { count: MAX_COMPARISON_MODELS })}
         </div>
       )}
       <div style={{ flex: 1, overflowY: "auto" }}>
@@ -717,7 +729,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         }}
       >
         {selectedModels.length === 0 ? (
-          <span style={{ color: "#9ca3af" }}>Select model</span>
+          <span style={{ color: "#9ca3af" }}>{t("chat.chatPage.selectModel")}</span>
         ) : selectedModels.length === 1 ? (
           <>
             {(() => {
@@ -798,7 +810,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
         value={inputText}
         onChange={(e) => setInputText(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder={inConversation ? "Send a message..." : "How can I help you today?"}
+        placeholder={inConversation ? t("chat.chatPage.sendMessagePlaceholder") : t("chat.chatPage.howCanIHelp")}
         style={{
           width: "100%",
           minHeight: inConversation ? 52 : 80,
@@ -870,9 +882,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
             >
               {inConversation
                 ? selectedMCPServers.length > 0
-                  ? `${selectedMCPServers.length} tool${selectedMCPServers.length > 1 ? "s" : ""} connected`
+                  ? t("chat.chatPage.toolsConnected", { count: selectedMCPServers.length })
                   : ""
-                : selectedModels[0] || "No model"}
+                : selectedModels[0] || t("chat.chatPage.noModel")}
             </span>
           )}
           {isAnyStreaming ? (
@@ -917,7 +929,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                 transition: "background 0.15s",
               }}
             >
-              Send
+              {t("chat.chatPage.send")}
             </button>
           )}
         </div>
@@ -969,7 +981,10 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               <span style={{ fontWeight: 700, fontSize: 15, color: "#111827", letterSpacing: "-0.01em" }}>LiteLLM</span>
             </div>
           )}
-          <Tooltip title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} placement="right">
+          <Tooltip
+            title={sidebarCollapsed ? t("chat.chatPage.expandSidebar") : t("chat.chatPage.collapseSidebar")}
+            placement="right"
+          >
             <button
               onClick={() => setSidebarCollapsed((v) => !v)}
               style={{
@@ -991,23 +1006,33 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
         {/* Sidebar nav buttons */}
         <div style={{ padding: "0 8px 4px", flexShrink: 0 }}>
-          {sidebarNavItem(<EditOutlined />, "New chat", () => router.push(getChatUrl(uiRoot)))}
-          {sidebarNavItem(<SearchOutlined />, "Search chats", () => setSidebarView("chats"))}
+          {sidebarNavItem(<EditOutlined />, t("chat.chatPage.newChat"), () => router.push(getChatUrl(uiRoot)))}
+          {sidebarNavItem(<SearchOutlined />, t("chat.chatPage.searchChats"), () => setSidebarView("chats"))}
         </div>
 
         <div style={{ height: 1, background: "#e5e7eb", margin: "4px 8px", flexShrink: 0 }} />
 
         {/* Chats / Apps tabs + Back to console */}
         <div style={{ padding: "4px 8px", flexShrink: 0 }}>
-          {sidebarNavItem(<MessageOutlined />, "Chats", () => setSidebarView("chats"), sidebarView === "chats")}
-          {sidebarNavItem(<AppstoreOutlined />, "Apps", () => setSidebarView("apps"), sidebarView === "apps")}
+          {sidebarNavItem(
+            <MessageOutlined />,
+            t("chat.chatPage.chats"),
+            () => setSidebarView("chats"),
+            sidebarView === "chats",
+          )}
+          {sidebarNavItem(
+            <AppstoreOutlined />,
+            t("chat.chatPage.apps"),
+            () => setSidebarView("apps"),
+            sidebarView === "apps",
+          )}
           {sidebarNavItem(
             <KeyOutlined />,
-            "Credentials",
+            t("chat.chatPage.credentials"),
             () => setSidebarView("credentials"),
             sidebarView === "credentials",
           )}
-          <Tooltip title={sidebarCollapsed ? "Back to Developer Console UI" : undefined} placement="right">
+          <Tooltip title={sidebarCollapsed ? t("chat.chatPage.backToConsole") : undefined} placement="right">
             <a
               href={dashboardUrl}
               style={{
@@ -1031,7 +1056,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               }}
             >
               <ArrowLeftOutlined style={{ fontSize: 16, flexShrink: 0 }} />
-              {!sidebarCollapsed && <span>Back to Developer Console UI</span>}
+              {!sidebarCollapsed && <span>{t("chat.chatPage.backToConsole")}</span>}
             </a>
           </Tooltip>
         </div>
@@ -1075,7 +1100,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
 
           {/* Right: settings */}
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-            <Tooltip title="Settings">
+            <Tooltip title={t("common.settings")}>
               <button
                 style={{
                   background: "none",
@@ -1109,7 +1134,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               alignItems: "center",
             }}
           >
-            <span>Chat history won&apos;t be saved in this browser session.</span>
+            <span>{t("chat.chatPage.storageWarning")}</span>
             <button
               onClick={() => setStorageBannerDismissed(true)}
               style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16, color: "#874d00" }}
@@ -1188,12 +1213,12 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                   textAlign: "center",
                 }}
               >
-                {isComparisonMode ? `Compare ${selectedModels.length} models` : greeting}
+                {isComparisonMode ? t("chat.chatPage.compareModels", { count: selectedModels.length }) : greeting}
               </h1>
 
               {isComparisonMode ? (
                 <p style={{ margin: "-16px 0 24px", fontSize: 14, color: "#6b7280", textAlign: "center" }}>
-                  Send a message to see responses side-by-side
+                  {t("chat.chatPage.sendToCompare")}
                 </p>
               ) : (
                 <p
@@ -1206,7 +1231,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                     lineHeight: 1.6,
                   }}
                 >
-                  Chat with 100+ LLMs + MCP tools — authenticate once, use them here.{" "}
+                  {t("chat.chatPage.blankStateDesc")}{" "}
                   <button
                     onClick={() => setSidebarView("apps")}
                     style={{
@@ -1219,7 +1244,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                       fontWeight: 500,
                     }}
                   >
-                    Open Apps →
+                    {t("chat.chatPage.openApps")}
                   </button>
                 </p>
               )}
@@ -1230,7 +1255,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
               {/* Suggestion chips — only in single-model mode */}
               {!isComparisonMode && (
                 <div style={{ display: "flex", gap: 8, marginTop: 14, flexWrap: "wrap", justifyContent: "center" }}>
-                  {SUGGESTIONS.map((s) => (
+                  {suggestions.map((s) => (
                     <button
                       key={s}
                       onClick={() => setInputText(s + ": ")}
@@ -1350,7 +1375,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                                         />
                                       )}
                                       <span style={{ fontWeight: 600, fontSize: 12, color: "#374151" }}>
-                                        Response {idx + 1}
+                                        {t("chat.chatPage.responseN", { n: idx + 1 })}
                                       </span>
                                       <span
                                         style={{
@@ -1434,7 +1459,9 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                                         {responseText}
                                       </ReactMarkdown>
                                     ) : isModelStreaming ? (
-                                      <span style={{ color: "#9ca3af", fontSize: 14 }}>Generating…</span>
+                                      <span style={{ color: "#9ca3af", fontSize: 14 }}>
+                                        {t("chat.chatPage.generating")}
+                                      </span>
                                     ) : (
                                       <span style={{ color: "#9ca3af", fontSize: 14 }}>—</span>
                                     )}
@@ -1493,7 +1520,7 @@ const ChatPage: React.FC<ChatPageProps> = ({ accessToken, userRole, userId, user
                   onMouseLeave={(e) => {
                     (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.75)";
                   }}
-                  aria-label="Scroll to bottom"
+                  aria-label={t("chat.chatPage.scrollToBottom")}
                 >
                   <DownOutlined style={{ fontSize: 12 }} />
                 </button>
