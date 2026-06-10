@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Collapse } from "antd";
+import { useTranslation } from "react-i18next";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 
 interface VectorStoreContent {
@@ -31,6 +32,7 @@ interface VectorStoreViewerProps {
 }
 
 export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
+  const { t } = useTranslation();
   const [expandedResults, setExpandedResults] = useState<Record<string, boolean>>({});
 
   if (!data || data.length === 0) {
@@ -63,7 +65,7 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
         items={[
           {
             key: "1",
-            label: <h3 className="text-lg font-medium text-gray-900">Vector Store Requests</h3>,
+            label: <h3 className="text-lg font-medium text-gray-900">{t("viewLogs.vectorStoreViewer.title")}</h3>,
             children: (
               <div className="p-4">
                 {data.map((request, index) => (
@@ -72,15 +74,17 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                           <div className="flex">
-                            <span className="font-medium w-1/3">Query:</span>
+                            <span className="font-medium w-1/3">{t("viewLogs.vectorStoreViewer.labelQuery")}</span>
                             <span className="font-mono">{request.query}</span>
                           </div>
                           <div className="flex">
-                            <span className="font-medium w-1/3">Vector Store ID:</span>
+                            <span className="font-medium w-1/3">
+                              {t("viewLogs.vectorStoreViewer.labelVectorStoreId")}
+                            </span>
                             <span className="font-mono">{request.vector_store_id}</span>
                           </div>
                           <div className="flex">
-                            <span className="font-medium w-1/3">Provider:</span>
+                            <span className="font-medium w-1/3">{t("viewLogs.vectorStoreViewer.labelProvider")}</span>
                             <span className="flex items-center">
                               {(() => {
                                 const { logo, displayName } = getProviderLogoAndName(request.custom_llm_provider);
@@ -96,22 +100,22 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                         </div>
                         <div className="space-y-2">
                           <div className="flex">
-                            <span className="font-medium w-1/3">Start Time:</span>
+                            <span className="font-medium w-1/3">{t("viewLogs.vectorStoreViewer.labelStartTime")}</span>
                             <span>{formatTime(request.start_time)}</span>
                           </div>
                           <div className="flex">
-                            <span className="font-medium w-1/3">End Time:</span>
+                            <span className="font-medium w-1/3">{t("viewLogs.vectorStoreViewer.labelEndTime")}</span>
                             <span>{formatTime(request.end_time)}</span>
                           </div>
                           <div className="flex">
-                            <span className="font-medium w-1/3">Duration:</span>
+                            <span className="font-medium w-1/3">{t("viewLogs.vectorStoreViewer.labelDuration")}</span>
                             <span>{calculateDuration(request.start_time, request.end_time)}</span>
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    <h4 className="font-medium mb-2">Search Results</h4>
+                    <h4 className="font-medium mb-2">{t("viewLogs.vectorStoreViewer.searchResults")}</h4>
                     <div className="space-y-2">
                       {request.vector_store_search_response.data.map((result, resultIndex) => {
                         const isExpanded = expandedResults[`${index}-${resultIndex}`] || false;
@@ -131,9 +135,12 @@ export function VectorStoreViewer({ data }: VectorStoreViewerProps) {
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                               </svg>
                               <div className="flex items-center">
-                                <span className="font-medium mr-2">Result {resultIndex + 1}</span>
+                                <span className="font-medium mr-2">
+                                  {t("viewLogs.vectorStoreViewer.resultItem", { number: resultIndex + 1 })}
+                                </span>
                                 <span className="text-gray-500 text-sm">
-                                  Score: <span className="font-mono">{result.score.toFixed(4)}</span>
+                                  {t("viewLogs.vectorStoreViewer.score")}{" "}
+                                  <span className="font-mono">{result.score.toFixed(4)}</span>
                                 </span>
                               </div>
                             </div>

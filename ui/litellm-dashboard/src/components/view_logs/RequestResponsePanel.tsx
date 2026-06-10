@@ -2,6 +2,7 @@ import { LogEntry } from "./columns";
 import NotificationsManager from "../molecules/notifications_manager";
 import { JsonView, defaultStyles } from "react-json-view-lite";
 import "react-json-view-lite/dist/index.css";
+import { useTranslation } from "react-i18next";
 
 interface RequestResponsePanelProps {
   row: {
@@ -24,6 +25,7 @@ export function RequestResponsePanel({
   getRawRequest,
   formattedResponse,
 }: RequestResponsePanelProps) {
+  const { t } = useTranslation();
   const copyToClipboard = async (text: string) => {
     try {
       // Try modern clipboard API first
@@ -57,18 +59,18 @@ export function RequestResponsePanel({
   const handleCopyRequest = async () => {
     const success = await copyToClipboard(JSON.stringify(getRawRequest(), null, 2));
     if (success) {
-      NotificationsManager.success("Request copied to clipboard");
+      NotificationsManager.success(t("viewLogs.requestResponsePanel.requestCopied"));
     } else {
-      NotificationsManager.fromBackend("Failed to copy request");
+      NotificationsManager.fromBackend(t("viewLogs.requestResponsePanel.failedToCopyRequest"));
     }
   };
 
   const handleCopyResponse = async () => {
     const success = await copyToClipboard(JSON.stringify(formattedResponse(), null, 2));
     if (success) {
-      NotificationsManager.success("Response copied to clipboard");
+      NotificationsManager.success(t("viewLogs.requestResponsePanel.responseCopied"));
     } else {
-      NotificationsManager.fromBackend("Failed to copy response");
+      NotificationsManager.fromBackend(t("viewLogs.requestResponsePanel.failedToCopyResponse"));
     }
   };
 
@@ -77,8 +79,12 @@ export function RequestResponsePanel({
       {/* Request Side */}
       <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b">
-          <h3 className="text-lg font-medium">Request</h3>
-          <button onClick={handleCopyRequest} className="p-1 hover:bg-gray-200 rounded" title="Copy request">
+          <h3 className="text-lg font-medium">{t("viewLogs.requestResponsePanel.request")}</h3>
+          <button
+            onClick={handleCopyRequest}
+            className="p-1 hover:bg-gray-200 rounded"
+            title={t("viewLogs.requestResponsePanel.copyRequest")}
+          >
             <svg
               xmlns="http://www.w3.org/2000/svg"
               width="16"
@@ -106,13 +112,17 @@ export function RequestResponsePanel({
       <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
         <div className="flex justify-between items-center p-4 border-b">
           <h3 className="text-lg font-medium">
-            Response
-            {hasError && <span className="ml-2 text-sm text-red-600">• HTTP code {errorInfo?.error_code || 400}</span>}
+            {t("viewLogs.requestResponsePanel.response")}
+            {hasError && (
+              <span className="ml-2 text-sm text-red-600">
+                {t("viewLogs.requestResponsePanel.httpErrorCode", { code: errorInfo?.error_code || 400 })}
+              </span>
+            )}
           </h3>
           <button
             onClick={handleCopyResponse}
             className="p-1 hover:bg-gray-200 rounded"
-            title="Copy response"
+            title={t("viewLogs.requestResponsePanel.copyResponse")}
             disabled={!hasResponse && !hasError}
           >
             <svg
@@ -137,7 +147,9 @@ export function RequestResponsePanel({
               <JsonView data={formattedResponse()} style={defaultStyles} clickToExpandNode />
             </div>
           ) : (
-            <div className="text-gray-500 text-sm italic text-center py-4">Response data not available</div>
+            <div className="text-gray-500 text-sm italic text-center py-4">
+              {t("viewLogs.requestResponsePanel.responseNotAvailable")}
+            </div>
           )}
         </div>
       </div>
