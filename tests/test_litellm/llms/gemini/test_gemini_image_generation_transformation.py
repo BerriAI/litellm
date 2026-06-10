@@ -196,6 +196,53 @@ def test_gemini_image_generation_usage_includes_chat_token_details():
     assert logging_usage["completion_tokens_details"]["image_tokens"] == 1120
 
 
+def test_gemini_image_generation_web_search_options_maps_to_google_search_tool():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"web_search_options": {}},
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert "tools" in mapped
+    assert mapped["tools"] == [{"googleSearch": {}}]
+
+    request = config.transform_image_generation_request(
+        model="gemini-3.1-flash-image-preview",
+        prompt="Generate an image of the latest iPhone",
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [{"googleSearch": {}}]
+
+
+def test_gemini_image_generation_openai_web_search_tool_maps_to_google_search():
+    config = GoogleImageGenConfig()
+
+    mapped = config.map_openai_params(
+        non_default_params={"tools": [{"type": "web_search"}]},
+        optional_params={},
+        model="gemini-3.1-flash-image-preview",
+        drop_params=False,
+    )
+
+    assert mapped["tools"] == [{"googleSearch": {}}]
+
+    request = config.transform_image_generation_request(
+        model="gemini-3.1-flash-image-preview",
+        prompt="Generate an image of the latest iPhone",
+        optional_params=mapped,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["tools"] == [{"googleSearch": {}}]
+
+
 def test_gemini_image_generation_usage_without_output_details_treats_output_as_image():
     config = GoogleImageGenConfig()
     raw_response = httpx.Response(

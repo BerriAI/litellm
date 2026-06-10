@@ -7,6 +7,7 @@ import litellm
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
+from litellm.llms.gemini.common_utils import map_gemini_image_tools_params
 from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
@@ -52,6 +53,8 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "aspect_ratio",
             "imageSize",
             "image_size",
+            "tools",
+            "web_search_options",
         ]
 
     def map_openai_params(
@@ -77,9 +80,10 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
                         mapped_params["aspectRatio"] = v
                     elif k in ("imageSize", "image_size"):
                         mapped_params["imageSize"] = v
-                    else:
+                    elif k not in ("tools", "web_search_options"):
                         mapped_params[k] = v
 
+        map_gemini_image_tools_params(non_default_params, mapped_params)
         return mapped_params
 
     def _map_size_to_aspect_ratio(self, size: str) -> str:
@@ -246,6 +250,9 @@ class VertexAIGeminiImageGenerationConfig(BaseImageGenerationConfig, VertexLLM):
             "contents": contents,
             "generationConfig": generation_config,
         }
+
+        if tools := optional_params.get("tools"):
+            request_body["tools"] = tools
 
         return request_body
 

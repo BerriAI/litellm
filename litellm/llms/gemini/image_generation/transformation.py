@@ -8,6 +8,7 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.gemini.common_utils import (
     get_gemini_image_generation_config,
     is_gemini_image_model,
+    map_gemini_image_tools_params,
     map_openai_image_params_to_gemini,
 )
 from litellm.llms.gemini.image_usage_transformation import (
@@ -41,7 +42,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         """
         supported_params = ["n", "size"]
         if is_gemini_image_model(model):
-            supported_params.append("imageConfig")
+            supported_params.extend(["imageConfig", "tools", "web_search_options"])
         return supported_params  # type: ignore[return-value]
 
     def map_openai_params(
@@ -51,12 +52,15 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return map_openai_image_params_to_gemini(
+        mapped_params = map_openai_image_params_to_gemini(
             params=non_default_params,
             model=model,
             supported_params=self.get_supported_openai_params(model),
             optional_params=optional_params,
         )
+        if is_gemini_image_model(model):
+            map_gemini_image_tools_params(non_default_params, mapped_params)
+        return mapped_params
 
     def get_complete_url(
         self,
@@ -140,6 +144,8 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                     optional_params=optional_params,
                 ),
             }
+            if tools := optional_params.get("tools"):
+                request_body["tools"] = tools
             return request_body
         else:
             # For other Imagen models, use the original Imagen format

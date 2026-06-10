@@ -174,9 +174,54 @@ def map_openai_image_params_to_gemini(
         mapped_params["imageConfig"] = image_config_param
 
     for key, value in filtered_params.items():
-        if key not in ("n", "size", "imageConfig") and key not in optional_params:
+        if (
+            key not in ("n", "size", "imageConfig", "tools", "web_search_options")
+            and key not in optional_params
+        ):
             mapped_params[key] = value
 
+    return mapped_params
+
+
+def map_gemini_image_tools_params(
+    non_default_params: Dict[str, Any],
+    mapped_params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Map tools and web_search_options to Gemini googleSearch tools for image generation.
+
+    Reuses VertexGeminiConfig tool mapping so OpenAI-style web_search tools,
+    web_search_options, and native googleSearch/google_search tools are supported.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    gemini_config = VertexGeminiConfig()
+    working_params = dict(mapped_params)
+    working_params.pop("web_search_options", None)
+
+    tools_value = non_default_params.get("tools")
+    if isinstance(tools_value, list) and tools_value:
+        mapped_tools = gemini_config._map_function(
+            value=tools_value, optional_params=working_params
+        )
+        working_params = gemini_config._add_tools_to_optional_params(
+            working_params, mapped_tools
+        )
+
+    web_search_options = non_default_params.get("web_search_options")
+    if isinstance(web_search_options, dict):
+        search_tool = gemini_config._map_web_search_options(web_search_options)
+        working_params = gemini_config._add_tools_to_optional_params(
+            working_params, [search_tool]
+        )
+
+    gemini_config._drop_search_tools_mixed_with_functions(working_params)
+
+    if "tools" in working_params:
+        mapped_params["tools"] = working_params["tools"]
+    mapped_params.pop("web_search_options", None)
     return mapped_params
 
 

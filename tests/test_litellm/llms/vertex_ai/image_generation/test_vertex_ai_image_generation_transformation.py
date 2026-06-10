@@ -139,6 +139,24 @@ class TestVertexAIGeminiImageGenerationConfig:
         )
         assert request["generationConfig"]["imageConfig"]["imageSize"] == "4K"
 
+    def test_map_openai_params_web_search_options(self):
+        """Test web_search_options maps to googleSearch tool"""
+        result = self.config.map_openai_params(
+            {"web_search_options": {}}, {}, "gemini-3.1-flash-image-preview", False
+        )
+        assert result["tools"] == [{"googleSearch": {}}]
+
+    def test_transform_image_generation_request_with_web_search_tools(self):
+        """Test request transformation includes googleSearch tools"""
+        request = self.config.transform_image_generation_request(
+            model="gemini-3.1-flash-image-preview",
+            prompt="Generate an image of the latest iPhone",
+            optional_params={"tools": [{"googleSearch": {}}]},
+            litellm_params={},
+            headers={},
+        )
+        assert request["tools"] == [{"googleSearch": {}}]
+
     def test_transform_image_generation_request_with_candidate_count(self):
         """Test request transformation with candidate_count"""
         request = self.config.transform_image_generation_request(
