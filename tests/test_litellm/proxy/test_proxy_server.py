@@ -6609,7 +6609,12 @@ async def test_increment_spend_counters_finalizes_none_cost_reservation():
 
 
 @pytest.mark.asyncio
-async def test_increment_spend_counters_invalidates_bad_reserved_counter_without_failing():
+async def test_increment_spend_counters_falls_back_to_direct_increment_on_bad_reserved_counter():
+    """When the reservation reconcile fails, the reserved counters are
+    invalidated and the actual response cost must still be written via the
+    direct increment fallback. Leaving the counter at ``None`` lets the next
+    request reseed a stale value from the DB and silently stops budget gating,
+    which is the bug this fix addresses."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.proxy_server import increment_spend_counters
 
@@ -6650,7 +6655,7 @@ async def test_increment_spend_counters_invalidates_bad_reserved_counter_without
             counter_cache.in_memory_cache.get_cache(
                 key="spend:key:key-bad-reserved-counter"
             )
-            is None
+            == 0.25
         )
     finally:
         ps.spend_counter_cache = orig_counter
