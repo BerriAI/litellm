@@ -259,11 +259,15 @@ def test_extract_uses_model_info_with_deployment_flag():
 # response_cost_calculator — custom_cost_per_second threading
 # ---------------------------------------------------------------------------
 def test_response_cost_calculator_honors_custom_cost_per_second():
-    """Per-second custom pricing is threaded through the cost calculator."""
-    response = _make_model_response("gpt-4o", prompt_tokens=100, completion_tokens=0)
+    r"""Per-second custom pricing is threaded through the cost calculator.
 
-    # total_time (ms) is needed alongside custom_cost_per_second so
-    # completion_cost can compute cost = rate * total_time_ms / 1000.
+    completion_cost reads timing from _response_ms on the
+    response object, so timing must be set there for per-second billing.
+    """
+    response = _make_model_response("gpt-4o", prompt_tokens=100, completion_tokens=0)
+    response._response_ms = 5000.0
+
+    # 0.01 $/s * 5 s = 0.05
     cost = litellm.response_cost_calculator(
         response_object=response,
         model="gpt-4o",
@@ -273,10 +277,8 @@ def test_response_cost_calculator_honors_custom_cost_per_second():
         custom_pricing=True,
         router_model_id="id-not-in-model-cost",
         custom_cost_per_second=0.01,
-        total_time=5000.0,
     )
 
-    # 0.01 * 5000 / 1000 = 0.05
     assert cost == pytest.approx(0.05)
 
 
