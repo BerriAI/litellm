@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { Modal, Input, Typography } from "antd";
+import { useTranslation } from "react-i18next";
 import { fetchDiscoverableMCPServers } from "../networking";
 import { DiscoverableMCPServer, DiscoverMCPServersResponse } from "./types";
 import { mcpLogoImg } from "./create_mcp_server";
@@ -30,6 +31,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
   onCustomServer,
   accessToken,
 }) => {
+  const { t } = useTranslation();
   const [servers, setServers] = useState<DiscoverableMCPServer[]>([]);
   const [categories, setCategories] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -47,7 +49,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
           setCategories(data.categories || []);
         })
         .catch((err: Error) => {
-          setError(err.message || "Failed to load MCP servers");
+          setError(err.message || t("mcpTools.mcpDiscovery.failedToLoadServers"));
         })
         .finally(() => {
           setLoading(false);
@@ -105,13 +107,13 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
                 objectFit: "contain",
               }}
             />
-            <h2 className="text-xl font-semibold text-gray-900">Add MCP Server</h2>
+            <h2 className="text-xl font-semibold text-gray-900">{t("mcpTools.mcpDiscovery.title")}</h2>
           </div>
           <button
             onClick={onCustomServer}
             className="text-sm text-blue-600 hover:text-blue-800 cursor-pointer bg-transparent border-none font-medium"
           >
-            + Custom Server
+            {t("mcpTools.mcpDiscovery.customServer")}
           </button>
         </div>
       }
@@ -153,7 +155,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
 
       {/* Search */}
       <Search
-        placeholder="Search servers..."
+        placeholder={t("mcpTools.mcpDiscovery.searchPlaceholder")}
         value={searchQuery}
         onChange={(e) => setSearchQuery(e.target.value)}
         style={{ marginBottom: 16 }}
@@ -178,16 +180,16 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
 
       {error && (
         <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
-          <Text>Failed to load servers: {error}</Text>
+          <Text>{t("mcpTools.mcpDiscovery.failedToLoadServersError", { error })}</Text>
         </div>
       )}
 
       {!loading && !error && filteredServers.length === 0 && (
         <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
           <Text>
-            No servers found.{" "}
+            {t("mcpTools.mcpDiscovery.noServersFound")}{" "}
             <a onClick={onCustomServer} style={{ color: "#2563eb", cursor: "pointer" }}>
-              Add a custom server
+              {t("mcpTools.mcpDiscovery.addCustomServer")}
             </a>
           </Text>
         </div>
