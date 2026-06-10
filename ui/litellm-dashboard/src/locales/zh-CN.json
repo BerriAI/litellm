@@ -8048,5 +8048,30 @@
       "loadingKeys": "🚅 正在加载密钥...",
       "noDeletedKeys": "未找到已删除密钥"
     }
+  },
+  "deletedTeams": {
+    "deletedTeamsPage": {
+      "comingSoonToEnterprise": "即将登陆企业版",
+      "enterpriseAuditDescription": "已删除团队审计功能正从 beta 版升级为企业版审计与合规套件的正式功能。"
+    },
+    "deletedTeamsTable": {
+      "colTeamName": "团队名称",
+      "colTeamId": "团队 ID",
+      "colCreated": "创建时间",
+      "colSpend": "花费（USD）",
+      "colBudget": "预算（USD）",
+      "colModels": "模型",
+      "colOrganization": "组织",
+      "colDeletedAt": "删除时间",
+      "colDeletedBy": "删除人",
+      "noLimit": "无限制",
+      "allProxyModels": "所有代理模型",
+      "moreModels_one": "+{{count}} 个更多模型",
+      "moreModels_other": "+{{count}} 个更多模型",
+      "showingTeams_one": "显示 {{count}} 个团队",
+      "showingTeams_other": "显示 {{count}} 个团队",
+      "loadingTeams": "🚅 正在加载团队...",
+      "noDeletedTeams": "未找到已删除团队"
+    }
   }
 }

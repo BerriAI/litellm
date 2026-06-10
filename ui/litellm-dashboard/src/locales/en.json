@@ -8048,5 +8048,30 @@
       "loadingKeys": "🚅 Loading keys...",
       "noDeletedKeys": "No deleted keys found"
     }
+  },
+  "deletedTeams": {
+    "deletedTeamsPage": {
+      "comingSoonToEnterprise": "Coming soon to Enterprise",
+      "enterpriseAuditDescription": "Deleted team auditing is graduating from beta into our Enterprise audit & compliance suite."
+    },
+    "deletedTeamsTable": {
+      "colTeamName": "Team Name",
+      "colTeamId": "Team ID",
+      "colCreated": "Created",
+      "colSpend": "Spend (USD)",
+      "colBudget": "Budget (USD)",
+      "colModels": "Models",
+      "colOrganization": "Organization",
+      "colDeletedAt": "Deleted At",
+      "colDeletedBy": "Deleted By",
+      "noLimit": "No limit",
+      "allProxyModels": "All Proxy Models",
+      "moreModels_one": "+{{count}} more model",
+      "moreModels_other": "+{{count}} more models",
+      "showingTeams_one": "Showing {{count}} team",
+      "showingTeams_other": "Showing {{count}} teams",
+      "loadingTeams": "🚅 Loading teams...",
+      "noDeletedTeams": "No deleted teams found"
+    }
   }
 }
