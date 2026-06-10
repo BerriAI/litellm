@@ -12,3 +12,5 @@ migrations/Dockerfile | FROM.*sha256:    | Digest-pinned base image (not ARG-var
 .github/workflows/codeql.yml        | timeout-minutes: 90                       | CodeQL analyze job timeout raised 30->90 min so python leg completes
 .github/codeql/codeql-config.yml    | py/log-injection                          | Exclude CWE-117 query: taint explosion from pervasive logging; same scaling class as py/clear-text-logging-sensitive-data
 .github/workflows/alert-bridge.yml  | workflow_dispatch                          | Alert bridge for code-scanning triage; re-apply after -X theirs syncs that wipe .github/workflows/
+.github/workflows/alert-bridge.yml  | FORCE_JAVASCRIPT_ACTIONS_TO_NODE24         | Opt in to Node.js 24 runtime before GitHub's 2026-06-16 forced migration (upload-artifact@v4 is a Node 20 action)
+.github/codeql/codeql-config.yml    | cookbook                                   | paths-ignore: cookbook/ and scripts/benchmark_* are example/benchmark code; excluded to prevent FP CodeQL alerts (py/reflective-xss #953, py/regex-injection #952, py/clear-text-storage #979 #980)

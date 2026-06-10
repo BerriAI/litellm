@@ -45,6 +45,10 @@ paths-ignore:
   # Standalone demo pages, not shipped product. Source of the
   # js/clear-text-storage-of-sensitive-data and js/insecure-randomness highs.
   - "scripts/adaptive_router_demo"
+  # Example/demo servers and benchmark scripts — not deployed product code.
+  # py/reflective-xss and py/regex-injection FPs surfaced from these paths.
+  - "cookbook"
+  - "scripts/benchmark_*"
   # js/clear-text-storage-of-sensitive-data FP: the MCP OAuth access token is
   # held in per-tab window.sessionStorage with a short TTL because the SPA must
   # read it from JS to call MCP servers. sessionStorage is the standard place
