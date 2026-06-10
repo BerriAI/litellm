@@ -225,6 +225,13 @@ healthcheck = [
     "httpx==0.28.1",
     "pyyaml==6.0.3",
 ]
+mock-server = [
+    # Extra deps required by the vendored mock OpenAI endpoint under
+    # tests/mock_endpoints/example_openai_endpoint/. Most of its deps (fastapi,
+    # uvicorn, pydantic, python-multipart, python-dotenv, websockets) are
+    # already pulled in by the proxy / dev groups; slowapi is the one extra.
+    "slowapi==0.1.9",
+]
 
 [build-system]
 requires = ["uv_build==0.11.8"]

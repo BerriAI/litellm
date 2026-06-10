@@ -32,6 +32,7 @@ jobs:
         tests/test_litellm/repositories
         tests/test_litellm/images
         tests/test_litellm/interactions
+        tests/test_litellm/mock_endpoints
         tests/test_litellm/passthrough
         tests/test_litellm/vector_stores
         tests/test_litellm/test_*.py

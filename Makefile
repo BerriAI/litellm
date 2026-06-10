@@ -5,8 +5,8 @@
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
 	info lint lint-dev format \
-	install-dev install-proxy-dev install-test-deps \
-	install-helm-unittest check-circular-imports check-import-safety
+	install-dev install-proxy-dev install-test-deps install-mock-server \
+	mock-server install-helm-unittest check-circular-imports check-import-safety
 
 # Default target
 help:
@@ -17,6 +17,7 @@ help:
 	@echo "  make install-proxy-dev-ci - Install proxy dev dependencies (CI-compatible)"
 	@echo "  make install-test-deps  - Install the full local test environment"
 	@echo "  make install-helm-unittest - Install helm unittest plugin"
+	@echo "  make mock-server        - Run the vendored mock OpenAI endpoint locally (PORT=8090)"
 	@echo "  make format             - Apply Black code formatting"
 	@echo "  make format-check       - Check Black code formatting (matches CI)"
 	@echo "  make lint               - Run all linting (Ruff, MyPy, Black check, circular imports, import safety)"
@@ -67,6 +68,16 @@ install-test-deps: install-proxy-dev
 
 install-helm-unittest:
 	helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.4.4 || echo "ignore error if plugin exists"
+
+# Mock OpenAI/Anthropic/Vertex endpoint server (vendored copy of
+# BerriAI/example_openai_endpoint). Use this to run tests offline / without
+# relying on the Railway-hosted deployment.
+install-mock-server:
+	$(UV) sync --group mock-server --group proxy-dev --extra proxy
+
+mock-server: install-mock-server
+	@echo "Starting mock OpenAI endpoint on http://0.0.0.0:$${PORT:-8090} (Ctrl+C to stop)"
+	$(UV_RUN) python tests/mock_endpoints/example_openai_endpoint/main.py
 
 # Formatting
 format: install-dev
