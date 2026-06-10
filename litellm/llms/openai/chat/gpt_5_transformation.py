@@ -103,10 +103,16 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_4_plus_model(cls, model: str) -> bool:
-        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro)."""
+        """Check if the model is gpt-5.4 or newer (5.4, 5.5, 5.6, etc., including pro).
+
+        Handles custom deployment names with prefixes (e.g. Azure deployments
+        like ``my-prefix-gpt-5.5``) by locating ``gpt-5.`` inside the name.
+        """
         model_name = model.split("/")[-1]
-        if not model_name.startswith("gpt-5."):
+        idx = model_name.find("gpt-5.")
+        if idx == -1:
             return False
+        model_name = model_name[idx:]
         try:
             version_str = model_name.replace("gpt-5.", "").split("-")[0]
             major = version_str.split(".")[0]
