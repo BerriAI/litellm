@@ -3972,6 +3972,94 @@
       "toolsetsExample": "<strong>示例：</strong>一个「GitHub 只读」工具集可能只包含来自 GitHub MCP 服务器的 <code>list_repos</code> 和 <code>get_file</code>——防止 Agent 进行写操作。",
       "toolsetsCreatingTitle": "创建工具集：",
       "toolsetsCreatingDesc": "管理员可以从 <strong>MCP</strong> 页面 → <strong>工具集</strong>标签页创建和管理工具集。工具集随后可分配给密钥和团队以限定其工具访问范围。"
+    },
+    "codeInterpreterOutput": {
+      "pythonCodeExecuted": "已执行的 Python 代码",
+      "loadingImage": "图片加载中...",
+      "generatedChart": "生成的图表",
+      "imageNotAvailable": "图片不可用"
+    },
+    "codeInterpreterTool": {
+      "title": "代码解释器",
+      "tooltipDesc": "运行 Python 代码以生成文件、图表并分析数据。容器将自动创建。",
+      "onlyOpenAIWarning": "代码解释器仅适用于 OpenAI 模型",
+      "onlyOpenAINotice": "代码解释器目前仅支持 OpenAI 模型。",
+      "requestSupportLink": "申请支持其他提供商"
+    },
+    "filePreviewCard": {
+      "uploadPreview": "上传预览",
+      "pdf": "PDF",
+      "image": "图片"
+    },
+    "mcpEventsDisplay": {
+      "listTools": "列出工具",
+      "toolCall": "工具调用",
+      "request": "请求",
+      "approved": "已批准",
+      "response": "响应"
+    },
+    "realtimePlayground": {
+      "title": "实时语音对话",
+      "selectModelFirst": "请先选择一个模型",
+      "connectedToApi": "已连接到实时 API",
+      "wsError": "错误：{{error}}",
+      "websocketError": "WebSocket 错误",
+      "disconnected": "已断开",
+      "connectionFailed": "连接失败：{{error}}",
+      "listening": "🎙️ 正在监听...",
+      "microphoneError": "麦克风错误：{{error}}",
+      "connected": "已连接",
+      "connecting": "连接中...",
+      "disconnectedStatus": "已断开",
+      "connect": "连接",
+      "disconnect": "断开",
+      "emptyTitle": "实时语音 Playground",
+      "emptyHint": "点击「连接」开始实时会话。您可以使用麦克风说话或输入文字，AI 将以语音和文字回复。",
+      "you": "您",
+      "ai": "AI",
+      "stopRecording": "停止录音",
+      "startRecording": "开始录音",
+      "inputPlaceholder": "输入消息或使用麦克风...",
+      "listeningHint": "正在监听 — 请对麦克风说话，服务器 VAD 将检测您何时停止说话。"
+    },
+    "responseMetrics": {
+      "timeToFirstToken": "首 Token 时间",
+      "totalLatency": "总延迟",
+      "promptTokens": "提示词 Token",
+      "completionTokens": "补全 Token",
+      "reasoningTokens": "推理 Token",
+      "totalTokens": "总 Token",
+      "cost": "费用",
+      "toolUsed": "使用的工具",
+      "ttft": "TTFT：{{value}}s",
+      "totalLatencyValue": "总延迟：{{value}}s",
+      "in": "输入：{{count}}",
+      "out": "输出：{{count}}",
+      "reasoning": "推理：{{count}}",
+      "total": "总计：{{count}}",
+      "toolName": "工具：{{name}}"
+    },
+    "searchResultsDisplay": {
+      "hideSources": "隐藏来源",
+      "showSources": "显示来源（{{count}}）",
+      "query": "查询：",
+      "resultCount_one": "{{count}} 条结果",
+      "resultCount_other": "{{count}} 条结果",
+      "metadata": "元数据："
+    },
+    "sessionManagement": {
+      "title": "会话管理",
+      "toggleTooltip": "在 LiteLLM API 会话管理（使用 previous_response_id）和基于 UI 的会话管理（使用聊天历史）之间选择",
+      "copiedToClipboard": "响应 ID 已复制到剪贴板！",
+      "apiSessionReady": "API 会话：就绪",
+      "uiSessionReady": "UI 会话：就绪",
+      "responseIdPrefix": "响应 ID",
+      "uiSessionPrefix": "UI 会话",
+      "apiSessionReadyDesc": "LiteLLM 将使用 previous_response_id 管理会话",
+      "uiSessionReadyDesc": "UI 将使用聊天历史管理会话",
+      "apiSessionActiveDesc": "LiteLLM API 会话活跃 - 上下文在服务端维护",
+      "uiSessionActiveDesc": "UI 会话活跃 - 上下文在客户端维护",
+      "copyTooltipTitle": "复制响应 ID 以继续会话："
     }
   }
 }

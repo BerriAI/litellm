@@ -3972,6 +3972,94 @@
       "toolsetsExample": "<strong>Example:</strong> A \"GitHub Read-only\" toolset might include only <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server — preventing agents from making writes.",
       "toolsetsCreatingTitle": "Creating toolsets:",
       "toolsetsCreatingDesc": "Admins can create and manage toolsets from the <strong>MCP</strong> page → <strong>Toolsets</strong> tab. Toolsets can then be assigned to keys and teams to scope their tool access."
+    },
+    "codeInterpreterOutput": {
+      "pythonCodeExecuted": "Python Code Executed",
+      "loadingImage": "Loading image...",
+      "generatedChart": "Generated chart",
+      "imageNotAvailable": "Image not available"
+    },
+    "codeInterpreterTool": {
+      "title": "Code Interpreter",
+      "tooltipDesc": "Run Python code to generate files, charts, and analyze data. Container is created automatically.",
+      "onlyOpenAIWarning": "Code Interpreter is only available for OpenAI models",
+      "onlyOpenAINotice": "Code Interpreter is currently only supported for OpenAI models.",
+      "requestSupportLink": "Request support for other providers"
+    },
+    "filePreviewCard": {
+      "uploadPreview": "Upload preview",
+      "pdf": "PDF",
+      "image": "Image"
+    },
+    "mcpEventsDisplay": {
+      "listTools": "List tools",
+      "toolCall": "Tool call",
+      "request": "Request",
+      "approved": "Approved",
+      "response": "Response"
+    },
+    "realtimePlayground": {
+      "title": "Realtime Voice Chat",
+      "selectModelFirst": "Please select a model first",
+      "connectedToApi": "Connected to realtime API",
+      "wsError": "Error: {{error}}",
+      "websocketError": "WebSocket error",
+      "disconnected": "Disconnected",
+      "connectionFailed": "Connection failed: {{error}}",
+      "listening": "🎙️ Listening...",
+      "microphoneError": "Microphone error: {{error}}",
+      "connected": "Connected",
+      "connecting": "Connecting...",
+      "disconnectedStatus": "Disconnected",
+      "connect": "Connect",
+      "disconnect": "Disconnect",
+      "emptyTitle": "Realtime Voice Playground",
+      "emptyHint": "Click Connect to start a realtime session. You can speak using your microphone or type messages. The AI will respond with voice and text.",
+      "you": "You",
+      "ai": "AI",
+      "stopRecording": "Stop recording",
+      "startRecording": "Start recording",
+      "inputPlaceholder": "Type a message or use the mic...",
+      "listeningHint": "Listening — speak into your microphone. Server VAD will detect when you stop."
+    },
+    "responseMetrics": {
+      "timeToFirstToken": "Time to first token",
+      "totalLatency": "Total latency",
+      "promptTokens": "Prompt tokens",
+      "completionTokens": "Completion tokens",
+      "reasoningTokens": "Reasoning tokens",
+      "totalTokens": "Total tokens",
+      "cost": "Cost",
+      "toolUsed": "Tool used",
+      "ttft": "TTFT: {{value}}s",
+      "totalLatencyValue": "Total Latency: {{value}}s",
+      "in": "In: {{count}}",
+      "out": "Out: {{count}}",
+      "reasoning": "Reasoning: {{count}}",
+      "total": "Total: {{count}}",
+      "toolName": "Tool: {{name}}"
+    },
+    "searchResultsDisplay": {
+      "hideSources": "Hide sources",
+      "showSources": "Show sources ({{count}})",
+      "query": "Query:",
+      "resultCount_one": "{{count}} result",
+      "resultCount_other": "{{count}} results",
+      "metadata": "Metadata:"
+    },
+    "sessionManagement": {
+      "title": "Session Management",
+      "toggleTooltip": "Choose between LiteLLM API session management (using previous_response_id) or UI-based session management (using chat history)",
+      "copiedToClipboard": "Response ID copied to clipboard!",
+      "apiSessionReady": "API Session: Ready",
+      "uiSessionReady": "UI Session: Ready",
+      "responseIdPrefix": "Response ID",
+      "uiSessionPrefix": "UI Session",
+      "apiSessionReadyDesc": "LiteLLM will manage session using previous_response_id",
+      "uiSessionReadyDesc": "UI will manage session using chat history",
+      "apiSessionActiveDesc": "LiteLLM API session active - context maintained server-side",
+      "uiSessionActiveDesc": "UI session active - context maintained client-side",
+      "copyTooltipTitle": "Copy response ID to continue session:"
     }
   }
 }
