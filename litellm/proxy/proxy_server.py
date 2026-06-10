@@ -7080,6 +7080,72 @@ async def _iter_with_keepalive(aiter, keepalive_seconds: float):
                 pass
 
 
+def _keepalive_from_deployment_config(request_data: dict, response: Any) -> Any:
+    """Look up a deployment-level ``litellm_params.keepalive_seconds`` default.
+
+    Prefers the exact deployment that served this request (by ``model_id`` from
+    ``response._hidden_params``, an O(1) router lookup). Falls back to resolving
+    by ``model`` name via ``get_model_list`` (alias/wildcard/team aware) when
+    the response doesn't carry a ``model_id`` (e.g. some streaming response
+    types). Returns the raw value (possibly ``None``) for the caller to coerce.
+    """
+    if llm_router is None:
+        return None
+
+    hidden = getattr(response, "_hidden_params", None)
+    model_id = hidden.get("model_id") if isinstance(hidden, dict) else None
+    if model_id:
+        deployment = llm_router.get_deployment(model_id=model_id)
+        if deployment is not None:
+            # ``litellm_params`` is a pydantic model with ``extra="allow"``, so
+            # a custom field like ``keepalive_seconds`` is reached via getattr,
+            # not ``.get()``.
+            return getattr(deployment.litellm_params, "keepalive_seconds", None)
+
+    for deployment_dict in (
+        llm_router.get_model_list(model_name=request_data.get("model")) or []
+    ):
+        raw = (deployment_dict.get("litellm_params") or {}).get("keepalive_seconds")
+        if raw is not None:
+            return raw
+    return None
+
+
+def _resolve_keepalive_seconds(request_data: dict, response: Any = None) -> float:
+    """Resolve the SSE keepalive interval for a streaming request.
+
+    Resolution order:
+        1. Explicit ``request_data["keepalive_seconds"]`` (if set).
+        2. The routed deployment's ``litellm_params.keepalive_seconds`` default.
+        3. ``0`` (disabled).
+
+    An explicit request ``0`` disables the heartbeat even when the deployment
+    sets a default — the request always overrides config. When enabled
+    (``> 0``) the result is clamped to
+    ``[_KEEPALIVE_MIN_SECONDS, _KEEPALIVE_MAX_SECONDS]``; values outside the
+    band are clamped (not rejected) so existing callers don't break.
+    """
+    raw = request_data.get("keepalive_seconds")
+    if raw is None:
+        raw = _keepalive_from_deployment_config(request_data, response)
+    try:
+        value = float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if value <= 0:
+        return 0.0  # disabled — never clamp up to the minimum
+    clamped = max(_KEEPALIVE_MIN_SECONDS, min(value, _KEEPALIVE_MAX_SECONDS))
+    if clamped != value:
+        verbose_proxy_logger.info(
+            "keepalive_seconds=%s clamped to %s [min=%s, max=%s]",
+            value,
+            clamped,
+            _KEEPALIVE_MIN_SECONDS,
+            _KEEPALIVE_MAX_SECONDS,
+        )
+    return clamped
+
+
 async def async_data_generator(  # noqa: PLR0915
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -7115,36 +7181,19 @@ async def async_data_generator(  # noqa: PLR0915
         else:
             stream_iterator = response
 
-        # Optional client-controlled SSE keepalive: when ``keepalive_seconds``
-        # > 0 is set on the request, emit an SSE comment (``: ping``) if no
-        # upstream chunk arrives within that interval. Useful when an
+        # Optional SSE keepalive: emit an SSE comment (``: ping``) if no
+        # upstream chunk arrives within the resolved interval. Useful when an
         # intermediary proxy (e.g. an L7 inference proxy, ALB, nginx) cuts
         # idle streams while the model is generating but producing
         # filtered-out chunks (e.g. Anthropic ``ping`` events that the OpenAI
-        # translation layer maps to empty chunks and then drops). Absent or
-        # 0 -> no keepalive, no behaviour change vs. the upstream fast path.
-        try:
-            _ka_secs = float(request_data.get("keepalive_seconds") or 0)
-        except (TypeError, ValueError):
-            _ka_secs = 0.0
+        # translation layer maps to empty chunks and then drops). Resolves
+        # from the request (``keepalive_seconds``) first, then the routed
+        # deployment's ``litellm_params.keepalive_seconds``, otherwise 0
+        # (disabled) — see ``_resolve_keepalive_seconds`` for clamping rules.
+        _ka_secs = _resolve_keepalive_seconds(request_data, response)
         if _ka_secs > 0:
-            # Clamp to ``[_KEEPALIVE_MIN_SECONDS, _KEEPALIVE_MAX_SECONDS]``
-            # so a hostile/buggy caller cannot busy-loop heartbeats with a
-            # tiny interval, and cannot disable the heartbeat semantically
-            # via an unreasonably long interval.
-            _ka_clamped = max(
-                _KEEPALIVE_MIN_SECONDS, min(_ka_secs, _KEEPALIVE_MAX_SECONDS)
-            )
-            if _ka_clamped != _ka_secs:
-                verbose_proxy_logger.info(
-                    "keepalive_seconds=%s clamped to %s [min=%s, max=%s]",
-                    _ka_secs,
-                    _ka_clamped,
-                    _KEEPALIVE_MIN_SECONDS,
-                    _KEEPALIVE_MAX_SECONDS,
-                )
             stream_iterator = _iter_with_keepalive(
-                stream_iterator.__aiter__(), _ka_clamped
+                stream_iterator.__aiter__(), _ka_secs
             )
 
         async for chunk in stream_iterator:

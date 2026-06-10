@@ -383,6 +383,217 @@ def test_keepalive_seconds_below_minimum_is_clamped_up():
     assert data_lines == ["data: first\n\n", "data: second\n\n", "data: [DONE]\n\n"]
 
 
+def _make_deployment_obj(keepalive_seconds):
+    """Stand-in for ``router.get_deployment(model_id=...)`` return value: an
+    object with a ``litellm_params`` attribute that itself exposes the custom
+    ``keepalive_seconds`` field via ``getattr`` (matching the real pydantic
+    ``extra="allow"`` shape)."""
+    params = MagicMock(name="litellm_params")
+    # ``getattr(params, "keepalive_seconds", None)`` on a MagicMock returns
+    # another MagicMock by default — force the attribute explicitly so the
+    # ``getattr`` lookup returns the value we want (incl. None).
+    params.keepalive_seconds = keepalive_seconds
+    deployment = MagicMock(name="deployment")
+    deployment.litellm_params = params
+    return deployment
+
+
+def test_resolve_keepalive_request_value_wins_over_deployment_default():
+    """When the request supplies ``keepalive_seconds``, the deployment-level
+    default is never consulted — request always overrides config."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    fake_router = MagicMock(name="llm_router")
+    fake_router.get_deployment.return_value = _make_deployment_obj(60.0)
+    fake_router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 60.0}}
+    ]
+
+    with patch.object(proxy_server_module, "llm_router", fake_router):
+        # Request value (5.0) wins over both deployment paths (60.0).
+        resolved = proxy_server_module._resolve_keepalive_seconds(
+            request_data={"model": "gpt-3.5-turbo", "keepalive_seconds": 5.0},
+            response=MagicMock(_hidden_params={"model_id": "dep-id-1"}),
+        )
+
+    assert resolved == 5.0
+    # Deployment lookup must not have been consulted at all.
+    fake_router.get_deployment.assert_not_called()
+    fake_router.get_model_list.assert_not_called()
+
+
+def test_resolve_keepalive_falls_back_to_deployment_via_model_id():
+    """When the request has no ``keepalive_seconds`` and the response carries a
+    ``model_id`` in ``_hidden_params``, the resolver looks up that exact
+    deployment via ``router.get_deployment(model_id=...)`` (the O(1) path)."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    fake_router = MagicMock(name="llm_router")
+    fake_router.get_deployment.return_value = _make_deployment_obj(42.0)
+    # If this is touched we know the fallback path was taken when it
+    # shouldn't have been.
+    fake_router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 999.0}}
+    ]
+
+    with patch.object(proxy_server_module, "llm_router", fake_router):
+        resolved = proxy_server_module._resolve_keepalive_seconds(
+            request_data={"model": "gpt-3.5-turbo"},
+            response=MagicMock(_hidden_params={"model_id": "dep-id-1"}),
+        )
+
+    assert resolved == 42.0
+    fake_router.get_deployment.assert_called_once_with(model_id="dep-id-1")
+    # The model-name fallback path is only used when ``get_deployment`` fails
+    # to resolve.
+    fake_router.get_model_list.assert_not_called()
+
+
+def test_resolve_keepalive_falls_back_to_model_name_when_no_model_id():
+    """When the response has no ``_hidden_params["model_id"]`` (some streaming
+    response types don't carry it), the resolver falls back to
+    ``router.get_model_list(model_name=...)`` — alias/wildcard/team aware."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    fake_router = MagicMock(name="llm_router")
+    fake_router.get_model_list.return_value = [
+        {"litellm_params": {"keepalive_seconds": 30.0}}
+    ]
+
+    with patch.object(proxy_server_module, "llm_router", fake_router):
+        resolved = proxy_server_module._resolve_keepalive_seconds(
+            request_data={"model": "gpt-3.5-turbo"},
+            response=MagicMock(spec=[]),  # no _hidden_params attribute
+        )
+
+    assert resolved == 30.0
+    fake_router.get_model_list.assert_called_once_with(model_name="gpt-3.5-turbo")
+
+
+def test_resolve_keepalive_zero_in_request_disables_even_with_deployment_default():
+    """An explicit ``keepalive_seconds=0`` in the request disables the heartbeat
+    even when the deployment has a non-zero default — the request always wins,
+    including for the "disable" case."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    fake_router = MagicMock(name="llm_router")
+    fake_router.get_deployment.return_value = _make_deployment_obj(60.0)
+
+    with patch.object(proxy_server_module, "llm_router", fake_router):
+        resolved = proxy_server_module._resolve_keepalive_seconds(
+            request_data={"model": "gpt-3.5-turbo", "keepalive_seconds": 0},
+            response=MagicMock(_hidden_params={"model_id": "dep-id-1"}),
+        )
+
+    assert resolved == 0.0
+    # Deployment must not be consulted — request 0 short-circuits.
+    fake_router.get_deployment.assert_not_called()
+
+
+def test_resolve_keepalive_returns_zero_when_router_is_none():
+    """No router (e.g. proxy started without a config / model_list) — no
+    fallback is possible, resolver returns 0 (disabled)."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    with patch.object(proxy_server_module, "llm_router", None):
+        resolved = proxy_server_module._resolve_keepalive_seconds(
+            request_data={"model": "gpt-3.5-turbo"},
+            response=MagicMock(),
+        )
+
+    assert resolved == 0.0
+
+
+def test_resolve_keepalive_clamps_deployment_default_too():
+    """The clamp must apply regardless of where the value came from — a
+    deployment config with an out-of-band default still gets clamped."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    fake_router = MagicMock(name="llm_router")
+    fake_router.get_deployment.return_value = _make_deployment_obj(999999.0)
+
+    with (
+        patch.object(proxy_server_module, "llm_router", fake_router),
+        patch.object(proxy_server_module, "_KEEPALIVE_MAX_SECONDS", 60.0),
+    ):
+        resolved = proxy_server_module._resolve_keepalive_seconds(
+            request_data={"model": "gpt-3.5-turbo"},
+            response=MagicMock(_hidden_params={"model_id": "dep-id-1"}),
+        )
+
+    assert resolved == 60.0
+
+
+def test_async_data_generator_uses_deployment_config_keepalive():
+    """End-to-end: with no ``keepalive_seconds`` on the request but a
+    deployment-level default, ``async_data_generator`` emits ``: ping``
+    heartbeats when the upstream stalls. Proves the resolver is wired
+    into the streaming generator and not just unit-callable."""
+    from litellm.proxy import proxy_server as proxy_server_module
+
+    inner = _slow_chunk_stream(
+        chunks=["first", "second"],
+        stall_before_index=1,
+        stall_seconds=0.3,
+    )
+
+    # Wrap the async generator in a class that also carries ``_hidden_params``
+    # so the resolver's O(1) path (``router.get_deployment(model_id=...)``)
+    # is exercised — raw async generators don't allow attribute assignment.
+    class _UpstreamWithHiddenParams:
+        def __init__(self, gen, hidden_params):
+            self._gen = gen
+            self._hidden_params = hidden_params
+
+        def __aiter__(self):
+            return self._gen.__aiter__()
+
+    upstream = _UpstreamWithHiddenParams(inner, {"model_id": "dep-id-1"})
+
+    fake_router = MagicMock(name="llm_router")
+    fake_router.get_deployment.return_value = _make_deployment_obj(0.1)
+
+    request_data = _make_request_data(keepalive_seconds=None)
+    user_api_key_dict = MagicMock(name="user_api_key_dict")
+
+    fake_logging = MagicMock(name="proxy_logging_obj")
+    fake_logging.needs_iterator_wrap.return_value = False
+    fake_logging.needs_per_chunk_streaming_hook.return_value = False
+
+    with (
+        patch.object(proxy_server_module, "proxy_logging_obj", fake_logging),
+        patch.object(proxy_server_module, "llm_router", fake_router),
+        patch.object(
+            proxy_server_module,
+            "_get_client_requested_model_for_streaming",
+            return_value=None,
+        ),
+        patch.object(
+            proxy_server_module.ProxyLogging,
+            "_fire_deferred_stream_logging",
+            return_value=None,
+        ),
+        # Lower the server-side minimum so this test can run sub-second
+        # (same trick as ``test_keepalive_emits_ping_when_upstream_stalls``).
+        patch.object(proxy_server_module, "_KEEPALIVE_MIN_SECONDS", 0.05),
+    ):
+        emitted = _run(
+            _collect(
+                proxy_server_module.async_data_generator(
+                    response=upstream,
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=request_data,
+                )
+            )
+        )
+
+    pings = [e for e in emitted if e == ": ping\n\n"]
+    assert len(pings) >= 2, (
+        f"deployment-level keepalive_seconds=0.1 should trigger heartbeats "
+        f"during the 0.3s upstream stall; got {len(pings)} pings. full: {emitted!r}"
+    )
+
+
 def test_keepalive_seconds_above_maximum_is_clamped_down():
     """An interval longer than ``_KEEPALIVE_MAX_SECONDS`` would defeat the
     heartbeat (the intermediary proxy times out before our first ping).
