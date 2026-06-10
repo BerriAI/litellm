@@ -88,7 +88,9 @@ class TinyfishSearchConfig(BaseSearchConfig):
             request_data["location"] = optional_params["country"]
 
         if "max_results" in optional_params:
-            request_data["max_results"] = min(int(optional_params["max_results"]), 20)
+            request_data["max_results"] = max(
+                1, min(int(optional_params["max_results"]), 20)
+            )
 
         if "search_domain_filter" in optional_params:
             domains = optional_params["search_domain_filter"]
