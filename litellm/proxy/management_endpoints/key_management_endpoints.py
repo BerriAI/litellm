@@ -1850,11 +1850,10 @@ async def prepare_key_update_data(
 
     if "budget_duration" in non_default_values:
         budget_duration = non_default_values.pop("budget_duration")
-        if (
-            budget_duration
-            and (isinstance(budget_duration, str))
-            and len(budget_duration) > 0
-        ):
+        if budget_duration is None:
+            non_default_values["budget_duration"] = None
+            non_default_values["budget_reset_at"] = None
+        elif isinstance(budget_duration, str) and len(budget_duration) > 0:
             from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 
             key_reset_at = get_budget_reset_time(budget_duration=budget_duration)
@@ -2518,7 +2517,7 @@ async def update_key_fn(  # noqa: PLR0915
                 },
             )
 
-        data_json: dict = data.model_dump(exclude_unset=True, exclude_none=True)
+        data_json: dict = data.model_dump(exclude_unset=True)
         key = data_json.pop("key")
 
         # get the row from db

@@ -11668,3 +11668,84 @@ async def test_ghsa_q775_default_team_id_does_not_grant_session_token_exemption(
         msg = str(getattr(err, "detail", "")) + str(getattr(err, "message", ""))
         assert str(code) == "400"
         assert "cannot exceed" in msg.lower()
+
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_duration_null_clears_fields():
+    """
+    When budget_duration is explicitly set to null, prepare_key_update_data
+    should produce budget_duration=None and budget_reset_at=None so Prisma
+    clears them in the DB.
+    """
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=[],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", budget_duration=None)
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert "budget_duration" in result
+    assert result["budget_duration"] is None
+    assert "budget_reset_at" in result
+    assert result["budget_reset_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_duration_not_sent_excluded():
+    """
+    When budget_duration is NOT sent in the request (unset), it should not
+    appear in the result dict at all — the existing DB value stays unchanged.
+    """
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=[],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", models=["gpt-4"])
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert "budget_duration" not in result
+    assert "budget_reset_at" not in result
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_budget_duration_valid_sets_reset():
+    """
+    When budget_duration is set to a valid duration string, both
+    budget_duration and budget_reset_at should be populated.
+    """
+    existing_key = LiteLLM_VerificationToken(
+        token="test-token",
+        key_alias="test-key",
+        models=[],
+        user_id="test-user",
+        team_id=None,
+        metadata={},
+    )
+
+    update_request = UpdateKeyRequest(key="test-token", budget_duration="30d")
+
+    result = await prepare_key_update_data(
+        data=update_request, existing_key_row=existing_key
+    )
+
+    assert result["budget_duration"] == "30d"
+    assert result["budget_reset_at"] is not None
+
+
