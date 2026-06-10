@@ -74,6 +74,25 @@ async def test_user_uid_resolution_priority():
 
 
 @pytest.mark.asyncio
+async def test_proxy_admin_placeholder_is_not_a_user():
+    from litellm.constants import LITELLM_PROXY_ADMIN_NAME
+
+    logger = make_logger()
+
+    await logger.async_log_success_event(
+        make_kwargs(user_id=LITELLM_PROXY_ADMIN_NAME, end_user="cust"),
+        None,
+        None,
+        None,
+    )
+    await logger.async_log_success_event(
+        make_kwargs(user_id=LITELLM_PROXY_ADMIN_NAME), None, None, None
+    )
+
+    assert [record["user_uid"] for record in logger.log_queue] == ["cust", "unknown"]
+
+
+@pytest.mark.asyncio
 async def test_proxy_admin_placeholder_user_id_is_ignored():
     logger = make_logger()
     await logger.async_log_success_event(
