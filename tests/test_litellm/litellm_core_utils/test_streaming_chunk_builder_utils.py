@@ -11,12 +11,14 @@ sys.path.insert(
 from litellm import stream_chunk_builder
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
     Delta,
     Function,
     ModelResponseStream,
     PromptTokensDetails,
+    PromptTokensDetailsWrapper,
     ServerToolUse,
     StreamingChoices,
     Usage,
@@ -323,6 +325,84 @@ def test_cache_read_input_tokens_retained():
     assert usage.cache_creation_input_tokens == 4
     assert usage.cache_read_input_tokens == 11775
     assert usage.prompt_tokens_details.cached_tokens == 11775
+
+
+def test_calculate_usage_retains_cache_creation_token_details():
+    """
+    The 5m/1h cache creation split only arrives in the message_start usage
+    chunk; the final message_delta usage chunk must not clobber it, or 1h
+    cache writes get billed at the 5m rate.
+    """
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-c8889184-careful-fox-12345",
+        created=1745513206,
+        model="claude-opus-4-8",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content=""),
+                logprobs=None,
+            )
+        ],
+        usage=Usage(
+            completion_tokens=1,
+            prompt_tokens=76,
+            total_tokens=77,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=31034,
+                cache_creation_tokens=362,
+                cache_creation_token_details=CacheCreationTokenDetails(
+                    ephemeral_5m_input_tokens=288,
+                    ephemeral_1h_input_tokens=74,
+                ),
+            ),
+            cache_creation_input_tokens=362,
+            cache_read_input_tokens=31034,
+        ),
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-c8889184-careful-fox-12345",
+        created=1745513207,
+        model="claude-opus-4-8",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=None),
+                logprobs=None,
+            )
+        ],
+        usage=Usage(
+            completion_tokens=259,
+            prompt_tokens=0,
+            total_tokens=259,
+            prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=0),
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        ),
+    )
+
+    chunks = [chunk1, chunk2]
+    processor = ChunkProcessor(chunks=chunks)
+
+    usage = processor.calculate_usage(
+        chunks=chunks,
+        model="claude-opus-4-8",
+        completion_output="",
+    )
+
+    assert usage.cache_creation_input_tokens == 362
+    assert usage.cache_read_input_tokens == 31034
+    cache_creation_token_details = (
+        usage.prompt_tokens_details.cache_creation_token_details
+    )
+    assert cache_creation_token_details is not None
+    assert cache_creation_token_details.ephemeral_5m_input_tokens == 288
+    assert cache_creation_token_details.ephemeral_1h_input_tokens == 74
 
 
 def test_stream_chunk_builder_litellm_usage_chunks():

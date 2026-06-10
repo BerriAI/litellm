@@ -7,6 +7,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioDelta,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
     ChatCompletionMessageToolCall,
     Choices,
@@ -587,6 +588,7 @@ class ChunkProcessor:
         completion_tokens = 0
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
+        cache_creation_token_details: Optional[CacheCreationTokenDetails] = None
         cache_read_input_tokens: Optional[int] = None
 
         server_tool_use: Optional[ServerToolUse] = None
@@ -651,6 +653,19 @@ class ChunkProcessor:
                         usage_chunk_dict["prompt_tokens_details"],
                         "web_search_requests",
                     )
+                if (
+                    usage_chunk_dict["prompt_tokens_details"] is not None
+                    and getattr(
+                        usage_chunk_dict["prompt_tokens_details"],
+                        "cache_creation_token_details",
+                        None,
+                    )
+                    is not None
+                ):
+                    cache_creation_token_details = getattr(
+                        usage_chunk_dict["prompt_tokens_details"],
+                        "cache_creation_token_details",
+                    )
 
                 prompt_tokens_details = usage_chunk_dict["prompt_tokens_details"]
 
@@ -658,6 +673,7 @@ class ChunkProcessor:
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
+            cache_creation_token_details=cache_creation_token_details,
             cache_read_input_tokens=cache_read_input_tokens,
             server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
@@ -686,6 +702,9 @@ class ChunkProcessor:
         cache_creation_input_tokens: Optional[int] = calculated_usage_per_chunk[
             "cache_creation_input_tokens"
         ]
+        cache_creation_token_details: Optional[CacheCreationTokenDetails] = (
+            calculated_usage_per_chunk["cache_creation_token_details"]
+        )
         cache_read_input_tokens: Optional[int] = calculated_usage_per_chunk[
             "cache_read_input_tokens"
         ]
@@ -757,6 +776,15 @@ class ChunkProcessor:
                 )
         if prompt_tokens_details is not None:
             returned_usage.prompt_tokens_details = prompt_tokens_details
+        if cache_creation_token_details is not None:
+            if returned_usage.prompt_tokens_details is None:
+                returned_usage.prompt_tokens_details = PromptTokensDetailsWrapper(
+                    cache_creation_token_details=cache_creation_token_details
+                )
+            else:
+                returned_usage.prompt_tokens_details.cache_creation_token_details = (
+                    cache_creation_token_details
+                )
 
         if server_tool_use is not None:
             returned_usage.server_tool_use = server_tool_use
