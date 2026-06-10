@@ -3943,7 +3943,7 @@ if MCP_AVAILABLE:
                     ):
                         _stateful_session_locks.pop(active_request_session_id, None)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
@@ -4057,7 +4057,7 @@ if MCP_AVAILABLE:
             ):
                 await sse_session_manager.handle_request(scope, receive, send)
         except MCPUpstreamAuthError as e:
-            # Pass-through server returned 401 — surface it to the client so
+            # Upstream delegated auth returned 401; surface it to the client so
             # standards-compliant MCP clients trigger the upstream OAuth flow.
             raise e.to_http_exception(
                 base_url=get_request_base_url(StarletteRequest(scope)),
