@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import ToolDiscoveryQueueItem
+from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import ToolRepository
 from litellm.types.tool_management import (
@@ -309,7 +310,11 @@ class ToolPolicyRegistry:
     async def sync_tool_policy_from_db(self, prisma_client: "PrismaClient") -> None:
         """Load all tool policies and object-permission blocked_tools from DB."""
         try:
-            tools = await ToolRepository(prisma_client).table.find_many()
+            tools = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: ToolRepository(prisma_client).table.find_many(),
+                reason="sync_tool_policy_from_db_tools_lookup_failure",
+            )
             self._tool_input_policies = {
                 row.tool_name: getattr(row, "input_policy", "untrusted") or "untrusted"
                 for row in tools
@@ -319,7 +324,11 @@ class ToolPolicyRegistry:
                 for row in tools
             }
 
-            perms = await ObjectPermissionRepository(prisma_client).table.find_many()
+            perms = await call_with_db_reconnect_retry(
+                prisma_client,
+                lambda: ObjectPermissionRepository(prisma_client).table.find_many(),
+                reason="sync_tool_policy_from_db_perms_lookup_failure",
+            )
             self._blocked_tools_by_op_id = {}
             for row in perms:
                 op_id = getattr(row, "object_permission_id", None)
