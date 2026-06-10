@@ -226,7 +226,7 @@ const PolicyTemplates: React.FC<PolicyTemplatesProps> = ({
                 <span className="text-sm font-semibold text-gray-900">{t("policies.policyTemplates.categories")}</span>
                 {selectedTags.size > 0 && (
                   <button onClick={handleClearAll} className="text-xs text-blue-600 hover:text-blue-800">
-                    {t("common.clear")}
+                    {t("policies.policyTemplates.clearAll")}
                   </button>
                 )}
               </div>

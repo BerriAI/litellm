@@ -50,7 +50,7 @@ export function HistoryTree({ messages }: HistoryTreeProps) {
           <RightOutlined style={{ fontSize: 10, color: "#8c8c8c" }} />
         )}
         <Text type="secondary" style={{ fontSize: 10, letterSpacing: "0.5px", textTransform: "uppercase" }}>
-          {t("viewLogs.historyTree.history_other", { count: messages.length })}
+          {t("viewLogs.historyTree.history", { count: messages.length })}
         </Text>
       </div>
 

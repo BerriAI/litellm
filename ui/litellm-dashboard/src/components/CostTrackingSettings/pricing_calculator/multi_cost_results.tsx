@@ -51,7 +51,9 @@ const SingleModelBreakdown: React.FC<{
 
       <div className="grid grid-cols-4 gap-4">
         <div>
-          <Text className="text-xs text-gray-500 block">{t("costTracking.multiCostResults.totalPerRequest")}</Text>
+          <Text className="text-xs text-gray-500 block">
+            {t("costTracking.multiCostResults.breakdownTotalPerRequest")}
+          </Text>
           <Text className="text-base font-semibold text-blue-600">{formatCost(result.cost_per_request)}</Text>
         </div>
         <div>

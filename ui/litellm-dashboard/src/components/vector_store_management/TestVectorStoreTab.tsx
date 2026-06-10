@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, Select, Typography } from "antd";
 import { VectorStoreTester } from "./VectorStoreTester";
 import { VectorStore } from "./types";
@@ -11,6 +12,7 @@ interface TestVectorStoreTabProps {
 }
 
 const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, vectorStores }) => {
+  const { t } = useTranslation();
   const [selectedVectorStoreId, setSelectedVectorStoreId] = useState<string | undefined>(
     vectorStores.length > 0 ? vectorStores[0].vector_store_id : undefined,
   );
@@ -18,7 +20,7 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, ve
   if (!accessToken) {
     return (
       <Card>
-        <Text type="secondary">Access token is required to test vector stores.</Text>
+        <Text type="secondary">{t("vectorStoreManagement.testVectorStoreTab.accessTokenRequired")}</Text>
       </Card>
     );
   }
@@ -27,7 +29,7 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, ve
     return (
       <Card>
         <div className="text-center py-8">
-          <Text type="secondary">No vector stores available. Create one first to test it.</Text>
+          <Text type="secondary">{t("vectorStoreManagement.testVectorStoreTab.noVectorStores")}</Text>
         </div>
       </Card>
     );
@@ -38,14 +40,14 @@ const TestVectorStoreTab: React.FC<TestVectorStoreTabProps> = ({ accessToken, ve
       <Card>
         <div className="space-y-4">
           <div>
-            <Title level={5}>Select Vector Store</Title>
-            <Text type="secondary">Choose a vector store to test search queries against</Text>
+            <Title level={5}>{t("vectorStoreManagement.testVectorStoreTab.selectTitle")}</Title>
+            <Text type="secondary">{t("vectorStoreManagement.testVectorStoreTab.selectSubtitle")}</Text>
           </div>
 
           <Select
             value={selectedVectorStoreId}
             onChange={setSelectedVectorStoreId}
-            placeholder="Select a vector store"
+            placeholder={t("vectorStoreManagement.testVectorStoreTab.selectPlaceholder")}
             size="large"
             style={{ width: "100%" }}
             showSearch

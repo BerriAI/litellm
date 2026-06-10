@@ -111,7 +111,7 @@ const EditSSOSettingsModal: React.FC<EditSSOSettingsModalProps> = ({ isVisible, 
         },
         onError: (error) => {
           NotificationsManager.fromBackend(
-            t("settingsPages.editSSOSettingsModal.saveFailed", { error: parseErrorMessage(error) }),
+            t("settingsPages.editSSOSettingsModal.saveFailed", { error: String(parseErrorMessage(error)) }),
           );
         },
       });
