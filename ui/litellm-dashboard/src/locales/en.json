@@ -8139,6 +8139,32 @@
       "noModelsFound": "No models found"
     }
   },
+  "organisms": {
+    "regenerateKeyModal": {
+      "title": "Regenerate Virtual Key",
+      "saveWarning": "Save it now, you will not see it again",
+      "keyAlias": "Key Alias",
+      "noAliasSet": "No alias set",
+      "virtualKey": "Virtual Key",
+      "copyKey": "Copy Key",
+      "regenerate": "Regenerate",
+      "maxBudget": "Max Budget (USD)",
+      "tpmLimit": "TPM Limit",
+      "rpmLimit": "RPM Limit",
+      "expireKey": "Expire Key",
+      "currentExpiry": "Current expiry: {{value}}",
+      "expiredSuffix": " (expired)",
+      "newExpiry": "New expiry: {{value}}",
+      "gracePeriod": "Grace Period",
+      "gracePeriodTooltip": "Keep the old key valid for this duration after rotation. Both keys work during this period for seamless cutover. Empty = immediate revoke.",
+      "gracePeriodRecommended": "Recommended: 24h to 72h for production keys",
+      "durationPlaceholder": "e.g. 30s, 30h, 30d",
+      "gracePeriodPlaceholder": "e.g. 24h, 2d",
+      "durationRuleMessage": "Must be a duration like 30s, 30m, 24h, 2d, 1w, or 1mo",
+      "expirationRequired": "Expiration is required for expired keys",
+      "regenerateSuccess": "Virtual Key regenerated successfully"
+    }
+  },
   "alerting": {
     "alertingSettings": {
       "saveSuccess": "Wait 10s for proxy to update."

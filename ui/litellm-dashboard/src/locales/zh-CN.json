@@ -8139,6 +8139,32 @@
       "noModelsFound": "未找到模型"
     }
   },
+  "organisms": {
+    "regenerateKeyModal": {
+      "title": "重新生成虚拟密钥",
+      "saveWarning": "请立即保存，此后将无法再次查看",
+      "keyAlias": "密钥别名",
+      "noAliasSet": "未设置别名",
+      "virtualKey": "虚拟密钥",
+      "copyKey": "复制密钥",
+      "regenerate": "重新生成",
+      "maxBudget": "最大预算（美元）",
+      "tpmLimit": "TPM 限制",
+      "rpmLimit": "RPM 限制",
+      "expireKey": "密钥过期",
+      "currentExpiry": "当前过期时间：{{value}}",
+      "expiredSuffix": "（已过期）",
+      "newExpiry": "新过期时间：{{value}}",
+      "gracePeriod": "宽限期",
+      "gracePeriodTooltip": "轮换后旧密钥在此时长内仍然有效。宽限期内新旧密钥均可使用，便于平滑切换。留空则立即吊销旧密钥。",
+      "gracePeriodRecommended": "生产环境密钥建议设置 24h 至 72h",
+      "durationPlaceholder": "例如 30s、30h、30d",
+      "gracePeriodPlaceholder": "例如 24h、2d",
+      "durationRuleMessage": "请输入有效时长，如 30s、30m、24h、2d、1w 或 1mo",
+      "expirationRequired": "已过期的密钥必须设置新的过期时间",
+      "regenerateSuccess": "虚拟密钥重新生成成功"
+    }
+  },
   "alerting": {
     "alertingSettings": {
       "saveSuccess": "等待代理更新，约需 10 秒。"
