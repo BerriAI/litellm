@@ -1,6 +1,7 @@
 import React from "react";
 import { Card, Badge, Tooltip, Button } from "antd";
 import { CopyOutlined, KeyOutlined, WarningOutlined, DeleteOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { Agent, AgentKeyInfo } from "./types";
 
 interface AgentCardProps {
@@ -14,10 +15,15 @@ interface AgentCardProps {
 }
 
 const AgentCard: React.FC<AgentCardProps> = ({ agent, keyInfo, onAgentClick, onDeleteClick, isAdmin }) => {
-  const description = agent.agent_card_params?.description || "No description";
+  const { t } = useTranslation();
+  const description = agent.agent_card_params?.description || t("agentsPage.agentCard.noDescription");
   const url = agent.agent_card_params?.url;
   const hasKey = keyInfo?.has_key ?? false;
-  const statusBadge = hasKey ? <Badge status="success" text="Active" /> : <Badge status="warning" text="Needs Setup" />;
+  const statusBadge = hasKey ? (
+    <Badge status="success" text={t("agentsPage.agentCard.statusActive")} />
+  ) : (
+    <Badge status="warning" text={t("agentsPage.agentCard.statusNeedsSetup")} />
+  );
 
   const copyToClipboard = (e: React.MouseEvent, text: string) => {
     e.stopPropagation();
@@ -37,7 +43,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, keyInfo, onAgentClick, onD
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="font-medium text-gray-900 truncate">{agent.agent_name}</span>
-            <Tooltip title="Copy Agent ID">
+            <Tooltip title={t("agentsPage.agentCard.copyAgentId")}>
               <CopyOutlined
                 onClick={(e) => copyToClipboard(e, agent.agent_id)}
                 className="cursor-pointer text-gray-400 hover:text-blue-500 text-xs shrink-0"
@@ -47,7 +53,7 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, keyInfo, onAgentClick, onD
           <div className="mt-1">{statusBadge}</div>
         </div>
         {isAdmin && onDeleteClick && (
-          <Tooltip title="Delete agent">
+          <Tooltip title={t("agentsPage.agentCard.deleteAgent")}>
             <Button
               type="text"
               size="small"
@@ -72,12 +78,12 @@ const AgentCard: React.FC<AgentCardProps> = ({ agent, keyInfo, onAgentClick, onD
         {hasKey ? (
           <div className="flex items-center gap-1.5 text-gray-600">
             <KeyOutlined />
-            <span>{keyInfo?.key_alias || keyInfo?.token_prefix || "Key assigned"}</span>
+            <span>{keyInfo?.key_alias || keyInfo?.token_prefix || t("agentsPage.agentCard.keyAssigned")}</span>
           </div>
         ) : (
           <div className="flex items-center gap-1.5 text-amber-600">
             <WarningOutlined />
-            <span>No key assigned</span>
+            <span>{t("agentsPage.agentCard.noKeyAssigned")}</span>
           </div>
         )}
       </div>
