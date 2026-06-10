@@ -6997,5 +6997,67 @@
       "revokeConnection": "Revoke connection",
       "revokeError": "Failed to revoke connection. Please try again."
     }
+  },
+  "accessGroups": {
+    "accessGroupBaseForm": {
+      "tabGeneralInfo": "General Info",
+      "labelGroupName": "Group Name",
+      "nameRequired": "Please enter the access group name",
+      "namePlaceholder": "e.g. Engineering Team",
+      "descriptionPlaceholder": "Describe the purpose of this access group...",
+      "tabModels": "Models",
+      "labelAllowedModels": "Allowed Models",
+      "tabMcpServers": "MCP Servers",
+      "labelAllowedMcpServers": "Allowed MCP Servers",
+      "mcpServersPlaceholder": "Select MCP servers",
+      "tabAgents": "Agents",
+      "labelAllowedAgents": "Allowed Agents",
+      "agentsPlaceholder": "Select agents"
+    },
+    "accessGroupCreateModal": {
+      "title": "Create Access Group",
+      "okText": "Create Group",
+      "createSuccess": "Access group created successfully"
+    },
+    "accessGroupEditModal": {
+      "title": "Edit Access Group",
+      "okText": "Save Changes",
+      "updateSuccess": "Access group updated successfully"
+    },
+    "accessGroupsDetailsPage": {
+      "notFound": "Access group not found",
+      "editButton": "Edit Access Group",
+      "groupDetails": "Group Details",
+      "by": "by",
+      "tabModels": "Models",
+      "noModels": "No models assigned to this group",
+      "tabMcpServers": "MCP Servers",
+      "noMcpServers": "No MCP servers assigned to this group",
+      "tabAgents": "Agents",
+      "noAgents": "No agents assigned to this group",
+      "attachedKeys": "Attached Keys",
+      "showLess": "Show Less",
+      "viewAll": "View All ({{count}})",
+      "noKeys": "No keys attached",
+      "attachedTeams": "Attached Teams",
+      "noTeams": "No teams attached",
+      "created": "Created",
+      "lastUpdated": "Last Updated"
+    },
+    "accessGroupsPage": {
+      "title": "Access Groups",
+      "subtitle": "Manage resource permissions for your organization",
+      "createButton": "Create Access Group",
+      "searchPlaceholder": "Search groups by name, ID, or description...",
+      "totalGroups": "{{total}} groups",
+      "colResources": "Resources",
+      "tooltipModels": "{{count}} Models",
+      "tooltipMcpServers": "{{count}} MCP Servers",
+      "tooltipAgents": "{{count}} Agents",
+      "deleteTooltip": "Delete access group",
+      "deleteTitle": "Delete Access Group",
+      "deleteMessage": "Are you sure you want to delete this access group? This action cannot be undone.",
+      "resourceInfoTitle": "Access Group Information"
+    }
   }
 }

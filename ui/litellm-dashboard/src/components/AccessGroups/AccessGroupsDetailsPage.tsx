@@ -17,6 +17,7 @@ import {
 } from "antd";
 import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
 
@@ -29,6 +30,7 @@ interface AccessGroupDetailProps {
 }
 
 export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailProps) {
+  const { t } = useTranslation();
   const { data: accessGroup, isLoading } = useAccessGroupDetails(accessGroupId);
   const { token } = theme.useToken();
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
@@ -61,7 +63,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
         }}
       >
         <Button icon={<ArrowLeftIcon size={16} />} onClick={onBack} type="text" style={{ marginBottom: 16 }} />
-        <Empty description="Access group not found" />
+        <Empty description={t("accessGroups.accessGroupsDetailsPage.notFound")} />
       </Content>
     );
   }
@@ -85,7 +87,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
       label: (
         <Flex align="center" gap={8}>
           <LayersIcon size={16} />
-          Models
+          {t("accessGroups.accessGroupsDetailsPage.tabModels")}
           <Tag style={{ marginInlineEnd: 0 }}>{modelIds?.length}</Tag>
         </Flex>
       ),
@@ -103,7 +105,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             )}
           />
         ) : (
-          <Empty description="No models assigned to this group" />
+          <Empty description={t("accessGroups.accessGroupsDetailsPage.noModels")} />
         ),
     },
     {
@@ -111,7 +113,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
       label: (
         <Flex align="center" gap={8}>
           <ServerIcon size={16} />
-          MCP Servers
+          {t("accessGroups.accessGroupsDetailsPage.tabMcpServers")}
           <Tag>{mcpServerIds?.length}</Tag>
         </Flex>
       ),
@@ -129,7 +131,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             )}
           />
         ) : (
-          <Empty description="No MCP servers assigned to this group" />
+          <Empty description={t("accessGroups.accessGroupsDetailsPage.noMcpServers")} />
         ),
     },
     {
@@ -137,7 +139,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
       label: (
         <Flex align="center" gap={8}>
           <BotIcon size={16} />
-          Agents
+          {t("accessGroups.accessGroupsDetailsPage.tabAgents")}
           <Tag>{agentIds?.length}</Tag>
         </Flex>
       ),
@@ -155,7 +157,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             )}
           />
         ) : (
-          <Empty description="No agents assigned to this group" />
+          <Empty description={t("accessGroups.accessGroupsDetailsPage.noAgents")} />
         ),
     },
   ];
@@ -183,29 +185,29 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
           </div>
         </div>
         <Button type="primary" icon={<EditIcon size={16} />} onClick={handleEdit}>
-          Edit Access Group
+          {t("accessGroups.accessGroupsDetailsPage.editButton")}
         </Button>
       </div>
 
       {/* Group Details */}
       <Row style={{ marginBottom: 24 }}>
         <Card>
-          <Descriptions title="Group Details" column={1}>
-            <Descriptions.Item label="Description">{accessGroup.description || "—"}</Descriptions.Item>
-            <Descriptions.Item label="Created">
+          <Descriptions title={t("accessGroups.accessGroupsDetailsPage.groupDetails")} column={1}>
+            <Descriptions.Item label={t("common.description")}>{accessGroup.description || "—"}</Descriptions.Item>
+            <Descriptions.Item label={t("accessGroups.accessGroupsDetailsPage.created")}>
               {new Date(accessGroup.created_at).toLocaleString()}
               {accessGroup.created_by && (
                 <Text>
-                  &nbsp;{"by"}&nbsp;
+                  &nbsp;{t("accessGroups.accessGroupsDetailsPage.by")}&nbsp;
                   <DefaultProxyAdminTag userId={accessGroup.created_by} />
                 </Text>
               )}
             </Descriptions.Item>
-            <Descriptions.Item label="Last Updated">
+            <Descriptions.Item label={t("accessGroups.accessGroupsDetailsPage.lastUpdated")}>
               {new Date(accessGroup.updated_at).toLocaleString()}
               {accessGroup.updated_by && (
                 <Text>
-                  &nbsp;{"by"}&nbsp;
+                  &nbsp;{t("accessGroups.accessGroupsDetailsPage.by")}&nbsp;
                   <DefaultProxyAdminTag userId={accessGroup.updated_by} />
                 </Text>
               )}
@@ -221,14 +223,16 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             title={
               <Flex align="center" gap={8}>
                 <KeyIcon size={16} />
-                Attached Keys
+                {t("accessGroups.accessGroupsDetailsPage.attachedKeys")}
                 <Tag>{keyIds?.length}</Tag>
               </Flex>
             }
             extra={
               keyIds?.length > MAX_PREVIEW ? (
                 <Button type="link" onClick={() => setShowAllKeys(!showAllKeys)}>
-                  {showAllKeys ? "Show Less" : `View All (${keyIds?.length})`}
+                  {showAllKeys
+                    ? t("accessGroups.accessGroupsDetailsPage.showLess")
+                    : t("accessGroups.accessGroupsDetailsPage.viewAll", { count: keyIds?.length })}
                 </Button>
               ) : null
             }
@@ -244,7 +248,10 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
                 ))}
               </Flex>
             ) : (
-              <Empty description="No keys attached" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              <Empty
+                description={t("accessGroups.accessGroupsDetailsPage.noKeys")}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
             )}
           </Card>
         </Col>
@@ -253,14 +260,16 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             title={
               <Flex align="center" gap={8}>
                 <UsersIcon size={16} />
-                Attached Teams
+                {t("accessGroups.accessGroupsDetailsPage.attachedTeams")}
                 <Tag>{teamIds?.length}</Tag>
               </Flex>
             }
             extra={
               teamIds?.length > MAX_PREVIEW ? (
                 <Button type="link" onClick={() => setShowAllTeams(!showAllTeams)}>
-                  {showAllTeams ? "Show Less" : `View All (${teamIds?.length})`}
+                  {showAllTeams
+                    ? t("accessGroups.accessGroupsDetailsPage.showLess")
+                    : t("accessGroups.accessGroupsDetailsPage.viewAll", { count: teamIds?.length })}
                 </Button>
               ) : null
             }
@@ -276,7 +285,10 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
                 ))}
               </Flex>
             ) : (
-              <Empty description="No teams attached" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              <Empty
+                description={t("accessGroups.accessGroupsDetailsPage.noTeams")}
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+              />
             )}
           </Card>
         </Col>

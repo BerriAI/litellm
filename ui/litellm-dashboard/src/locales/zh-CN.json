@@ -6997,5 +6997,67 @@
       "revokeConnection": "撤销连接",
       "revokeError": "撤销连接失败，请重试。"
     }
+  },
+  "accessGroups": {
+    "accessGroupBaseForm": {
+      "tabGeneralInfo": "基本信息",
+      "labelGroupName": "组名称",
+      "nameRequired": "请输入访问组名称",
+      "namePlaceholder": "例如：工程团队",
+      "descriptionPlaceholder": "描述此访问组的用途...",
+      "tabModels": "模型",
+      "labelAllowedModels": "允许的模型",
+      "tabMcpServers": "MCP 服务器",
+      "labelAllowedMcpServers": "允许的 MCP 服务器",
+      "mcpServersPlaceholder": "选择 MCP 服务器",
+      "tabAgents": "Agent",
+      "labelAllowedAgents": "允许的 Agent",
+      "agentsPlaceholder": "选择 Agent"
+    },
+    "accessGroupCreateModal": {
+      "title": "创建访问组",
+      "okText": "创建组",
+      "createSuccess": "访问组创建成功"
+    },
+    "accessGroupEditModal": {
+      "title": "编辑访问组",
+      "okText": "保存更改",
+      "updateSuccess": "访问组更新成功"
+    },
+    "accessGroupsDetailsPage": {
+      "notFound": "访问组不存在",
+      "editButton": "编辑访问组",
+      "groupDetails": "组详情",
+      "by": "由",
+      "tabModels": "模型",
+      "noModels": "此组未分配任何模型",
+      "tabMcpServers": "MCP 服务器",
+      "noMcpServers": "此组未分配任何 MCP 服务器",
+      "tabAgents": "Agent",
+      "noAgents": "此组未分配任何 Agent",
+      "attachedKeys": "关联密钥",
+      "showLess": "收起",
+      "viewAll": "查看全部（{{count}}）",
+      "noKeys": "暂无关联密钥",
+      "attachedTeams": "关联团队",
+      "noTeams": "暂无关联团队",
+      "created": "创建时间",
+      "lastUpdated": "最后更新"
+    },
+    "accessGroupsPage": {
+      "title": "访问组",
+      "subtitle": "管理组织的资源访问权限",
+      "createButton": "创建访问组",
+      "searchPlaceholder": "按名称、ID 或描述搜索组...",
+      "totalGroups": "共 {{total}} 个组",
+      "colResources": "资源",
+      "tooltipModels": "{{count}} 个模型",
+      "tooltipMcpServers": "{{count}} 个 MCP 服务器",
+      "tooltipAgents": "{{count}} 个 Agent",
+      "deleteTooltip": "删除访问组",
+      "deleteTitle": "删除访问组",
+      "deleteMessage": "确定要删除此访问组吗？此操作无法撤销。",
+      "resourceInfoTitle": "访问组信息"
+    }
   }
 }
