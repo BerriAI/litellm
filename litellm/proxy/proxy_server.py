@@ -10998,12 +10998,17 @@ async def get_all_team_and_direct_access_models(
             _model["model_info"]["direct_access"] = True
 
     ## FILTER OUT MODELS THAT ARE NOT IN DIRECT_ACCESS_MODELS OR ACCESS_VIA_TEAM_IDS - only show user models they can call
-    all_models = [
-        _model
-        for _model in all_models
-        if _model.get("model_info", {}).get("direct_access", False)
-        or _model.get("model_info", {}).get("access_via_team_ids", [])
-    ]
+    should_filter_by_user_access = (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_teams is not None
+    )
+    if should_filter_by_user_access:
+        all_models = [
+            _model
+            for _model in all_models
+            if _model.get("model_info", {}).get("direct_access", False)
+            or _model.get("model_info", {}).get("access_via_team_ids", [])
+        ]
     return all_models
 
 
@@ -12450,14 +12455,19 @@ def _filter_v1_model_info_deployments(
     ]
 
 
-def _should_apply_v1_team_access_filter(
+async def _should_apply_v1_team_access_filter(
     user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: PrismaClient,
 ) -> bool:
-    """Team membership filtering requires a resolvable user or admin role."""
-    return (
-        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
-        or user_api_key_dict.user_id is not None
+    """Team membership filtering requires admin role or a DB-backed user row."""
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return True
+    if user_api_key_dict.user_id is None:
+        return False
+    user_db_object = await UserRepository(prisma_client).table.find_unique(
+        where={"user_id": user_api_key_dict.user_id}
     )
+    return user_db_object is not None
 
 
 def _translate_model_name_for_response(model: dict) -> dict:
@@ -12639,8 +12649,9 @@ async def model_info_v1(  # noqa: PLR0915
         llm_router=llm_router,
     )
 
-    if prisma_client is not None and _should_apply_v1_team_access_filter(
-        user_api_key_dict=user_api_key_dict
+    if prisma_client is not None and await _should_apply_v1_team_access_filter(
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
     ):
         all_models = await get_all_team_and_direct_access_models(
             user_api_key_dict=user_api_key_dict,

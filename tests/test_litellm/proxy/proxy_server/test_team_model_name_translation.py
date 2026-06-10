@@ -270,6 +270,12 @@ async def test_model_info_v1_restricted_key_filters_after_team_enrichment(monkey
     router.get_model_names.return_value = ["gpt-4", "team-claude-sonnet"]
     router.get_model_access_groups.return_value = {}
 
+    class MockUserRepository:
+        def __init__(self, prisma_client):
+            self.table = MagicMock()
+            self.table.find_unique = AsyncMock(return_value=MagicMock(model_dump=lambda: {"user_id": "user-1", "teams": []}))
+
+    monkeypatch.setattr(ps, "UserRepository", MockUserRepository)
     monkeypatch.setattr(ps, "user_model", None)
     monkeypatch.setattr(ps, "llm_model_list", router.model_list)
     monkeypatch.setattr(ps, "llm_router", router)
@@ -314,3 +320,87 @@ async def test_model_info_v1_restricted_key_filters_after_team_enrichment(monkey
     resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
 
     assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
+
+
+@pytest.mark.asyncio
+async def test_model_info_v1_missing_db_user_returns_deployments(monkeypatch):
+    """Keys with user_id but no DB row must not lose their model list."""
+    deployment = {
+        "model_name": "gpt-4",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {"id": "global-id-1", "db_model": False},
+    }
+    router = MagicMock()
+    router.model_list = [deployment]
+    router.get_model_names.return_value = ["gpt-4"]
+    router.get_model_access_groups.return_value = {}
+
+    class MockUserRepository:
+        def __init__(self, prisma_client):
+            self.table = MagicMock()
+            self.table.find_unique = AsyncMock(return_value=None)
+
+    get_team_access = AsyncMock()
+    monkeypatch.setattr(ps, "UserRepository", MockUserRepository)
+    monkeypatch.setattr(ps, "user_model", None)
+    monkeypatch.setattr(ps, "llm_model_list", router.model_list)
+    monkeypatch.setattr(ps, "llm_router", router)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+    monkeypatch.setattr(ps, "get_all_team_and_direct_access_models", get_team_access)
+    monkeypatch.setattr(
+        ps, "_enrich_model_info_with_litellm_data", lambda model, **kw: model
+    )
+    import litellm.proxy.agent_endpoints.model_list_helpers as mlh
+
+    monkeypatch.setattr(
+        mlh,
+        "append_agents_to_model_info",
+        AsyncMock(side_effect=lambda models, **kw: models),
+    )
+
+    caller = UserAPIKeyAuth(
+        user_id="missing-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_models=[],
+    )
+    resp = await ps.model_info_v1(user_api_key_dict=caller, litellm_model_id=None)
+
+    assert [m["model_name"] for m in resp["data"]] == ["gpt-4"]
+    get_team_access.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_all_team_and_direct_access_models_missing_user_skips_filter(
+    monkeypatch,
+):
+    """Defense in depth: unresolved user_id must not empty the model list."""
+    models = [
+        {
+            "model_name": "gpt-4",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {"id": "global-id-1"},
+        }
+    ]
+
+    class MockUserRepository:
+        def __init__(self, prisma_client):
+            self.table = MagicMock()
+            self.table.find_unique = AsyncMock(return_value=None)
+
+    monkeypatch.setattr(ps, "UserRepository", MockUserRepository)
+
+    caller = UserAPIKeyAuth(
+        user_id="missing-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=[],
+        team_models=[],
+    )
+    result = await ps.get_all_team_and_direct_access_models(
+        user_api_key_dict=caller,
+        prisma_client=MagicMock(),
+        llm_router=MagicMock(),
+        all_models=models,
+    )
+
+    assert result == models
