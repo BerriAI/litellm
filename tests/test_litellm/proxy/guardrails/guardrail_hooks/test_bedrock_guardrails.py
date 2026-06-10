@@ -2513,8 +2513,8 @@ async def test_post_call_success_hook_only_runs_output_scan():
 # `qualifiers` array (grounding_source / query / guard_content). A caller marks
 # message content blocks `{"type": "grounding_source", ...}` / `{"type": "query", ...}`;
 # at post_call the hook assembles one source="OUTPUT" call carrying the source +
-# query + the model response (as guard_content). A request without these tags must
-# produce a byte-identical payload to before the feature existed.
+# query + the model response (as guard_content). A request without these tags
+# produces the plain-text payload with no qualifiers.
 
 _GROUNDING_SOURCE_TEXT = "Tokyo is the capital of Japan."
 _GROUNDING_QUERY_TEXT = "What is the capital of Japan?"
@@ -2554,107 +2554,166 @@ def _model_response(content: str) -> ModelResponse:
     )
 
 
-def test_grounding_input_default_unchanged():
-    """A plain-text request must produce the legacy INPUT payload (no qualifiers)."""
-    guardrail = _grounding_guardrail()
+# Expected OUTPUT content blocks, keyed by their grounding qualifier, so the
+# per-test assertions read as the block sequence they expect.
+_GROUNDING_SOURCE_BLOCK = {
+    "text": {"text": _GROUNDING_SOURCE_TEXT, "qualifiers": ["grounding_source"]}
+}
+_QUERY_BLOCK = {"text": {"text": _GROUNDING_QUERY_TEXT, "qualifiers": ["query"]}}
+_GUARD_BLOCK = {
+    "text": {"text": _GROUNDING_RESPONSE_TEXT, "qualifiers": ["guard_content"]}
+}
 
-    request = guardrail.convert_to_bedrock_format(
-        source="INPUT", messages=[{"role": "user", "content": "hello"}]
+
+def _input_request(messages: list) -> dict:
+    """Arrange a guardrail and act: build the Bedrock INPUT payload."""
+    return _grounding_guardrail().convert_to_bedrock_format(
+        source="INPUT", messages=messages
     )
 
-    assert request == {"source": "INPUT", "content": [{"text": {"text": "hello"}}]}
 
-
-def test_grounding_input_propagates_qualifiers():
-    """Tagged content blocks attach the matching Bedrock qualifiers, in order."""
-    guardrail = _grounding_guardrail()
-
-    request = guardrail.convert_to_bedrock_format(
-        source="INPUT", messages=_grounding_messages()
+def _output_request(messages: list, response=None) -> dict:
+    """Arrange a guardrail and act: build the Bedrock OUTPUT payload."""
+    return _grounding_guardrail().convert_to_bedrock_format(
+        source="OUTPUT", response=response, messages=messages
     )
 
-    assert request["content"] == [
-        {"text": {"text": _GROUNDING_SOURCE_TEXT, "qualifiers": ["grounding_source"]}},
-        {"text": {"text": _GROUNDING_QUERY_TEXT, "qualifiers": ["query"]}},
-    ]
+
+def test_grounding_input_strips_grounding_and_query_qualifiers():
+    """Grounding is OUTPUT-only: tagged source/query reach Bedrock as plain text on an
+    INPUT scan, so a tag cannot change how input-safety policies scan content (no bypass).
+    """
+    expected_request = {
+        "source": "INPUT",
+        "content": [
+            {"text": {"text": _GROUNDING_SOURCE_TEXT}},
+            {"text": {"text": _GROUNDING_QUERY_TEXT}},
+        ],
+    }
+
+    actual_request = _input_request(_grounding_messages())
+
+    assert actual_request == expected_request
 
 
-def test_grounding_output_assembles_three_blocks():
-    """OUTPUT assembles grounding_source + query (from request) + response (guard_content)."""
-    guardrail = _grounding_guardrail()
+def test_grounding_input_leaves_existing_guarded_text_unqualified():
+    """An existing guarded_text input block keeps its legacy unqualified payload."""
+    expected_request = {"source": "INPUT", "content": [{"text": {"text": "policy"}}]}
 
-    request = guardrail.convert_to_bedrock_format(
-        source="OUTPUT",
-        response=_model_response(_GROUNDING_RESPONSE_TEXT),
-        messages=_grounding_messages(),
+    actual_request = _input_request(
+        [{"role": "user", "content": [{"type": "guarded_text", "text": "policy"}]}]
     )
 
-    assert request["source"] == "OUTPUT"
-    assert request["content"] == [
-        {"text": {"text": _GROUNDING_SOURCE_TEXT, "qualifiers": ["grounding_source"]}},
-        {"text": {"text": _GROUNDING_QUERY_TEXT, "qualifiers": ["query"]}},
-        {"text": {"text": _GROUNDING_RESPONSE_TEXT, "qualifiers": ["guard_content"]}},
-    ]
+    assert actual_request == expected_request
 
 
-def test_grounding_output_default_unchanged():
-    """Without grounding tags, OUTPUT is the legacy single response block (no qualifiers)."""
-    guardrail = _grounding_guardrail()
+def test_grounding_output_assembles_source_query_and_response():
+    """OUTPUT emits grounding_source + query (from the request) then the response as
+    guard_content, so Bedrock can grade the response against the source and query."""
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK, _GUARD_BLOCK],
+    }
 
-    request = guardrail.convert_to_bedrock_format(
-        source="OUTPUT",
-        response=_model_response("Hi there."),
-        messages=[{"role": "user", "content": "hello"}],
+    actual_request = _output_request(
+        _grounding_messages(), _model_response(_GROUNDING_RESPONSE_TEXT)
     )
 
-    assert request["content"] == [{"text": {"text": "Hi there."}}]
+    assert actual_request == expected_request
 
 
-def test_grounding_multiple_sources_all_emitted():
-    """Multiple grounding_source blocks are all emitted (Bedrock combines them)."""
-    guardrail = _grounding_guardrail()
+def test_grounding_output_keeps_legacy_payload_without_tags():
+    """Without grounding tags the OUTPUT payload is the legacy single response block."""
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [{"text": {"text": "Hi there."}}],
+    }
+
+    actual_request = _output_request(
+        [{"role": "user", "content": "hello"}], _model_response("Hi there.")
+    )
+
+    assert actual_request == expected_request
+
+
+def test_grounding_output_combines_multiple_sources():
+    """Every grounding_source block is emitted; Bedrock combines them into one corpus."""
+    uk_source_text = "London is the capital of UK."
+    uk_source_block = {
+        "text": {"text": uk_source_text, "qualifiers": ["grounding_source"]}
+    }
     messages = [
         {
             "role": "system",
             "content": [
-                {"type": "grounding_source", "text": "London is the capital of UK."},
+                {"type": "grounding_source", "text": uk_source_text},
                 {"type": "grounding_source", "text": _GROUNDING_SOURCE_TEXT},
             ],
         },
         {"role": "user", "content": [{"type": "query", "text": _GROUNDING_QUERY_TEXT}]},
     ]
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [
+            uk_source_block,
+            _GROUNDING_SOURCE_BLOCK,
+            _QUERY_BLOCK,
+            _GUARD_BLOCK,
+        ],
+    }
 
-    request = guardrail.convert_to_bedrock_format(
-        source="OUTPUT",
-        response=_model_response(_GROUNDING_RESPONSE_TEXT),
-        messages=messages,
+    actual_request = _output_request(
+        messages, _model_response(_GROUNDING_RESPONSE_TEXT)
     )
 
-    qualifiers = [item["text"].get("qualifiers") for item in request["content"]]
-    assert qualifiers == [
-        ["grounding_source"],
-        ["grounding_source"],
-        ["query"],
-        ["guard_content"],
-    ]
+    assert actual_request == expected_request
 
 
-def test_get_content_items_for_message_mixed():
-    """The extractor preserves the grounding qualifier per block; untagged -> None."""
-    guardrail = _grounding_guardrail()
+def test_grounding_output_keeps_grounding_for_non_model_response():
+    """Harvested grounding blocks survive a non-ModelResponse output instead of being
+    silently dropped (regression guard for the unconditional content assignment)."""
+    expected_request = {
+        "source": "OUTPUT",
+        "content": [_GROUNDING_SOURCE_BLOCK, _QUERY_BLOCK],
+    }
 
-    blocks = guardrail.get_content_items_for_message(
+    actual_request = _output_request(_grounding_messages(), response=None)
+
+    assert actual_request == expected_request
+
+
+@pytest.mark.parametrize(
+    "role, is_trusted",
+    [
+        ("system", True),
+        ("developer", True),
+        ("tool", False),
+        ("function", False),
+        ("user", False),
+        ("assistant", False),
+    ],
+)
+def test_grounding_source_trusted_only_from_app_roles(role, is_trusted):
+    """grounding_source is honored only from app-authored roles (system/developer). A
+    tag on a user, tool, function or assistant message is ignored, so neither a forwarded
+    end user nor an externally-influenced tool result can supply fake evidence for the
+    grounding check to grade the response against; query is always collected."""
+    messages = [
         {
-            "role": "user",
-            "content": [
-                {"type": "grounding_source", "text": "src"},
-                {"type": "text", "text": "plain"},
-                {"type": "query", "text": "q"},
-            ],
-        }
+            "role": role,
+            "content": [{"type": "grounding_source", "text": _GROUNDING_SOURCE_TEXT}],
+        },
+        {"role": "user", "content": [{"type": "query", "text": _GROUNDING_QUERY_TEXT}]},
+    ]
+    expected_content = [_QUERY_BLOCK, _GUARD_BLOCK]
+    if is_trusted:
+        expected_content = [_GROUNDING_SOURCE_BLOCK, *expected_content]
+
+    actual_request = _output_request(
+        messages, _model_response(_GROUNDING_RESPONSE_TEXT)
     )
 
-    assert blocks == [("src", "grounding_source"), ("plain", None), ("q", "query")]
+    assert actual_request == {"source": "OUTPUT", "content": expected_content}
 
 
 @pytest.mark.asyncio
