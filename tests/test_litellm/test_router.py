@@ -4342,6 +4342,7 @@ def test_initialize_deployment_for_pass_through_sets_credentials_with_api_key():
         passthrough_endpoint_router,
     )
 
+    passthrough_endpoint_router.credentials.clear()
     router = _router_with_two_pass_through_deployments([False, False])
     assert len(router.get_model_list()) == 2
     assert (
