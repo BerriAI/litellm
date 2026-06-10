@@ -394,6 +394,218 @@ async def test_websearch_streaming_conversion():
     finally:
         litellm.callbacks = []
 
+@pytest.mark.asyncio
+async def test_bedrock_converse_agentic_hook_triggers():
+    """Test that BedrockConverseLLM._call_agentic_chat_completion_hooks
+    correctly triggers the websearch interception agentic loop.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/25191:
+    websearch_interception worked via /v1/messages but NOT via
+    /chat/completions for Bedrock because BedrockConverseLLM.async_completion
+    did not call agentic chat completion hooks.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
+    from litellm.types.utils import (
+        ChatCompletionMessageToolCall,
+        Choices,
+        Function,
+        Message,
+    )
+
+    handler = BedrockConverseLLM()
+
+    # Build a ModelResponse that looks like Bedrock returned a tool call
+    mock_response = ModelResponse(
+        id="chatcmpl-bedrock-123",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="",
+                    tool_calls=[
+                        ChatCompletionMessageToolCall(
+                            id="tooluse_abc",
+                            type="function",
+                            function=Function(
+                                name="litellm_web_search",
+                                arguments='{"query": "weather tomorrow"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        model="us.anthropic.claude-sonnet-4-6",
+        object="chat.completion",
+        created=1234567890,
+    )
+
+    # Create a mock callback that simulates the websearch interception logger
+    mock_callback = AsyncMock(spec=WebSearchInterceptionLogger)
+    mock_callback.async_should_run_chat_completion_agentic_loop = AsyncMock(
+        return_value=(
+            True,
+            {
+                "tool_calls": [
+                    {
+                        "id": "tooluse_abc",
+                        "type": "function",
+                        "name": "litellm_web_search",
+                        "function": {
+                            "name": "litellm_web_search",
+                            "arguments": {"query": "weather tomorrow"},
+                        },
+                        "input": {"query": "weather tomorrow"},
+                    }
+                ],
+                "tool_type": "websearch",
+                "provider": "bedrock",
+                "response_format": "openai",
+            },
+        )
+    )
+
+    # The agentic loop should return a final answer (no tool_calls)
+    final_response = ModelResponse(
+        id="chatcmpl-bedrock-456",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="Tomorrow's weather will be sunny, 25°C.",
+                ),
+            )
+        ],
+        model="us.anthropic.claude-sonnet-4-6",
+        object="chat.completion",
+        created=1234567891,
+    )
+    mock_callback.async_run_chat_completion_agentic_loop = AsyncMock(
+        return_value=final_response
+    )
+
+    # Patch litellm.callbacks so the handler finds our mock
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = [mock_callback]
+
+    logging_obj = MagicMock()
+    logging_obj.dynamic_success_callbacks = []
+
+    try:
+        result = await handler._call_agentic_chat_completion_hooks(
+            response=mock_response,
+            model="us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "What is the weather tomorrow?"}],
+            optional_params={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "litellm_web_search",
+                            "description": "Search the web",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            },
+                        },
+                    }
+                ]
+            },
+            logging_obj=logging_obj,
+            stream=False,
+            litellm_params={"custom_llm_provider": "bedrock"},
+        )
+
+        # Agentic hook should have returned the final response
+        assert result is not None
+        assert result.choices[0].finish_reason == "stop"
+        assert "sunny" in result.choices[0].message.content
+
+        # Verify the callback methods were called
+        mock_callback.async_should_run_chat_completion_agentic_loop.assert_called_once()
+        mock_callback.async_run_chat_completion_agentic_loop.assert_called_once()
+
+    finally:
+        litellm.callbacks = original_callbacks
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_agentic_hook_skips_when_no_tool_call():
+    """Test that the agentic hook returns None when the model response
+    does not contain a litellm_web_search tool call (normal response)."""
+    from unittest.mock import MagicMock
+
+    from litellm.llms.bedrock.chat.converse_handler import BedrockConverseLLM
+    from litellm.types.utils import Choices, Message
+
+    handler = BedrockConverseLLM()
+
+    # Build a normal response (no tool calls)
+    mock_response = ModelResponse(
+        id="chatcmpl-bedrock-789",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    role="assistant",
+                    content="Hello! How can I help you?",
+                ),
+            )
+        ],
+        model="us.anthropic.claude-sonnet-4-6",
+        object="chat.completion",
+        created=1234567890,
+    )
+
+    # Use real websearch logger (not mock) so real detection logic runs
+    websearch_logger = WebSearchInterceptionLogger(
+        enabled_providers=[LlmProviders.BEDROCK]
+    )
+    original_callbacks = litellm.callbacks
+    litellm.callbacks = [websearch_logger]
+
+    logging_obj = MagicMock()
+    logging_obj.dynamic_success_callbacks = []
+
+    try:
+        result = await handler._call_agentic_chat_completion_hooks(
+            response=mock_response,
+            model="us.anthropic.claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "litellm_web_search",
+                            "description": "Search the web",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"query": {"type": "string"}},
+                                "required": ["query"],
+                            },
+                        },
+                    }
+                ]
+            },
+            logging_obj=logging_obj,
+            stream=False,
+            litellm_params={"custom_llm_provider": "bedrock"},
+        )
+
+        # No tool calls in response → hook should return None
+        assert result is None
+
+    finally:
+        litellm.callbacks = original_callbacks
 
 if __name__ == "__main__":
     # Run with: pytest test_websearch_chat_completion.py -v -s
