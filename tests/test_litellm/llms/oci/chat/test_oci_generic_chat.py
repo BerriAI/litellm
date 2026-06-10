@@ -2,7 +2,6 @@
 Unit tests for litellm/llms/oci/chat/generic.py — error paths and stream handling.
 """
 
-import json
 import pytest
 from unittest.mock import MagicMock
 
@@ -16,7 +15,12 @@ from litellm.llms.oci.chat.generic import (
     handle_generic_response,
     handle_generic_stream_chunk,
 )
-from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIStreamWrapper
+from litellm.llms.oci.chat.transformation import (
+    OCIChatConfig,
+    OCIStreamWrapper,
+    OCIVendors,
+    _model_uses_max_completion_tokens,
+)
 from litellm.llms.oci.common_utils import OCIError
 
 # ---------------------------------------------------------------------------
@@ -271,7 +275,6 @@ class TestHandleGenericStreamChunk:
         assert result.choices[0].index == 0
 
     def test_image_content_in_stream_raises(self):
-        from litellm.types.llms.oci import OCIImageContentPart, OCIImageUrl, OCIMessage
 
         chunk = {
             "apiFormat": "GENERIC",
@@ -368,10 +371,6 @@ def _register_oci_gpt5_in_catalog():
 
 class TestGpt5MaxCompletionTokens:
     def test_helper_detects_gpt5_family(self, _register_oci_gpt5_in_catalog):
-        from litellm.llms.oci.chat.transformation import (
-            _model_uses_max_completion_tokens,
-        )
-
         assert _model_uses_max_completion_tokens("openai.gpt-5") is True
         assert _model_uses_max_completion_tokens("openai.gpt-5-mini") is True
         assert _model_uses_max_completion_tokens("openai.gpt-5-nano") is True
@@ -389,9 +388,6 @@ class TestGpt5MaxCompletionTokens:
         since OpenAI accepts max_completion_tokens on every chat model while
         the reasoning families hard-reject max_tokens."""
         import litellm
-        from litellm.llms.oci.chat.transformation import (
-            _model_uses_max_completion_tokens,
-        )
 
         for name in (
             "openai.gpt-5.2",
@@ -410,7 +406,6 @@ class TestGpt5MaxCompletionTokens:
         ("Use 'max_completion_tokens' instead") even when the caller never set
         max_tokens."""
         from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
-        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
 
         cfg = OCIChatConfig()
         out = cfg._get_optional_params(OCIVendors.GENERIC, {}, model="openai.gpt-5.2")
@@ -420,8 +415,6 @@ class TestGpt5MaxCompletionTokens:
     def test_gpt5_routes_max_tokens_to_max_completion_tokens(
         self, _register_oci_gpt5_in_catalog
     ):
-        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
-
         cfg = OCIChatConfig()
         # Both shapes optional_params can take after upstream map_openai_params:
         # 1. openai-side key still present
@@ -439,8 +432,6 @@ class TestGpt5MaxCompletionTokens:
         assert "maxTokens" not in out_b
 
     def test_non_gpt5_keeps_max_tokens(self):
-        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
-
         cfg = OCIChatConfig()
         out = cfg._get_optional_params(
             OCIVendors.GENERIC,
@@ -451,8 +442,6 @@ class TestGpt5MaxCompletionTokens:
         assert "maxCompletionTokens" not in out
 
     def test_cohere_reasoning_model_keeps_max_tokens(self):
-        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
-
         cfg = OCIChatConfig()
         out = cfg._get_optional_params(
             OCIVendors.COHERE,
