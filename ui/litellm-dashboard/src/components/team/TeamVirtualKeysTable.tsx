@@ -28,6 +28,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Popover, Skeleton, Tooltip, Typography } from "antd";
 import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import FilterComponent, { FilterOption } from "../molecules/filter";
@@ -48,6 +49,7 @@ interface TeamVirtualKeysTableProps {
  * Displays all virtual keys belonging to the team with same format and styling.
  */
 export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVirtualKeysTableProps) {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [selectedKey, setSelectedKey] = useState<KeyResponse | null>(null);
   const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
@@ -211,7 +213,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "token",
         accessorKey: "token",
-        header: "Key ID",
+        header: t("teamPage.teamVirtualKeysTable.colKeyId"),
         size: 100,
         enableSorting: true,
         cell: (info) => {
@@ -235,7 +237,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "key_alias",
         accessorKey: "key_alias",
-        header: "Key Alias",
+        header: t("teamPage.teamVirtualKeysTable.colKeyAlias"),
         size: 150,
         enableSorting: true,
         cell: (info) => {
@@ -253,7 +255,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "key_name",
         accessorKey: "key_name",
-        header: "Secret Key",
+        header: t("teamPage.teamVirtualKeysTable.colSecretKey"),
         size: 120,
         enableSorting: false,
         cell: (info) => <span className="font-mono text-xs">{info.getValue() as string}</span>,
@@ -261,7 +263,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "organization_id",
         accessorKey: "organization_id",
-        header: "Organization ID",
+        header: t("teamPage.teamVirtualKeysTable.colOrganizationId"),
         size: 140,
         enableSorting: false,
         cell: (info) => (info.getValue() ? info.renderValue() : "-"),
@@ -269,7 +271,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "user_email",
         accessorKey: "user",
-        header: "User Email",
+        header: t("teamPage.teamVirtualKeysTable.colUserEmail"),
         size: 160,
         enableSorting: false,
         cell: (info) => {
@@ -288,12 +290,13 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "user_id",
         accessorKey: "user_id",
-        header: "User ID",
+        header: t("teamPage.teamVirtualKeysTable.colUserId"),
         size: 70,
         enableSorting: false,
         cell: (info) => {
           const userId = info.getValue() as string | null;
-          const displayValue = userId === "default_user_id" ? "Default Proxy Admin" : userId;
+          const displayValue =
+            userId === "default_user_id" ? t("teamPage.teamVirtualKeysTable.defaultProxyAdmin") : userId;
           const width = info.cell.column.getSize();
           return (
             <Tooltip title={displayValue}>
@@ -307,7 +310,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "created_at",
         accessorKey: "created_at",
-        header: "Created At",
+        header: t("common.createdAt"),
         size: 120,
         enableSorting: true,
         cell: (info) => {
@@ -318,7 +321,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "created_by",
         accessorKey: "created_by",
-        header: "Created By",
+        header: t("teamPage.teamVirtualKeysTable.colCreatedBy"),
         size: 70,
         enableSorting: false,
         cell: (info) => {
@@ -334,9 +337,9 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const popoverContent = (
             <div className="flex flex-col gap-2 text-xs min-w-[200px] max-w-[300px]">
               {[
-                { label: "User Alias", value: userAlias },
-                { label: "User Email", value: userEmail },
-                { label: "User ID", value: userId },
+                { label: t("teamPage.teamVirtualKeysTable.popoverUserAlias"), value: userAlias },
+                { label: t("teamPage.teamVirtualKeysTable.popoverUserEmail"), value: userEmail },
+                { label: t("teamPage.teamVirtualKeysTable.popoverUserId"), value: userId },
               ].map(({ label, value }) => (
                 <div key={label} className="flex flex-col min-w-0">
                   <span className="text-gray-400">{label}</span>
@@ -377,12 +380,12 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "updated_at",
         accessorKey: "updated_at",
-        header: "Updated At",
+        header: t("common.updatedAt"),
         size: 120,
         enableSorting: true,
         cell: (info) => {
           const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
+          return value ? new Date(value as string).toLocaleDateString() : t("common.never");
         },
       },
       {
@@ -390,11 +393,8 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         accessorKey: "last_active",
         header: () => (
           <span className="flex items-center gap-1">
-            Last Active
-            <Popover
-              content="This is a new field and is not backfilled. Only new key usage will update this value."
-              trigger="hover"
-            >
+            {t("teamPage.teamVirtualKeysTable.colLastActive")}
+            <Popover content={t("teamPage.teamVirtualKeysTable.colLastActiveTooltip")} trigger="hover">
               <InfoCircleOutlined className="text-gray-400 text-xs cursor-help" />
             </Popover>
           </span>
@@ -403,7 +403,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
         enableSorting: false,
         cell: (info) => {
           const value = info.getValue();
-          if (!value) return "Unknown";
+          if (!value) return t("common.unknown");
           const date = new Date(value as string);
           return (
             <Tooltip title={date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "long" })}>
@@ -415,18 +415,18 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "expires",
         accessorKey: "expires",
-        header: "Expires",
+        header: t("teamPage.teamVirtualKeysTable.colExpires"),
         size: 120,
         enableSorting: false,
         cell: (info) => {
           const value = info.getValue();
-          return value ? new Date(value as string).toLocaleDateString() : "Never";
+          return value ? new Date(value as string).toLocaleDateString() : t("common.never");
         },
       },
       {
         id: "spend",
         accessorKey: "spend",
-        header: "Spend (USD)",
+        header: t("teamPage.teamVirtualKeysTable.colSpend"),
         size: 100,
         enableSorting: true,
         cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
@@ -434,30 +434,30 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       {
         id: "max_budget",
         accessorKey: "max_budget",
-        header: "Budget (USD)",
+        header: t("teamPage.teamVirtualKeysTable.colBudget"),
         size: 110,
         enableSorting: true,
         cell: (info) => {
           const maxBudget = info.getValue() as number | null;
-          if (maxBudget === null) return "Unlimited";
+          if (maxBudget === null) return t("teamPage.teamVirtualKeysTable.unlimited");
           return `$${formatNumberWithCommas(maxBudget)}`;
         },
       },
       {
         id: "budget_reset_at",
         accessorKey: "budget_reset_at",
-        header: "Budget Reset",
+        header: t("teamPage.teamVirtualKeysTable.colBudgetReset"),
         size: 130,
         enableSorting: false,
         cell: (info) => {
           const value = info.getValue();
-          return value ? new Date(value as string).toLocaleString() : "Never";
+          return value ? new Date(value as string).toLocaleString() : t("common.never");
         },
       },
       {
         id: "models",
         accessorKey: "models",
-        header: "Models",
+        header: t("teamPage.teamVirtualKeysTable.colModels"),
         size: 200,
         enableSorting: false,
         cell: (info) => {
@@ -468,7 +468,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                 <div className="flex flex-col">
                   {models.length === 0 ? (
                     <Badge size="xs" className="mb-1" color="red">
-                      <Text>All Proxy Models</Text>
+                      <Text>{t("teamPage.teamVirtualKeysTable.allProxyModels")}</Text>
                     </Badge>
                   ) : (
                     <>
@@ -492,7 +492,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                           {models.slice(0, 3).map((model, index) =>
                             model === "all-proxy-models" ? (
                               <Badge key={index} size="xs" color="red">
-                                <Text>All Proxy Models</Text>
+                                <Text>{t("teamPage.teamVirtualKeysTable.allProxyModels")}</Text>
                               </Badge>
                             ) : (
                               <Badge key={index} size="xs" color="blue">
@@ -506,9 +506,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                           )}
                           {models.length > 3 && !expandedAccordions[info.row.id] && (
                             <Badge size="xs" color="gray" className="cursor-pointer">
-                              <Text>
-                                +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
-                              </Text>
+                              <Text>{t("teamPage.teamVirtualKeysTable.moreModel", { count: models.length - 3 })}</Text>
                             </Badge>
                           )}
                           {expandedAccordions[info.row.id] && (
@@ -516,7 +514,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                               {models.slice(3).map((model, index) =>
                                 model === "all-proxy-models" ? (
                                   <Badge key={index + 3} size="xs" color="red">
-                                    <Text>All Proxy Models</Text>
+                                    <Text>{t("teamPage.teamVirtualKeysTable.allProxyModels")}</Text>
                                   </Badge>
                                 ) : (
                                   <Badge key={index + 3} size="xs" color="blue">
@@ -542,21 +540,21 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       },
       {
         id: "rate_limits",
-        header: "Rate Limits",
+        header: t("teamPage.teamVirtualKeysTable.colRateLimits"),
         size: 140,
         enableSorting: false,
         cell: ({ row }) => {
           const key = row.original;
           return (
             <div>
-              <div>TPM: {key.tpm_limit !== null ? key.tpm_limit : "Unlimited"}</div>
-              <div>RPM: {key.rpm_limit !== null ? key.rpm_limit : "Unlimited"}</div>
+              <div>TPM: {key.tpm_limit !== null ? key.tpm_limit : t("teamPage.teamVirtualKeysTable.unlimited")}</div>
+              <div>RPM: {key.rpm_limit !== null ? key.rpm_limit : t("teamPage.teamVirtualKeysTable.unlimited")}</div>
             </div>
           );
         },
       },
     ],
-    [expandedAccordions],
+    [expandedAccordions, t],
   );
 
   const handleSortingChange = useCallback(
@@ -620,7 +618,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                 <Skeleton.Node active style={{ width: 74, height: 20 }} />
               ) : (
                 <span className="text-sm text-gray-700">
-                  Page {pageIndex + 1} of {table.getPageCount()}
+                  {t("teamPage.teamVirtualKeysTable.pageOf", { current: pageIndex + 1, total: table.getPageCount() })}
                 </span>
               )}
 
@@ -632,7 +630,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                   disabled={isLoading || isFetching || !table.getCanPreviousPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Previous
+                  {t("common.previous")}
                 </button>
               )}
 
@@ -644,7 +642,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                   disabled={isLoading || isFetching || !table.getCanNextPage()}
                   className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Next
+                  {t("common.next")}
                 </button>
               )}
             </div>
@@ -730,7 +728,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
                           <div className="text-center text-gray-500">
-                            <p>Loading keys...</p>
+                            <p>{t("teamPage.teamVirtualKeysTable.loadingKeys")}</p>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -763,7 +761,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
                       <TableRow>
                         <TableCell colSpan={columns.length} className="h-8 text-center">
                           <div className="text-center text-gray-500">
-                            <p>No keys found</p>
+                            <p>{t("teamPage.teamVirtualKeysTable.noKeysFound")}</p>
                           </div>
                         </TableCell>
                       </TableRow>

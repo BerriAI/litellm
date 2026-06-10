@@ -8,6 +8,7 @@ import { InfoCircleOutlined } from "@ant-design/icons";
 import { Space, Tooltip, Typography } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import MemberTable from "@/components/common_components/MemberTable";
+import { useTranslation } from "react-i18next";
 import { TeamData } from "./TeamInfo";
 
 interface TeamMemberTabProps {
@@ -27,6 +28,7 @@ export default function TeamMemberTab({
   setIsEditMemberModalVisible,
   setIsAddMemberModalVisible,
 }: TeamMemberTabProps) {
+  const { t } = useTranslation();
   const formatNumber = (value: number | null): string => {
     if (value === null || value === undefined) return "0";
 
@@ -70,7 +72,7 @@ export default function TeamMemberTab({
 
   // Helper function to get rate limits for a user
   const getUserRateLimits = (userId: string | null): string => {
-    if (!userId) return "No Limits";
+    if (!userId) return t("teamPage.teamMemberTab.noLimits");
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
     const rpmLimit = membership?.litellm_budget_table?.rpm_limit;
     const tpmLimit = membership?.litellm_budget_table?.tpm_limit;
@@ -79,7 +81,7 @@ export default function TeamMemberTab({
     const tpmText = tpmLimit ? `${formatNumber(tpmLimit)} TPM` : null;
 
     const limits = [rpmText, tpmText].filter(Boolean);
-    return limits.length > 0 ? limits.join(" / ") : "No Limits";
+    return limits.length > 0 ? limits.join(" / ") : t("teamPage.teamMemberTab.noLimits");
   };
 
   const { data: uiSettingsData } = useUISettings();
@@ -105,8 +107,8 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
-          Model Scope
-          <Tooltip title="Models this member can access. Empty means they inherit all team models.">
+          {t("teamPage.teamMemberTab.modelScopeTitle")}
+          <Tooltip title={t("teamPage.teamMemberTab.modelScopeTooltip")}>
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
@@ -115,7 +117,7 @@ export default function TeamMemberTab({
       render: (_: unknown, record: Member) => {
         const models = getUserAllowedModels(record.user_id);
         if (!models) {
-          return <Typography.Text type="secondary">(all team models)</Typography.Text>;
+          return <Typography.Text type="secondary">{t("teamPage.teamMemberTab.allTeamModels")}</Typography.Text>;
         }
         const displayed = models.slice(0, 2);
         const remaining = models.length - displayed.length;
@@ -128,7 +130,9 @@ export default function TeamMemberTab({
             ))}
             {remaining > 0 && (
               <Tooltip title={models.slice(2).join(", ")}>
-                <Typography.Text type="secondary">+{remaining} more</Typography.Text>
+                <Typography.Text type="secondary">
+                  {t("teamPage.teamMemberTab.moreModels", { count: remaining })}
+                </Typography.Text>
               </Tooltip>
             )}
           </Space>
@@ -138,8 +142,8 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
-          Current Cycle Spend (USD)
-          <Tooltip title="Spend for the current budget cycle. Resets to $0 when the member's budget window rolls over. This is the value checked against the member's budget.">
+          {t("teamPage.teamMemberTab.currentCycleSpendTitle")}
+          <Tooltip title={t("teamPage.teamMemberTab.currentCycleSpendTooltip")}>
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
@@ -152,8 +156,8 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
-          Total Spend (USD)
-          <Tooltip title="Cumulative spend by this member within this team, across all budget cycles. Tracking began 2026-04-21; spend from before that date is not included.">
+          {t("teamPage.teamMemberTab.totalSpendTitle")}
+          <Tooltip title={t("teamPage.teamMemberTab.totalSpendTooltip")}>
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
@@ -164,17 +168,19 @@ export default function TeamMemberTab({
       ),
     },
     {
-      title: "Team Member Budget (USD)",
+      title: t("teamPage.teamMemberTab.memberBudgetTitle"),
       key: "budget",
       render: (_: unknown, record: Member) => {
         const budget = getUserBudget(record.user_id);
         return (
-          <Typography.Text>{budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : "No Limit"}</Typography.Text>
+          <Typography.Text>
+            {budget ? `$${formatNumberWithCommas(Number(budget), 4)}` : t("teamPage.teamMemberTab.noLimit")}
+          </Typography.Text>
         );
       },
     },
     {
-      title: "Budget Reset",
+      title: t("teamPage.teamMemberTab.budgetResetTitle"),
       key: "budget_reset",
       render: (_: unknown, record: Member) => {
         const reset = getUserBudgetReset(record.user_id);
@@ -188,8 +194,8 @@ export default function TeamMemberTab({
     {
       title: (
         <Space direction="horizontal">
-          Team Member Rate Limits
-          <Tooltip title="Rate limits for this member's usage within this team.">
+          {t("teamPage.teamMemberTab.rateLimitsTitle")}
+          <Tooltip title={t("teamPage.teamMemberTab.rateLimitsTooltip")}>
             <InfoCircleOutlined />
           </Tooltip>
         </Space>
@@ -218,8 +224,8 @@ export default function TeamMemberTab({
       }}
       onDelete={handleMemberDelete}
       onAddMember={() => setIsAddMemberModalVisible(true)}
-      roleColumnTitle="Team Role"
-      roleTooltip="This role applies only to this team and is independent from the user's proxy-level role."
+      roleColumnTitle={t("teamPage.teamMemberTab.roleColumnTitle")}
+      roleTooltip={t("teamPage.teamMemberTab.roleTooltip")}
       extraColumns={extraColumns}
       showDeleteForMember={() =>
         isProxyAdmin || (canEditTeam && !isUserTeamAdmin) || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)
