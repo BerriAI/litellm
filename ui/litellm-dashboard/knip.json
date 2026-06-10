@@ -1,8 +1,9 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["scripts/**/*.ts"],
-  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.ts", "e2e_tests/**/*.ts"],
+  "entry": ["scripts/**/*.{ts,mjs}"],
+  "project": ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}", "scripts/**/*.{ts,mjs}", "e2e_tests/**/*.ts"],
   "ignore": ["src/lib/http/schema.d.ts"],
+  "ignoreDependencies": ["openapi-typescript"],
   "playwright": {
     "config": "e2e_tests/playwright.config.ts",
     "entry": ["e2e_tests/**/*.spec.ts", "e2e_tests/**/*.setup.ts", "e2e_tests/globalSetup.ts"]
