@@ -276,6 +276,24 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             cache_read_input_tokens=0,
         )
 
+    def _should_queue_block_transition_delta(
+        self, processed_chunk: Dict[str, Any]
+    ) -> bool:
+        if processed_chunk.get("type") != "content_block_delta":
+            return False
+        delta = processed_chunk.get("delta")
+        if not isinstance(delta, dict):
+            return False
+
+        delta_payload_keys = {
+            "input_json_delta": "partial_json",
+            "text_delta": "text",
+            "thinking_delta": "thinking",
+            "signature_delta": "signature",
+        }
+        payload_key = delta_payload_keys.get(delta.get("type"))
+        return bool(payload_key and delta.get(payload_key))
+
     def __next__(self):  # noqa: PLR0915
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
@@ -373,12 +391,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
                 if should_start_new_block and not self.sent_content_block_finish:
                     # Queue the sequence: content_block_stop -> content_block_start
-                    # For text blocks the trigger chunk is not emitted as a separate
-                    # delta because content_block_start carries the information.
-                    # For tool_use blocks we must also emit the trigger chunk's delta
-                    # when it carries input_json_delta data, because some providers
-                    # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                    # chunk as the function name/id.
+                    # If the trigger chunk also carries content, queue that delta too
+                    # so text, thinking, signatures, and tool args are preserved.
 
                     # 1. Stop current content block
                     self.chunk_queue.append(
@@ -397,14 +411,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         }
                     )
 
-                    # 3. If the trigger chunk carries tool argument data, queue it
-                    # so the input_json_delta is not silently dropped.
-                    if (
-                        processed_chunk.get("type") == "content_block_delta"
-                        and isinstance(processed_chunk.get("delta"), dict)
-                        and processed_chunk["delta"].get("type") == "input_json_delta"
-                        and processed_chunk["delta"].get("partial_json")
-                    ):
+                    # 3. If the trigger chunk carries delta data, queue it.
+                    if self._should_queue_block_transition_delta(processed_chunk):
                         self.chunk_queue.append(processed_chunk)
 
                     self.sent_content_block_finish = False
@@ -615,12 +623,9 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 if not self.queued_usage_chunk:
                     if should_start_new_block and not self.sent_content_block_finish:
                         # Queue the sequence: content_block_stop -> content_block_start
-                        # For text blocks the trigger chunk is not emitted as a separate
-                        # delta because content_block_start carries the information.
-                        # For tool_use blocks we must also emit the trigger chunk's delta
-                        # when it carries input_json_delta data, because some providers
-                        # (e.g. xAI, Gemini) include tool arguments in the same streaming
-                        # chunk as the function name/id.
+                        # If the trigger chunk also carries content, queue that delta
+                        # too so text, thinking, signatures, and tool args are
+                        # preserved.
 
                         # 1. Stop current content block
                         self.chunk_queue.append(
@@ -637,15 +642,8 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             }
                         )
 
-                        # 3. If the trigger chunk carries tool argument data, queue it
-                        # so the input_json_delta is not silently dropped.
-                        if (
-                            processed_chunk.get("type") == "content_block_delta"
-                            and isinstance(processed_chunk.get("delta"), dict)
-                            and processed_chunk["delta"].get("type")
-                            == "input_json_delta"
-                            and processed_chunk["delta"].get("partial_json")
-                        ):
+                        # 3. If the trigger chunk carries delta data, queue it.
+                        if self._should_queue_block_transition_delta(processed_chunk):
                             self.chunk_queue.append(processed_chunk)
 
                         # Reset state for new block

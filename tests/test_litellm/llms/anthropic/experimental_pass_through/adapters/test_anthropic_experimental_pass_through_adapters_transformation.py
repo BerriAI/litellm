@@ -2499,6 +2499,133 @@ class TestAnthropicStreamWrapperToolArgs:
         assert parsed == {"city": "Tokyo"}
 
 
+class TestAnthropicStreamWrapperTextDeltas:
+    """Regression test for Anthropic streams that switch back to text output."""
+
+    def _build_chunks(self):
+        thinking_chunk = ModelResponseStream(
+            id="chatcmpl-456",
+            created=1700000000,
+            model="claude-code-proxy",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        reasoning_content="Checking the request",
+                        thinking_blocks=[
+                            {
+                                "type": "thinking",
+                                "thinking": "Checking the request",
+                                "signature": None,
+                            }
+                        ],
+                        content="",
+                        role="assistant",
+                    ),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        text_chunk = ModelResponseStream(
+            id="chatcmpl-456",
+            created=1700000000,
+            model="claude-code-proxy",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="Here is the answer", role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+        )
+
+        finish_chunk = ModelResponseStream(
+            id="chatcmpl-456",
+            created=1700000000,
+            model="claude-code-proxy",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(),
+                    finish_reason="stop",
+                )
+            ],
+            usage=Usage(prompt_tokens=12, completion_tokens=4, total_tokens=16),
+        )
+
+        return [thinking_chunk, text_chunk, finish_chunk]
+
+    def _make_stream_wrapper(self, chunks):
+        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+            AnthropicStreamWrapper,
+        )
+
+        class SimpleIterator:
+            def __init__(self, items):
+                self._items = iter(items)
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                return next(self._items)
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._items)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        return AnthropicStreamWrapper(
+            completion_stream=SimpleIterator(chunks),
+            model="claude-code-proxy",
+        )
+
+    def _find_text_deltas(self, events):
+        return [
+            e
+            for e in events
+            if isinstance(e, dict)
+            and e.get("type") == "content_block_delta"
+            and isinstance(e.get("delta"), dict)
+            and e["delta"].get("type") == "text_delta"
+            and e["delta"].get("text")
+        ]
+
+    def test_sync_text_delta_not_dropped_when_text_block_starts(self):
+        chunks = self._build_chunks()
+        wrapper = self._make_stream_wrapper(chunks)
+
+        events = list(wrapper)
+        text_deltas = self._find_text_deltas(events)
+
+        assert [delta["delta"]["text"] for delta in text_deltas] == [
+            "Here is the answer"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_text_delta_not_dropped_when_text_block_starts(self):
+        chunks = self._build_chunks()
+        wrapper = self._make_stream_wrapper(chunks)
+
+        events = []
+        async for event in wrapper:
+            events.append(event)
+
+        text_deltas = self._find_text_deltas(events)
+
+        assert [delta["delta"]["text"] for delta in text_deltas] == [
+            "Here is the answer"
+        ]
+
+
 def test_translate_anthropic_tool_choice_none():
     """
     Regression test for issue #24443.
