@@ -1423,7 +1423,8 @@
       "unableToLoadContent": "无法加载分类内容",
       "viewFileFor": "查看 {{fileType}} 文件：{{name}}",
       "contentWillLoad": "展开后将加载内容",
-      "noTopicsSelected": "未选择封锁主题。添加主题以检测和拦截有害内容。"
+      "noTopicsSelected": "未选择封锁主题。添加主题以检测和拦截有害内容。",
+      "previewLabel": "预览"
     },
     "contentFilterConfiguration": {
       "description": "配置模式、关键词和内容分类，以检测和过滤请求及响应中的敏感信息。",
@@ -1571,7 +1572,21 @@
       "primContainsAnyDesc": "检查是否存在任意子字符串",
       "primWordCountDesc": "统计单词数",
       "primCharCountDesc": "统计字符数",
-      "primStringTransformsDesc": "字符串转换"
+      "primStringTransformsDesc": "字符串转换",
+      "modePreCall": "pre_call（请求）",
+      "modePostCall": "post_call（响应）",
+      "modeDuringCall": "during_call（并行）",
+      "modePreMcpCall": "pre_mcp_call（MCP 工具调用前）",
+      "modePostMcpCall": "post_mcp_call（MCP 工具调用后）",
+      "modeDuringMcpCall": "during_mcp_call（MCP 工具调用中）",
+      "fieldTextsDesc": "消息内容（始终）",
+      "fieldImagesDesc": "Base64 图像（视觉）",
+      "fieldToolsDesc": "工具定义",
+      "fieldToolsMcpDesc": "MCP 作为 OpenAI 工具",
+      "fieldToolCallsDesc": "LLM 工具调用",
+      "fieldStructuredMessagesDesc": "完整消息",
+      "fieldModelDesc": "模型名称（始终）",
+      "testInputPlaceholder": "{\"texts\": [\"测试消息\"], ...}"
     },
     "editGuardrailForm": {
       "modalTitle": "编辑护栏",
@@ -2127,7 +2142,9 @@
     "connectionTestSuccess": "连接测试成功！",
     "connectionTestError": "测试连接时出错：{{error}}",
     "modelDeleteSuccess": "模型已成功删除",
-    "modelDeleteFailed": "删除模型失败"
+    "modelDeleteFailed": "删除模型失败",
+    "placeholderModelInfo": "{\"gpt-4\": 100, \"claude-v1\": 200}",
+    "placeholderLitellmParams": "{\"rpm\": 100, \"timeout\": 0, \"stream_timeout\": 0}"
   },
   "common": {
     "save": "保存",
@@ -3221,6 +3238,12 @@
       "imagesCoverage": "图片 {{guarded}}/{{total}}",
       "automatedReasoningFindings": "自动推理发现",
       "rawResponse": "原始 Bedrock 护栏响应"
+    },
+    "prettyMessagesUtils": {
+      "roleSystem": "系统",
+      "roleUser": "用户",
+      "roleAssistant": "助手",
+      "roleTool": "工具结果"
     }
   },
   "userAgentActivity": {
@@ -3581,7 +3604,8 @@
       "label": "Stdio 配置（JSON）",
       "tooltip": "以 JSON 格式粘贴您的 stdio MCP 服务器配置。可使用 config.yaml 中的完整 mcpServers 结构，或仅填写内部服务器配置。",
       "required": "请输入 stdio 配置",
-      "invalidJson": "请输入有效的 JSON"
+      "invalidJson": "请输入有效的 JSON",
+      "placeholder": "{\n  \"mcpServers\": {\n    \"circleci-mcp-server\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@circleci/mcp-server-circleci\"],\n      \"env\": {\n        \"CIRCLECI_TOKEN\": \"your-circleci-token\",\n        \"CIRCLECI_BASE_URL\": \"https://circleci.com\"\n      }\n    }\n  }\n}"
     },
     "userEnvVarsModal": {
       "title": "设置您的凭据",
@@ -4127,7 +4151,8 @@
       "statusMessage": "状态消息：",
       "taskId": "任务 ID：",
       "sessionId": "会话 ID：",
-      "customMetadata": "自定义元数据："
+      "customMetadata": "自定义元数据：",
+      "ttftPrefix": "TTFT:"
     },
     "additionalModelSettings": {
       "useAdvancedParams": "使用高级参数",
@@ -6084,7 +6109,8 @@
       "metadataTooltip": "向量存储的 JSON 元数据（可选）",
       "invalidMetadataJson": "元数据字段中的 JSON 无效",
       "createSuccess": "向量存储创建成功",
-      "createFailed": "创建向量存储失败：{{error}}"
+      "createFailed": "创建向量存储失败：{{error}}",
+      "metadataPlaceholder": "{\"key\": \"value\"}"
     },
     "vectorStoreTable": {
       "colVectorStoreId": "向量存储 ID",
@@ -6639,7 +6665,9 @@
       "deleteMemberInfoTitle": "团队成员信息",
       "userIdLabel": "用户 ID",
       "emailLabel": "邮箱",
-      "roleLabel": "角色"
+      "roleLabel": "角色",
+      "globalGuardrailAriaLabel": "全局护栏",
+      "vaultConfigPlaceholder": "{\"namespace\": \"admin\", \"mount\": \"secret\", \"path_prefix\": \"litellm\"}"
     },
     "teamMemberTab": {
       "noLimits": "无限制",
@@ -7265,7 +7293,8 @@
       "attachedTeams": "关联团队",
       "noTeams": "暂无关联团队",
       "created": "创建时间",
-      "lastUpdated": "最后更新"
+      "lastUpdated": "最后更新",
+      "idLabel": "ID："
     },
     "accessGroupsPage": {
       "title": "访问组",
@@ -8116,7 +8145,8 @@
       "valueTooltip": "注入 LLM 上下文的 Markdown/文本内容，普通字符串即可。",
       "valuePlaceholder": "Agent 需要记住的内容……",
       "labelMetadata": "元数据 <secondary>（可选 JSON）</secondary>",
-      "metadataTooltip": "可选的结构化元数据——如填写必须为有效 JSON。"
+      "metadataTooltip": "可选的结构化元数据——如填写必须为有效 JSON。",
+      "metadataPlaceholder": "{\"tags\": [\"示例\"]}"
     },
     "memoryView": {
       "pageTitle": "记忆",

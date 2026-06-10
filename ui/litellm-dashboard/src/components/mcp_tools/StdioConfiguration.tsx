@@ -44,18 +44,7 @@ const StdioConfiguration: React.FC<StdioConfigurationProps> = ({ isVisible, requ
       ]}
     >
       <Input.TextArea
-        placeholder={`{
-  "mcpServers": {
-    "circleci-mcp-server": {
-      "command": "npx",
-      "args": ["-y", "@circleci/mcp-server-circleci"],
-      "env": {
-        "CIRCLECI_TOKEN": "your-circleci-token",
-        "CIRCLECI_BASE_URL": "https://circleci.com"
-      }
-    }
-  }
-}`}
+        placeholder={t("mcpTools.stdioConfiguration.placeholder")}
         rows={12}
         className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500 font-mono text-sm"
       />

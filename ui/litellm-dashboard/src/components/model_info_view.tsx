@@ -1255,7 +1255,7 @@ export default function ModelInfoView({
                           <Form.Item name="model_info" className="mb-0">
                             <Input.TextArea
                               rows={4}
-                              placeholder='{"gpt-4": 100, "claude-v1": 200}'
+                              placeholder={t("modelInfoView.placeholderModelInfo")}
                               defaultValue={JSON.stringify(modelData.model_info, null, 2)}
                             />
                           </Form.Item>
@@ -1283,14 +1283,7 @@ export default function ModelInfoView({
                         </Text>
                         {isEditing ? (
                           <Form.Item name="litellm_extra_params" rules={[{ validator: formItemValidateJSON }]}>
-                            <Input.TextArea
-                              rows={4}
-                              placeholder='{
-                  "rpm": 100,
-                  "timeout": 0,
-                  "stream_timeout": 0
-                }'
-                            />
+                            <Input.TextArea rows={4} placeholder={t("modelInfoView.placeholderLitellmParams")} />
                           </Form.Item>
                         ) : (
                           <div className="mt-1 p-2 bg-gray-50 rounded">

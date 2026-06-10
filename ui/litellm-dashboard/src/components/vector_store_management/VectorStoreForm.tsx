@@ -412,7 +412,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
             rows={4}
             value={metadataJson}
             onChange={(e) => setMetadataJson(e.target.value)}
-            placeholder='{"key": "value"}'
+            placeholder={t("vectorStoreManagement.vectorStoreForm.metadataPlaceholder")}
           />
         </Form.Item>
 

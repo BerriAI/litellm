@@ -180,7 +180,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               {accessGroup.access_group_name}
             </Title>
             <Text type="secondary">
-              ID: <Text copyable>{accessGroup.access_group_id}</Text>
+              {t("accessGroups.accessGroupsDetailsPage.idLabel")} <Text copyable>{accessGroup.access_group_id}</Text>
             </Text>
           </div>
         </div>

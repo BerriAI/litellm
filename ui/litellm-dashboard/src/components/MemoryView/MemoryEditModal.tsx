@@ -91,7 +91,7 @@ export const MemoryEditModal: React.FC<MemoryEditModalProps> = ({ open, mode, in
         >
           <Input.TextArea
             rows={4}
-            placeholder='{"tags": ["example"]}'
+            placeholder={t("memoryView.memoryEditModal.metadataPlaceholder")}
             style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}
           />
         </Form.Item>

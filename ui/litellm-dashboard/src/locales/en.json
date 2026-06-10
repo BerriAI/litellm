@@ -1423,7 +1423,8 @@
       "unableToLoadContent": "Unable to load category content",
       "viewFileFor": "View {{fileType}} for {{name}}",
       "contentWillLoad": "Content will load when expanded",
-      "noTopicsSelected": "No blocked topics selected. Add topics to detect and block harmful content."
+      "noTopicsSelected": "No blocked topics selected. Add topics to detect and block harmful content.",
+      "previewLabel": "Preview"
     },
     "contentFilterConfiguration": {
       "description": "Configure patterns, keywords, and content categories to detect and filter sensitive information in requests and responses.",
@@ -1571,7 +1572,21 @@
       "primContainsAnyDesc": "Check if any substring exists",
       "primWordCountDesc": "Count words",
       "primCharCountDesc": "Count characters",
-      "primStringTransformsDesc": "String transforms"
+      "primStringTransformsDesc": "String transforms",
+      "modePreCall": "pre_call (Request)",
+      "modePostCall": "post_call (Response)",
+      "modeDuringCall": "during_call (Parallel)",
+      "modePreMcpCall": "pre_mcp_call (Before MCP Tool Call)",
+      "modePostMcpCall": "post_mcp_call (After MCP Tool Call)",
+      "modeDuringMcpCall": "during_mcp_call (During MCP Tool Call)",
+      "fieldTextsDesc": "Message content (always)",
+      "fieldImagesDesc": "Base64 images (vision)",
+      "fieldToolsDesc": "Tool definitions",
+      "fieldToolsMcpDesc": "MCP as OpenAI tool",
+      "fieldToolCallsDesc": "LLM tool calls",
+      "fieldStructuredMessagesDesc": "Full messages",
+      "fieldModelDesc": "Model name (always)",
+      "testInputPlaceholder": "{\"texts\": [\"test message\"], ...}"
     },
     "editGuardrailForm": {
       "modalTitle": "Edit Guardrail",
@@ -2127,7 +2142,9 @@
     "connectionTestSuccess": "Connection test successful!",
     "connectionTestError": "Error testing connection: {{error}}",
     "modelDeleteSuccess": "Model deleted successfully",
-    "modelDeleteFailed": "Failed to delete model"
+    "modelDeleteFailed": "Failed to delete model",
+    "placeholderModelInfo": "{\"gpt-4\": 100, \"claude-v1\": 200}",
+    "placeholderLitellmParams": "{\"rpm\": 100, \"timeout\": 0, \"stream_timeout\": 0}"
   },
   "common": {
     "save": "Save",
@@ -3221,6 +3238,12 @@
       "imagesCoverage": "images {{guarded}}/{{total}}",
       "automatedReasoningFindings": "Automated Reasoning Findings",
       "rawResponse": "Raw Bedrock Guardrail Response"
+    },
+    "prettyMessagesUtils": {
+      "roleSystem": "SYSTEM",
+      "roleUser": "USER",
+      "roleAssistant": "ASSISTANT",
+      "roleTool": "TOOL RESULT"
     }
   },
   "userAgentActivity": {
@@ -3581,7 +3604,8 @@
       "label": "Stdio Configuration (JSON)",
       "tooltip": "Paste your stdio MCP server configuration in JSON format. You can use the full mcpServers structure from config.yaml or just the inner server configuration.",
       "required": "Please enter stdio configuration",
-      "invalidJson": "Please enter valid JSON"
+      "invalidJson": "Please enter valid JSON",
+      "placeholder": "{\n  \"mcpServers\": {\n    \"circleci-mcp-server\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"@circleci/mcp-server-circleci\"],\n      \"env\": {\n        \"CIRCLECI_TOKEN\": \"your-circleci-token\",\n        \"CIRCLECI_BASE_URL\": \"https://circleci.com\"\n      }\n    }\n  }\n}"
     },
     "userEnvVarsModal": {
       "title": "Set your credentials",
@@ -4127,7 +4151,8 @@
       "statusMessage": "Status Message:",
       "taskId": "Task ID:",
       "sessionId": "Session ID:",
-      "customMetadata": "Custom Metadata:"
+      "customMetadata": "Custom Metadata:",
+      "ttftPrefix": "TTFT:"
     },
     "additionalModelSettings": {
       "useAdvancedParams": "Use Advanced Parameters",
@@ -6084,7 +6109,8 @@
       "metadataTooltip": "JSON metadata for the vector store (optional)",
       "invalidMetadataJson": "Invalid JSON in metadata field",
       "createSuccess": "Vector store created successfully",
-      "createFailed": "Error creating vector store: {{error}}"
+      "createFailed": "Error creating vector store: {{error}}",
+      "metadataPlaceholder": "{\"key\": \"value\"}"
     },
     "vectorStoreTable": {
       "colVectorStoreId": "Vector Store ID",
@@ -6639,7 +6665,9 @@
       "deleteMemberInfoTitle": "Team Member Information",
       "userIdLabel": "User ID",
       "emailLabel": "Email",
-      "roleLabel": "Role"
+      "roleLabel": "Role",
+      "globalGuardrailAriaLabel": "Global guardrail",
+      "vaultConfigPlaceholder": "{\"namespace\": \"admin\", \"mount\": \"secret\", \"path_prefix\": \"litellm\"}"
     },
     "teamMemberTab": {
       "noLimits": "No Limits",
@@ -7265,7 +7293,8 @@
       "attachedTeams": "Attached Teams",
       "noTeams": "No teams attached",
       "created": "Created",
-      "lastUpdated": "Last Updated"
+      "lastUpdated": "Last Updated",
+      "idLabel": "ID:"
     },
     "accessGroupsPage": {
       "title": "Access Groups",
@@ -8116,7 +8145,8 @@
       "valueTooltip": "Markdown/text injected into LLM context. Plain strings are fine.",
       "valuePlaceholder": "What the agent should remember…",
       "labelMetadata": "Metadata <secondary>(optional JSON)</secondary>",
-      "metadataTooltip": "Optional structured metadata — must be valid JSON if provided."
+      "metadataTooltip": "Optional structured metadata — must be valid JSON if provided.",
+      "metadataPlaceholder": "{\"tags\": [\"example\"]}"
     },
     "memoryView": {
       "pageTitle": "Memory",

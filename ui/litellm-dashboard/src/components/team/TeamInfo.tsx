@@ -684,7 +684,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         onMouseDown={preventTagMouseDown}
         style={{ marginInlineEnd: 4 }}
       >
-        {isGlobal && <GlobalOutlined style={{ marginInlineEnd: 4 }} aria-label="Global guardrail" />}
+        {isGlobal && (
+          <GlobalOutlined style={{ marginInlineEnd: 4 }} aria-label={t("teamPage.teamInfo.globalGuardrailAriaLabel")} />
+        )}
         {label}
       </Tag>
     );
@@ -1508,7 +1510,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     >
                       <Input.TextArea
                         rows={6}
-                        placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                        placeholder={t("teamPage.teamInfo.vaultConfigPlaceholder")}
                         disabled={!premiumUser}
                       />
                     </Form.Item>

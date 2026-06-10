@@ -134,7 +134,7 @@ const DynamicForm: React.FC<DynamicFormProps> = ({
           </TableCell>
           <TableCell>
             <Icon icon={TrashIcon} color="red" onClick={() => handleResetField(value.field_name, index)}>
-              Reset
+              {t("common.reset")}
             </Icon>
           </TableCell>
         </TableRow>

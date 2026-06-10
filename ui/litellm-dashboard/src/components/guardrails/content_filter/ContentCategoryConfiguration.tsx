@@ -290,7 +290,8 @@ const ContentCategoryConfiguration: React.FC<ContentCategoryConfigurationProps> 
           }}
         >
           <div style={{ marginBottom: 8, fontWeight: 500, fontSize: "14px" }}>
-            Preview: {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
+            {t("guardrails.contentCategoryConfiguration.previewLabel")}:{" "}
+            {availableCategories.find((c) => c.name === selectedCategoryName)?.display_name}
             {categoryFileTypes[selectedCategoryName] && (
               <span style={{ marginLeft: 8, fontSize: "12px", color: "#888", fontWeight: 400 }}>
                 ({categoryFileTypes[selectedCategoryName]?.toUpperCase()})

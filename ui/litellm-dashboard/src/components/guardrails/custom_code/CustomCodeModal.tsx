@@ -95,14 +95,14 @@ const CODE_TEMPLATES = {
   },
 };
 
-const MODE_OPTIONS = [
-  { value: "pre_call", label: "pre_call (Request)" },
-  { value: "post_call", label: "post_call (Response)" },
-  { value: "during_call", label: "during_call (Parallel)" },
+const getModeOptions = (t: TFunction) => [
+  { value: "pre_call", label: t("guardrails.customCodeModal.modePreCall") },
+  { value: "post_call", label: t("guardrails.customCodeModal.modePostCall") },
+  { value: "during_call", label: t("guardrails.customCodeModal.modeDuringCall") },
   { value: "logging_only", label: "logging_only" },
-  { value: "pre_mcp_call", label: "pre_mcp_call (Before MCP Tool Call)" },
-  { value: "post_mcp_call", label: "post_mcp_call (After MCP Tool Call)" },
-  { value: "during_mcp_call", label: "during_mcp_call (During MCP Tool Call)" },
+  { value: "pre_mcp_call", label: t("guardrails.customCodeModal.modePreMcpCall") },
+  { value: "post_mcp_call", label: t("guardrails.customCodeModal.modePostMcpCall") },
+  { value: "during_mcp_call", label: t("guardrails.customCodeModal.modeDuringMcpCall") },
 ];
 
 const getPrimitives = (t: TFunction) => ({
@@ -173,6 +173,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
   const { t } = useTranslation();
   const isEditMode = !!editData;
   const primitives = useMemo(() => getPrimitives(t), [t]);
+  const modeOptions = useMemo(() => getModeOptions(t), [t]);
   const [guardrailName, setGuardrailName] = useState("");
   const [mode, setMode] = useState<string[]>(["pre_call"]);
   const [defaultOn, setDefaultOn] = useState(false);
@@ -518,7 +519,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
               mode="multiple"
               value={mode}
               onChange={setMode}
-              options={MODE_OPTIONS}
+              options={modeOptions}
               className="w-full"
               size="middle"
               placeholder={t("guardrails.customCodeModal.modePlaceholder")}
@@ -678,25 +679,28 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                     <div className="mb-2 p-2 bg-gray-50 rounded text-xs text-gray-600 border border-gray-200">
                       <div className="grid grid-cols-2 gap-x-4 gap-y-1">
                         <div>
-                          <strong>texts</strong>: Message content (always)
+                          <strong>texts</strong>: {t("guardrails.customCodeModal.fieldTextsDesc")}
                         </div>
                         <div>
-                          <strong>images</strong>: Base64 images (vision)
+                          <strong>images</strong>: {t("guardrails.customCodeModal.fieldImagesDesc")}
                         </div>
                         <div>
-                          <strong>tools</strong>: Tool definitions <span className="text-orange-600">(pre_call)</span>,
-                          MCP as OpenAI tool <span className="text-purple-600">(pre_mcp_call)</span>
+                          <strong>tools</strong>: {t("guardrails.customCodeModal.fieldToolsDesc")}{" "}
+                          <span className="text-orange-600">(pre_call)</span>,{" "}
+                          {t("guardrails.customCodeModal.fieldToolsMcpDesc")}{" "}
+                          <span className="text-purple-600">(pre_mcp_call)</span>
                         </div>
                         <div>
-                          <strong>tool_calls</strong>: LLM tool calls{" "}
+                          <strong>tool_calls</strong>: {t("guardrails.customCodeModal.fieldToolCallsDesc")}{" "}
                           <span className="text-green-600">(post_call)</span>
                         </div>
                         <div>
-                          <strong>structured_messages</strong>: Full messages{" "}
+                          <strong>structured_messages</strong>:{" "}
+                          {t("guardrails.customCodeModal.fieldStructuredMessagesDesc")}{" "}
                           <span className="text-orange-600">(pre_call)</span>
                         </div>
                         <div>
-                          <strong>model</strong>: Model name (always)
+                          <strong>model</strong>: {t("guardrails.customCodeModal.fieldModelDesc")}
                         </div>
                       </div>
                     </div>
@@ -705,7 +709,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
                       onChange={(e) => setTestInput(e.target.value)}
                       rows={8}
                       className="font-mono text-xs"
-                      placeholder='{"texts": ["test message"], ...}'
+                      placeholder={t("guardrails.customCodeModal.testInputPlaceholder")}
                     />
                   </div>
                   <div className="flex items-center gap-3">

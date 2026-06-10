@@ -132,7 +132,9 @@ const A2AMetrics: React.FC<A2AMetricsProps> = ({ a2aMetadata, timeToFirstToken, 
         {/* Time to first token */}
         {timeToFirstToken !== undefined && (
           <Tooltip title={t("playground.a2AMetrics.timeToFirstToken")}>
-            <span className="flex items-center text-green-600">TTFT: {(timeToFirstToken / 1000).toFixed(2)}s</span>
+            <span className="flex items-center text-green-600">
+              {t("playground.a2AMetrics.ttftPrefix")} {(timeToFirstToken / 1000).toFixed(2)}s
+            </span>
           </Tooltip>
         )}
       </div>

@@ -226,7 +226,7 @@ const MakeModelPublicForm: React.FC<MakeModelPublicFormProps> = ({
 
         <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
           <Text className="text-sm text-yellow-800">
-            <strong>Warning:</strong>{" "}
+            <strong>{t("common.warning")}:</strong>{" "}
             <Trans i18nKey="aiHub.makeModelPublicForm.warningText" components={{ code: <code key="code" /> }} />
           </Text>
         </div>
