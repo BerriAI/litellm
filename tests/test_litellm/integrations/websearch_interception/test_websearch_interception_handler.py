@@ -34,6 +34,35 @@ def test_initialize_from_proxy_config():
     assert logger.search_tool_name == "my-search"
 
 
+def test_initialize_from_proxy_config_ignores_non_dict_callback_specific_params():
+    """Regression (#29590): a non-dict value under
+    callback_settings.websearch_interception must not crash initialization.
+
+    Forwarding callback_settings as callback_specific_params activates this
+    branch; without the isinstance(dict) guard a non-dict value reached
+    from_config_yaml(...).get(...) and raised AttributeError at proxy startup.
+    The value is ignored and the logger falls back to defaults.
+    """
+    logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings={},
+        callback_specific_params={"websearch_interception": True},
+    )
+
+    assert logger.search_tool_name is None
+
+
+def test_initialize_from_proxy_config_honors_dict_callback_specific_params():
+    """A valid dict under callback_settings.websearch_interception is applied."""
+    logger = WebSearchInterceptionLogger.initialize_from_proxy_config(
+        litellm_settings={},
+        callback_specific_params={
+            "websearch_interception": {"search_tool_name": "ws-tool"}
+        },
+    )
+
+    assert logger.search_tool_name == "ws-tool"
+
+
 @pytest.mark.asyncio
 async def test_async_should_run_agentic_loop():
     """Test that agentic loop is NOT triggered for wrong provider or missing WebSearch tool"""
