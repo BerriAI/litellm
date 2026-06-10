@@ -12,6 +12,7 @@ import time
 import traceback
 from datetime import datetime as dt_object
 from functools import lru_cache
+from typing_extensions import TypedDict
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -291,6 +292,40 @@ def _get_cached_prometheus_logger():
     return _PrometheusLogger
 
 
+ModelTransparencyMismatch = Union[
+    Literal["requested_vs_resolved_mismatch", "resolved_vs_response_mismatch"],
+    bool,
+]
+
+UsageSource = Literal["upstream", "missing"]
+
+
+class ModelTransparencyData(TypedDict):
+    requested_model: str
+    resolved_model: str
+    response_model: str
+    model_mismatch: ModelTransparencyMismatch
+    usage_source: UsageSource
+
+
+ResponseCostCalculatorResult = Union[
+    CostResponseTypes,
+    ModelResponseStream,
+    HttpxBinaryResponseContent,
+    RerankResponse,
+    Batch,
+    FineTuningJob,
+    ResponsesAPIResponse,
+    ResponseCompletedEvent,
+    OpenAIFileObject,
+    LiteLLMRealtimeStreamLoggingObject,
+    OpenAIModerationResponse,
+    SearchResponse,
+    dict,
+    list,
+]
+
+
 class Logging(LiteLLMLoggingBaseClass):
     global supabaseClient, promptLayerLogger, weightsBiasesLogger, logfireLogger, capture_exception, add_breadcrumb, lunaryLogger, logfireLogger, prometheusLogger, slack_app
     custom_pricing: bool = False
@@ -426,6 +461,58 @@ class Logging(LiteLLMLoggingBaseClass):
         self._defer_async_logging: bool = False
         self._enqueue_deferred_logging: Optional[Callable[[], None]] = None
 
+    def _calculate_model_transparency(
+        self, response_obj: Any = None
+    ) -> ModelTransparencyData:
+        """
+        Calculates the requested vs resolved vs response model mismatch metadata.
+        """
+        requested_model = self.model or ""
+
+        resolved_model_value: Any = self.litellm_params.get("model", requested_model)
+        resolved_model = (
+            resolved_model_value
+            if isinstance(resolved_model_value, str)
+            else requested_model
+        )
+
+        response_model_value: Any = None
+        if isinstance(response_obj, dict):
+            response_model_value = response_obj.get("model")
+        elif response_obj is not None:
+            response_model_value = getattr(response_obj, "model", None)
+
+        response_model = (
+            response_model_value if isinstance(response_model_value, str) else ""
+        )
+
+        model_mismatch: ModelTransparencyMismatch = False
+        if requested_model != resolved_model:
+            model_mismatch = "requested_vs_resolved_mismatch"
+        elif (
+            response_model
+            and resolved_model
+            and resolved_model not in response_model
+            and response_model not in resolved_model
+        ):
+            model_mismatch = "resolved_vs_response_mismatch"
+
+        usage_value: Any = None
+        if isinstance(response_obj, dict):
+            usage_value = response_obj.get("usage")
+        elif response_obj is not None:
+            usage_value = getattr(response_obj, "usage", None)
+
+        usage_source: UsageSource = "upstream" if usage_value is not None else "missing"
+
+        return {
+            "requested_model": requested_model,
+            "resolved_model": resolved_model,
+            "response_model": response_model,
+            "model_mismatch": model_mismatch,
+            "usage_source": usage_source,
+        }
+
     def process_dynamic_callbacks(self):
         """
         Initializes CustomLogger compatible callbacks in self.dynamic_* callbacks
@@ -481,13 +568,17 @@ class Logging(LiteLLMLoggingBaseClass):
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
             ):
+                compatible_callback = cast(
+                    _custom_logger_compatible_callbacks_literal, callback
+                )
                 callback_class = _init_custom_logger_compatible_class(
-                    callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                    logging_integration=compatible_callback,
+                    internal_usage_cache=None,
+                    llm_router=None,  # type: ignore
                 )
                 if callback_class is not None:
                     processed_list.append(callback_class)
 
-                    # If processing dynamic_success_callbacks, add to dynamic_async_success_callbacks
                     if dynamic_callbacks_type == "success":
                         if self.dynamic_async_success_callbacks is None:
                             self.dynamic_async_success_callbacks = []
@@ -1147,12 +1238,12 @@ class Logging(LiteLLMLoggingBaseClass):
                 if self.litellm_request_debug:
                     verbose_logger.warning(  # .warning ensures this shows up in all environments
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {api_base}, **masked_headers},
+                        extra={"api_base": api_base, **masked_headers},
                     )
                 else:
                     verbose_logger.debug(
                         "POST Request Sent from LiteLLM",
-                        extra={"api_base": {api_base}, **masked_headers},
+                        extra={"api_base": api_base, **masked_headers},
                     )
             else:
                 headers = additional_args.get("headers", {})
@@ -1850,7 +1941,11 @@ class Logging(LiteLLMLoggingBaseClass):
                 self.model_call_details["litellm_params"].setdefault("metadata", {})
                 if self.model_call_details["litellm_params"]["metadata"] is None:
                     self.model_call_details["litellm_params"]["metadata"] = {}
-                self.model_call_details["litellm_params"]["metadata"]["hidden_params"] = getattr(logging_result, "_hidden_params", {})  # type: ignore
+                self.model_call_details["litellm_params"]["metadata"][
+                    "hidden_params"
+                ] = getattr(
+                    logging_result, "_hidden_params", {}
+                )  # type: ignore
 
         if self.model_call_details.get("cache_hit") is True:
             self.model_call_details["response_cost"] = 0.0
@@ -1929,7 +2024,9 @@ class Logging(LiteLLMLoggingBaseClass):
             )
 
             result = result.model_copy()
-            transformed_usage = TranscriptionUsageObjectTransformation.transform_transcription_usage_object(result.usage)  # type: ignore
+            transformed_usage = TranscriptionUsageObjectTransformation.transform_transcription_usage_object(
+                result.usage
+            )  # type: ignore
             setattr(result, "usage", transformed_usage)
         return result
 
@@ -4505,7 +4602,7 @@ def _maybe_auto_initialize_arize_phoenix(_in_memory_loggers: list) -> None:
         litellm.logging_callback_manager.add_litellm_callback(phoenix_logger)
 
         verbose_logger.info(
-            "Auto-initialized Arize Phoenix logger alongside otel " "(endpoint=%s)",
+            "Auto-initialized Arize Phoenix logger alongside otel (endpoint=%s)",
             arize_phoenix_config.endpoint,
         )
     except Exception as e:
@@ -5555,7 +5652,7 @@ def _extract_response_obj_and_hidden_params(
     return response_obj, hidden_params
 
 
-def get_standard_logging_object_payload(
+def get_standard_logging_object_payload(  # noqa: PLR0915
     kwargs: Optional[dict],
     init_response_obj: Union[Any, BaseModel, dict],
     start_time: dt_object,
@@ -5643,7 +5740,8 @@ def get_standard_logging_object_payload(
             id = f"{id}_cache_hit{time.time()}"  # do not duplicate the request id
             saved_cache_cost = (
                 logging_obj._response_cost_calculator(
-                    result=init_response_obj, cache_hit=False  # type: ignore
+                    result=cast(ResponseCostCalculatorResult, init_response_obj),
+                    cache_hit=False,
                 )
                 or 0.0
             )
@@ -5782,7 +5880,19 @@ def get_standard_logging_object_payload(
 
         # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
 
+        if logging_obj is not None:
+            transparency_data = logging_obj._calculate_model_transparency(
+                response_obj=init_response_obj
+            )
+
+            payload["requested_model"] = transparency_data["requested_model"]
+            payload["resolved_model"] = transparency_data["resolved_model"]
+            payload["response_model"] = transparency_data["response_model"]
+            payload["model_mismatch"] = transparency_data["model_mismatch"]
+            payload["usage_source"] = transparency_data["usage_source"]
+
         return payload
+
     except Exception as e:
         verbose_logger.exception(
             "Error creating standard logging object - {}".format(str(e))
@@ -5907,8 +6017,6 @@ def _get_traceback_str_for_error(error_str: str) -> str:
     return traceback.format_exc()
 
 
-from decimal import Decimal
-
 # used for unit testing
 from typing import Any, Dict, List, Optional, Union
 
@@ -5920,16 +6028,16 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
     )
 
     metadata = StandardLoggingMetadata(  # type: ignore
-        user_api_key_hash=str("test_hash"),
-        user_api_key_alias=str("test_alias"),
-        user_api_key_team_id=str("test_team"),
-        user_api_key_user_id=str("test_user"),
-        user_api_key_team_alias=str("test_team_alias"),
+        user_api_key_hash="test_hash",
+        user_api_key_alias="test_alias",
+        user_api_key_team_id="test_team",
+        user_api_key_user_id="test_user",
+        user_api_key_team_alias="test_team_alias",
         user_api_key_org_id=None,
         spend_logs_metadata=None,
-        requester_ip_address=str("127.0.0.1"),
+        requester_ip_address="127.0.0.1",
         requester_metadata=None,
-        user_api_key_end_user_id=str("test_end_user"),
+        user_api_key_end_user_id="test_end_user",
     )
 
     hidden_params = StandardLoggingHiddenParams(
@@ -5944,12 +6052,12 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         usage_object=None,
     )
 
-    # Convert numeric values to appropriate types
-    response_cost = Decimal("0.1")
-    start_time = Decimal("1234567890.0")
-    end_time = Decimal("1234567891.0")
-    completion_start_time = Decimal("1234567890.5")
-    saved_cache_cost = Decimal("0.0")
+    # FIX: Use native floats instead of Decimal
+    response_cost = 0.1
+    start_time = 1234567890.0
+    end_time = 1234567891.0
+    completion_start_time = 1234567890.5
+    saved_cache_cost = 0.0
 
     # Create messages and response with proper typing
     messages: List[Dict[str, str]] = [{"role": "user", "content": "Hello, world!"}]
@@ -5959,12 +6067,12 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
 
     # Main payload initialization
     return StandardLoggingPayload(  # type: ignore
-        id=str("test_id"),
-        call_type=str("completion"),
-        stream=bool(False),
+        id="test_id",  # FIX: remove str() wrappers
+        call_type="completion",
+        stream=False,
         response_cost=response_cost,
         response_cost_failure_debug_info=None,
-        status=str("success"),
+        status="success",  # FIX: Literal expects "success", not str("success")
         total_tokens=int(
             DEFAULT_MOCK_RESPONSE_PROMPT_TOKEN_COUNT
             + DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
@@ -5975,21 +6083,26 @@ def create_dummy_standard_logging_payload() -> StandardLoggingPayload:
         endTime=end_time,
         completionStartTime=completion_start_time,
         model_map_information=model_info,
-        model=str("gpt-3.5-turbo"),
-        model_id=str("model-123"),
-        model_group=str("openai-gpt"),
-        custom_llm_provider=str("openai"),
-        api_base=str("https://api.openai.com"),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai-gpt",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
         metadata=metadata,
-        cache_hit=bool(False),
+        cache_hit=False,
         cache_key=None,
         saved_cache_cost=saved_cache_cost,
         request_tags=[],
         end_user=None,
-        requester_ip_address=str("127.0.0.1"),
+        requester_ip_address="127.0.0.1",
         messages=messages,
         response=response,
         error_str=None,
         model_parameters={"stream": True},
         hidden_params=hidden_params,
+        requested_model="gpt-3.5-turbo",
+        resolved_model="gpt-3.5-turbo",
+        response_model="gpt-3.5-turbo-0613",
+        model_mismatch=False,
+        usage_source="upstream",
     )

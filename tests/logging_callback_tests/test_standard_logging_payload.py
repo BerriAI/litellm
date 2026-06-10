@@ -2,11 +2,9 @@
 Unit tests for StandardLoggingPayloadSetup
 """
 
-import json
 import os
 import sys
 from datetime import datetime
-from unittest.mock import AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -23,7 +21,6 @@ from litellm.types.utils import (
     StandardLoggingHiddenParams,
 )
 from create_mock_standard_logging_payload import (
-    create_standard_logging_payload,
     create_standard_logging_payload_with_long_content,
 )
 from litellm.litellm_core_utils.litellm_logging import (
@@ -78,6 +75,124 @@ def test_get_usage(response_obj, expected_values):
     assert usage.prompt_tokens == expected_values[0]
     assert usage.completion_tokens == expected_values[1]
     assert usage.total_tokens == expected_values[2]
+
+
+def test_calculate_model_transparency_for_object_response():
+    from types import SimpleNamespace
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "gpt-4o"}
+
+    response_obj = SimpleNamespace(
+        model="claude-3-haiku",
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == "gpt-4o"
+    assert result["resolved_model"] == "gpt-4o"
+    assert result["response_model"] == "claude-3-haiku"
+    assert result["model_mismatch"] == "resolved_vs_response_mismatch"
+    assert result["usage_source"] == "upstream"
+
+
+def test_calculate_model_transparency_for_dict_response_requested_resolved_mismatch():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "azure/gpt-4-deployment"}
+
+    response_obj = {
+        "model": "gpt-4-0613",
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == "gpt-4"
+    assert result["resolved_model"] == "azure/gpt-4-deployment"
+    assert result["response_model"] == "gpt-4-0613"
+    assert result["model_mismatch"] == "requested_vs_resolved_mismatch"
+    assert result["usage_source"] == "upstream"
+
+
+def test_standard_logging_payload_includes_model_transparency_fields():
+    from litellm.litellm_core_utils.litellm_logging import (
+        Logging,
+        get_standard_logging_object_payload,
+    )
+
+    logging_obj = Logging(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "azure/gpt-4-deployment"}
+
+    response_obj = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "model": "gpt-4-0613",
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "response_cost": 0.0,
+            "custom_llm_provider": "openai",
+        },
+        init_response_obj=response_obj,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload["requested_model"] == "gpt-4"
+    assert payload["resolved_model"] == "azure/gpt-4-deployment"
+    assert payload["response_model"] == "gpt-4-0613"
+    assert payload["model_mismatch"] == "requested_vs_resolved_mismatch"
+    assert payload["usage_source"] == "upstream"
 
 
 def test_get_usage_from_image_generation_response():
@@ -177,6 +292,215 @@ def test_get_additional_headers():
     )
 
 
+def test_calculate_model_transparency_missing_usage_no_mismatch():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "gpt-4o"}
+
+    response_obj = {
+        "model": "gpt-4o",
+    }
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == "gpt-4o"
+    assert result["resolved_model"] == "gpt-4o"
+    assert result["response_model"] == "gpt-4o"
+    assert result["model_mismatch"] is False
+    assert result["usage_source"] == "missing"
+
+
+def test_calculate_model_transparency_response_model_missing():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "gpt-4o"}
+
+    response_obj = {
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        }
+    }
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == "gpt-4o"
+    assert result["resolved_model"] == "gpt-4o"
+    assert result["response_model"] == ""
+    assert result["model_mismatch"] is False
+    assert result["usage_source"] == "upstream"
+
+
+def test_calculate_model_transparency_non_string_resolved_model_falls_back_to_requested():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": {"deployment": "gpt-4o"}}
+
+    response_obj = {
+        "model": "gpt-4o",
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == "gpt-4o"
+    assert result["resolved_model"] == "gpt-4o"
+    assert result["response_model"] == "gpt-4o"
+    assert result["model_mismatch"] is False
+    assert result["usage_source"] == "upstream"
+
+
+def test_calculate_model_transparency_none_response_object():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "gpt-4o"}
+
+    result = logging_obj._calculate_model_transparency(response_obj=None)
+
+    assert result["requested_model"] == "gpt-4o"
+    assert result["resolved_model"] == "gpt-4o"
+    assert result["response_model"] == ""
+    assert result["model_mismatch"] is False
+    assert result["usage_source"] == "missing"
+
+
+def test_calculate_model_transparency_empty_requested_model():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-empty-model",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {}
+
+    response_obj = {
+        "model": "",
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == ""
+    assert result["resolved_model"] == ""
+    assert result["response_model"] == ""
+    assert result["model_mismatch"] is False
+    assert result["usage_source"] == "upstream"
+
+
+def test_calculate_model_transparency_non_string_response_model():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-non-string-response-model",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "gpt-4o"}
+
+    response_obj = {
+        "model": {"name": "gpt-4o"},
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == "gpt-4o"
+    assert result["resolved_model"] == "gpt-4o"
+    assert result["response_model"] == ""
+    assert result["model_mismatch"] is False
+    assert result["usage_source"] == "upstream"
+
+
+def test_calculate_model_transparency_response_model_with_version_suffix_no_mismatch():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gpt-4",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test-function",
+    )
+    logging_obj.litellm_params = {"model": "gpt-4"}
+
+    response_obj = {
+        "model": "gpt-4-0613",
+        "usage": {
+            "prompt_tokens": 1,
+            "completion_tokens": 1,
+            "total_tokens": 2,
+        },
+    }
+
+    result = logging_obj._calculate_model_transparency(response_obj=response_obj)
+
+    assert result["requested_model"] == "gpt-4"
+    assert result["resolved_model"] == "gpt-4"
+    assert result["response_model"] == "gpt-4-0613"
+    assert result["model_mismatch"] is False
+    assert result["usage_source"] == "upstream"
+
+
 def all_fields_present(standard_logging_metadata: StandardLoggingMetadata):
     for field in StandardLoggingMetadata.__annotations__.keys():
         assert field in standard_logging_metadata
@@ -205,8 +529,6 @@ def test_get_standard_logging_metadata(metadata_key, metadata_value):
     standard_logging_metadata = (
         StandardLoggingPayloadSetup.get_standard_logging_metadata(metadata)
     )
-
-    print("standard_logging_metadata", standard_logging_metadata)
 
     # Assert that all fields in StandardLoggingMetadata are present
     all_fields_present(standard_logging_metadata)
@@ -325,7 +647,6 @@ def test_get_model_cost_information():
     litellm_info_gpt_3_5_turbo_model_map_value = litellm.get_model_info(
         model="gpt-5-mini", custom_llm_provider="openai"
     )
-    print("result", result)
     assert result["model_map_key"] == "gpt-5-mini"
     assert result["model_map_value"] is not None
     assert result["model_map_value"] == litellm_info_gpt_3_5_turbo_model_map_value
@@ -392,8 +713,6 @@ def test_get_final_response_obj():
             response_obj=model_response, init_response_obj=model_response, kwargs=kwargs
         )
 
-        print("result", result)
-        print("type(result)", type(result))
         # Verify response message content was redacted
         assert result["choices"][0]["message"]["content"] == "redacted-by-litellm"
         # Verify that redaction occurred in kwargs
@@ -467,11 +786,6 @@ def test_truncate_standard_logging_payload():
     assert len_original_response == len(str(original_response))
     assert len_original_error_str == len(str(original_error_str))
 
-    print(
-        "logged standard_logging_payload",
-        json.dumps(standard_logging_payload, indent=2),
-    )
-
     # Logged messages, response, and error_str should be truncated
     # assert len of messages is less than 10_500
     assert len(str(standard_logging_payload["messages"])) < 10_500
@@ -498,7 +812,6 @@ def test_get_error_information():
 
     # Test with None
     result = StandardLoggingPayloadSetup.get_error_information(None)
-    print("error_information", json.dumps(result, indent=2))
     assert result["error_code"] == ""
     assert result["error_class"] == ""
     assert result["llm_provider"] == ""
@@ -506,7 +819,6 @@ def test_get_error_information():
     # Test with a basic Exception
     basic_exception = Exception("Test error")
     result = StandardLoggingPayloadSetup.get_error_information(basic_exception)
-    print("error_information", json.dumps(result, indent=2))
     assert result["error_code"] == ""
     assert result["error_class"] == "Exception"
     assert result["llm_provider"] == ""
@@ -522,7 +834,6 @@ def test_get_error_information():
         num_retries=None,
     )
     result = StandardLoggingPayloadSetup.get_error_information(litellm_exception)
-    print("error_information", json.dumps(result, indent=2))
     assert result["error_code"] == "429"
     assert result["error_class"] == "RateLimitError"
     assert result["llm_provider"] == "openai"
@@ -597,9 +908,7 @@ def test_cost_breakdown_in_standard_logging_payload():
         get_standard_logging_object_payload,
         Logging,
     )
-    from litellm.types.utils import Usage
     from datetime import datetime
-    import time
 
     # Create a mock logging object with cost breakdown
     logging_obj = Logging(
@@ -672,8 +981,6 @@ def test_cost_breakdown_in_standard_logging_payload():
     assert payload["cost_breakdown"]["total_cost"] == 0.0035
     assert payload["response_cost"] == 0.0035
 
-    print("✅ Cost breakdown test passed!")
-
 
 def test_cost_breakdown_missing_in_standard_logging_payload():
     """
@@ -730,8 +1037,6 @@ def test_cost_breakdown_missing_in_standard_logging_payload():
     assert payload is not None
     assert payload["cost_breakdown"] is None
     assert payload["response_cost"] == 0.0001
-
-    print("✅ Cost breakdown missing test passed!")
 
 
 @pytest.mark.parametrize(
