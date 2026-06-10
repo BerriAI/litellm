@@ -306,7 +306,7 @@ class HighflameGuardrail(CustomGuardrail):
         guard_response = await self.call_highflame_guard(
             content=text,
             content_type="response",
-            action="process_prompt",
+            action="process_response",
             event_type=event_type,
         )
         self._raise_if_denied(guard_response)

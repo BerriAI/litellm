@@ -290,6 +290,7 @@ async def test_post_call_hook_allows():
     assert out is response
     body = gr.async_handler.post.call_args_list[1].kwargs["json"]
     assert body["content_type"] == "response"
+    assert body["action"] == "process_response"
 
 
 @pytest.mark.asyncio
