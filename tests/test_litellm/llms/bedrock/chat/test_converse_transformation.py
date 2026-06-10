@@ -5267,3 +5267,122 @@ def test_transform_response_does_not_leak_body_on_parse_failure():
     msg = str(exc_info.value)
     assert "secret content" not in msg
     assert "Error converting to valid response block" in msg
+
+
+def test_converse_drops_sampling_params_for_models_that_removed_them():
+    """Fable 5 / Opus 4.7 / 4.8 reject temperature != 1 and any top_p; with
+    drop_params set, converse must drop them instead of forwarding (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-fable-5",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
+    assert "topP" not in result
+
+
+def test_converse_sampling_params_raise_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model="global.anthropic.claude-opus-4-8-v1:0",
+            drop_params=False,
+        )
+
+
+def test_converse_sampling_params_forwarded_on_models_that_accept_them():
+    config = AmazonConverseConfig()
+
+    result = config.map_openai_params(
+        non_default_params={"temperature": 0.5, "top_p": 0.9},
+        optional_params={},
+        model="us.anthropic.claude-sonnet-4-6",
+        drop_params=True,
+    )
+
+    assert result["temperature"] == 0.5
+    assert result["topP"] == 0.9
+
+
+def test_converse_top_k_dropped_for_models_that_removed_it():
+    """``top_k`` reaches converse as a provider-specific kwarg destined for
+    ``additionalModelRequestFields``, bypassing ``map_openai_params``; the
+    transform must strip it for models that removed sampling params (#30064)."""
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-fable-5",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert "top_k" not in result.get("additionalModelRequestFields", {})
+
+
+def test_converse_top_k_raises_without_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 40},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 40},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 40
+
+
+def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
+    """``top_k=0`` must hit the same gating as any other value; previously the
+    truthiness check let it silently disappear on models that removed sampling
+    params, diverging from the Anthropic boundary that treats ``0`` as present."""
+    monkeypatch.setattr(litellm, "drop_params", False)
+    config = AmazonConverseConfig()
+
+    with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
+        config.transform_request(
+            model="us.anthropic.claude-fable-5",
+            messages=[{"role": "user", "content": "hello"}],
+            optional_params={"top_k": 0},
+            litellm_params={},
+            headers={},
+        )
+
+
+def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
+    config = AmazonConverseConfig()
+
+    result = config.transform_request(
+        model="us.anthropic.claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={"top_k": 0},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+
+    assert result["additionalModelRequestFields"]["top_k"] == 0
