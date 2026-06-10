@@ -38,11 +38,15 @@ def make_kwargs(
     }
 
 
-@pytest.mark.asyncio
-async def test_init_requires_api_key(monkeypatch):
+def test_init_requires_api_key(monkeypatch):
     monkeypatch.delenv("FAROS_API_KEY", raising=False)
     with pytest.raises(ValueError, match="FAROS_API_KEY"):
         FarosLogger()
+
+
+def test_init_without_running_event_loop():
+    logger = make_logger()
+    assert logger.flush_lock is not None
 
 
 @pytest.mark.asyncio
@@ -189,15 +193,26 @@ def test_faros_is_a_registered_callback():
 @pytest.mark.asyncio
 async def test_init_custom_logger_compatible_class_returns_singleton(monkeypatch):
     from litellm.litellm_core_utils.litellm_logging import (
-        _init_custom_logger_compatible_class,
         _in_memory_loggers,
+        _init_custom_logger_compatible_class,
+        get_custom_logger_compatible_class,
     )
 
     monkeypatch.setenv("FAROS_API_KEY", "test-key")
+    assert get_custom_logger_compatible_class("faros") is None
     created = _init_custom_logger_compatible_class("faros", None, None)
     try:
         assert isinstance(created, FarosLogger)
         again = _init_custom_logger_compatible_class("faros", None, None)
         assert again is created
+        assert get_custom_logger_compatible_class("faros") is created
     finally:
         _in_memory_loggers.remove(created)
+
+
+@pytest.mark.asyncio
+async def test_send_batch_with_empty_queue_does_not_post():
+    mock_post = AsyncMock()
+    logger = make_logger(mock_post=mock_post)
+    await logger.async_send_batch()
+    mock_post.assert_not_awaited()
