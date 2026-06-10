@@ -9948,7 +9948,9 @@ class Router:
         }
 
     @staticmethod
-    def _are_all_deployments_blocked(deployments: List[Dict]) -> bool:
+    def _are_all_deployments_blocked(
+        deployments: List[DeploymentTypedDict],
+    ) -> bool:
         return len(deployments) > 0 and all(
             (deployment.get("model_info") or {}).get("blocked") is True
             for deployment in deployments
