@@ -16,14 +16,11 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
 
 // Stub modals and the detail page to keep tests focused on the list page
 vi.mock("./ProjectModals/CreateProjectModal", () => ({
-  CreateProjectModal: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <div data-testid="create-modal" /> : null,
+  CreateProjectModal: ({ isOpen }: { isOpen: boolean }) => (isOpen ? <div data-testid="create-modal" /> : null),
 }));
 
 vi.mock("./ProjectDetailsPage", () => ({
-  ProjectDetail: ({ projectId }: { projectId: string }) => (
-    <div data-testid="project-detail">{projectId}</div>
-  ),
+  ProjectDetail: ({ projectId }: { projectId: string }) => <div data-testid="project-detail">{projectId}</div>,
 }));
 
 const mockProjects: ProjectResponse[] = [
@@ -134,10 +131,7 @@ describe("ProjectsPage", () => {
     const user = userEvent.setup();
     mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
     renderWithProviders(<ProjectsPage />);
-    await user.type(
-      screen.getByPlaceholderText(/search projects/i),
-      "Alpha"
-    );
+    await user.type(screen.getByPlaceholderText(/search projects/i), "Alpha");
     await waitFor(() => {
       expect(screen.getByText("Alpha Project")).toBeInTheDocument();
       expect(screen.queryByText("Beta Project")).not.toBeInTheDocument();

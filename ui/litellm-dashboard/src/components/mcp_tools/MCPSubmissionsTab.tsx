@@ -24,10 +24,7 @@ import NotificationsManager from "@/components/molecules/notifications_manager";
 
 type MCPStatus = "active" | "pending_review" | "rejected";
 
-const STATUS_CONFIG: Record<
-  MCPStatus,
-  { label: string; bg: string; text: string; dot: string }
-> = {
+const STATUS_CONFIG: Record<MCPStatus, { label: string; bg: string; text: string; dot: string }> = {
   active: {
     label: "Active",
     bg: "bg-green-50",
@@ -58,15 +55,7 @@ function formatDate(value: string | null | undefined): string {
   }
 }
 
-function StatCard({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: number;
-  color: string;
-}) {
+function StatCard({ label, value, color }: { label: string; value: number; color: string }) {
   return (
     <div className="bg-white border border-gray-200 rounded-lg px-4 py-3">
       <div className={`text-2xl font-bold ${color}`}>{value}</div>
@@ -107,11 +96,8 @@ function ConfirmDialog({ action, serverName, isCurrentlyActive, onConfirm, onCan
           {isApprove ? "Approve MCP Server" : "Reject MCP Server"}
         </h3>
         <p className="text-sm text-gray-500 mb-4">
-          Are you sure you want to {action}{" "}
-          <span className="font-medium text-gray-700">&quot;{serverName}&quot;</span>?{" "}
-          {isApprove
-            ? "This will make it active and available for use."
-            : rejectBody}
+          Are you sure you want to {action} <span className="font-medium text-gray-700">&quot;{serverName}&quot;</span>?{" "}
+          {isApprove ? "This will make it active and available for use." : rejectBody}
         </p>
         {!isApprove && (
           <textarea
@@ -205,23 +191,18 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
       {expanded && (
         <div className="border-t border-gray-100 px-4 pt-4 pb-4">
           <p className="text-xs text-gray-500 mb-4">
-            Select which fields must be filled in before a submission is considered compliant.
-            LiteLLM will show ✓ / ✗ for each rule on every submission card below.
+            Select which fields must be filled in before a submission is considered compliant. LiteLLM will show ✓ / ✗
+            for each rule on every submission card below.
           </p>
           <div className="grid grid-cols-2 gap-x-8 gap-y-5">
             {FIELD_GROUPS.map((group) => (
               <div key={group.label}>
-                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                  {group.label}
-                </div>
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">{group.label}</div>
                 <div className="space-y-2">
                   {group.fields.map((field) => {
                     const active = requiredFields.includes(field.key);
                     return (
-                      <label
-                        key={field.key}
-                        className="flex items-start gap-2.5 cursor-pointer group"
-                      >
+                      <label key={field.key} className="flex items-start gap-2.5 cursor-pointer group">
                         <input
                           type="checkbox"
                           checked={active}
@@ -305,9 +286,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
             <h3 className="text-sm font-semibold text-gray-900">
               {server.alias ?? server.server_name ?? server.server_id}
             </h3>
-            {server.description && (
-              <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{server.description}</p>
-            )}
+            {server.description && <p className="text-xs text-gray-500 mt-0.5 line-clamp-1">{server.description}</p>}
             {server.url && (
               <div className="flex items-center gap-1.5 mt-1.5">
                 <ServerIcon className="h-3.5 w-3.5 text-gray-400 flex-shrink-0" />
@@ -315,9 +294,13 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               </div>
             )}
             <div className="flex items-center gap-3 mt-1.5 text-xs text-gray-400">
-              <span>Transport: <span className="text-gray-600">{server.transport ?? "sse"}</span></span>
+              <span>
+                Transport: <span className="text-gray-600">{server.transport ?? "sse"}</span>
+              </span>
               <span>·</span>
-              <span>Submitted by: <span className="text-gray-600">{server.submitted_by ?? "—"}</span></span>
+              <span>
+                Submitted by: <span className="text-gray-600">{server.submitted_by ?? "—"}</span>
+              </span>
               <span>·</span>
               <span>{formatDate(server.submitted_at)}</span>
             </div>
@@ -375,17 +358,11 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                 allPassed ? "bg-green-500" : "bg-red-500"
               }`}
             >
-              {allPassed ? (
-                <CheckIcon className="h-4 w-4 text-white" />
-              ) : (
-                <XIcon className="h-4 w-4 text-white" />
-              )}
+              {allPassed ? <CheckIcon className="h-4 w-4 text-white" /> : <XIcon className="h-4 w-4 text-white" />}
             </div>
             <div className="flex-1 min-w-0">
               <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-green-800" : "text-red-800"}`}>
-                {allPassed
-                  ? "All checks passed"
-                  : `${failCount} check${failCount !== 1 ? "s" : ""} failed`}
+                {allPassed ? "All checks passed" : `${failCount} check${failCount !== 1 ? "s" : ""} failed`}
               </div>
               <div className="text-xs text-gray-500 mt-0.5">
                 {passCount} passing, {failCount} failing
@@ -439,9 +416,7 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
                     <XIcon className="h-3 w-3 text-red-600" />
                   )}
                 </div>
-                <span className={`text-sm flex-1 ${c.passed ? "text-gray-700" : "text-gray-800"}`}>
-                  {c.label}
-                </span>
+                <span className={`text-sm flex-1 ${c.passed ? "text-gray-700" : "text-gray-800"}`}>{c.label}</span>
                 <span className={`text-xs ${c.passed ? "text-green-600" : "text-red-500"}`}>
                   {c.passed ? "Passes" : "Missing"}
                 </span>
@@ -605,16 +580,10 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
       </div>
 
       <div className="space-y-3">
-        {isLoading && (
-          <div className="text-center py-12 text-gray-500 text-sm">Loading submissions…</div>
-        )}
-        {error && (
-          <div className="text-center py-12 text-red-600 text-sm">{error}</div>
-        )}
+        {isLoading && <div className="text-center py-12 text-gray-500 text-sm">Loading submissions…</div>}
+        {error && <div className="text-center py-12 text-red-600 text-sm">{error}</div>}
         {!isLoading && !error && filtered.length === 0 && (
-          <div className="text-center py-12 text-gray-400 text-sm">
-            No MCP server submissions match your filters.
-          </div>
+          <div className="text-center py-12 text-gray-400 text-sm">No MCP server submissions match your filters.</div>
         )}
         {!isLoading &&
           !error &&

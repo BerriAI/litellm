@@ -79,8 +79,7 @@ export function useMultiCostEstimate(accessToken: string | null) {
           });
         } else {
           const errorData = await response.json();
-          const errorMessage =
-            errorData.detail?.error || errorData.detail || "Failed to estimate cost";
+          const errorMessage = errorData.detail?.error || errorData.detail || "Failed to estimate cost";
           setEntryResults((prev) => {
             const next = new Map(prev);
             next.set(entry.id, {
@@ -106,7 +105,7 @@ export function useMultiCostEstimate(accessToken: string | null) {
         });
       }
     },
-    [accessToken]
+    [accessToken],
   );
 
   const debouncedFetchForEntry = useCallback(
@@ -120,7 +119,7 @@ export function useMultiCostEstimate(accessToken: string | null) {
       }, DEBOUNCE_MS);
       debounceRefs.current.set(entry.id, timeout);
     },
-    [fetchEstimateForEntry]
+    [fetchEstimateForEntry],
   );
 
   const removeEntry = useCallback((id: string) => {
@@ -194,7 +193,7 @@ export function useMultiCostEstimate(accessToken: string | null) {
         },
       };
     },
-    [entryResults]
+    [entryResults],
   );
 
   return {
@@ -203,4 +202,3 @@ export function useMultiCostEstimate(accessToken: string | null) {
     getMultiModelResult,
   };
 }
-

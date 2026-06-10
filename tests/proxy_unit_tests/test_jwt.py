@@ -747,7 +747,6 @@ async def test_allowed_routes_admin(
     from litellm.proxy.proxy_server import user_api_key_auth
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
-    await litellm.proxy.proxy_server.prisma_client.connect()
 
     monkeypatch.setenv("JWT_PUBLIC_KEY_URL", "https://example.com/public-key")
 

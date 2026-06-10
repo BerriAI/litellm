@@ -249,6 +249,13 @@ async def create_response(  # noqa: PLR0915
     If the first chunk is an error, return a standard JSON error response.
     Otherwise, return StreamingResponse and stream all content.
     """
+    # Tell buffering reverse proxies (nginx, ingress-nginx, Envoy) to flush SSE
+    # immediately instead of releasing the whole stream in one batch (issue #28384).
+    streaming_headers = {
+        **headers,
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
     first_chunk_value: Optional[str] = None
     final_status_code = default_status_code
 
@@ -300,7 +307,7 @@ async def create_response(  # noqa: PLR0915
         return StreamingResponse(
             empty_gen(),
             media_type=media_type,
-            headers=headers,
+            headers=streaming_headers,
             status_code=default_status_code,
         )
     except Exception as e:
@@ -338,7 +345,7 @@ async def create_response(  # noqa: PLR0915
         return StreamingResponse(
             error_gen_message(),
             media_type=media_type,
-            headers=headers,
+            headers=streaming_headers,
             status_code=error_status,
         )
 
@@ -360,7 +367,7 @@ async def create_response(  # noqa: PLR0915
     return StreamingResponse(
         combined_generator(),
         media_type=media_type,
-        headers=headers,
+        headers=streaming_headers,
         status_code=final_status_code,
     )
 
@@ -1942,12 +1949,26 @@ class ProxyBaseLLMRequestProcessing:
                 code=status.HTTP_400_BAD_REQUEST,
                 headers=headers,
             )
+        # Extract status_code from the exception if it carries one.
+        # Provider exceptions (NotFoundError, BadRequestError, GeminiError,
+        # VertexAIError, etc.) all have a status_code attribute reflecting
+        # the upstream API response. Use it to return the correct HTTP code
+        # instead of defaulting to 500.
+        _exc_status_code = getattr(e, "status_code", None)
+        if (
+            _exc_status_code is not None
+            and isinstance(_exc_status_code, int)
+            and 400 <= _exc_status_code <= 599
+        ):
+            _code = _exc_status_code
+        else:
+            _code = status.HTTP_500_INTERNAL_SERVER_ERROR
         raise ProxyException(
             message=getattr(e, "message", error_msg),
             type=getattr(e, "type", "None"),
             param=getattr(e, "param", "None"),
             openai_code=getattr(e, "code", None),
-            code=getattr(e, "status_code", 500),
+            code=_code,
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )

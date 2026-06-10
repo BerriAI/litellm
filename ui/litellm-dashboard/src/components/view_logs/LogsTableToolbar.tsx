@@ -195,12 +195,8 @@ export function LogsTableToolbar({
           <div className="flex items-center space-x-4">
             <span className="text-sm text-gray-700 whitespace-nowrap">
               Showing {isLoading ? "..." : filteredLogs ? (currentPage - 1) * pageSize + 1 : 0} -{" "}
-              {isLoading
-                ? "..."
-                : filteredLogs
-                  ? Math.min(currentPage * pageSize, filteredLogs.total)
-                  : 0}{" "}
-              of {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
+              {isLoading ? "..." : filteredLogs ? Math.min(currentPage * pageSize, filteredLogs.total) : 0} of{" "}
+              {isLoading ? "..." : filteredLogs ? filteredLogs.total : 0} results
             </span>
             <div className="flex items-center space-x-2">
               <span className="text-sm text-gray-700 min-w-[90px]">
@@ -230,10 +226,7 @@ export function LogsTableToolbar({
           <div className="flex items-center gap-2">
             <span className="text-sm text-green-700">Auto-refreshing every 15 seconds</span>
           </div>
-          <button
-            onClick={() => onIsLiveTailChange(false)}
-            className="text-sm text-green-600 hover:text-green-800"
-          >
+          <button onClick={() => onIsLiveTailChange(false)} className="text-sm text-green-600 hover:text-green-800">
             Stop
           </button>
         </div>

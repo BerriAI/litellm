@@ -733,7 +733,7 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -799,7 +799,7 @@ def test_virtual_key_llm_api_routes_allows_non_auth_enforced_pass_through_endpoi
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -849,7 +849,7 @@ def test_virtual_key_llm_api_routes_denies_auth_pass_through_without_allowlist()
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -893,7 +893,7 @@ def test_virtual_key_llm_api_routes_uses_method_specific_auth_setting():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -948,7 +948,7 @@ def test_non_proxy_admin_denies_auth_pass_through_without_allowlist():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -987,7 +987,7 @@ def test_non_proxy_admin_allows_auth_pass_through_with_team_allowlist():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):
@@ -1021,7 +1021,7 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
             mock_registered_routes,
         ),
         patch(
-            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+            "litellm.proxy.utils.get_server_root_path",
             return_value="/",
         ),
     ):

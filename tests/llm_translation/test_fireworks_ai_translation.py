@@ -43,12 +43,14 @@ def test_map_openai_params_tool_choice():
 
 def test_map_response_format():
     """
-    Test that the response format is translated correctly.
+    json_schema response_format is passed through to Fireworks unchanged.
 
-    h/t to https://github.com/DaveDeCaprio (@DaveDeCaprio) for the test case
+    Fireworks accepts the OpenAI strict json_schema shape natively. The earlier
+    downgrade to {type: json_object, schema: ...} silently dropped `strict` and
+    `name`, producing a request that Fireworks treats as "any valid JSON" per
+    its docs, disabling grammar-guided decoding.
 
-    Relevant Issue: https://github.com/BerriAI/litellm/issues/6797
-    Fireworks AI Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting#step-1-import-libraries
+    Ref: https://docs.fireworks.ai/structured-responses/structured-response-formatting
     """
     response_format = {
         "type": "json_schema",
@@ -65,16 +67,7 @@ def test_map_response_format():
     result = fireworks.map_openai_params(
         {"response_format": response_format}, {}, "some_model", drop_params=False
     )
-    assert result == {
-        "response_format": {
-            "type": "json_object",
-            "schema": {
-                "properties": {"result": {"type": "boolean"}},
-                "required": ["result"],
-                "type": "object",
-            },
-        }
-    }
+    assert result == {"response_format": response_format}
 
 
 class TestFireworksAIAudioTranscription(BaseLLMAudioTranscriptionTest):

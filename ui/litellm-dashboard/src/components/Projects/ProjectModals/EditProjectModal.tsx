@@ -3,10 +3,7 @@ import { Modal, Form, Button, Typography } from "antd";
 import { SaveOutlined } from "@ant-design/icons";
 import MessageManager from "@/components/molecules/message_manager";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
-import {
-  useUpdateProject,
-  ProjectUpdateParams,
-} from "@/app/(dashboard)/hooks/projects/useUpdateProject";
+import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/projects/useUpdateProject";
 import { ProjectBaseForm, ProjectFormValues } from "./ProjectBaseForm";
 import { buildProjectApiParams } from "./projectFormUtils";
 
@@ -17,12 +14,7 @@ interface EditProjectModalProps {
   onSuccess?: () => void;
 }
 
-export function EditProjectModal({
-  isOpen,
-  project,
-  onClose,
-  onSuccess,
-}: EditProjectModalProps) {
+export function EditProjectModal({ isOpen, project, onClose, onSuccess }: EditProjectModalProps) {
   const [form] = Form.useForm<ProjectFormValues>();
   const updateMutation = useUpdateProject();
 
@@ -33,15 +25,10 @@ export function EditProjectModal({
       const metadataObj = (project.metadata ?? {}) as Record<string, unknown>;
       const rpmLimits = (metadataObj.model_rpm_limit ?? {}) as Record<string, number>;
       const tpmLimits = (metadataObj.model_tpm_limit ?? {}) as Record<string, number>;
-      const guardrails = (Array.isArray(metadataObj.guardrails)
-        ? metadataObj.guardrails
-        : []) as string[];
+      const guardrails = (Array.isArray(metadataObj.guardrails) ? metadataObj.guardrails : []) as string[];
 
       const modelLimits: ProjectFormValues["modelLimits"] = [];
-      const allLimitModels = new Set([
-        ...Object.keys(rpmLimits),
-        ...Object.keys(tpmLimits),
-      ]);
+      const allLimitModels = new Set([...Object.keys(rpmLimits), ...Object.keys(tpmLimits)]);
       for (const model of allLimitModels) {
         modelLimits.push({
           model,

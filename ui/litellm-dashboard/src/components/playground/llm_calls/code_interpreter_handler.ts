@@ -24,10 +24,7 @@ export interface CodeInterpreterState {
  * Handle code interpreter call completed event.
  * Extracts code and container ID from the event.
  */
-export function handleCodeInterpreterCall(
-  event: any,
-  state: CodeInterpreterState
-): CodeInterpreterState {
+export function handleCodeInterpreterCall(event: any, state: CodeInterpreterState): CodeInterpreterState {
   if (event.type === "response.output_item.done" && event.item?.type === "code_interpreter_call") {
     console.log("Code interpreter call completed:", event.item);
     return {
@@ -45,7 +42,7 @@ export function handleCodeInterpreterCall(
 export function handleCodeInterpreterOutput(
   event: any,
   state: CodeInterpreterState,
-  onCodeInterpreterResult?: (result: CodeInterpreterResult) => void
+  onCodeInterpreterResult?: (result: CodeInterpreterResult) => void,
 ): void {
   if (
     event.type === "response.output_item.done" &&
@@ -56,9 +53,7 @@ export function handleCodeInterpreterOutput(
     const content = event.item.content;
     for (const part of content) {
       if (part.type === "output_text" && part.annotations) {
-        const fileAnnotations = part.annotations.filter(
-          (a: any) => a.type === "container_file_citation"
-        );
+        const fileAnnotations = part.annotations.filter((a: any) => a.type === "container_file_citation");
         if (fileAnnotations.length > 0 || state.code) {
           onCodeInterpreterResult({
             code: state.code,
@@ -75,9 +70,5 @@ export function handleCodeInterpreterOutput(
  * Check if code interpreter is being used based on event type.
  */
 export function isCodeInterpreterEvent(event: any): boolean {
-  return (
-    event.type === "response.output_item.done" &&
-    event.item?.type === "code_interpreter_call"
-  );
+  return event.type === "response.output_item.done" && event.item?.type === "code_interpreter_call";
 }
-
