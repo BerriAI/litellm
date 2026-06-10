@@ -144,7 +144,7 @@ class RealTimeStreaming:
             return True
         return False
 
-    def store_message(self, message: Union[str, bytes, OpenAIRealtimeEvents]):
+    def store_message(self, message: Union[str, bytes, dict, OpenAIRealtimeEvents]):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
