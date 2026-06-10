@@ -141,5 +141,10 @@
     "special_handling": {
       "force_store_false": true
     }
+  },
+  "pinstripes": {
+    "base_url": "https://pinstripes.ai/v1",
+    "api_key_env": "PINSTRIPES_API_KEY",
+    "api_base_env": "PINSTRIPES_API_BASE"
   }
 }
