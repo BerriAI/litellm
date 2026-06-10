@@ -1,5 +1,5 @@
 import re
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 from urllib.parse import urlparse
 
 import litellm
@@ -7,7 +7,7 @@ from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
-from ..types.router import LiteLLM_Params
+from ..types.router import GenericLiteLLMParams, LiteLLM_Params
 
 
 def _endpoint_matches_api_base(endpoint: str, api_base: str) -> bool:
@@ -159,7 +159,7 @@ def get_llm_provider(  # noqa: PLR0915
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
     api_key: Optional[str] = None,
-    litellm_params: Optional[LiteLLM_Params] = None,
+    litellm_params: Optional[GenericLiteLLMParams] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
@@ -178,7 +178,7 @@ def get_llm_provider(  # noqa: PLR0915
             )
 
         if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
-            litellm_params=litellm_params
+            litellm_params=cast(Optional[LiteLLM_Params], litellm_params)
         ):
             return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(
                 model=model, api_base=api_base, api_key=api_key
@@ -186,12 +186,14 @@ def get_llm_provider(  # noqa: PLR0915
 
         ## IF LITELLM PARAMS GIVEN ##
         if litellm_params:
-            assert (
-                custom_llm_provider is None and api_base is None and api_key is None
-            ), "Either pass in litellm_params or the custom_llm_provider/api_base/api_key. Otherwise, these values will be overriden."
-            custom_llm_provider = litellm_params.custom_llm_provider
-            api_base = litellm_params.api_base
-            api_key = litellm_params.api_key
+            if (
+                custom_llm_provider is None
+                and api_base is None
+                and api_key is None
+            ):
+                custom_llm_provider = litellm_params.custom_llm_provider
+                api_base = litellm_params.api_base
+                api_key = litellm_params.api_key
 
         dynamic_api_key = None
         # check if llm provider provided
@@ -235,6 +237,7 @@ def get_llm_provider(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
+                litellm_params=litellm_params,
             )
 
         # check if llm provider part of model name
@@ -250,6 +253,7 @@ def get_llm_provider(  # noqa: PLR0915
                 api_base=api_base,
                 api_key=api_key,
                 dynamic_api_key=dynamic_api_key,
+                litellm_params=litellm_params,
             )
         elif model.split("/", 1)[0] in litellm.provider_list:
             custom_llm_provider = model.split("/", 1)[0]
@@ -570,6 +574,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     api_base: Optional[str],
     api_key: Optional[str],
     dynamic_api_key: Optional[str],
+    litellm_params: Optional[GenericLiteLLMParams] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
     Returns:
@@ -633,11 +638,16 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base, api_key
         )
     elif custom_llm_provider == "bedrock_mantle":
+        mantle_region = (
+            getattr(litellm_params, "aws_region_name", None)
+            if litellm_params is not None
+            else None
+        )
         (
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
-            api_base, api_key
+            api_base, api_key, aws_region_name=mantle_region
         )
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1

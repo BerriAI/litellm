@@ -148,6 +148,52 @@ class TestBedrockMantleResponsesURL:
         url = cfg.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
 
+    def test_url_aws_region_name_overrides_stale_api_base(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base="https://bedrock-mantle.us-east-1.api.aws/v1",
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+
+class TestBedrockMantleGetLlmProviderRegion:
+    def test_get_llm_provider_uses_supplemental_litellm_params(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.types.router import GenericLiteLLMParams
+
+        _, provider, _, api_base = get_llm_provider(
+            model="bedrock_mantle/openai.gpt-5.5",
+            api_key="test-key",
+            litellm_params=GenericLiteLLMParams(aws_region_name="us-east-2"),
+        )
+        assert provider == "bedrock_mantle"
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
+    def test_get_llm_provider_uses_aws_region_from_litellm_params(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+        from litellm.types.router import GenericLiteLLMParams
+
+        params = GenericLiteLLMParams(
+            custom_llm_provider="bedrock_mantle",
+            aws_region_name="us-east-2",
+        )
+        _, provider, _, api_base = get_llm_provider(
+            model="bedrock_mantle/openai.gpt-5.5",
+            litellm_params=params,
+        )
+        assert provider == "bedrock_mantle"
+        assert api_base == "https://bedrock-mantle.us-east-2.api.aws/v1"
+
 
 class TestBedrockMantleResponsesAuth:
     def test_config_api_key_takes_priority(self, monkeypatch):
