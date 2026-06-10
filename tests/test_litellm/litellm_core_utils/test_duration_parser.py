@@ -34,6 +34,17 @@ class TestStandardizedResetTime(unittest.TestCase):
         custom_day_result = get_next_standardized_reset_time("3d", base_time, "UTC")
         self.assertEqual(custom_day_result, custom_day_expected)
 
+    def test_week_based_resets(self):
+        wednesday = datetime(2023, 5, 17, 15, 45, 0, tzinfo=timezone.utc)
+        weekly_expected = datetime(2023, 5, 22, 0, 0, 0, tzinfo=timezone.utc)
+        weekly_result = get_next_standardized_reset_time("1w", wednesday, "UTC")
+        self.assertEqual(weekly_result, weekly_expected)
+
+        base_time = datetime(2023, 5, 15, 10, 30, 0, tzinfo=timezone.utc)
+        two_week_expected = datetime(2023, 5, 29, 0, 0, 0, tzinfo=timezone.utc)
+        two_week_result = get_next_standardized_reset_time("2w", base_time, "UTC")
+        self.assertEqual(two_week_result, two_week_expected)
+
     def test_hour_minute_second_resets(self):
         """Test hour, minute, and second based reset durations"""
         # Base time: 2023-05-15 15:20:30 UTC (3:20:30 PM)
