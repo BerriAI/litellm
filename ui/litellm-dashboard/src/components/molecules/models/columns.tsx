@@ -5,13 +5,14 @@ import { Badge, Button, Icon } from "@tremor/react";
 import { Divider, Flex, Popover, Space, Switch, Tooltip, Typography } from "antd";
 import { ModelData } from "../../model_dashboard/types";
 import { ProviderLogo } from "./ProviderLogo";
+import i18n from "@/lib/i18n";
 
 const { Text, Title } = Typography;
 
-const credentialsInfoPopoverContent = (
+const getCredentialsInfoPopoverContent = () => (
   <Space direction="vertical" size={12}>
     <Text strong style={{ fontSize: 13 }}>
-      Credential types
+      {i18n.t("molecules.modelsColumns.credentialTypes")}
     </Text>
     <Space direction="vertical" size={8}>
       <Flex align="center" gap={8}>
@@ -19,10 +20,10 @@ const credentialsInfoPopoverContent = (
           <Flex align="center" gap={8}>
             <SyncOutlined style={{ color: "#1890ff" }} />
             <Title level={5} style={{ margin: 0, color: "#1890ff" }}>
-              Reusable
+              {i18n.t("molecules.modelsColumns.reusable")}
             </Title>
           </Flex>
-          <Text type="secondary">Credentials saved in LiteLLM that can be added to models repeatedly.</Text>
+          <Text type="secondary">{i18n.t("molecules.modelsColumns.reusableDescription")}</Text>
         </Space>
       </Flex>
       <Divider size="small" />
@@ -31,10 +32,10 @@ const credentialsInfoPopoverContent = (
           <Flex align="center" gap={8}>
             <EditOutlined style={{ color: "#8c8c8c", fontSize: 14, flexShrink: 0 }} />
             <Title level={5} style={{ margin: 0 }}>
-              Manual
+              {i18n.t("molecules.modelsColumns.manual")}
             </Title>
           </Flex>
-          <Text type="secondary">Credentials added directly during model creation or defined in the config file.</Text>
+          <Text type="secondary">{i18n.t("molecules.modelsColumns.manualDescription")}</Text>
         </Space>
       </Flex>
     </Space>
@@ -57,7 +58,7 @@ export const columns = (
   pausingModelId?: string | null,
 ): ColumnDef<ModelData>[] => [
   {
-    header: () => <span className="text-sm font-semibold">Model ID</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("molecules.modelsColumns.modelId")}</span>,
     accessorKey: "model_info.id",
     enableSorting: false,
     size: 130,
@@ -82,7 +83,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Model Information</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("molecules.modelsColumns.modelInformation")}</span>,
     accessorKey: "model_name",
     size: 250,
     minSize: 120,
@@ -94,14 +95,14 @@ export const columns = (
           <Flex align="center" gap={8}>
             <ProviderLogo provider={model.provider} />
             <Text type="secondary" style={{ fontSize: 12 }} ellipsis>
-              {model.provider || "Unknown provider"}
+              {model.provider || i18n.t("molecules.modelsColumns.unknownProvider")}
             </Text>
           </Flex>
 
           <Space direction="vertical" size={6}>
             <Space direction="vertical" size={2} style={{ width: "100%" }}>
               <Text type="secondary" style={{ fontSize: 11 }}>
-                Public Model Name
+                {i18n.t("molecules.modelsColumns.publicModelName")}
               </Text>
               <Text strong style={{ fontSize: 13, maxWidth: 480 }} ellipsis title={displayName}>
                 {displayName}
@@ -110,7 +111,7 @@ export const columns = (
 
             <Space direction="vertical" size={2}>
               <Text type="secondary" style={{ fontSize: 11 }}>
-                LiteLLM Model Name
+                {i18n.t("molecules.modelsColumns.litellmModelName")}
               </Text>
               <Text
                 style={{ fontSize: 13 }}
@@ -161,8 +162,8 @@ export const columns = (
   {
     header: () => (
       <span className="flex items-center gap-1">
-        <span className="text-sm font-semibold">Credentials</span>
-        <Popover content={credentialsInfoPopoverContent} placement="bottom" arrow={{ pointAtCenter: true }}>
+        <span className="text-sm font-semibold">{i18n.t("molecules.modelsColumns.credentials")}</span>
+        <Popover content={getCredentialsInfoPopoverContent()} placement="bottom" arrow={{ pointAtCenter: true }}>
           <InfoCircleOutlined className="cursor-pointer text-gray-400 hover:text-gray-600" style={{ fontSize: 12 }} />
         </Popover>
       </span>
@@ -188,7 +189,7 @@ export const columns = (
           ) : (
             <>
               <EditOutlined className="flex-shrink-0" style={{ color: "#8c8c8c", fontSize: 14 }} />
-              <span className="text-xs text-gray-500">Manual</span>
+              <span className="text-xs text-gray-500">{i18n.t("molecules.modelsColumns.manual")}</span>
             </>
           )}
         </div>
@@ -196,7 +197,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Created By</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("molecules.modelsColumns.createdBy")}</span>,
     accessorKey: "model_info.created_by",
     sortingFn: "datetime",
     size: 160,
@@ -212,23 +213,25 @@ export const columns = (
           {/* Created By - Primary */}
           <div
             className="text-xs font-medium text-gray-900 truncate"
-            title={isConfigModel ? "Defined in config" : createdBy || "Unknown"}
+            title={
+              isConfigModel ? i18n.t("molecules.modelsColumns.definedInConfig") : createdBy || i18n.t("common.unknown")
+            }
           >
-            {isConfigModel ? "Defined in config" : createdBy || "Unknown"}
+            {isConfigModel ? i18n.t("molecules.modelsColumns.definedInConfig") : createdBy || i18n.t("common.unknown")}
           </div>
           {/* Created At - Secondary */}
           <div
             className="text-xs text-gray-500 truncate mt-0.5"
-            title={isConfigModel ? "Config file" : createdAt || "Unknown date"}
+            title={isConfigModel ? "-" : createdAt || i18n.t("molecules.modelsColumns.unknownDate")}
           >
-            {isConfigModel ? "-" : createdAt || "Unknown date"}
+            {isConfigModel ? "-" : createdAt || i18n.t("molecules.modelsColumns.unknownDate")}
           </div>
         </div>
       );
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Updated At</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("common.updatedAt")}</span>,
     accessorKey: "model_info.updated_at",
     sortingFn: "datetime",
     size: 120,
@@ -243,7 +246,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Costs</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("molecules.modelsColumns.costs")}</span>,
     accessorKey: "input_cost",
     size: 120,
     minSize: 80,
@@ -262,19 +265,27 @@ export const columns = (
       }
 
       return (
-        <Tooltip title="Cost per 1M tokens">
+        <Tooltip title={i18n.t("molecules.modelsColumns.costPerMTokens")}>
           <div className="flex flex-col min-w-0 w-full">
             {/* Input Cost - Primary */}
-            {inputCost != null && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
+            {inputCost != null && (
+              <div className="text-xs font-medium text-gray-900 truncate">
+                {i18n.t("molecules.modelsColumns.inputCost", { cost: inputCost })}
+              </div>
+            )}
             {/* Output Cost - Secondary */}
-            {outputCost != null && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
+            {outputCost != null && (
+              <div className="text-xs text-gray-500 truncate mt-0.5">
+                {i18n.t("molecules.modelsColumns.outputCost", { cost: outputCost })}
+              </div>
+            )}
           </div>
         </Tooltip>
       );
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Team ID</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("molecules.modelsColumns.teamId")}</span>,
     accessorKey: "model_info.team_id",
     enableSorting: false,
     size: 130,
@@ -303,7 +314,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Model Access Group</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("molecules.modelsColumns.modelAccessGroup")}</span>,
     accessorKey: "model_info.model_access_group",
     enableSorting: false,
     size: 180,
@@ -364,7 +375,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Status</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("common.status")}</span>,
     accessorKey: "model_info.db_model",
     size: 120,
     minSize: 80,
@@ -377,14 +388,16 @@ export const columns = (
           ${model.model_info.db_model ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-600"}
         `}
         >
-          {model.model_info.db_model ? "DB Model" : "Config Model"}
+          {model.model_info.db_model
+            ? i18n.t("molecules.modelsColumns.dbModel")
+            : i18n.t("molecules.modelsColumns.configModel")}
         </div>
       );
     },
   },
   {
     id: "actions",
-    header: () => <span className="text-sm font-semibold">Actions</span>,
+    header: () => <span className="text-sm font-semibold">{i18n.t("common.actions")}</span>,
     size: 100,
     minSize: 80,
     enableResizing: false,
@@ -396,12 +409,12 @@ export const columns = (
       const isBlocked = model.model_info?.blocked === true;
       const isPauseToggleable = !isConfigModel && isAdmin && Boolean(onTogglePauseClick);
       const pauseTooltip = isConfigModel
-        ? "Config models cannot be paused from the dashboard. Pause is DB-backed."
+        ? i18n.t("molecules.modelsColumns.configNoPause")
         : !isAdmin
-          ? "Only proxy admins can pause or resume a model."
+          ? i18n.t("molecules.modelsColumns.nonAdminNoPause")
           : isBlocked
-            ? "Resume model — restore normal routing."
-            : "Pause model — stop routing requests until resumed.";
+            ? i18n.t("molecules.modelsColumns.resumeTooltip")
+            : i18n.t("molecules.modelsColumns.pauseTooltip");
       // antd's `loading` prop on Switch is purely cosmetic — it does not block
       // clicks. Pair `loading` with `disabled` derived from the same condition
       // so a double-click during a pending PATCH cannot send a second,
@@ -415,7 +428,9 @@ export const columns = (
               checked={!isBlocked}
               disabled={!isPauseToggleable || isPausing}
               loading={isPausing}
-              aria-label={isBlocked ? "Resume model" : "Pause model"}
+              aria-label={
+                isBlocked ? i18n.t("molecules.modelsColumns.resumeModel") : i18n.t("molecules.modelsColumns.pauseModel")
+              }
               onClick={(_, e) => {
                 e.stopPropagation();
               }}
@@ -428,11 +443,11 @@ export const columns = (
             />
           </Tooltip>
           {isConfigModel ? (
-            <Tooltip title="Config model cannot be deleted on the dashboard. Please delete it from the config file.">
+            <Tooltip title={i18n.t("molecules.modelsColumns.configNoDelete")}>
               <Icon icon={TrashIcon} size="sm" className="opacity-50 cursor-not-allowed" />
             </Tooltip>
           ) : (
-            <Tooltip title="Delete model">
+            <Tooltip title={i18n.t("molecules.modelsColumns.deleteModel")}>
               <Icon
                 icon={TrashIcon}
                 size="sm"
