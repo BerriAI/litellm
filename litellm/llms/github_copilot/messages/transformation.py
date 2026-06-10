@@ -12,6 +12,8 @@ from ..common_utils import (
     get_copilot_default_headers,
 )
 
+_MESSAGES_PROXY_API_VERSION = "2026-06-01"
+
 
 class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
     """
@@ -60,12 +62,13 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
             if key not in headers:
                 headers[key] = value
 
-        # Set Anthropic version for messages API
+        headers["openai-intent"] = "messages-proxy"
+        headers["x-interaction-type"] = "messages-proxy"
+        headers["x-github-api-version"] = _MESSAGES_PROXY_API_VERSION
+
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = "2023-06-01"
 
-        # Auto-inject anthropic-beta headers for advanced features
-        # (context_management, tool_search, output_format, speed)
         headers = self._update_headers_with_anthropic_beta(
             headers, optional_params, custom_llm_provider="github_copilot"
         )
