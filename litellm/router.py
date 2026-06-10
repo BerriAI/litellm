@@ -4067,28 +4067,23 @@ class Router:
             verbose_router_logger.debug(
                 f"Inside _aspeech()- model: {model}; kwargs: {kwargs}"
             )
+            parent_otel_span = _get_parent_otel_span_from_kwargs(kwargs)
             deployment = await self.async_get_available_deployment(
                 model=model,
                 messages=[{"role": "user", "content": "prompt"}],
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            data = deployment["litellm_params"].copy()
-            for k, v in self.default_litellm_params.items():
-                if (
-                    k not in kwargs
-                ):  # prioritize model-specific params > default router params
-                    kwargs[k] = v
-                elif k == "metadata":
-                    kwargs[k].update(v)
 
+            self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
+            data = deployment["litellm_params"].copy()
             model_client = self._get_async_openai_model_client(
                 deployment=deployment,
                 kwargs=kwargs,
             )
 
             self.total_calls[model_name] += 1
-            response = await litellm.aspeech(
+            response = litellm.aspeech(
                 **{
                     **data,
                     "input": input,
@@ -4097,6 +4092,31 @@ class Router:
                     **kwargs,
                 }
             )
+
+            ### CONCURRENCY-SAFE RPM CHECKS ###
+            rpm_semaphore = self._get_client(
+                deployment=deployment,
+                kwargs=kwargs,
+                client_type="max_parallel_requests",
+            )
+
+            if rpm_semaphore is not None and isinstance(
+                rpm_semaphore, asyncio.Semaphore
+            ):
+                async with rpm_semaphore:
+                    """
+                    - Check rpm limits before making the call
+                    - If allowed, increment the rpm limit (allows global value to be updated, concurrency-safe)
+                    """
+                    await self.async_routing_strategy_pre_call_checks(
+                        deployment=deployment, parent_otel_span=parent_otel_span
+                    )
+                    response = await response
+            else:
+                await self.async_routing_strategy_pre_call_checks(
+                    deployment=deployment, parent_otel_span=parent_otel_span
+                )
+                response = await response
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info(

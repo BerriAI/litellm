@@ -262,6 +262,32 @@ async def test_aspeech_success_returns_response():
     assert mock_aspeech.call_args.kwargs["model"] == "openai/tts-1"
 
 
+@pytest.mark.asyncio
+async def test_aspeech_sets_deployment_metadata():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {"model": "openai/tts-1", "api_key": "fake-key"},
+            },
+        ]
+    )
+
+    mock_response = MagicMock()
+    with patch("litellm.aspeech", return_value=mock_response) as mock_aspeech:
+        response = await router._aspeech(
+            model="tts",
+            input="the quick brown fox jumped over the lazy dogs",
+            voice="alloy",
+        )
+
+    assert response is mock_response
+    metadata = mock_aspeech.call_args.kwargs["metadata"]
+    assert metadata["deployment"] == "openai/tts-1"
+    assert metadata["deployment_model_name"] == "tts"
+    assert metadata["model_info"]["id"] is not None
+
+
 @pytest.mark.asyncio()
 async def test_rerank_endpoint(model_list):
     from litellm.types.utils import RerankResponse
