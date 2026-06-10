@@ -806,7 +806,7 @@ export function ToolTestPanel({
                                     {/* eslint-disable-next-line @next/next/no-img-element */}
                                     <img
                                       src={content.url}
-                                      alt="Tool result"
+                                      alt={t("mcpTools.toolTestPanel.toolResultAlt")}
                                       className="max-w-full h-auto rounded shadow-sm"
                                     />
                                   </div>

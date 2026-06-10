@@ -104,7 +104,7 @@ const Navbar: React.FC<NavbarProps> = ({
                   <div className="flex h-10 max-w-48 items-center justify-center overflow-hidden">
                     <img
                       src={imageUrl}
-                      alt="LiteLLM Brand"
+                      alt={t("navbar.logoAlt")}
                       className="h-auto max-h-full w-auto max-w-full object-contain"
                     />
                   </div>
@@ -144,7 +144,7 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <nav
-              aria-label="Product documentation"
+              aria-label={t("navbar.productDocsAriaLabel")}
               className={`flex min-w-0 items-center gap-2 ${showWorkerSwitch ? "border-l border-gray-200 pl-4" : ""}`}
             >
               <a

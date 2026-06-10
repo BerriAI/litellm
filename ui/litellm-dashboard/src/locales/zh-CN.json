@@ -66,7 +66,9 @@
       "notifications": "通知",
       "agentPlatformDesc": "开源 Agent 基础设施 — 沙箱、持久会话以及运行在 AWS Fargate 上的 worker。",
       "markAsRead": "标记为已读"
-    }
+    },
+    "logoAlt": "LiteLLM 品牌",
+    "productDocsAriaLabel": "产品文档"
   },
   "user": {
     "logout": "退出登录",
@@ -1088,7 +1090,8 @@
     "parseError": "解析 CSV 时出错：{{error}}",
     "parseFileFailed": "解析 CSV 文件失败：{{error}}",
     "invitationLinkFailed": "用户已创建，但生成邀请链接失败",
-    "failedToCreateUser": "创建用户失败"
+    "failedToCreateUser": "创建用户失败",
+    "fileSizeKb": "{{size}} KB • {{date}}"
   },
   "cacheDashboard": {
     "tabAnalytics": "缓存分析",
@@ -2033,7 +2036,10 @@
     "saveFailed": "保存模型组别名设置失败",
     "addSuccess": "别名添加成功",
     "updateSuccess": "别名更新成功",
-    "deleteSuccess": "别名删除成功"
+    "deleteSuccess": "别名删除成功",
+    "aliasNamePlaceholder": "例如：gpt-4o",
+    "targetModelGroupPlaceholder": "例如：gpt-4o-mini-openai",
+    "noAliasesConfigured": "# 尚未配置别名"
   },
   "modelHubTableColumns": {
     "publicModelName": "公开模型名称",
@@ -3133,7 +3139,8 @@
       "showJson": "显示 JSON",
       "copied": "已复制！",
       "colAction": "操作",
-      "colChangedBy": "变更人"
+      "colChangedBy": "变更人",
+      "fieldCount": "({{count}} 个字段)"
     },
     "auditLogDrawer": {
       "tableKeys": "密钥",
@@ -3362,7 +3369,8 @@
       "hintLabel": "提示",
       "perUserPlaceholder": "例如：您的数据库用户名",
       "valuePlaceholder": "例如：postgresql",
-      "addVariable": "添加变量"
+      "addVariable": "添加变量",
+      "varNamePlaceholder": "例如：DB_PROTOCOL"
     },
     "mcpLogoSelector": {
       "logoLabel": "Logo",
@@ -3848,7 +3856,8 @@
       "resultCopied": "结果已复制到剪贴板",
       "copyResultFailed": "复制结果失败",
       "toolNameCopied": "工具名称已复制到剪贴板",
-      "copyToolNameFailed": "复制工具名称失败"
+      "copyToolNameFailed": "复制工具名称失败",
+      "toolResultAlt": "工具结果"
     },
     "mcpServerEdit": {
       "oauthAuthSuccess": "OAuth 授权成功！请点击「更新 MCP 服务器」以保存凭据。",
@@ -4342,7 +4351,8 @@
       "toolsetsStep4": "工具调用会自动路由到正确的底层 MCP 服务器。",
       "toolsetsExample": "<strong>示例：</strong>一个「GitHub 只读」工具集可能只包含来自 GitHub MCP 服务器的 <code>list_repos</code> 和 <code>get_file</code>——防止 Agent 进行写操作。",
       "toolsetsCreatingTitle": "创建工具集：",
-      "toolsetsCreatingDesc": "管理员可以从 <strong>MCP</strong> 页面 → <strong>工具集</strong>标签页创建和管理工具集。工具集随后可分配给密钥和团队以限定其工具访问范围。"
+      "toolsetsCreatingDesc": "管理员可以从 <strong>MCP</strong> 页面 → <strong>工具集</strong>标签页创建和管理工具集。工具集随后可分配给密钥和团队以限定其工具访问范围。",
+      "audioFileSizeMb": "({{size}} MB)"
     },
     "codeInterpreterOutput": {
       "pythonCodeExecuted": "已执行的 Python 代码",
@@ -5619,7 +5629,9 @@
       "addDiscountModalTitle": "添加提供商折扣",
       "addDiscountModalDesc": "选择提供商并设置折扣百分比，输入 0% 到 100% 之间的值（例如：5 表示 5% 折扣）。",
       "addMarginModalTitle": "添加提供商利润率",
-      "addMarginModalDesc": "选择提供商（或选择「全局」以覆盖所有提供商）并配置利润率，可使用百分比或固定金额。"
+      "addMarginModalDesc": "选择提供商（或选择「全局」以覆盖所有提供商）并配置利润率，可使用百分比或固定金额。",
+      "docsLinkCustomPricing": "模型自定义定价",
+      "docsLinkSpendTracking": "花费追踪"
     },
     "howItWorks": {
       "costCalculationTitle": "成本计算",
@@ -6713,7 +6725,12 @@
       "moreModel_other": "+{{count}} 个模型",
       "pageOf": "第 {{current}} 页，共 {{total}} 页",
       "loadingKeys": "正在加载密钥...",
-      "noKeysFound": "未找到密钥"
+      "noKeysFound": "未找到密钥",
+      "filterOrgId": "组织 ID",
+      "filterKeyAlias": "密钥别名",
+      "filterUserId": "用户 ID",
+      "tpmLabel": "TPM：",
+      "rpmLabel": "RPM："
     },
     "availableTeams": {
       "colTeamName": "团队名称",

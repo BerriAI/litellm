@@ -551,8 +551,8 @@ const CollapsibleJsonCell = ({ jsonData }: { jsonData: any }) => {
   return (
     <div>
       <button onClick={() => setIsExpanded(!isExpanded)} className="text-blue-500 hover:text-blue-700 text-xs">
-        {isExpanded ? i18n.t("viewLogs.columns.hideJson") : i18n.t("viewLogs.columns.showJson")} (
-        {Object.keys(jsonData).length} fields)
+        {isExpanded ? i18n.t("viewLogs.columns.hideJson") : i18n.t("viewLogs.columns.showJson")}{" "}
+        {i18n.t("viewLogs.columns.fieldCount", { count: Object.keys(jsonData).length })}
       </button>
       {isExpanded && (
         <pre className="mt-2 p-2 bg-gray-50 border rounded text-xs overflow-auto max-h-60">{jsonString}</pre>

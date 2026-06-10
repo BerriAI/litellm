@@ -182,7 +182,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                       aliasName: e.target.value,
                     })
                   }
-                  placeholder="e.g., gpt-4o"
+                  placeholder={t("modelGroupAliasSettings.aliasNamePlaceholder")}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                 />
               </div>
@@ -199,7 +199,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                       targetModelGroup: e.target.value,
                     })
                   }
-                  placeholder="e.g., gpt-4o-mini-openai"
+                  placeholder={t("modelGroupAliasSettings.targetModelGroupPlaceholder")}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
                 />
               </div>
@@ -325,7 +325,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                 {Object.keys(aliasObject).length === 0 ? (
                   <span className="text-gray-500">
                     <br />
-                    &nbsp;&nbsp;&nbsp;&nbsp;# No aliases configured yet
+                    &nbsp;&nbsp;&nbsp;&nbsp;{t("modelGroupAliasSettings.noAliasesConfigured")}
                   </span>
                 ) : (
                   Object.entries(aliasObject).map(([key, value]) => (

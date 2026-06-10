@@ -77,7 +77,10 @@ const EnvVarsSection: React.FC = () => {
                     },
                   ]}
                 >
-                  <Input placeholder="e.g. DB_PROTOCOL" className="rounded-md font-mono" />
+                  <Input
+                    placeholder={t("mcpTools.envVarsSection.varNamePlaceholder")}
+                    className="rounded-md font-mono"
+                  />
                 </Form.Item>
                 <div style={{ flex: 1 }}>
                   <ScopedValueOrDescription name={name} restField={restField} />

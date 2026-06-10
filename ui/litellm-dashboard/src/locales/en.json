@@ -66,7 +66,9 @@
       "notifications": "Notifications",
       "agentPlatformDesc": "Open-source agent infra — sandboxes, durable sessions, and workers on AWS Fargate.",
       "markAsRead": "Mark as read"
-    }
+    },
+    "logoAlt": "LiteLLM Brand",
+    "productDocsAriaLabel": "Product documentation"
   },
   "user": {
     "logout": "Logout",
@@ -1088,7 +1090,8 @@
     "parseError": "Error parsing CSV: {{error}}",
     "parseFileFailed": "Failed to parse CSV file: {{error}}",
     "invitationLinkFailed": "User created but failed to generate invitation link",
-    "failedToCreateUser": "Failed to create user"
+    "failedToCreateUser": "Failed to create user",
+    "fileSizeKb": "{{size}} KB • {{date}}"
   },
   "cacheDashboard": {
     "tabAnalytics": "Cache Analytics",
@@ -2033,7 +2036,10 @@
     "saveFailed": "Failed to save model group alias settings",
     "addSuccess": "Alias added successfully",
     "updateSuccess": "Alias updated successfully",
-    "deleteSuccess": "Alias deleted successfully"
+    "deleteSuccess": "Alias deleted successfully",
+    "aliasNamePlaceholder": "e.g., gpt-4o",
+    "targetModelGroupPlaceholder": "e.g., gpt-4o-mini-openai",
+    "noAliasesConfigured": "# No aliases configured yet"
   },
   "modelHubTableColumns": {
     "publicModelName": "Public Model Name",
@@ -3133,7 +3139,8 @@
       "showJson": "Show JSON",
       "copied": "Copied!",
       "colAction": "Action",
-      "colChangedBy": "Changed By"
+      "colChangedBy": "Changed By",
+      "fieldCount": "({{count}} fields)"
     },
     "auditLogDrawer": {
       "tableKeys": "Keys",
@@ -3362,7 +3369,8 @@
       "hintLabel": "Hint",
       "perUserPlaceholder": "e.g. Your DB username",
       "valuePlaceholder": "e.g. postgresql",
-      "addVariable": "Add Variable"
+      "addVariable": "Add Variable",
+      "varNamePlaceholder": "e.g. DB_PROTOCOL"
     },
     "mcpLogoSelector": {
       "logoLabel": "Logo",
@@ -3848,7 +3856,8 @@
       "resultCopied": "Result copied to clipboard",
       "copyResultFailed": "Failed to copy result",
       "toolNameCopied": "Tool name copied to clipboard",
-      "copyToolNameFailed": "Failed to copy tool name"
+      "copyToolNameFailed": "Failed to copy tool name",
+      "toolResultAlt": "Tool result"
     },
     "mcpServerEdit": {
       "oauthAuthSuccess": "OAuth authorization successful! Please click 'Update MCP Server' to save the credentials.",
@@ -4342,7 +4351,8 @@
       "toolsetsStep4": "The tool call is routed to the correct underlying MCP server automatically.",
       "toolsetsExample": "<strong>Example:</strong> A \"GitHub Read-only\" toolset might include only <code>list_repos</code> and <code>get_file</code> from a GitHub MCP server — preventing agents from making writes.",
       "toolsetsCreatingTitle": "Creating toolsets:",
-      "toolsetsCreatingDesc": "Admins can create and manage toolsets from the <strong>MCP</strong> page → <strong>Toolsets</strong> tab. Toolsets can then be assigned to keys and teams to scope their tool access."
+      "toolsetsCreatingDesc": "Admins can create and manage toolsets from the <strong>MCP</strong> page → <strong>Toolsets</strong> tab. Toolsets can then be assigned to keys and teams to scope their tool access.",
+      "audioFileSizeMb": "({{size}} MB)"
     },
     "codeInterpreterOutput": {
       "pythonCodeExecuted": "Python Code Executed",
@@ -5619,7 +5629,9 @@
       "addDiscountModalTitle": "Add Provider Discount",
       "addDiscountModalDesc": "Select a provider and set its discount percentage. Enter a value between 0% and 100% (e.g., 5 for a 5% discount).",
       "addMarginModalTitle": "Add Provider Margin",
-      "addMarginModalDesc": "Select a provider (or \"Global\" for all providers) and configure the margin. You can use percentage-based or fixed amount."
+      "addMarginModalDesc": "Select a provider (or \"Global\" for all providers) and configure the margin. You can use percentage-based or fixed amount.",
+      "docsLinkCustomPricing": "Custom pricing for models",
+      "docsLinkSpendTracking": "Spend tracking"
     },
     "howItWorks": {
       "costCalculationTitle": "Cost Calculation",
@@ -6713,7 +6725,12 @@
       "moreModel_other": "+{{count}} more models",
       "pageOf": "Page {{current}} of {{total}}",
       "loadingKeys": "Loading keys...",
-      "noKeysFound": "No keys found"
+      "noKeysFound": "No keys found",
+      "filterOrgId": "Organization ID",
+      "filterKeyAlias": "Key Alias",
+      "filterUserId": "User ID",
+      "tpmLabel": "TPM:",
+      "rpmLabel": "RPM:"
     },
     "availableTeams": {
       "colTeamName": "Team Name",

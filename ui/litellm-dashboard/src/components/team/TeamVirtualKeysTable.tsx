@@ -167,7 +167,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
     () => [
       {
         name: "Organization ID",
-        label: "Organization ID",
+        label: t("teamPage.teamVirtualKeysTable.filterOrgId"),
         isSearchable: true,
         searchFn: async (searchText: string) => {
           const { organizationIds } = teamFilterOptions;
@@ -179,7 +179,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       },
       {
         name: "Key Alias",
-        label: "Key Alias",
+        label: t("teamPage.teamVirtualKeysTable.filterKeyAlias"),
         isSearchable: true,
         searchFn: async (searchText: string) => {
           const { keyAliases } = teamFilterOptions;
@@ -190,7 +190,7 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
       },
       {
         name: "User ID",
-        label: "User ID",
+        label: t("teamPage.teamVirtualKeysTable.filterUserId"),
         isSearchable: true,
         searchFn: async (searchText: string) => {
           const { userIds } = teamFilterOptions;
@@ -547,8 +547,14 @@ export function TeamVirtualKeysTable({ teamId, teamAlias, organization }: TeamVi
           const key = row.original;
           return (
             <div>
-              <div>TPM: {key.tpm_limit !== null ? key.tpm_limit : t("teamPage.teamVirtualKeysTable.unlimited")}</div>
-              <div>RPM: {key.rpm_limit !== null ? key.rpm_limit : t("teamPage.teamVirtualKeysTable.unlimited")}</div>
+              <div>
+                {t("teamPage.teamVirtualKeysTable.tpmLabel")}{" "}
+                {key.tpm_limit !== null ? key.tpm_limit : t("teamPage.teamVirtualKeysTable.unlimited")}
+              </div>
+              <div>
+                {t("teamPage.teamVirtualKeysTable.rpmLabel")}{" "}
+                {key.rpm_limit !== null ? key.rpm_limit : t("teamPage.teamVirtualKeysTable.unlimited")}
+              </div>
             </div>
           );
         },

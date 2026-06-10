@@ -1906,7 +1906,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                             <SoundOutlined style={{ fontSize: "20px", color: "#666" }} />
                             <span className="text-sm font-medium">{uploadedAudio.name}</span>
                             <span className="text-xs text-gray-500">
-                              ({(uploadedAudio.size / 1024 / 1024).toFixed(2)} MB)
+                              {t("playground.chatUi.audioFileSizeMb", {
+                                size: (uploadedAudio.size / 1024 / 1024).toFixed(2),
+                              })}
                             </span>
                           </div>
                           <button

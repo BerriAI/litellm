@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   Title,
   Text,
@@ -27,13 +27,21 @@ import { useDiscountConfig } from "./use_discount_config";
 import { useMarginConfig } from "./use_margin_config";
 import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 
-const DOCS_LINKS = [
-  { label: "Custom pricing for models", href: "https://docs.litellm.ai/docs/proxy/custom_pricing" },
-  { label: "Spend tracking", href: "https://docs.litellm.ai/docs/proxy/cost_tracking" },
-];
-
 const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, userRole, accessToken }) => {
   const { t } = useTranslation();
+  const docsLinks = useMemo(
+    () => [
+      {
+        label: t("costTracking.costTrackingSettings.docsLinkCustomPricing"),
+        href: "https://docs.litellm.ai/docs/proxy/custom_pricing",
+      },
+      {
+        label: t("costTracking.costTrackingSettings.docsLinkSpendTracking"),
+        href: "https://docs.litellm.ai/docs/proxy/cost_tracking",
+      },
+    ],
+    [t],
+  );
   const [selectedProvider, setSelectedProvider] = useState<string | undefined>(undefined);
   const [newDiscount, setNewDiscount] = useState<string>("");
   const [isFetching, setIsFetching] = useState(true);
@@ -168,7 +176,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({ userID, use
         <div>
           <div className="flex items-center gap-2">
             <Title>{t("costTracking.costTrackingSettings.pageTitle")}</Title>
-            <DocsMenu items={DOCS_LINKS} />
+            <DocsMenu items={docsLinks} />
           </div>
           <Text className="text-gray-500 mt-1">{t("costTracking.costTrackingSettings.pageSubtitle")}</Text>
         </div>

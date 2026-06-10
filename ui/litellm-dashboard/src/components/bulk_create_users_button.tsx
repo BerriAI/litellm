@@ -646,7 +646,10 @@ const BulkCreateUsersButton: React.FC<BulkCreateUsersProps> = ({
                             {selectedFile.name}
                           </Typography.Text>
                           <Typography.Text className={`block text-xs ${fileError ? "text-red-600" : "text-blue-600"}`}>
-                            {(selectedFile.size / 1024).toFixed(1)} KB • {new Date().toLocaleDateString()}
+                            {t("bulkCreateUsers.fileSizeKb", {
+                              size: (selectedFile.size / 1024).toFixed(1),
+                              date: new Date().toLocaleDateString(),
+                            })}
                           </Typography.Text>
                         </div>
                       </div>
