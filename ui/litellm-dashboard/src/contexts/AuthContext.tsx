@@ -77,10 +77,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Side effects of a token change: drop tokens that fail to decode, sync the
-  // mutable user fields, and apply any custom auth header. The reset branch runs
-  // after any commit that nulls the token, so user fields cannot survive clearAuth
-  // even if a stale sync was queued in the same commit.
+  // Sync the mutable user fields and the custom auth header to the decoded token;
+  // a token that fails to decode is cleared.
   useEffect(() => {
     if (token && !decoded) {
       clearAuth();

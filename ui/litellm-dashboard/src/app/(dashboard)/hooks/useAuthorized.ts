@@ -7,16 +7,10 @@ import { useCallback, useEffect } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useUIConfig } from "./uiConfig/useUIConfig";
 
-// Decoded-JWT fields keep the pre-consolidation `any` typing: the old hook returned
-// `any` here and ~25 call sites pass these where `string` is expected. Tightening to
-// the context's `string | null` is a follow-up that has to fix those call sites.
+// Decoded-JWT fields keep their legacy `any` typing; call sites still pass them
+// where `string` is expected, so tightening to `string | null` is a follow-up.
 type LegacyDecodedField = any;
 
-/**
- * Policy hook for pages that require an authenticated user. Auth state itself
- * lives in AuthContext (single decode at the root); this hook layers on the
- * admin_ui_disabled check and the redirect-to-login side effect.
- */
 const useAuthorized = () => {
   const router = useRouter();
   const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
