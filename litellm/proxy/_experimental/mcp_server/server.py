@@ -264,7 +264,6 @@ if MCP_AVAILABLE:
         _request_auth_header,
         _request_extra_headers,
     )
-    from litellm.proxy._experimental.mcp_server.sse_transport import SseServerTransport
     from litellm.proxy._experimental.mcp_server.tool_registry import (
         global_mcp_tool_registry,
     )
@@ -338,7 +337,6 @@ if MCP_AVAILABLE:
     server.create_initialization_options = types.MethodType(  # type: ignore[method-assign]
         _gateway_create_initialization_options, server
     )
-    sse: SseServerTransport = SseServerTransport("/mcp/sse/messages")
 
     # Create session managers
     session_manager_stateless = StreamableHTTPSessionManager(
