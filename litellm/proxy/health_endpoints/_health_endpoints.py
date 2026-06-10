@@ -1056,12 +1056,23 @@ async def health_endpoint(
         # Keys granted SpecialModelNames.all_proxy_models carry the literal
         # "all-proxy-models" entry, which matches no real model_name; treat
         # them as unrestricted instead of filtering the list down to nothing.
+        # Keys granted SpecialModelNames.all_team_models inherit the parent
+        # team's allowlist (same semantics as get_key_models in
+        # model_checks.py). Without a team_id the sentinel cannot resolve and
+        # stays in the list, matching nothing; denied rather than
+        # unrestricted, mirroring _resolve_key_models_for_auth_check.
+        accessible_models = list(user_api_key_dict.models)
+        if (
+            SpecialModelNames.all_team_models.value in accessible_models
+            and user_api_key_dict.team_id is not None
+        ):
+            accessible_models = list(user_api_key_dict.team_models)
         restrict_to_allowed_models = (
-            len(user_api_key_dict.models) > 0
-            and SpecialModelNames.all_proxy_models.value not in user_api_key_dict.models
+            len(accessible_models) > 0
+            and SpecialModelNames.all_proxy_models.value not in accessible_models
         )
         if restrict_to_allowed_models:
-            allowed_models = set(user_api_key_dict.models)
+            allowed_models = set(accessible_models)
             _llm_model_list = [
                 m for m in _llm_model_list if m.get("model_name") in allowed_models
             ]
