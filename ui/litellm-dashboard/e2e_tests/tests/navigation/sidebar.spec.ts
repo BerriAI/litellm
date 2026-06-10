@@ -9,6 +9,17 @@ const sidebarButtons = {
   [Role.ProxyAdmin]: ["Virtual Keys", "Playground", "Models", "Usage", "Teams", "Internal Users", "AI Hub"],
 };
 
+// Route segment for pages migrated to path routes; mirror of MIGRATED_PAGES in src/utils/migratedPages.ts.
+const migratedPageSegments: Partial<Record<Page, string>> = {
+  [Page.ApiRef]: "api-reference",
+  [Page.LlmPlayground]: "playground",
+};
+
+function expectedUrlPattern(pageKey: Page): RegExp {
+  const segment = migratedPageSegments[pageKey];
+  return segment ? new RegExp(`/ui/${segment}/?($|\\?)`) : new RegExp(`[?&]page=${pageKey}(&|$)`);
+}
+
 const roles = [{ role: Role.ProxyAdmin, storage: ADMIN_STORAGE_PATH }];
 
 for (const { role, storage } of roles) {
@@ -35,8 +46,7 @@ for (const { role, storage } of roles) {
 
         await tab.click();
 
-        // Verify URL contains the correct page query parameter
-        await expect(page).toHaveURL(new RegExp(`[?&]page=${expectedPage}(&|$)`));
+        await expect(page).toHaveURL(expectedUrlPattern(expectedPage));
       }
     });
 
@@ -50,13 +60,13 @@ for (const { role, storage } of roles) {
 
       // Test direct navigation to verify the helper function works
       await navigateToPage(page, Page.ApiKeys);
-      await expect(page).toHaveURL(new RegExp(`[?&]page=${Page.ApiKeys}(&|$)`));
+      await expect(page).toHaveURL(expectedUrlPattern(Page.ApiKeys));
 
       await navigateToPage(page, Page.Models);
-      await expect(page).toHaveURL(new RegExp(`[?&]page=${Page.Models}(&|$)`));
+      await expect(page).toHaveURL(expectedUrlPattern(Page.Models));
 
       await navigateToPage(page, Page.LlmPlayground);
-      await expect(page).toHaveURL(new RegExp(`[?&]page=${Page.LlmPlayground}(&|$)`));
+      await expect(page).toHaveURL(expectedUrlPattern(Page.LlmPlayground));
     });
   });
 }

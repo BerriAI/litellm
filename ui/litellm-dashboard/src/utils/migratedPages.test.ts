@@ -28,12 +28,13 @@ describe("migratedHref / legacyPageHref", () => {
     expect(migratedHref("/api-reference")).toBe("/ui/api-reference");
   });
 
-  it("maps both the api_ref id and the hyphenated alias to the api-reference route", async () => {
+  it("maps legacy page ids (and the hyphenated api-reference alias) to their route segments", async () => {
     vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
     const { MIGRATED_PAGES } = await import("./migratedPages");
 
     expect(MIGRATED_PAGES.api_ref).toBe("api-reference");
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
+    expect(MIGRATED_PAGES["llm-playground"]).toBe("playground");
   });
 });
 
@@ -49,6 +50,8 @@ describe("legacyKeyForPathname", () => {
     // Resolves to the sidebar key api_ref, not the hyphenated alias, so highlighting works.
     expect(legacyKeyForPathname("/ui/api-reference")).toBe("api_ref");
     expect(legacyKeyForPathname("/ui/api-reference/")).toBe("api_ref");
+    expect(legacyKeyForPathname("/ui/playground")).toBe("llm-playground");
+    expect(legacyKeyForPathname("/ui/playground/")).toBe("llm-playground");
   });
 
   it("returns null for a not-yet-migrated path", async () => {
