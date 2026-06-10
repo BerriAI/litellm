@@ -360,6 +360,129 @@ class TestAzureAnthropicCostCalculation:
         assert kwargs["response_cost"] > 0
 
 
+class TestBaseModelCostCalculation:
+    """Test that the deployment's model_info.base_model is used for cost calculation."""
+
+    def _create_mock_logging_obj(
+        self,
+        model: str,
+        base_model: str = None,
+        custom_llm_provider: str = None,
+    ) -> LiteLLMLoggingObj:
+        mock_logging_obj = MagicMock()
+        model_call_details = {"model": model}
+        if custom_llm_provider:
+            model_call_details["custom_llm_provider"] = custom_llm_provider
+        if base_model:
+            model_call_details["litellm_params"] = {
+                "metadata": {"model_info": {"base_model": base_model}}
+            }
+        mock_logging_obj.model_call_details = model_call_details
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        mock_logging_obj.get_router_model_id.return_value = None
+        mock_logging_obj.litellm_params = {}
+        return mock_logging_obj
+
+    @patch("litellm.completion_cost")
+    def test_base_model_passed_to_completion_cost(self, mock_completion_cost):
+        """base_model from litellm_params metadata must be forwarded to completion_cost"""
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(
+            model="us/aws/anthropic/eccn-claude-sonnet-4-6",
+            base_model="claude-sonnet-4-6",
+            custom_llm_provider="anthropic",
+        )
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "us/aws/anthropic/eccn-claude-sonnet-4-6"
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="us/aws/anthropic/eccn-claude-sonnet-4-6",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["base_model"] == "claude-sonnet-4-6"
+
+    @patch("litellm.completion_cost")
+    def test_base_model_none_when_not_configured(self, mock_completion_cost):
+        """base_model should be None when the deployment doesn't set it"""
+        from litellm.types.utils import ModelResponse
+
+        mock_completion_cost.return_value = 0.001
+
+        logging_obj = self._create_mock_logging_obj(model="claude-3-sonnet-20240229")
+
+        mock_response = MagicMock(spec=ModelResponse)
+        mock_response.id = "test-id"
+        mock_response.model = "claude-3-sonnet-20240229"
+
+        AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=mock_response,
+            model="claude-3-sonnet-20240229",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        mock_completion_cost.assert_called_once()
+        call_kwargs = mock_completion_cost.call_args[1]
+        assert call_kwargs["base_model"] is None
+
+    def test_unmapped_alias_with_base_model_computes_cost(self):
+        """
+        Unmapped model alias (e.g. proxy-to-proxy setup) with base_model set must
+        compute a real cost instead of failing with 'This model isn't mapped yet'.
+        """
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        logging_obj = self._create_mock_logging_obj(
+            model="us/aws/anthropic/eccn-claude-sonnet-4-6",
+            base_model="claude-sonnet-4-6",
+            custom_llm_provider="anthropic",
+        )
+
+        response = ModelResponse(
+            id="test-id",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="test", role="assistant"),
+                )
+            ],
+            created=1234567890,
+            model="us/aws/anthropic/eccn-claude-sonnet-4-6",
+            usage={
+                "prompt_tokens": 25,
+                "completion_tokens": 10,
+                "total_tokens": 35,
+            },
+        )
+
+        kwargs = AnthropicPassthroughLoggingHandler._create_anthropic_response_logging_payload(
+            litellm_model_response=response,
+            model="us/aws/anthropic/eccn-claude-sonnet-4-6",
+            kwargs={},
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            logging_obj=logging_obj,
+        )
+
+        assert "response_cost" in kwargs
+        assert kwargs["response_cost"] > 0
+
+
 class TestAnthropicBatchPassthroughCostTracking:
     """Test cases for Anthropic batch passthrough cost tracking functionality"""
 
