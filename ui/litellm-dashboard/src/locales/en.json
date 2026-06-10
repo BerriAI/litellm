@@ -365,6 +365,21 @@
     "teamDropdown": {
       "placeholder": "Search or select a team",
       "notFound": "No teams found"
+    },
+    "userSearchModal": {
+      "title": "Add Team Member",
+      "emailLabel": "Email",
+      "searchByEmailPlaceholder": "Search by email",
+      "orDivider": "OR",
+      "userIdLabel": "User ID",
+      "searchByUserIdPlaceholder": "Search by user ID",
+      "memberRoleLabel": "Member Role",
+      "roleAdminLabel": "admin",
+      "roleAdminDescription": "Admin role. Can create team keys, add members, and manage settings.",
+      "roleUserLabel": "user",
+      "roleUserDescription": "User role. Can view team info, but not manage it.",
+      "adding": "Adding...",
+      "addMember": "Add Member"
     }
   },
   "common": {

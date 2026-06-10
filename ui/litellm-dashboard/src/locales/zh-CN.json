@@ -365,6 +365,21 @@
     "teamDropdown": {
       "placeholder": "搜索或选择团队",
       "notFound": "未找到团队"
+    },
+    "userSearchModal": {
+      "title": "添加团队成员",
+      "emailLabel": "邮箱",
+      "searchByEmailPlaceholder": "按邮箱搜索",
+      "orDivider": "或",
+      "userIdLabel": "用户 ID",
+      "searchByUserIdPlaceholder": "按用户 ID 搜索",
+      "memberRoleLabel": "成员角色",
+      "roleAdminLabel": "admin",
+      "roleAdminDescription": "管理员角色，可创建团队密钥、添加成员并管理设置。",
+      "roleUserLabel": "user",
+      "roleUserDescription": "普通用户角色，可查看团队信息，但无法管理。",
+      "adding": "添加中...",
+      "addMember": "添加成员"
     }
   },
   "common": {
