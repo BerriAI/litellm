@@ -2978,6 +2978,9 @@ class PrismaClient:
                 )
                 self.db = writer_wrapper
         else:
+            verbose_proxy_logger.warning(
+                "PrismaClient: DATABASE_URL_READ_REPLICA not set; using primary DATABASE_URL for reads"
+            )
             self.db = writer_wrapper  # Client to connect to Prisma db
         self._db_reconnect_lock = asyncio.Lock()
         self._db_health_watchdog_task: Optional[asyncio.Task] = None
