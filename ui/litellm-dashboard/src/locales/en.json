@@ -2421,5 +2421,49 @@
       "showJson": "Show JSON",
       "copied": "Copied!"
     }
+  },
+  "guardrails": {
+    "guardrailTestPanel": {
+      "title": "Test Guardrails:",
+      "subtitle_one": "Test guardrail and compare results",
+      "subtitle_other": "Test guardrails and compare results",
+      "inputText": "Input Text",
+      "inputTooltip": "Press Enter to submit. Use Shift+Enter for new line.",
+      "copyInput": "Copy Input",
+      "inputPlaceholder": "Enter text to test with guardrails...",
+      "keyboardHint": "Press <enter>Enter</enter> to submit • <shiftEnter>Shift+Enter</shiftEnter> for new line",
+      "characters": "Characters: {{count}}",
+      "testButton_one": "Test {{count}} guardrail",
+      "testButton_other": "Test {{count}} guardrails",
+      "testingButton_one": "Testing {{count}} guardrail...",
+      "testingButton_other": "Testing {{count}} guardrails...",
+      "pleaseEnterText": "Please enter text to test",
+      "inputCopied": "Input copied to clipboard",
+      "failedToCopyInput": "Failed to copy input"
+    },
+    "guardrailTestPlayground": {
+      "pageTitle": "Guardrail Testing Playground",
+      "guardrailsHeading": "Guardrails",
+      "searchPlaceholder": "Search guardrails...",
+      "noGuardrailsMatch": "No guardrails match your search",
+      "noGuardrailsAvailable": "No guardrails available",
+      "typeLabel": "Type:",
+      "modeLabel": "Mode:",
+      "selectedCount": "{{selected}} of {{total}} selected",
+      "emptyStateTitle": "Select Guardrails to Test",
+      "emptyStateDesc": "Choose one or more guardrails from the left sidebar to start testing and comparing results.",
+      "appliedSuccess_one": "{{count}} guardrail applied successfully",
+      "appliedSuccess_other": "{{count}} guardrails applied successfully",
+      "applyFailed_one": "{{count}} guardrail failed",
+      "applyFailed_other": "{{count}} guardrails failed"
+    },
+    "guardrailTestResults": {
+      "resultsHeading": "Results",
+      "outputText": "Output Text",
+      "characters": "Characters:",
+      "errorTitle": "{{name}} - Error",
+      "resultCopied": "Result copied to clipboard",
+      "failedToCopyResult": "Failed to copy result"
+    }
   }
 }

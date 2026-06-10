@@ -2421,5 +2421,49 @@
       "showJson": "显示 JSON",
       "copied": "已复制！"
     }
+  },
+  "guardrails": {
+    "guardrailTestPanel": {
+      "title": "测试护栏：",
+      "subtitle_one": "测试护栏并比较结果",
+      "subtitle_other": "测试护栏并比较结果",
+      "inputText": "输入文本",
+      "inputTooltip": "按 Enter 提交，按 Shift+Enter 换行。",
+      "copyInput": "复制输入",
+      "inputPlaceholder": "输入要用护栏测试的文本...",
+      "keyboardHint": "按 <enter>Enter</enter> 提交 • <shiftEnter>Shift+Enter</shiftEnter> 换行",
+      "characters": "字符数：{{count}}",
+      "testButton_one": "测试 {{count}} 个护栏",
+      "testButton_other": "测试 {{count}} 个护栏",
+      "testingButton_one": "正在测试 {{count}} 个护栏...",
+      "testingButton_other": "正在测试 {{count}} 个护栏...",
+      "pleaseEnterText": "请输入要测试的文本",
+      "inputCopied": "输入已复制到剪贴板",
+      "failedToCopyInput": "复制输入失败"
+    },
+    "guardrailTestPlayground": {
+      "pageTitle": "护栏测试 Playground",
+      "guardrailsHeading": "护栏",
+      "searchPlaceholder": "搜索护栏...",
+      "noGuardrailsMatch": "没有护栏匹配您的搜索",
+      "noGuardrailsAvailable": "暂无护栏可用",
+      "typeLabel": "类型：",
+      "modeLabel": "模式：",
+      "selectedCount": "已选 {{selected}} / {{total}}",
+      "emptyStateTitle": "选择要测试的护栏",
+      "emptyStateDesc": "从左侧边栏选择一个或多个护栏，开始测试并比较结果。",
+      "appliedSuccess_one": "{{count}} 个护栏已成功应用",
+      "appliedSuccess_other": "{{count}} 个护栏已成功应用",
+      "applyFailed_one": "{{count}} 个护栏执行失败",
+      "applyFailed_other": "{{count}} 个护栏执行失败"
+    },
+    "guardrailTestResults": {
+      "resultsHeading": "结果",
+      "outputText": "输出文本",
+      "characters": "字符数：",
+      "errorTitle": "{{name}} - 错误",
+      "resultCopied": "结果已复制到剪贴板",
+      "failedToCopyResult": "复制结果失败"
+    }
   }
 }
