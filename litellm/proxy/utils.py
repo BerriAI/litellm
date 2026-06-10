@@ -3253,40 +3253,49 @@ class PrismaClient:
         self, sql_query: str, *args
     ) -> Optional[dict]:
         """
-        Execute a query with automatic fallback for PostgreSQL cached plan errors.
+        Execute a query, recovering once from PostgreSQL's "cached plan must not
+        change result type" error.
 
-        This handles the "cached plan must not change result type" error that occurs
-        during rolling deployments when schema changes are applied while old pods
-        still have cached query plans expecting the old schema.
+        That error surfaces during rolling deployments when a schema change
+        invalidates the prepared-statement plans that pooled connections still
+        hold. Clearing only the server-side plans with DEALLOCATE ALL makes
+        things worse: Prisma's query engine keeps a per-connection client-side
+        cache of prepared-statement names, so once the server drops a plan the
+        engine re-sends a name PostgreSQL no longer recognizes and the
+        connection breaks with `prepared statement "sN" does not exist`. With a
+        small pool that connection stays poisoned and every auth lookup fails.
 
-        Args:
-            sql_query: SQL query string to execute
+        Recreating the Prisma client kills the engine subprocess and drops the
+        server-side plans and the engine's client-side name cache together, so
+        the retried query is prepared fresh. We reconnect through
+        `attempt_db_reconnect`, which is singleflight: when a schema change
+        poisons every pooled connection at once, the first cached-plan error
+        recreates the client and the concurrent waiters reuse that single
+        recreate instead of racing to kill each other's fresh engine. We then
+        retry the identical query exactly once.
 
-        Returns:
-            Query result or None
+        The retry reuses the original query byte-for-byte. Mutating the SQL
+        (e.g. injecting a unique comment) would defeat PostgreSQL's plan cache,
+        forcing a fresh plan on every request and pegging the database CPU.
 
-        Raises:
-            Original exception if not a cached plan error
+        If the reconnect is skipped because a recent reconnect is still within
+        its cooldown, the retry runs against the same connection and may fail
+        again; the get_data backoff decorator re-runs the lookup and a later
+        attempt reconnects once the cooldown elapses.
         """
         try:
             return await self.db.query_first(sql_query, *args)
         except Exception as e:
-            error_str = str(e)
-            if "cached plan must not change result type" in error_str:
-                # Force PostgreSQL to re-plan by invalidating the cache
-                # Add a unique comment to make the query different
-                sql_query_retry = sql_query.replace(
-                    "SELECT",
-                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */",
-                )
-                verbose_proxy_logger.warning(
-                    "PostgreSQL cached plan error detected for token lookup, "
-                    "retrying with fresh plan. This may occur during rolling deployments "
-                    "when schema changes are applied."
-                )
-                return await self.db.query_first(sql_query_retry, *args)
-            else:
+            if "cached plan must not change result type" not in str(e):
                 raise
+            verbose_proxy_logger.warning(
+                "PostgreSQL cached plan error detected for token lookup; "
+                "recreating the database connection and retrying with the same "
+                "query. This may occur during rolling deployments when schema "
+                "changes are applied."
+            )
+            await self.attempt_db_reconnect(reason="postgres_cached_plan_error")
+            return await self.db.query_first(sql_query, *args)
 
     @backoff.on_exception(
         backoff.expo,
