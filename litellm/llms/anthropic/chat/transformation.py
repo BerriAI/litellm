@@ -2225,12 +2225,24 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             text_tokens=raw_input_tokens,
         )
         # Always populate completion_token_details, not just when there's reasoning_content
-        estimated_reasoning_tokens = (
-            token_counter(text=reasoning_content, count_response_tokens=True)
-            if reasoning_content
-            else 0
-        )
-        reasoning_tokens = min(estimated_reasoning_tokens, completion_tokens)
+        # Prefer the provider-reported thinking_tokens when present. Redacted thinking blocks
+        # (Vertex AI Opus 4.7/4.8 with adaptive thinking) return empty thinking text but
+        # carry the real count in output_tokens_details.thinking_tokens (fixes #30099).
+        _output_tokens_details = _usage.get("output_tokens_details")
+        _provider_thinking_tokens: Optional[int] = None
+        if isinstance(_output_tokens_details, dict):
+            _tt = _output_tokens_details.get("thinking_tokens")
+            if isinstance(_tt, (int, float)) and _tt > 0:
+                _provider_thinking_tokens = int(_tt)
+        if _provider_thinking_tokens is not None:
+            reasoning_tokens = min(_provider_thinking_tokens, completion_tokens)
+        else:
+            estimated_reasoning_tokens = (
+                token_counter(text=reasoning_content, count_response_tokens=True)
+                if reasoning_content
+                else 0
+            )
+            reasoning_tokens = min(estimated_reasoning_tokens, completion_tokens)
         completion_token_details = CompletionTokensDetailsWrapper(
             reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else 0,
             text_tokens=(
