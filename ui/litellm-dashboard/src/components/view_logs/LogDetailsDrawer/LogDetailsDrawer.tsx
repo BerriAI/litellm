@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button, Drawer } from "antd";
 import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Bot, Sparkles, Wrench } from "lucide-react";
@@ -234,6 +235,8 @@ export function LogDetailsDrawer({
     }
   };
 
+  const { t } = useTranslation();
+
   if (!currentLog || !enrichedLog) return null;
 
   return (
@@ -259,7 +262,7 @@ export function LogDetailsDrawer({
             icon={<LeftOutlined />}
             onClick={() => setIsSidebarCollapsed(true)}
             className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
-            aria-label="Collapse trace sidebar"
+            aria-label={t("viewLogs.logDetailsDrawer.collapseTraceSidebar")}
           />
         ) : (
           <Button
@@ -268,7 +271,7 @@ export function LogDetailsDrawer({
             icon={<RightOutlined />}
             onClick={() => setIsSidebarCollapsed(false)}
             className="absolute top-2 left-2 z-20 !bg-white !border !border-slate-200 !rounded-md"
-            aria-label="Expand trace sidebar"
+            aria-label={t("viewLogs.logDetailsDrawer.expandTraceSidebar")}
           />
         )}
         {!isSidebarCollapsed && (
@@ -277,7 +280,9 @@ export function LogDetailsDrawer({
               <div className="flex items-start justify-between gap-2">
                 <div>
                   <div className="text-[10px] uppercase tracking-wide text-slate-500">
-                    {isSessionMode ? "Session" : "Trace"}
+                    {isSessionMode
+                      ? t("viewLogs.logDetailsDrawer.labelSession")
+                      : t("viewLogs.logDetailsDrawer.labelTrace")}
                   </div>
                   <div className="font-mono text-[12px] text-slate-900 leading-tight flex items-center gap-1">
                     <span className="truncate">{leftPanelDisplayId}</span>
@@ -285,7 +290,7 @@ export function LogDetailsDrawer({
                       type="button"
                       onClick={handleCopyLeftPanelId}
                       className="text-slate-400 hover:text-slate-600"
-                      aria-label="Copy trace id"
+                      aria-label={t("viewLogs.logDetailsDrawer.copyTraceId")}
                     >
                       {copiedLeftPanelId ? (
                         <CheckOutlined className="text-[11px]" />
@@ -297,7 +302,7 @@ export function LogDetailsDrawer({
                 </div>
               </div>
               <div className="mt-1 text-[11px] text-slate-500 font-mono">
-                {logsForList.length} req
+                {t("viewLogs.logDetailsDrawer.labelReqCount", { count: logsForList.length })}
                 {[
                   isSessionMode
                     ? llmCount
@@ -309,7 +314,11 @@ export function LogDetailsDrawer({
                     : logsForList.filter((row) => AGENT_CALL_TYPES.includes(row.call_type)).length,
                   isSessionMode ? mcpCount : logsForList.filter((row) => MCP_CALL_TYPES.includes(row.call_type)).length,
                 ].map((count, i) => {
-                  const label = [" LLM", " Agent", " MCP"][i];
+                  const label = [
+                    t("viewLogs.logDetailsDrawer.labelLlm"),
+                    t("viewLogs.logDetailsDrawer.labelAgent"),
+                    t("viewLogs.logDetailsDrawer.labelMcp"),
+                  ][i];
                   return count > 0 ? (
                     <span key={label}>
                       <span className="mx-1.5">·</span>

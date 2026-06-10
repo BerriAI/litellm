@@ -5,6 +5,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Typography, Tag, Tooltip } from "antd";
 import {
   SoundOutlined,
@@ -90,6 +91,7 @@ export function isRealtimeResponse(response: any): boolean {
 }
 
 export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProps) {
+  const { t } = useTranslation();
   const events: RealtimeEvent[] = response?.results || [];
   const usage = response?.usage;
 
@@ -122,7 +124,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
             fontSize: 13,
           }}
         >
-          No recognized realtime events found
+          {t("viewLogs.realtimePrettyView.noEventsFound")}
         </div>
       )}
     </div>
@@ -130,6 +132,7 @@ export function RealtimePrettyView({ response, metrics }: RealtimePrettyViewProp
 }
 
 function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCount: number }) {
+  const { t } = useTranslation();
   const [isCollapsed, setIsCollapsed] = useState(true);
 
   return (
@@ -170,14 +173,14 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <SettingOutlined style={{ color: "#8c8c8c", fontSize: 14 }} />
-            <Text style={{ fontWeight: 500, fontSize: 14 }}>Session</Text>
+            <Text style={{ fontWeight: 500, fontSize: 14 }}>{t("viewLogs.realtimePrettyView.labelSession")}</Text>
           </div>
           <Text type="secondary" style={{ fontSize: 12 }}>
             {session.model}
           </Text>
           {turnCount > 0 && (
             <Tag color="purple" style={{ margin: 0, fontWeight: 500 }}>
-              {turnCount} {turnCount === 1 ? "turn" : "turns"}
+              {t("viewLogs.realtimePrettyView.turnCount", { count: turnCount })}
             </Tag>
           )}
           {session.voice && (
@@ -214,15 +217,32 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
               fontSize: 13,
             }}
           >
-            <ConfigRow label="Model" value={session.model} />
-            <ConfigRow label="Voice" value={session.voice} />
-            <ConfigRow label="Temperature" value={session.temperature} />
-            <ConfigRow label="Max Output Tokens" value={session.max_response_output_tokens} />
-            <ConfigRow label="Input Audio Format" value={session.input_audio_format} />
-            <ConfigRow label="Output Audio Format" value={session.output_audio_format} />
-            {session.turn_detection && <ConfigRow label="Turn Detection" value={session.turn_detection.type} />}
+            <ConfigRow label={t("viewLogs.realtimePrettyView.labelModel")} value={session.model} />
+            <ConfigRow label={t("viewLogs.realtimePrettyView.labelVoice")} value={session.voice} />
+            <ConfigRow label={t("viewLogs.realtimePrettyView.labelTemperature")} value={session.temperature} />
+            <ConfigRow
+              label={t("viewLogs.realtimePrettyView.labelMaxOutputTokens")}
+              value={session.max_response_output_tokens}
+            />
+            <ConfigRow
+              label={t("viewLogs.realtimePrettyView.labelInputAudioFormat")}
+              value={session.input_audio_format}
+            />
+            <ConfigRow
+              label={t("viewLogs.realtimePrettyView.labelOutputAudioFormat")}
+              value={session.output_audio_format}
+            />
+            {session.turn_detection && (
+              <ConfigRow
+                label={t("viewLogs.realtimePrettyView.labelTurnDetection")}
+                value={session.turn_detection.type}
+              />
+            )}
             {session.tools && session.tools.length > 0 && (
-              <ConfigRow label="Tools" value={`${session.tools.length} tool(s)`} />
+              <ConfigRow
+                label={t("viewLogs.realtimePrettyView.labelTools")}
+                value={t("viewLogs.realtimePrettyView.toolCount", { count: session.tools.length })}
+              />
             )}
           </div>
 
@@ -238,7 +258,7 @@ function SessionCard({ session, turnCount }: { session: RealtimeSession; turnCou
                   marginBottom: 4,
                 }}
               >
-                Instructions
+                {t("viewLogs.realtimePrettyView.labelInstructions")}
               </Text>
               <div
                 style={{
@@ -324,6 +344,7 @@ function ConversationCard({
 }
 
 function ResponseTurn({ response, index }: { response: RealtimeResponse; index: number }) {
+  const { t } = useTranslation();
   const outputs = response.output || [];
   const usage = response.usage;
 
@@ -349,7 +370,10 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
         </Tag>
         {usage && (
           <Text type="secondary" style={{ fontSize: 11 }}>
-            {usage.input_tokens ?? 0} in / {usage.output_tokens ?? 0} out tokens
+            {t("viewLogs.realtimePrettyView.tokenUsage", {
+              input: usage.input_tokens ?? 0,
+              output: usage.output_tokens ?? 0,
+            })}
           </Text>
         )}
         {response.conversation_id && (
@@ -367,8 +391,18 @@ function ResponseTurn({ response, index }: { response: RealtimeResponse; index: 
       ))}
 
       {/* Token breakdown if available */}
-      {usage?.input_token_details && <TokenBreakdown label="Input" details={usage.input_token_details} />}
-      {usage?.output_token_details && <TokenBreakdown label="Output" details={usage.output_token_details} />}
+      {usage?.input_token_details && (
+        <TokenBreakdown
+          label={t("viewLogs.realtimePrettyView.inputTokenBreakdown")}
+          details={usage.input_token_details}
+        />
+      )}
+      {usage?.output_token_details && (
+        <TokenBreakdown
+          label={t("viewLogs.realtimePrettyView.outputTokenBreakdown")}
+          details={usage.output_token_details}
+        />
+      )}
     </div>
   );
 }
