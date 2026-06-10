@@ -1880,6 +1880,9 @@ def test_group_keys_by_hash_tag_force_grouping_flag():
         "{team:1f44b322-dead-41d9-9244-09515df45269}:tokens",
     ]
 
+    # Defensive: clear any prior test leakage before asserting default behaviour.
+    setattr(litellm, "force_redis_hash_tag_grouping", False)
+
     # Default: no flag, non-cluster cache -> single group (current behaviour).
     groups_default = handler._group_keys_by_hash_tag(keys_two_slots)
     assert len(groups_default) == 1
