@@ -1097,8 +1097,9 @@ def _model_has_known_pricing(model: str, custom_llm_provider: str) -> bool:
     pricing dimensions checked here); registration is only needed so unknown
     models can be priced at all.
     """
+    model_cost_map = litellm.model_cost
     for key in (model, f"{custom_llm_provider}/{model}"):
-        entry = litellm.model_cost.get(key)
+        entry = model_cost_map.get(key)
         if entry is not None and (
             entry.get("input_cost_per_token") is not None
             or entry.get("input_cost_per_second") is not None
