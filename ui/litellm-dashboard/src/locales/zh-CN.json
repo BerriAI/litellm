@@ -8382,5 +8382,18 @@
       "updateSuccess": "自动路由器配置更新成功",
       "updateFailed": "更新自动路由器配置失败"
     }
+  },
+  "emailEvents": {
+    "emailEventSettings": {
+      "title": "邮件通知",
+      "subtitle": "选择哪些事件应触发邮件通知。",
+      "saveSuccess": "邮件事件设置已成功更新",
+      "resetSuccess": "邮件事件设置已重置为默认值",
+      "saveChanges": "保存更改",
+      "resetToDefaults": "重置为默认值",
+      "descVirtualKeyCreated": "当使用用户 ID 创建新虚拟密钥时，将向该用户发送一封邮件",
+      "descNewUserInvitation": "当新用户创建时，将向该用户的邮件地址发送一封邮件",
+      "descGeneric": "当 {{words}} 时接收邮件通知"
+    }
   }
 }

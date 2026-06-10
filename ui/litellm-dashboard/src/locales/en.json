@@ -8382,5 +8382,18 @@
       "updateSuccess": "Auto router configuration updated successfully",
       "updateFailed": "Failed to update auto router configuration"
     }
+  },
+  "emailEvents": {
+    "emailEventSettings": {
+      "title": "Email Notifications",
+      "subtitle": "Select which events should trigger email notifications.",
+      "saveSuccess": "Email event settings updated successfully",
+      "resetSuccess": "Email event settings reset to defaults",
+      "saveChanges": "Save Changes",
+      "resetToDefaults": "Reset to Defaults",
+      "descVirtualKeyCreated": "An email will be sent to the user when a new virtual key is created with their user ID",
+      "descNewUserInvitation": "An email will be sent to the email address of the user when a new user is created",
+      "descGeneric": "Receive an email notification when {{words}}"
+    }
   }
 }
