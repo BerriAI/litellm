@@ -4,6 +4,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { NumberInput, TextInput } from "@tremor/react";
 import { Select } from "antd";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 import NumericalInput from "../shared/numerical_input";
 
@@ -16,6 +17,7 @@ const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({ field, currentV
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>(currentValue || "");
   const { accessToken } = useAuthorized();
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (!accessToken) return;
@@ -99,7 +101,7 @@ const CacheFieldRenderer: React.FC<CacheFieldRendererProps> = ({ field, currentV
           value={selectedModel}
           onChange={setSelectedModel}
           showSearch={true}
-          placeholder="Search and select a model..."
+          placeholder={t("cacheSettings.cacheFieldRenderer.searchAndSelectModel")}
           options={embeddingModels}
           style={{ width: "100%" }}
           className="rounded-md"

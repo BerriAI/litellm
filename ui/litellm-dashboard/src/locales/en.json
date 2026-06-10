@@ -7675,5 +7675,38 @@
       "weekly": "weekly",
       "monthly": "monthly"
     }
+  },
+  "cacheSettings": {
+    "cacheFieldRenderer": {
+      "searchAndSelectModel": "Search and select a model..."
+    },
+    "redisTypeSelector": {
+      "redisType": "Redis Type",
+      "nodeType": "Node (Single Instance)",
+      "clusterType": "Cluster",
+      "sentinelType": "Sentinel",
+      "semanticType": "Semantic",
+      "selectTypeDescription": "Select the type of Redis deployment you're using"
+    },
+    "index": {
+      "failedToLoad": "Failed to load cache settings",
+      "testSuccessful": "Cache connection test successful!",
+      "testFailed": "Connection test failed: {{message}}",
+      "updateSuccess": "Cache settings updated successfully",
+      "failedToUpdate": "Failed to update cache settings",
+      "title": "Cache Settings",
+      "subtitle": "Configure Redis cache for LiteLLM",
+      "connectionSettings": "Connection Settings",
+      "clusterConfiguration": "Cluster Configuration",
+      "sentinelConfiguration": "Sentinel Configuration",
+      "semanticConfiguration": "Semantic Configuration",
+      "advancedSettings": "Advanced Settings",
+      "sslSettings": "SSL Settings",
+      "cacheManagement": "Cache Management",
+      "gcpAuthentication": "GCP Authentication",
+      "testing": "Testing...",
+      "testConnection": "Test Connection",
+      "saveChanges": "Save Changes"
+    }
   }
 }

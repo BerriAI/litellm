@@ -7675,5 +7675,38 @@
       "weekly": "每周",
       "monthly": "每月"
     }
+  },
+  "cacheSettings": {
+    "cacheFieldRenderer": {
+      "searchAndSelectModel": "搜索并选择模型..."
+    },
+    "redisTypeSelector": {
+      "redisType": "Redis 类型",
+      "nodeType": "节点（单实例）",
+      "clusterType": "集群",
+      "sentinelType": "哨兵",
+      "semanticType": "语义",
+      "selectTypeDescription": "选择您使用的 Redis 部署类型"
+    },
+    "index": {
+      "failedToLoad": "加载缓存设置失败",
+      "testSuccessful": "缓存连接测试成功！",
+      "testFailed": "连接测试失败：{{message}}",
+      "updateSuccess": "缓存设置已成功更新",
+      "failedToUpdate": "更新缓存设置失败",
+      "title": "缓存设置",
+      "subtitle": "为 LiteLLM 配置 Redis 缓存",
+      "connectionSettings": "连接设置",
+      "clusterConfiguration": "集群配置",
+      "sentinelConfiguration": "哨兵配置",
+      "semanticConfiguration": "语义配置",
+      "advancedSettings": "高级设置",
+      "sslSettings": "SSL 设置",
+      "cacheManagement": "缓存管理",
+      "gcpAuthentication": "GCP 身份验证",
+      "testing": "测试中...",
+      "testConnection": "测试连接",
+      "saveChanges": "保存更改"
+    }
   }
 }
