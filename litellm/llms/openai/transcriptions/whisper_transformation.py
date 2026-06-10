@@ -1,3 +1,4 @@
+import json
 from typing import List, Optional, Union
 
 from httpx import Headers, Response
@@ -131,10 +132,8 @@ class OpenAIWhisperAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     ) -> TranscriptionResponse:
         try:
             raw_response_json = raw_response.json()
-        except Exception as e:
-            raise ValueError(
-                f"Error transforming response to json: {str(e)}\nResponse: {raw_response.text}"
-            )
+        except json.JSONDecodeError:
+            return TranscriptionResponse(text=raw_response.text)
 
         if any(
             key in raw_response_json
