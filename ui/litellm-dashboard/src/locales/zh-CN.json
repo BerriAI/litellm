@@ -393,6 +393,178 @@
       "addMember": "添加成员"
     }
   },
+  "adminPanel": {
+    "title": "管理员访问",
+    "goToInternalUsers": "前往「内部用户」页面添加其他管理员。",
+    "allIPAddressesAllowed": "允许所有 IP 地址",
+    "tabs": {
+      "ssoSettings": "SSO 设置",
+      "securitySettings": "安全设置",
+      "scim": "SCIM",
+      "uiSettings": "界面设置",
+      "loggingSettings": "日志设置",
+      "hashicorpVault": "Hashicorp Vault"
+    },
+    "securityCard": {
+      "title": "安全设置",
+      "deprecatedAlertMessage": "SSO 配置已弃用",
+      "deprecatedAlertDescription": "在此页面编辑 SSO 设置已弃用，将在未来版本中移除。请使用 SSO 设置标签页进行 SSO 配置。",
+      "editSSOSettings": "编辑 SSO 设置",
+      "addSSO": "添加 SSO",
+      "allowedIPs": "允许的 IP",
+      "uiAccessControl": "界面访问控制"
+    },
+    "loginWithoutSSO": {
+      "title": "不使用 SSO 登录",
+      "description": "如果您需要在不使用 SSO 的情况下登录，可以访问"
+    },
+    "manageAllowedIPModal": {
+      "title": "管理允许的 IP 地址",
+      "addIPAddress": "添加 IP 地址",
+      "ipAddressColumn": "IP 地址",
+      "actionColumn": "操作"
+    },
+    "addIPModal": {
+      "title": "添加允许的 IP 地址",
+      "inputPlaceholder": "输入 IP 地址",
+      "inputRequired": "请输入 IP 地址",
+      "submitButton": "添加 IP 地址"
+    },
+    "deleteIPModal": {
+      "title": "确认删除",
+      "confirmText": "确定要删除 IP 地址：{{ip}}？"
+    },
+    "uiAccessControlModal": {
+      "title": "界面访问控制设置",
+      "updateSuccess": "界面访问控制设置已成功更新"
+    },
+    "notifications": {
+      "premiumOnlyFeature": "此功能仅对高级用户开放，请升级您的账户。",
+      "premiumOnlyUIAccessControl": "只有高级用户才能配置界面访问控制",
+      "ipAddedSuccess": "IP 地址添加成功",
+      "ipDeletedSuccess": "IP 地址删除成功"
+    },
+    "fetchAllowedIpsFailed": "获取允许的 IP 列表失败 {{error}}",
+    "addIpFailed": "添加 IP 地址失败 {{error}}",
+    "deleteIpFailed": "删除 IP 地址失败 {{error}}"
+  },
+  "bulkEditUsers": {
+    "titleAllUsers": "批量编辑所有用户",
+    "titleSelectedUsers": "批量编辑 {{count}} 个用户",
+    "updateAllUsersLabel": "更新系统中的所有用户",
+    "updateAllUsersWarning": "这将对系统中的所有用户应用更改，而不仅仅是所选用户。",
+    "selectedUsersTitle": "已选用户（{{count}} 人）：",
+    "columns": {
+      "userId": "用户 ID",
+      "email": "邮箱",
+      "currentRole": "当前角色",
+      "budget": "预算"
+    },
+    "noEmail": "无邮箱",
+    "unlimited": "无限制",
+    "instructions": "在下方填写要应用于所有选定用户的值。可批量编辑：角色、预算、模型和元数据，也可将用户添加到团队。",
+    "instructionsLabel": "使用说明：",
+    "teamManagement": {
+      "sectionTitle": "团队管理",
+      "addToTeamsLabel": "将选定用户添加到团队",
+      "selectTeamsLabel": "选择团队：",
+      "selectTeamsPlaceholder": "选择要添加用户的团队",
+      "teamBudgetLabel": "团队预算（可选）：",
+      "teamBudgetPlaceholder": "团队内每位用户的最大预算",
+      "teamBudgetHint": "留空表示在团队限制内不设预算上限",
+      "defaultRoleNote": "用户将以 user 角色默认添加，所有用户将被添加到每个选定的团队。"
+    },
+    "updatingUsers": "正在更新 {{count}} 个用户...",
+    "updatingAllUsers": "正在更新所有用户...",
+    "notifications": {
+      "noFieldsModified": "请至少修改一个字段或选择要添加用户的团队",
+      "accessTokenNotFound": "未找到访问令牌",
+      "bulkOpFailed": "批量操作失败",
+      "updatedAllUsers": "已更新所有用户（共 {{total}} 个）",
+      "updatedUsers": "已更新 {{count}} 个用户",
+      "addedToTeams": "已将用户添加到 {{count}} 个团队（共 {{total}} 次添加）",
+      "failedToAddToTeams": "向 {{count}} 个团队添加用户失败"
+    }
+  },
+  "createUserButton": {
+    "inviteUserButton": "+ 邀请用户",
+    "createUserOwnsKeys": "创建可拥有密钥的用户",
+    "emailInvitations": "邮件邀请",
+    "emailInvitationsDesc": "仅当配置了邮件集成（SMTP、Resend 或 SendGrid）时，新用户才会收到邮件邀请。",
+    "learnHowToSetupEmail": "了解如何设置邮件通知",
+    "userEmailLabel": "用户邮箱",
+    "userRoleLabel": "用户角色",
+    "globalProxyRoleLabel": "全局代理角色",
+    "globalProxyRoleTooltip": "此角色独立于任何团队/组织特定角色。在设置中配置团队/组织管理员。",
+    "teamLabel": "团队",
+    "teamHelp": "若选择，用户将以 user 角色添加到该团队。",
+    "organizationLabel": "组织",
+    "organizationHelp": "用户将被添加到所选组织。",
+    "selectOrganizationPlaceholder": "选择组织",
+    "metadataLabel": "元数据",
+    "metadataPlaceholder": "以 JSON 格式输入元数据",
+    "sendInviteEmailLabel": "发送邀请邮件",
+    "personalKeyCreation": "个人密钥创建",
+    "modelsLabel": "模型",
+    "modelsTooltip": "用户在团队范围外可访问的模型。",
+    "modelsHelp": "用户在团队范围外可访问的模型。",
+    "modelsPlaceholder": "选择模型",
+    "allProxyModels": "所有代理模型",
+    "noDefaultModels": "无默认模型",
+    "inviteUserModalTitle": "邀请用户",
+    "inviteUserSubmitButton": "邀请用户",
+    "createUserSubmitButton": "创建用户",
+    "notifications": {
+      "makingApiCall": "正在调用 API",
+      "userCreated": "API 用户已创建",
+      "errorCreatingUser": "创建用户时出错"
+    }
+  },
+  "debugWarningBanner": {
+    "message": "性能警告：详细调试模式已启用",
+    "description": "详细调试日志（<code>LITELLM_LOG=DEBUG</code>）当前已启用。此模式会记录大量诊断信息并显著降低性能，应仅用于排查问题，生产环境请禁用。"
+  },
+  "defaultUserSettings": {
+    "title": "默认用户设置",
+    "editSettings": "编辑设置",
+    "saveChanges": "保存更改",
+    "noSettings": "暂无可用设置，或您没有查看权限。",
+    "noSchemaInfo": "暂无 schema 信息",
+    "noDescriptionAvailable": "暂无描述",
+    "teamEntry": {
+      "teamLabel": "团队 {{number}}",
+      "removeButton": "移除",
+      "teamIdLabel": "团队 ID",
+      "teamIdPlaceholder": "输入团队 ID",
+      "maxBudgetLabel": "团队内最大预算",
+      "maxBudgetPlaceholder": "可选",
+      "userRoleLabel": "用户角色",
+      "addTeamButton": "添加团队"
+    },
+    "displayValues": {
+      "notSet": "未设置",
+      "noTeamsAssigned": "未分配团队",
+      "notSpecified": "未指定",
+      "noLimit": "无上限",
+      "userRoleOption": "用户",
+      "adminRoleOption": "管理员"
+    },
+    "notifications": {
+      "fetchFailed": "获取 SSO 设置失败",
+      "updateFailed": "更新设置失败：{{error}}"
+    }
+  },
+  "guardrailSettingsView": {
+    "noGuardrailsConfigured": "未配置护栏",
+    "globalLabel": "全局",
+    "globalGuardrailAriaLabel": "全局护栏",
+    "bypassedForTeam": "已为此团队绕过",
+    "noneConfigured": "未配置",
+    "teamSpecificLabel": "团队专属",
+    "cardTitle": "护栏设置",
+    "cardSubtitle": "应用于此团队的全局和团队专属护栏",
+    "inlineTitle": "护栏设置"
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",

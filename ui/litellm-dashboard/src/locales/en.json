@@ -393,6 +393,178 @@
       "addMember": "Add Member"
     }
   },
+  "adminPanel": {
+    "title": "Admin Access",
+    "goToInternalUsers": "Go to 'Internal Users' page to add other admins.",
+    "allIPAddressesAllowed": "All IP Addresses Allowed",
+    "tabs": {
+      "ssoSettings": "SSO Settings",
+      "securitySettings": "Security Settings",
+      "scim": "SCIM",
+      "uiSettings": "UI Settings",
+      "loggingSettings": "Logging Settings",
+      "hashicorpVault": "Hashicorp Vault"
+    },
+    "securityCard": {
+      "title": "Security Settings",
+      "deprecatedAlertMessage": "SSO Configuration Deprecated",
+      "deprecatedAlertDescription": "Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the SSO Settings tab for SSO configuration.",
+      "editSSOSettings": "Edit SSO Settings",
+      "addSSO": "Add SSO",
+      "allowedIPs": "Allowed IPs",
+      "uiAccessControl": "UI Access Control"
+    },
+    "loginWithoutSSO": {
+      "title": "Login without SSO",
+      "description": "If you need to login without sso, you can access"
+    },
+    "manageAllowedIPModal": {
+      "title": "Manage Allowed IP Addresses",
+      "addIPAddress": "Add IP Address",
+      "ipAddressColumn": "IP Address",
+      "actionColumn": "Action"
+    },
+    "addIPModal": {
+      "title": "Add Allowed IP Address",
+      "inputPlaceholder": "Enter IP address",
+      "inputRequired": "Please enter an IP address",
+      "submitButton": "Add IP Address"
+    },
+    "deleteIPModal": {
+      "title": "Confirm Delete",
+      "confirmText": "Are you sure you want to delete the IP address: {{ip}}?"
+    },
+    "uiAccessControlModal": {
+      "title": "UI Access Control Settings",
+      "updateSuccess": "UI Access Control settings updated successfully"
+    },
+    "notifications": {
+      "premiumOnlyFeature": "This feature is only available for premium users. Please upgrade your account.",
+      "premiumOnlyUIAccessControl": "Only premium users can configure UI access control",
+      "ipAddedSuccess": "IP address added successfully",
+      "ipDeletedSuccess": "IP address deleted successfully"
+    },
+    "fetchAllowedIpsFailed": "Failed to fetch allowed IPs {{error}}",
+    "addIpFailed": "Failed to add IP address {{error}}",
+    "deleteIpFailed": "Failed to delete IP address {{error}}"
+  },
+  "bulkEditUsers": {
+    "titleAllUsers": "Bulk Edit All Users",
+    "titleSelectedUsers": "Bulk Edit {{count}} User(s)",
+    "updateAllUsersLabel": "Update ALL users in the system",
+    "updateAllUsersWarning": "This will apply changes to ALL users in the system, not just the selected ones.",
+    "selectedUsersTitle": "Selected Users ({{count}}):",
+    "columns": {
+      "userId": "User ID",
+      "email": "Email",
+      "currentRole": "Current Role",
+      "budget": "Budget"
+    },
+    "noEmail": "No email",
+    "unlimited": "Unlimited",
+    "instructions": "Fill in the fields below with the values you want to apply to all selected users. You can bulk edit: role, budget, models, and metadata. You can also add users to teams.",
+    "instructionsLabel": "Instructions:",
+    "teamManagement": {
+      "sectionTitle": "Team Management",
+      "addToTeamsLabel": "Add selected users to teams",
+      "selectTeamsLabel": "Select Teams:",
+      "selectTeamsPlaceholder": "Select teams to add users to",
+      "teamBudgetLabel": "Team Budget (Optional):",
+      "teamBudgetPlaceholder": "Max budget per user in team",
+      "teamBudgetHint": "Leave empty for unlimited budget within team limits",
+      "defaultRoleNote": "Users will be added with \"user\" role by default. All users will be added to each selected team."
+    },
+    "updatingUsers": "Updating {{count}} user(s)...",
+    "updatingAllUsers": "Updating all users...",
+    "notifications": {
+      "noFieldsModified": "Please modify at least one field or select teams to add users to",
+      "accessTokenNotFound": "Access token not found",
+      "bulkOpFailed": "Failed to perform bulk operations",
+      "updatedAllUsers": "Updated all users ({{total}} total)",
+      "updatedUsers": "Updated {{count}} user(s)",
+      "addedToTeams": "Added users to {{count}} team(s) ({{total}} total additions)",
+      "failedToAddToTeams": "Failed to add users to {{count}} team(s)"
+    }
+  },
+  "createUserButton": {
+    "inviteUserButton": "+ Invite User",
+    "createUserOwnsKeys": "Create a User who can own keys",
+    "emailInvitations": "Email invitations",
+    "emailInvitationsDesc": "New users receive an email invite only when an email integration (SMTP, Resend, or SendGrid) is configured.",
+    "learnHowToSetupEmail": "Learn how to set up email notifications",
+    "userEmailLabel": "User Email",
+    "userRoleLabel": "User Role",
+    "globalProxyRoleLabel": "Global Proxy Role",
+    "globalProxyRoleTooltip": "This role is independent of any team/org specific roles. Configure Team / Organization Admins in the Settings",
+    "teamLabel": "Team",
+    "teamHelp": "If selected, user will be added as a 'user' role to the team.",
+    "organizationLabel": "Organization",
+    "organizationHelp": "The user will be added to the selected organization(s).",
+    "selectOrganizationPlaceholder": "Select Organization",
+    "metadataLabel": "Metadata",
+    "metadataPlaceholder": "Enter metadata as JSON",
+    "sendInviteEmailLabel": "Send invitation email",
+    "personalKeyCreation": "Personal Key Creation",
+    "modelsLabel": "Models",
+    "modelsTooltip": "Models user has access to, outside of team scope.",
+    "modelsHelp": "Models user has access to, outside of team scope.",
+    "modelsPlaceholder": "Select models",
+    "allProxyModels": "All Proxy Models",
+    "noDefaultModels": "No Default Models",
+    "inviteUserModalTitle": "Invite User",
+    "inviteUserSubmitButton": "Invite User",
+    "createUserSubmitButton": "Create User",
+    "notifications": {
+      "makingApiCall": "Making API Call",
+      "userCreated": "API user Created",
+      "errorCreatingUser": "Error creating the user"
+    }
+  },
+  "debugWarningBanner": {
+    "message": "Performance Warning: Detailed Debug Mode Active",
+    "description": "Detailed debug logging (<code>LITELLM_LOG=DEBUG</code>) is currently enabled. This mode logs extensive diagnostic information and will significantly degrade performance. It should only be used for troubleshooting and disabled in production environments."
+  },
+  "defaultUserSettings": {
+    "title": "Default User Settings",
+    "editSettings": "Edit Settings",
+    "saveChanges": "Save Changes",
+    "noSettings": "No settings available or you do not have permission to view them.",
+    "noSchemaInfo": "No schema information available",
+    "noDescriptionAvailable": "No description available",
+    "teamEntry": {
+      "teamLabel": "Team {{number}}",
+      "removeButton": "Remove",
+      "teamIdLabel": "Team ID",
+      "teamIdPlaceholder": "Enter team ID",
+      "maxBudgetLabel": "Max Budget in Team",
+      "maxBudgetPlaceholder": "Optional",
+      "userRoleLabel": "User Role",
+      "addTeamButton": "Add Team"
+    },
+    "displayValues": {
+      "notSet": "Not set",
+      "noTeamsAssigned": "No teams assigned",
+      "notSpecified": "Not specified",
+      "noLimit": "No limit",
+      "userRoleOption": "User",
+      "adminRoleOption": "Admin"
+    },
+    "notifications": {
+      "fetchFailed": "Failed to fetch SSO settings",
+      "updateFailed": "Failed to update settings: {{error}}"
+    }
+  },
+  "guardrailSettingsView": {
+    "noGuardrailsConfigured": "No guardrails configured",
+    "globalLabel": "Global",
+    "globalGuardrailAriaLabel": "Global guardrail",
+    "bypassedForTeam": "Bypassed for this team",
+    "noneConfigured": "None configured",
+    "teamSpecificLabel": "Team-specific",
+    "cardTitle": "Guardrails Settings",
+    "cardSubtitle": "Global and team-specific guardrails applied to this team",
+    "inlineTitle": "Guardrails Settings"
+  },
   "common": {
     "save": "Save",
     "cancel": "Cancel",
