@@ -1259,6 +1259,46 @@
     "allTools": "所有工具",
     "infoShort": "详情"
   },
+  "modelFilters": {
+    "searchModels": "搜索模型：",
+    "searchPlaceholder": "搜索模型名称...",
+    "provider": "提供商：",
+    "allProviders": "所有提供商",
+    "mode": "模式：",
+    "allModes": "所有模式",
+    "features": "功能：",
+    "allFeatures": "所有功能",
+    "filtersLabel": "筛选"
+  },
+  "modelGroupAliasSettings": {
+    "title": "模型组别名设置",
+    "description": "为您的模型组创建别名以简化 API 调用。例如，您可以创建别名 'gpt-4o' 指向 'gpt-4o-mini-openai' 模型组。",
+    "addNewAlias": "添加新别名",
+    "aliasName": "别名名称",
+    "targetModelGroup": "目标模型组",
+    "addAlias": "添加别名",
+    "manageExisting": "管理现有别名",
+    "noAliases": "暂无别名。请在上方添加新别名。",
+    "configExample": "配置示例",
+    "configExampleDesc": "以下是您当前别名在 config.yaml 中的样子：",
+    "bothRequired": "请同时提供别名名称和目标模型组",
+    "duplicateAlias": "同名别名已存在",
+    "saveFailed": "保存模型组别名设置失败",
+    "addSuccess": "别名添加成功",
+    "updateSuccess": "别名更新成功",
+    "deleteSuccess": "别名删除成功"
+  },
+  "modelHubTableColumns": {
+    "publicModelName": "公开模型名称",
+    "copyModelName": "复制模型名称",
+    "provider": "提供商",
+    "mode": "模式",
+    "tokens": "Token",
+    "costPerMillion": "费用/百万",
+    "features": "功能",
+    "public": "公开",
+    "infoShort": "详情"
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",
