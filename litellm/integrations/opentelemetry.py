@@ -2293,8 +2293,23 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 tools = optional_params["tools"]
                 self.set_tools_attributes(span, tools)
 
-            if kwargs.get("messages"):
-                transformed_messages = self._transform_messages_to_otel_semantic_conventions(kwargs.get("messages"))
+            # Coalesce messages from kwargs or optional_params: the
+            # anthropic-native /v1/messages (call_type="anthropic_messages")
+            # path stores the messages list on ``optional_params``, not on
+            # ``kwargs``. Same coalesce pattern the system-instructions block
+            # below uses. Without this, gen_ai.input.messages is empty for
+            # the entire Anthropic Messages call type (#30121).
+            input_messages = (
+                kwargs.get("messages")
+                if kwargs.get("messages") is not None
+                else optional_params.get("messages")
+            )
+            if input_messages:
+                transformed_messages = (
+                    self._transform_messages_to_otel_semantic_conventions(
+                        input_messages
+                    )
+                )
                 self.safe_set_attribute(
                     span=span,
                     key=SpanAttributes.GEN_AI_INPUT_MESSAGES.value,
@@ -2389,6 +2404,80 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                                         key=key,
                                         value=value,
                                     )
+
+                elif response_obj.get("content") and isinstance(
+                    response_obj.get("content"), list
+                ):
+                    # Anthropic Messages API response: top-level "content" is
+                    # a list of blocks (text / thinking / tool_use). The
+                    # finish reason lives on "stop_reason". Without this
+                    # branch, /v1/messages (call_type="anthropic_messages")
+                    # spans never get gen_ai.output.messages or
+                    # gen_ai.response.finish_reasons (#30121).
+                    content_blocks = response_obj.get("content") or []
+                    parts: List[dict] = []
+                    tool_calls = []
+                    for block in content_blocks:
+                        block_d = self._to_dict(block) or {}
+                        btype = block_d.get("type")
+                        if btype == "text":
+                            parts.append(
+                                {"type": "text", "content": block_d.get("text", "")}
+                            )
+                        elif btype == "thinking":
+                            parts.append(
+                                {
+                                    "type": "text",
+                                    "content": block_d.get("thinking", ""),
+                                }
+                            )
+                        elif btype == "tool_use":
+                            tool_input = block_d.get("input") or {}
+                            parts.append(
+                                {
+                                    "type": "tool_call",
+                                    "id": block_d.get("id", ""),
+                                    "name": block_d.get("name", ""),
+                                    "arguments": tool_input,
+                                }
+                            )
+                            tool_calls.append(
+                                {
+                                    "function": {
+                                        "name": block_d.get("name", ""),
+                                        "arguments": safe_dumps(tool_input),
+                                    }
+                                }
+                            )
+
+                    output_messages = [
+                        {
+                            "role": response_obj.get("role", "assistant"),
+                            "parts": parts,
+                        }
+                    ]
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                        value=safe_dumps(output_messages),
+                    )
+
+                    if tool_calls:
+                        kv_pairs = OpenTelemetry._tool_calls_kv_pair(tool_calls)  # type: ignore
+                        for key, value in kv_pairs.items():
+                            self.safe_set_attribute(
+                                span=span,
+                                key=key,
+                                value=value,
+                            )
+
+                    stop_reason = response_obj.get("stop_reason")
+                    if stop_reason:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                            value=safe_dumps([stop_reason]),
+                        )
 
                 elif response_obj.get("output"):
                     # Responses API: ResponsesAPIResponse has an "output"
