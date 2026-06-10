@@ -2073,3 +2073,52 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
     assert REDACTED_BY_LITELM_STRING in sanitized["error_message"]
+
+
+def _model_router_spend_log_kwargs(slp_model) -> dict:
+    standard_logging_payload = cast(
+        StandardLoggingPayload,
+        {
+            "model": slp_model,
+            "metadata": {},
+            "model_map_information": StandardLoggingModelInformation(
+                model_map_key="azure_ai/model_router", model_map_value=None
+            ),
+        },
+    )
+    return {
+        "model": "azure_ai/model_router/model-router",
+        "litellm_params": {"metadata": {"user_api_key": "sk-test-key"}},
+        "standard_logging_object": standard_logging_payload,
+    }
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_uses_standard_logging_payload_model():
+    """
+    Azure Model Router regression: the standard logging payload model (the
+    model Azure actually selected) must win over the router model
+    reconstructed from request kwargs.
+    """
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model="azure_ai/gpt-5-mini"),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == "azure_ai/gpt-5-mini"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_falls_back_to_kwargs_model_when_slp_model_missing():
+    payload = get_logging_payload(
+        kwargs=_model_router_spend_log_kwargs(slp_model=None),
+        response_obj={},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
+    )
+
+    assert payload["model"] == "azure_ai/model_router/model-router"
