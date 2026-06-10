@@ -2535,6 +2535,7 @@ if MCP_AVAILABLE:
                 standard_logging_mcp_tool_call
             )
             litellm_logging_obj.model = f"MCP: {name}"
+            litellm_logging_obj.model_call_details["model"] = f"MCP: {name}"
         # Resolve the MCP server early so BYOK checks and credential injection
         # apply to ALL dispatch paths (local tool registry AND managed MCP server).
         if mcp_server is None:

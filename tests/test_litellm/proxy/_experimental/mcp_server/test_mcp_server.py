@@ -5363,3 +5363,88 @@ async def test_create_mcp_client_sampling_enabled():
 
     client = await manager._create_mcp_client(server=server)
     assert client._sampling_callback is not None
+
+
+@pytest.mark.asyncio
+async def test_execute_mcp_tool_sets_model_in_model_call_details():
+    """Regression test: MCP passthrough tools/call spend logs had model="".
+
+    The @client decorator on call_mcp_tool creates the logging object via
+    function_setup without a "model" kwarg, so model_call_details["model"]
+    starts as None. execute_mcp_tool set logging_obj.model as an instance
+    attribute only, which the spend-log writer never reads (it reads
+    kwargs["model"] from model_call_details). The tools/call rows therefore
+    persisted with an empty model while list_tools rows showed
+    "MCP: list_tools".
+    """
+    import uuid
+    from datetime import timezone
+
+    from litellm.proxy._experimental.mcp_server import server as mcp_module
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.utils import Rules, function_setup
+
+    user = UserAPIKeyAuth(
+        api_key="sk-user",
+        user_id="alice",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    fake_server = MagicMock()
+    fake_server.name = "openapi-petstore"
+    fake_server.is_byok = False
+    fake_server.auth_type = None
+    fake_server.mcp_info = None
+    fake_server.server_id = "srv-1"
+    fake_server.server_name = "openapi-petstore"
+
+    fake_tool = MagicMock()
+    fake_tool.name = "list_pets"
+
+    start_time = datetime.now(timezone.utc)
+    litellm_logging_obj, _ = function_setup(
+        original_function="call_mcp_tool",
+        rules_obj=Rules(),
+        start_time=start_time,
+        litellm_call_id=str(uuid.uuid4()),
+        name="list_pets",
+        arguments={"limit": 10},
+    )
+    assert litellm_logging_obj.model_call_details.get("model") is None
+
+    with (
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "_get_mcp_server_from_tool_name",
+            return_value=fake_server,
+        ),
+        patch.object(
+            mcp_module.global_mcp_server_manager,
+            "pre_call_tool_check",
+            new=AsyncMock(return_value={}),
+        ),
+        patch.object(
+            mcp_module.global_mcp_tool_registry,
+            "get_tool",
+            return_value=fake_tool,
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            new=AsyncMock(return_value=[]),
+        ),
+        patch(
+            "litellm.proxy._experimental.mcp_server.server.MCPRequestHandler.is_tool_allowed",
+            return_value=True,
+        ),
+    ):
+        await mcp_module.execute_mcp_tool(
+            name="list_pets",
+            arguments={"limit": 10},
+            allowed_mcp_servers=[fake_server],
+            start_time=start_time,
+            user_api_key_auth=user,
+            litellm_logging_obj=litellm_logging_obj,
+        )
+
+    assert litellm_logging_obj.model_call_details["model"] == "MCP: list_pets"
+    assert litellm_logging_obj.model == "MCP: list_pets"
