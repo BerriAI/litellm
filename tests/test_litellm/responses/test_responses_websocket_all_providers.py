@@ -165,6 +165,209 @@ class TestManagedWebSocketHandlerIntegration:
         assert handler.timeout == 30.0
         assert handler.custom_llm_provider == "test_provider"
 
+    @pytest.mark.asyncio
+    async def test_frame_alias_resolves_to_connection_model(self, monkeypatch):
+        """
+        A response.create frame that repeats the public model alias must reach
+        litellm.aresponses with the router-resolved deployment model, not the
+        raw alias (which fails in get_llm_provider). Regression for codex
+        WebSocket sessions against managed providers like bedrock_mantle.
+        """
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        captured: dict = {}
+
+        async def fake_aresponses(*args, **kwargs):
+            captured["model"] = kwargs.get("model")
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=mock_websocket,
+            model="bedrock_mantle/openai.gpt-5.5",
+            logging_obj=Logging(
+                model="bedrock_mantle/openai.gpt-5.5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={"model_group": "gpt-5.5-mantle"},
+        )
+
+        frame = json.dumps(
+            {
+                "type": "response.create",
+                "model": "gpt-5.5-mantle",
+                "input": [],
+            }
+        )
+        await handler._process_response_create(frame)
+
+        assert captured["model"] == "bedrock_mantle/openai.gpt-5.5"
+
+    @pytest.mark.asyncio
+    async def test_warmup_frame_skips_provider_and_sends_synthetic_ack(
+        self, monkeypatch
+    ):
+        """
+        A generate=false warmup frame (codex prewarm) carries empty input that
+        managed HTTP providers reject. It must not call the provider, and should
+        emit synthetic response.created/completed events so Codex can proceed.
+        """
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        called = False
+
+        async def fail_aresponses(*args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("provider must not be called for a warmup frame")
+
+        monkeypatch.setattr(litellm, "aresponses", fail_aresponses)
+
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=mock_websocket,
+            model="bedrock_mantle/openai.gpt-5.5",
+            logging_obj=Logging(
+                model="bedrock_mantle/openai.gpt-5.5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={"model_group": "gpt-5.5-mantle"},
+        )
+
+        frame = json.dumps(
+            {
+                "type": "response.create",
+                "model": "gpt-5.5-mantle",
+                "generate": False,
+                "input": [],
+            }
+        )
+        await handler._process_response_create(frame)
+
+        assert called is False
+        assert mock_websocket.send_text.call_count == 2
+        events = [
+            json.loads(call.args[0]) for call in mock_websocket.send_text.call_args_list
+        ]
+        assert events[0]["type"] == "response.created"
+        assert events[0]["response"]["status"] == "in_progress"
+        assert events[1]["type"] == "response.completed"
+        assert events[1]["response"]["status"] == "completed"
+        assert events[1]["response"]["output"] == []
+        assert events[1]["response"]["model"] == "gpt-5.5-mantle"
+
+    @pytest.mark.asyncio
+    async def test_warmup_previous_response_id_not_forwarded_to_provider(
+        self, monkeypatch
+    ):
+        import json
+        from unittest.mock import AsyncMock, MagicMock
+
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import (
+            ManagedResponsesWebSocketHandler,
+        )
+
+        captured: dict = {}
+
+        async def fake_aresponses(*args, **kwargs):
+            captured.update(kwargs)
+
+            async def _empty():
+                return
+                yield
+
+            return _empty()
+
+        monkeypatch.setattr(litellm, "aresponses", fake_aresponses)
+
+        mock_websocket = MagicMock()
+        mock_websocket.send_text = AsyncMock()
+
+        handler = ManagedResponsesWebSocketHandler(
+            websocket=mock_websocket,
+            model="bedrock_mantle/openai.gpt-5.5",
+            logging_obj=Logging(
+                model="bedrock_mantle/openai.gpt-5.5",
+                messages=[],
+                stream=True,
+                call_type="aresponses",
+                start_time=0,
+                litellm_call_id="test-id",
+                function_id="test-func",
+            ),
+            litellm_metadata={"model_group": "gpt-5.5-mantle"},
+        )
+
+        await handler._process_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.5-mantle",
+                    "generate": False,
+                    "input": [],
+                }
+            )
+        )
+        warmup_id = json.loads(mock_websocket.send_text.call_args_list[1].args[0])[
+            "response"
+        ]["id"]
+
+        await handler._process_response_create(
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.5-mantle",
+                    "previous_response_id": warmup_id,
+                    "input": [
+                        {
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": "Hi"}],
+                        }
+                    ],
+                }
+            )
+        )
+
+        assert "previous_response_id" not in captured
+
 
 class TestChunkTransformation:
     """Test chunk serialization and transformation for WebSocket streaming"""

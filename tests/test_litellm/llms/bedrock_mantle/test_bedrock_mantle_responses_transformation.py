@@ -314,6 +314,31 @@ class TestBedrockMantleResponsesRequestBody:
         assert "input" in body
 
 
+class TestBedrockMantleResponsesTools:
+    def test_map_openai_params_drops_unsupported_tools(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={
+                "tools": [
+                    {"type": "web_search"},
+                    {"type": "function", "name": "exec_command"},
+                ]
+            },
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert params["tools"] == [{"type": "function", "name": "exec_command"}]
+
+    def test_map_openai_params_removes_tools_when_all_unsupported(self):
+        cfg = BedrockMantleResponsesAPIConfig()
+        params = cfg.map_openai_params(
+            response_api_optional_params={"tools": [{"type": "web_search"}]},
+            model="openai.gpt-5.5",
+            drop_params=False,
+        )
+        assert "tools" not in params
+
+
 class TestBedrockMantleResponsesRegistry:
     def test_registry_returns_config_for_gpt_5_5(self):
         from litellm.utils import ProviderConfigManager

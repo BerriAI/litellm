@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 import traceback
+import uuid
 from datetime import datetime
 from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
@@ -1418,6 +1419,8 @@ _MANAGED_WS_SKIP_KWARGS: frozenset = frozenset(
     }
 )
 
+_WARMUP_RESPONSE_ID_PREFIX = "resp_warmup_"
+
 
 class ManagedResponsesWebSocketHandler:
     """
@@ -1455,6 +1458,9 @@ class ManagedResponsesWebSocketHandler:
         self.logging_obj = logging_obj
         self.user_api_key_dict = user_api_key_dict
         self.litellm_metadata: Dict[str, Any] = litellm_metadata or {}
+        self.model_group: Optional[str] = self.litellm_metadata.get(
+            "model_group"
+        ) or self.litellm_metadata.get("deployment_model_name")
         self.api_key = api_key
         self.api_base = api_base
         self.timeout = timeout
@@ -1613,6 +1619,71 @@ class ManagedResponsesWebSocketHandler:
         return msg_obj
 
     @staticmethod
+    def _is_warmup_frame(msg_obj: Dict[str, Any]) -> bool:
+        """Return True for a response.create whose generate flag is false."""
+        nested = msg_obj.get("response")
+        source = nested if isinstance(nested, dict) and nested else msg_obj
+        return source.get("generate") is False
+
+    @staticmethod
+    def _is_warmup_response_id(response_id: Optional[str]) -> bool:
+        """Return True for synthetic warmup IDs that only exist on this connection."""
+        if not response_id:
+            return False
+        decoded = ResponsesAPIRequestUtils._decode_responses_api_response_id(
+            response_id
+        )
+        raw_id = decoded.get("response_id", response_id)
+        return str(raw_id).startswith(_WARMUP_RESPONSE_ID_PREFIX)
+
+    @staticmethod
+    def _warmup_source_params(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        nested = msg_obj.get("response")
+        if isinstance(nested, dict) and nested:
+            return nested
+        return {k: v for k, v in msg_obj.items() if k != "type"}
+
+    def _build_warmup_response(self, msg_obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Build a minimal completed Responses API object for a warmup ack."""
+        source = self._warmup_source_params(msg_obj)
+        wire_model = source.get("model") or self.model_group or self.model
+        return {
+            "id": f"resp_warmup_{uuid.uuid4().hex}",
+            "object": "response",
+            "created_at": int(time.time()),
+            "status": "completed",
+            "model": wire_model,
+            "output": [],
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0,
+            },
+        }
+
+    async def _send_warmup_ack(self, msg_obj: Dict[str, Any]) -> None:
+        """
+        Acknowledge a generate=false prewarm without calling the provider.
+
+        Codex blocks on the warmup turn until it receives response.created and
+        response.completed over the WebSocket. Managed HTTP providers cannot
+        honor an empty-input warmup, so we synthesize the completion locally.
+        """
+        response = self._build_warmup_response(msg_obj)
+        for event_type, status in (
+            ("response.created", "in_progress"),
+            ("response.completed", "completed"),
+        ):
+            event = {
+                "type": event_type,
+                "response": {**response, "status": status},
+            }
+            serialized = self._serialize_chunk(event)
+            if serialized is None:
+                continue
+            await self.websocket.send_text(serialized)
+
+    @staticmethod
     def _build_base_call_kwargs(msg_obj: Dict[str, Any]) -> Dict[str, Any]:
         """
         Extract Responses API params from the event, handling both wire formats:
@@ -1640,6 +1711,12 @@ class ManagedResponsesWebSocketHandler:
     ) -> None:
         """Prepend in-memory turn history, or fall back to DB-based reconstruction."""
         if not previous_response_id:
+            return
+        if self._is_warmup_response_id(previous_response_id):
+            verbose_logger.debug(
+                "ManagedResponsesWS: ignoring synthetic warmup previous_response_id=%s",
+                previous_response_id,
+            )
             return
         if prior_history:
             call_kwargs["input"] = prior_history + current_messages
@@ -1807,10 +1884,31 @@ class ManagedResponsesWebSocketHandler:
         if msg_obj is None:
             return
 
+        # generate=false is a prompt-cache warmup hint (sent by codex prewarm).
+        # Native provider sockets handle it server-side, but there is no HTTP
+        # equivalent and the frame carries empty input. Managed providers must
+        # synthesize a completion so clients like Codex can proceed.
+        if self._is_warmup_frame(msg_obj):
+            try:
+                await self._send_warmup_ack(msg_obj)
+            except Exception as exc:
+                verbose_logger.debug(
+                    "ManagedResponsesWS: error sending warmup ack: %s", exc
+                )
+            return
+
         call_kwargs = self._build_base_call_kwargs(msg_obj)
         call_kwargs["stream"] = True
 
-        model = call_kwargs.pop("model", None) or self.model
+        # A frame that repeats the connection's public alias (model_group) must
+        # reuse the router-resolved self.model; passing the alias raw to
+        # litellm.aresponses fails in get_llm_provider. A genuinely different
+        # provider-prefixed per-frame model is still honored.
+        requested_model = call_kwargs.pop("model", None)
+        if requested_model is None or requested_model == self.model_group:
+            model = self.model
+        else:
+            model = requested_model
 
         previous_response_id: Optional[str] = call_kwargs.pop(
             "previous_response_id", None
@@ -1828,7 +1926,9 @@ class ManagedResponsesWebSocketHandler:
             call_kwargs, previous_response_id, current_messages, prior_history
         )
         self._inject_credentials(call_kwargs, model=model)
-        self._update_proxy_request(call_kwargs, model)
+        self._update_proxy_request(
+            call_kwargs, requested_model or self.model_group or model
+        )
         call_kwargs.update(self.extra_kwargs)
 
         try:
