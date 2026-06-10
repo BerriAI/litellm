@@ -4868,5 +4868,106 @@
       "invalidPercentageRange": "百分比必须在 0% 到 1000% 之间",
       "invalidFixedAmount": "固定金额不能为负数"
     }
+  },
+  "usagePage": {
+    "endpointUsageBarChart": {
+      "title": "按端点统计成功与失败请求"
+    },
+    "endpointUsageLineChart": {
+      "title": "端点用量趋势"
+    },
+    "entityUsage": {
+      "filterLabel": "按 {{entityType}} 筛选",
+      "filterPlaceholder": "选择 {{entityType}} 进行筛选...",
+      "fetchingSpendData": "正在获取花费数据：已获取 {{currentPage}} / {{totalPages}} 页。图表会随数据加载定期更新。离开本页将停止并重置加载。如需继续使用界面，请 <a>新标签页打开</a>。",
+      "partialData": "显示部分数据（已加载 {{currentPage}}/{{totalPages}} 页）",
+      "fetchingAgentData": "正在获取 Agent 数据：已获取 {{currentPage}} / {{totalPages}} 页。图表会随数据加载定期更新。离开本页将停止并重置加载。如需继续使用界面，请 <a>新标签页打开</a>。",
+      "partialAgentData": "显示部分 Agent 数据（已加载 {{currentPage}}/{{totalPages}} 页）",
+      "filterByTeam": "按团队筛选",
+      "stopButton": "停止",
+      "tabCost": "花费",
+      "tabRequestTokenConsumption": "请求 / Token 消耗",
+      "tabModelActivity": "模型活动",
+      "tabAgentActivity": "Agent 活动",
+      "tabKeyActivity": "密钥活动",
+      "tabEndpointActivity": "端点活动",
+      "spendOverview": "{{entity}} 花费概览",
+      "totalSpend": "总花费",
+      "totalRequests": "总请求数",
+      "successfulRequests": "成功请求数",
+      "failedRequests": "失败请求数",
+      "totalTokens": "总 Token 数",
+      "dailySpend": "每日花费",
+      "tooltipTotalSpend": "总花费：${{amount}}",
+      "tooltipTotalRequests": "总请求数：{{count}}",
+      "tooltipSuccessful": "成功：{{count}}",
+      "tooltipFailed": "失败：{{count}}",
+      "tooltipTotalTokens": "总 Token 数：{{count}}",
+      "tooltipTotalEntities": "{{entity}} 总数：{{count}}",
+      "tooltipSpendByEntity": "按 {{entity}} 统计花费：",
+      "tooltipAndMore": "...以及另外 {{count}} 个",
+      "spendPerEntity": "每个 {{entity}} 的花费",
+      "showingTop5BySpend": "显示花费前 5",
+      "getStartedTracking": "开始按 {{entity}} 跟踪成本，<a>点击这里</a>",
+      "tooltipSpend": "花费：${{amount}}",
+      "tooltipRequests": "请求数：{{count}}",
+      "tooltipTokens": "Token 数：{{count}}",
+      "colSpend": "花费",
+      "colSuccessful": "成功",
+      "colFailed": "失败",
+      "colTokens": "Token",
+      "colProvider": "提供商",
+      "topVirtualKeys": "热门虚拟密钥",
+      "topAgents": "热门 Agent",
+      "topModels": "热门模型",
+      "topAgentsDrivingSpend": "花费最高的 Agent",
+      "providerUsage": "提供商用量",
+      "providerLogoAlt": "{{provider}} 图标"
+    },
+    "spendByProvider": {
+      "title": "按提供商统计花费",
+      "showZeroSpend": "显示零花费",
+      "showUnknown": "显示未知",
+      "unknownTooltip": "路由到提供商失败的请求",
+      "colProvider": "提供商",
+      "colSpend": "花费",
+      "colSuccessful": "成功",
+      "colFailed": "失败",
+      "colTokens": "Token"
+    },
+    "topKeyView": {
+      "colKeyId": "密钥 ID",
+      "colKeyAlias": "密钥别名",
+      "colTags": "标签",
+      "colSpendUsd": "花费（USD）",
+      "tagName": "标签名：",
+      "tagSpend": "花费：",
+      "showFewerTags": "显示更少标签",
+      "showAllTags": "显示全部标签",
+      "tooltipKeyAlias": "密钥别名：",
+      "tooltipKeyId": "密钥 ID：",
+      "tooltipSpend": "花费：",
+      "tableView": "表格视图",
+      "chartView": "图表视图"
+    },
+    "topModelView": {
+      "colModel": "模型",
+      "colSpendUsd": "花费（USD）",
+      "colSuccessful": "成功",
+      "colFailed": "失败",
+      "colTokens": "Token",
+      "tableView": "表格视图",
+      "chartView": "图表视图"
+    },
+    "keyModelUsageView": {
+      "title": "模型用量",
+      "colModel": "模型",
+      "colSpendUsd": "花费（USD）",
+      "colSuccessful": "成功",
+      "colFailed": "失败",
+      "colTokens": "Token",
+      "tableView": "表格",
+      "chartView": "图表"
+    }
   }
 }

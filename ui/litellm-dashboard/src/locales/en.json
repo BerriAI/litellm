@@ -4868,5 +4868,106 @@
       "invalidPercentageRange": "Percentage must be between 0% and 1000%",
       "invalidFixedAmount": "Fixed amount must be non-negative"
     }
+  },
+  "usagePage": {
+    "endpointUsageBarChart": {
+      "title": "Success vs Failed Requests by Endpoint"
+    },
+    "endpointUsageLineChart": {
+      "title": "Endpoint Usage Trends"
+    },
+    "entityUsage": {
+      "filterLabel": "Filter by {{entityType}}",
+      "filterPlaceholder": "Select {{entityType}} to filter...",
+      "fetchingSpendData": "Currently fetching spend data: fetched {{currentPage}} / {{totalPages}} pages. Charts will update periodically as data loads. Moving off of this page will stop and reset this. To continue using the UI in the meantime, <a>open a new tab</a>.",
+      "partialData": "Showing partial data ({{currentPage}}/{{totalPages}} pages loaded)",
+      "fetchingAgentData": "Currently fetching agent data: fetched {{currentPage}} / {{totalPages}} pages. Charts will update periodically as data loads. Moving off of this page will stop and reset this. To continue using the UI in the meantime, <a>open a new tab</a>.",
+      "partialAgentData": "Showing partial agent data ({{currentPage}}/{{totalPages}} pages loaded)",
+      "filterByTeam": "Filter by team",
+      "stopButton": "Stop",
+      "tabCost": "Cost",
+      "tabRequestTokenConsumption": "Request / Token Consumption",
+      "tabModelActivity": "Model Activity",
+      "tabAgentActivity": "Agent Activity",
+      "tabKeyActivity": "Key Activity",
+      "tabEndpointActivity": "Endpoint Activity",
+      "spendOverview": "{{entity}} Spend Overview",
+      "totalSpend": "Total Spend",
+      "totalRequests": "Total Requests",
+      "successfulRequests": "Successful Requests",
+      "failedRequests": "Failed Requests",
+      "totalTokens": "Total Tokens",
+      "dailySpend": "Daily Spend",
+      "tooltipTotalSpend": "Total Spend: ${{amount}}",
+      "tooltipTotalRequests": "Total Requests: {{count}}",
+      "tooltipSuccessful": "Successful: {{count}}",
+      "tooltipFailed": "Failed: {{count}}",
+      "tooltipTotalTokens": "Total Tokens: {{count}}",
+      "tooltipTotalEntities": "Total {{entity}}s: {{count}}",
+      "tooltipSpendByEntity": "Spend by {{entity}}:",
+      "tooltipAndMore": "...and {{count}} more",
+      "spendPerEntity": "Spend Per {{entity}}",
+      "showingTop5BySpend": "Showing Top 5 by Spend",
+      "getStartedTracking": "Get Started by Tracking cost per {{entity}} <a>here</a>",
+      "tooltipSpend": "Spend: ${{amount}}",
+      "tooltipRequests": "Requests: {{count}}",
+      "tooltipTokens": "Tokens: {{count}}",
+      "colSpend": "Spend",
+      "colSuccessful": "Successful",
+      "colFailed": "Failed",
+      "colTokens": "Tokens",
+      "colProvider": "Provider",
+      "topVirtualKeys": "Top Virtual Keys",
+      "topAgents": "Top Agents",
+      "topModels": "Top Models",
+      "topAgentsDrivingSpend": "Top Agents Driving Spend",
+      "providerUsage": "Provider Usage",
+      "providerLogoAlt": "{{provider}} logo"
+    },
+    "spendByProvider": {
+      "title": "Spend by Provider",
+      "showZeroSpend": "Show Zero Spend",
+      "showUnknown": "Show Unknown",
+      "unknownTooltip": "Requests that failed to route to a provider",
+      "colProvider": "Provider",
+      "colSpend": "Spend",
+      "colSuccessful": "Successful",
+      "colFailed": "Failed",
+      "colTokens": "Tokens"
+    },
+    "topKeyView": {
+      "colKeyId": "Key ID",
+      "colKeyAlias": "Key Alias",
+      "colTags": "Tags",
+      "colSpendUsd": "Spend (USD)",
+      "tagName": "Tag Name:",
+      "tagSpend": "Spend:",
+      "showFewerTags": "Show fewer tags",
+      "showAllTags": "Show all tags",
+      "tooltipKeyAlias": "Key Alias:",
+      "tooltipKeyId": "Key ID:",
+      "tooltipSpend": "Spend:",
+      "tableView": "Table View",
+      "chartView": "Chart View"
+    },
+    "topModelView": {
+      "colModel": "Model",
+      "colSpendUsd": "Spend (USD)",
+      "colSuccessful": "Successful",
+      "colFailed": "Failed",
+      "colTokens": "Tokens",
+      "tableView": "Table View",
+      "chartView": "Chart View"
+    },
+    "keyModelUsageView": {
+      "title": "Model Usage",
+      "colModel": "Model",
+      "colSpendUsd": "Spend (USD)",
+      "colSuccessful": "Successful",
+      "colFailed": "Failed",
+      "colTokens": "Tokens",
+      "tableView": "Table",
+      "chartView": "Chart"
+    }
   }
 }

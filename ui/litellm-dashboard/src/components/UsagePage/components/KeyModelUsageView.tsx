@@ -2,7 +2,9 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { BarChart, Card, Title } from "@tremor/react";
 import { Table } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { TopModelData } from "../types";
 
 interface KeyModelUsageViewProps {
@@ -13,33 +15,33 @@ const VISIBLE_ROWS = 5;
 // antd Table with size="small" has a row height of ~39px
 const ANTD_SMALL_TABLE_ROW_HEIGHT = 39;
 
-const columns: ColumnsType<TopModelData> = [
+const getColumns = (t: TFunction): ColumnsType<TopModelData> => [
   {
-    title: "Model",
+    title: t("usagePage.keyModelUsageView.colModel"),
     dataIndex: "model",
     key: "model",
     render: (value) => value || "-",
   },
   {
-    title: "Spend (USD)",
+    title: t("usagePage.keyModelUsageView.colSpendUsd"),
     dataIndex: "spend",
     key: "spend",
     render: (value) => `$${formatNumberWithCommas(value, 2)}`,
   },
   {
-    title: "Successful",
+    title: t("usagePage.keyModelUsageView.colSuccessful"),
     dataIndex: "successful_requests",
     key: "successful_requests",
     render: (value) => <span className="text-green-600">{value?.toLocaleString() || 0}</span>,
   },
   {
-    title: "Failed",
+    title: t("usagePage.keyModelUsageView.colFailed"),
     dataIndex: "failed_requests",
     key: "failed_requests",
     render: (value) => <span className="text-red-600">{value?.toLocaleString() || 0}</span>,
   },
   {
-    title: "Tokens",
+    title: t("usagePage.keyModelUsageView.colTokens"),
     dataIndex: "tokens",
     key: "tokens",
     render: (value) => value?.toLocaleString() || 0,
@@ -47,6 +49,8 @@ const columns: ColumnsType<TopModelData> = [
 ];
 
 const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
+  const { t } = useTranslation();
+  const columns = useMemo(() => getColumns(t), [t]);
   const [viewMode, setViewMode] = useState<"chart" | "table">("table");
 
   if (topModels.length === 0) {
@@ -56,19 +60,19 @@ const KeyModelUsageView: React.FC<KeyModelUsageViewProps> = ({ topModels }) => {
   return (
     <Card className="mt-4">
       <div className="flex justify-between items-center mb-3">
-        <Title>Model Usage</Title>
+        <Title>{t("usagePage.keyModelUsageView.title")}</Title>
         <div className="flex space-x-2">
           <button
             onClick={() => setViewMode("table")}
             className={`px-3 py-1 text-sm rounded-md ${viewMode === "table" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
           >
-            Table
+            {t("usagePage.keyModelUsageView.tableView")}
           </button>
           <button
             onClick={() => setViewMode("chart")}
             className={`px-3 py-1 text-sm rounded-md ${viewMode === "chart" ? "bg-blue-100 text-blue-700" : "bg-gray-100 text-gray-700"}`}
           >
-            Chart
+            {t("usagePage.keyModelUsageView.chartView")}
           </button>
         </div>
       </div>
