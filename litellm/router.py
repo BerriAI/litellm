@@ -3331,7 +3331,10 @@ class Router:
                     # Request Number X, Model Number Y
                     _tasks.append(
                         _async_completion_no_exceptions_return_idx(
-                            model=model, idx=idx, messages=message, **kwargs  # type: ignore
+                            model=model,
+                            idx=idx,
+                            messages=message,
+                            **kwargs,  # type: ignore
                         )
                     )
             responses = await asyncio.gather(*_tasks)
@@ -3494,7 +3497,7 @@ class Router:
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[False] = False, **kwargs
     ) -> ModelResponse: 
         ...
-    
+
     @overload
     async def schedule_acompletion(
         self, model: str, messages: List[AllMessageValues], priority: int, stream: Literal[True], **kwargs
@@ -7847,8 +7850,7 @@ class Router:
                     re.compile(pattern)
                 except re.error as exc:
                     raise ValueError(
-                        f"Invalid regex in tag_regex for model '{deployment.model_name}': "
-                        f"{pattern!r} — {exc}"
+                        f"Invalid regex in tag_regex for model '{deployment.model_name}': {pattern!r} — {exc}"
                     ) from exc
 
             deployment = self._add_deployment(deployment=deployment)
@@ -8106,8 +8108,7 @@ class Router:
 
         if deployment.model_name in self.adaptive_routers:
             raise ValueError(
-                f"Adaptive-router deployment {deployment.model_name} already exists. "
-                "Please use a different model name."
+                f"Adaptive-router deployment {deployment.model_name} already exists. Please use a different model name."
             )
 
         adaptive_router = AdaptiveRouter(
@@ -9303,8 +9304,7 @@ class Router:
                 ):
                     model_group_info.supports_parallel_function_calling = True
                 if (
-                    model_info.get("supports_vision", None) is not None
-                    and model_info["supports_vision"] is True  # type: ignore
+                    model_info.get("supports_vision", None) is not None and model_info["supports_vision"] is True  # type: ignore
                 ):
                     model_group_info.supports_vision = True
                 if (
@@ -9324,8 +9324,7 @@ class Router:
                     model_group_info.supports_url_context = True
 
                 if (
-                    model_info.get("supports_reasoning", None) is not None
-                    and model_info["supports_reasoning"] is True  # type: ignore
+                    model_info.get("supports_reasoning", None) is not None and model_info["supports_reasoning"] is True  # type: ignore
                 ):
                     model_group_info.supports_reasoning = True
                 if (
@@ -9947,6 +9946,31 @@ class Router:
         return {
             name for name, fully_blocked in blocked_by_name.items() if fully_blocked
         }
+
+    @staticmethod
+    def _are_all_deployments_blocked(deployments: List[Dict]) -> bool:
+        return len(deployments) > 0 and all(
+            (deployment.get("model_info") or {}).get("blocked") is True
+            for deployment in deployments
+        )
+
+    def _is_model_fully_blocked(self, model: str) -> bool:
+        deployments = self.get_model_list(model_name=model) or []
+        return self._are_all_deployments_blocked(deployments=deployments)
+
+    @staticmethod
+    def _raise_model_blocked_error(model: str) -> None:
+        raise litellm.PermissionDeniedError(
+            message="Model is blocked",
+            model=model,
+            llm_provider="",
+            response=httpx.Response(
+                status_code=403,
+                request=httpx.Request(
+                    method="POST", url="https://github.com/BerriAI/litellm"
+                ),
+            ),
+        )
 
     def _get_team_specific_model(
         self, deployment: DeploymentTypedDict, team_id: Optional[str] = None
@@ -10876,6 +10900,8 @@ class Router:
             healthy_deployments = _pre_cooldown_deployments
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
+        if len(healthy_deployments) == 0 and self._is_model_fully_blocked(model):
+            self._raise_model_blocked_error(model=model)
 
         healthy_deployments = await self.async_callback_filter_deployments(
             model=model,
@@ -11311,6 +11337,8 @@ class Router:
             healthy_deployments = _pre_cooldown_deployments
 
         healthy_deployments = self._filter_blocked_deployments(healthy_deployments)
+        if len(healthy_deployments) == 0 and self._is_model_fully_blocked(model):
+            self._raise_model_blocked_error(model=model)
 
         # filter pre-call checks
         if self.enable_pre_call_checks and messages is not None:
@@ -11479,6 +11507,8 @@ class Router:
         pass_through_deployments = self._filter_blocked_deployments(
             pass_through_deployments
         )
+        if len(pass_through_deployments) == 0 and self._is_model_fully_blocked(model):
+            self._raise_model_blocked_error(model=model)
 
         # 5. Apply pre-call checks (if enabled)
         if self.enable_pre_call_checks and messages is not None:

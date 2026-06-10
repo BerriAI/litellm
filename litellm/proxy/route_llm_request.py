@@ -46,6 +46,20 @@ def _is_a2a_agent_model(model_name: Any) -> bool:
     return isinstance(model_name, str) and model_name.startswith("a2a/")
 
 
+def _raise_if_model_fully_blocked(
+    llm_router: LitellmRouter, model_name: Any, team_id: Optional[str]
+) -> None:
+    if not isinstance(model_name, str) or not model_name:
+        return
+    if not isinstance(llm_router, litellm.Router):
+        return
+    deployments = (
+        llm_router.get_model_list(model_name=model_name, team_id=team_id) or []
+    )
+    if llm_router._are_all_deployments_blocked(deployments):
+        llm_router._raise_model_blocked_error(model=model_name)
+
+
 ROUTE_ENDPOINT_MAPPING = {
     "acompletion": "/chat/completions",
     "atext_completion": "/completions",
@@ -411,6 +425,9 @@ async def route_request(  # noqa: PLR0915 - Complex routing function, refactorin
         else:
             return getattr(litellm, f"{route_type}")(**data)
     elif llm_router is not None:
+        _raise_if_model_fully_blocked(
+            llm_router=llm_router, model_name=data.get("model"), team_id=team_id
+        )
         # Evals API: always route to litellm directly (not through router)
         # But extract model credentials if a model is provided
         if route_type in [

@@ -1855,6 +1855,10 @@ class BlockKeyRequest(LiteLLMPydanticObjectBase):
     key: str  # required
 
 
+class BlockModelRequest(LiteLLMPydanticObjectBase):
+    model_id: str  # required
+
+
 class AddTeamCallback(LiteLLMPydanticObjectBase):
     callback_name: str
     callback_type: Optional[Literal["success", "failure", "success_and_failure"]] = (
@@ -2219,8 +2223,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     health_check_concurrency: Optional[int] = Field(
         None,
         description=(
-            "limit concurrent health checks per cycle; when unset, "
-            "health checks run without a concurrency cap"
+            "limit concurrent health checks per cycle; when unset, health checks run without a concurrency cap"
         ),
     )
     health_check_skip_disabled_background_models: bool = Field(
