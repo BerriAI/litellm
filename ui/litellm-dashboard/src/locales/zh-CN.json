@@ -7123,5 +7123,36 @@
       "timezoneLabel": "时区",
       "timezoneTooltip": "日期处理时区（未提供时默认为 UTC）"
     }
+  },
+  "usageExport": {
+    "entityUsageExportModal": {
+      "exportTitle": "导出 {{entityLabel}} 用量",
+      "exportSuccessCsv": "{{entityLabel}} 用量数据已成功导出为 CSV",
+      "exportSuccessJson": "{{entityLabel}} 用量数据已成功导出为 JSON",
+      "exportFailed": "导出数据失败",
+      "exporting": "导出中...",
+      "exportFormat": "导出 {{format}}"
+    },
+    "exportFormatSelector": {
+      "label": "格式",
+      "optionCsv": "CSV（Excel、Google Sheets）",
+      "optionJson": "JSON（包含元数据）"
+    },
+    "exportSummary": {
+      "filterCount_one": "{{count}} 个筛选器",
+      "filterCount_other": "{{count}} 个筛选器"
+    },
+    "exportTypeSelector": {
+      "label": "导出类型",
+      "dailyTitle": "按 {{entityType}} 逐日明细",
+      "dailyDesc": "每个 {{entityType}} 的每日指标",
+      "dailyWithKeysTitle": "按 {{entityType}} 和密钥逐日明细",
+      "dailyWithKeysDesc": "每个 {{entityType}} 的每日指标，按 API 密钥拆分",
+      "dailyWithModelsTitle": "按 {{entityType}} 和模型逐日明细",
+      "dailyWithModelsDesc": "按模型拆分的每日指标"
+    },
+    "usageExportHeader": {
+      "exportData": "导出数据"
+    }
   }
 }

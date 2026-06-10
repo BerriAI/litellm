@@ -7123,5 +7123,36 @@
       "timezoneLabel": "Timezone",
       "timezoneTooltip": "Timezone for date handling (defaults to UTC if not provided)"
     }
+  },
+  "usageExport": {
+    "entityUsageExportModal": {
+      "exportTitle": "Export {{entityLabel}} Usage",
+      "exportSuccessCsv": "{{entityLabel}} usage data exported successfully as CSV",
+      "exportSuccessJson": "{{entityLabel}} usage data exported successfully as JSON",
+      "exportFailed": "Failed to export data",
+      "exporting": "Exporting...",
+      "exportFormat": "Export {{format}}"
+    },
+    "exportFormatSelector": {
+      "label": "Format",
+      "optionCsv": "CSV (Excel, Google Sheets)",
+      "optionJson": "JSON (includes metadata)"
+    },
+    "exportSummary": {
+      "filterCount_one": "{{count}} filter",
+      "filterCount_other": "{{count}} filters"
+    },
+    "exportTypeSelector": {
+      "label": "Export type",
+      "dailyTitle": "Day-by-day breakdown by {{entityType}}",
+      "dailyDesc": "Daily metrics for each {{entityType}}",
+      "dailyWithKeysTitle": "Day-by-day breakdown by {{entityType}} and key",
+      "dailyWithKeysDesc": "Daily metrics for each {{entityType}}, split by API key",
+      "dailyWithModelsTitle": "Day-by-day by {{entityType}} and model",
+      "dailyWithModelsDesc": "Daily metrics split by model"
+    },
+    "usageExportHeader": {
+      "exportData": "Export Data"
+    }
   }
 }
