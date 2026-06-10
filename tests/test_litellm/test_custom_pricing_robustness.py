@@ -262,18 +262,22 @@ def test_response_cost_calculator_honors_custom_cost_per_second():
     """Per-second custom pricing is threaded through the cost calculator."""
     response = _make_model_response("gpt-4o", prompt_tokens=100, completion_tokens=0)
 
+    # response_time_ms is needed alongside custom_cost_per_second so
+    # completion_cost can compute cost = rate * response_time_s.
     cost = litellm.response_cost_calculator(
         response_object=response,
         model="gpt-4o",
         custom_llm_provider="openai",
         call_type="acompletion",
-        optional_params={"response_time": 5000.0},
+        optional_params={},
         custom_pricing=True,
         router_model_id="id-not-in-model-cost",
         custom_cost_per_second=0.01,
+        response_time_ms=5000.0,
     )
 
-    assert cost > 0.0
+    # 0.01 * 5000 / 1000 = 0.05
+    assert cost == pytest.approx(0.05)
 
 
 # ---------------------------------------------------------------------------

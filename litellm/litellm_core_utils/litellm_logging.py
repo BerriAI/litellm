@@ -178,6 +178,8 @@ from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 if TYPE_CHECKING:
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
     from litellm.types.utils import CostPerToken
+else:
+    CostPerToken = dict
 try:
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
