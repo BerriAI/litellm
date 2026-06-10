@@ -7569,5 +7569,52 @@
       "tagUpdatedSuccess": "Tag updated successfully",
       "errorUpdatingTag": "Error updating tag: {{error}}"
     }
+  },
+  "modelAdd": {
+    "addCredentialModal": {
+      "title": "Add New Credential",
+      "credentialNameLabel": "Credential Name:",
+      "credentialNameRequired": "Credential name is required",
+      "credentialNamePlaceholder": "Enter a friendly name for these credentials",
+      "providerLabel": "Provider:",
+      "providerTooltip": "Helper to auto-populate provider specific fields",
+      "needHelpTooltip": "Get help on our github",
+      "needHelp": "Need Help?",
+      "addCredential": "Add Credential"
+    },
+    "editCredentialModal": {
+      "title": "Edit Credential",
+      "credentialNameLabel": "Credential Name:",
+      "credentialNameRequired": "Credential name is required",
+      "credentialNamePlaceholder": "Enter a friendly name for these credentials",
+      "providerLabel": "Provider:",
+      "providerTooltip": "Helper to auto-populate provider specific fields",
+      "needHelpTooltip": "Get help on our github",
+      "needHelp": "Need Help?",
+      "updateCredential": "Update Credential"
+    },
+    "credentials": {
+      "addCredential": "Add Credential",
+      "configuredCredentials": "Configured credentials for different AI providers. Add and manage your API credentials.",
+      "credentialName": "Credential Name",
+      "provider": "Provider",
+      "noCredentials": "No credentials configured",
+      "updatedSuccess": "Credential updated successfully",
+      "addedSuccess": "Credential added successfully",
+      "deletedSuccess": "Credential deleted successfully",
+      "deleteFailed": "Failed to delete credential",
+      "deleteTitle": "Delete Credential?",
+      "deleteMessage": "Are you sure you want to delete this credential? This action cannot be undone and may break existing integrations.",
+      "credentialInformation": "Credential Information"
+    },
+    "reuseCredentials": {
+      "title": "Reuse Credentials",
+      "credentialNameLabel": "Credential Name:",
+      "credentialNameRequired": "Credential name is required",
+      "credentialNamePlaceholder": "Enter a friendly name for these credentials",
+      "needHelpTooltip": "Get help on our github",
+      "needHelp": "Need Help?",
+      "reuseCredentials": "Reuse Credentials"
+    }
   }
 }

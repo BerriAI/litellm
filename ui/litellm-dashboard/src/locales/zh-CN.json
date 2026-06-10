@@ -7569,5 +7569,52 @@
       "tagUpdatedSuccess": "标签更新成功",
       "errorUpdatingTag": "更新标签失败：{{error}}"
     }
+  },
+  "modelAdd": {
+    "addCredentialModal": {
+      "title": "添加新凭据",
+      "credentialNameLabel": "凭据名称：",
+      "credentialNameRequired": "凭据名称不能为空",
+      "credentialNamePlaceholder": "输入这组凭据的友好名称",
+      "providerLabel": "提供商：",
+      "providerTooltip": "帮助自动填充提供商特定字段",
+      "needHelpTooltip": "在我们的 GitHub 上获取帮助",
+      "needHelp": "需要帮助？",
+      "addCredential": "添加凭据"
+    },
+    "editCredentialModal": {
+      "title": "编辑凭据",
+      "credentialNameLabel": "凭据名称：",
+      "credentialNameRequired": "凭据名称不能为空",
+      "credentialNamePlaceholder": "输入这组凭据的友好名称",
+      "providerLabel": "提供商：",
+      "providerTooltip": "帮助自动填充提供商特定字段",
+      "needHelpTooltip": "在我们的 GitHub 上获取帮助",
+      "needHelp": "需要帮助？",
+      "updateCredential": "更新凭据"
+    },
+    "credentials": {
+      "addCredential": "添加凭据",
+      "configuredCredentials": "已为不同 AI 提供商配置的凭据。添加并管理您的 API 凭据。",
+      "credentialName": "凭据名称",
+      "provider": "提供商",
+      "noCredentials": "暂无已配置的凭据",
+      "updatedSuccess": "凭据更新成功",
+      "addedSuccess": "凭据添加成功",
+      "deletedSuccess": "凭据删除成功",
+      "deleteFailed": "删除凭据失败",
+      "deleteTitle": "删除凭据？",
+      "deleteMessage": "确定要删除此凭据吗？此操作不可撤销，且可能破坏现有集成。",
+      "credentialInformation": "凭据信息"
+    },
+    "reuseCredentials": {
+      "title": "复用凭据",
+      "credentialNameLabel": "凭据名称：",
+      "credentialNameRequired": "凭据名称不能为空",
+      "credentialNamePlaceholder": "输入这组凭据的友好名称",
+      "needHelpTooltip": "在我们的 GitHub 上获取帮助",
+      "needHelp": "需要帮助？",
+      "reuseCredentials": "复用凭据"
+    }
   }
 }
