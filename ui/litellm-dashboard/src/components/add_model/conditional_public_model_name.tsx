@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from "react";
 import { Form, Table } from "antd";
 import { TextInput } from "@tremor/react";
+import { Trans, useTranslation } from "react-i18next";
 import { Tooltip } from "../atoms/index";
 import { Providers } from "../provider_info_helpers";
 
 const ConditionalPublicModelName: React.FC = () => {
+  const { t } = useTranslation();
   const form = Form.useFormInstance();
-  const [tableKey, setTableKey] = useState(0); // Add a key to force table re-render
+  const [tableKey, setTableKey] = useState(0);
 
   // Watch the 'model' field for changes and ensure it's always an array
   const modelValue = Form.useWatch("model", form) || [];
@@ -95,30 +97,40 @@ const ConditionalPublicModelName: React.FC = () => {
 
   const publicNameTooltipContent = (
     <>
-      <div className="mb-2 font-normal">The name you specify in your API calls to LiteLLM Proxy</div>
+      <div className="mb-2 font-normal">{t("addModel.conditionalPublicModelName.publicModelNameTooltip")}</div>
       <div className="mb-2 font-normal">
-        <strong>Example:</strong> If you name your public model{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">example-name</code>, and choose{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">openai/qwen-plus-latest</code> as the LiteLLM model
+        <Trans
+          i18nKey="addModel.conditionalPublicModelName.tooltipExample"
+          components={{
+            strong: <strong />,
+            publicName: <code className="bg-gray-700 px-1 py-0.5 rounded text-xs" />,
+            modelName: <code className="bg-gray-700 px-1 py-0.5 rounded text-xs" />,
+          }}
+        />
       </div>
       <div className="mb-2 font-normal">
-        <strong>Usage:</strong> You make an API call to the LiteLLM proxy with{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">model = &quot;example-name&quot;</code>
+        <strong>{t("addModel.conditionalPublicModelName.tooltipUsage")}</strong>{" "}
+        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">
+          {t("addModel.conditionalPublicModelName.tooltipUsageCode")}
+        </code>
       </div>
       <div className="font-normal">
-        <strong>Result:</strong> LiteLLM sends{" "}
-        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">qwen-plus-latest</code> to the provider
+        <strong>{t("addModel.conditionalPublicModelName.tooltipResult")}</strong>{" "}
+        <code className="bg-gray-700 px-1 py-0.5 rounded text-xs">
+          {t("addModel.conditionalPublicModelName.tooltipResultCode")}
+        </code>{" "}
+        {t("addModel.conditionalPublicModelName.tooltipResultSuffix")}
       </div>
     </>
   );
 
-  const liteLLMModelTooltipContent = <div>The model name LiteLLM will send to the LLM API</div>;
+  const liteLLMModelTooltipContent = <div>{t("addModel.conditionalPublicModelName.litellmModelNameTooltip")}</div>;
 
   const columns = [
     {
       title: (
         <span className="flex items-center">
-          Public Model Name
+          {t("addModel.conditionalPublicModelName.publicModelNameColumn")}
           <Tooltip content={publicNameTooltipContent} width="500px" />
         </span>
       ),
@@ -163,7 +175,7 @@ const ConditionalPublicModelName: React.FC = () => {
     {
       title: (
         <span className="flex items-center">
-          LiteLLM Model Name
+          {t("addModel.conditionalPublicModelName.litellmModelNameColumn")}
           <Tooltip content={liteLLMModelTooltipContent} width="360px" />
         </span>
       ),
@@ -175,9 +187,9 @@ const ConditionalPublicModelName: React.FC = () => {
   return (
     <>
       <Form.Item
-        label="Model Mappings"
+        label={t("addModel.conditionalPublicModelName.modelMappingsLabel")}
         name="model_mappings"
-        tooltip="Map public model names to LiteLLM model names for load balancing"
+        tooltip={t("addModel.conditionalPublicModelName.modelMappingsTooltip")}
         labelCol={{ span: 10 }}
         wrapperCol={{ span: 16 }}
         labelAlign="left"
@@ -186,21 +198,20 @@ const ConditionalPublicModelName: React.FC = () => {
             required: true,
             validator: async (_, value) => {
               if (!value || value.length === 0) {
-                throw new Error("At least one model mapping is required");
+                throw new Error(t("addModel.conditionalPublicModelName.mappingRequired"));
               }
-              // Check if all mappings have valid public names
               const invalidMappings = value.filter(
                 (mapping: any) => !mapping.public_name || mapping.public_name.trim() === "",
               );
               if (invalidMappings.length > 0) {
-                throw new Error("All model mappings must have valid public names");
+                throw new Error(t("addModel.conditionalPublicModelName.publicNameRequired"));
               }
             },
           },
         ]}
       >
         <Table
-          key={tableKey} // Add key to force re-render
+          key={tableKey}
           dataSource={form.getFieldValue("model_mappings")}
           columns={columns}
           pagination={false}

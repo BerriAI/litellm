@@ -3,6 +3,7 @@ import { UploadOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
 import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
 const { Link } = Typography;
@@ -93,8 +94,9 @@ export const createCredentialFromModel = (provider: string, modelData: any): Cre
 };
 
 const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selectedProvider, uploadProps }) => {
+  const { t } = useTranslation();
   const selectedProviderEnum = Providers[selectedProvider as keyof typeof Providers] as Providers;
-  const form = Form.useFormInstance(); // Get form instance from context
+  const form = Form.useFormInstance();
 
   const { data: providerMetadata, isLoading, error: loadError } = useProviderFields();
 
@@ -201,7 +203,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
       {isLoading && allFields.length === 0 && (
         <Row>
           <Col span={24}>
-            <Text className="mb-2">Loading provider fields...</Text>
+            <Text className="mb-2">{t("addModel.providerSpecificFields.loadingFields")}</Text>
           </Col>
         </Row>
       )}
@@ -209,7 +211,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
         <Row>
           <Col span={24}>
             <Text className="mb-2 text-red-500">
-              {loadError instanceof Error ? loadError.message : "Failed to load provider credential fields"}
+              {loadError instanceof Error ? loadError.message : t("addModel.providerSpecificFields.loadFailed")}
             </Text>
           </Col>
         </Row>
@@ -219,7 +221,9 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           <Form.Item
             label={field.label}
             name={field.key}
-            rules={field.required ? [{ required: true, message: "Required" }] : undefined}
+            rules={
+              field.required ? [{ required: true, message: t("addModel.providerSpecificFields.required") }] : undefined
+            }
             tooltip={field.tooltip}
             className={field.key === "vertex_credentials" ? "mb-0" : undefined}
           >
@@ -247,7 +251,7 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
                   }, 500);
                 }}
               >
-                <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
+                <Button2 icon={<UploadOutlined />}>{t("addModel.providerSpecificFields.clickToUpload")}</Button2>
               </Upload>
             ) : field.type === "textarea" ? (
               <Input.TextArea
@@ -269,23 +273,22 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
           {field.key === "vertex_credentials" && (
             <Row>
               <Col>
-                <Text className="mb-3 mt-1">Give a gcp service account(.json file)</Text>
+                <Text className="mb-3 mt-1">{t("addModel.providerSpecificFields.vertexCredentialsHelp")}</Text>
               </Col>
             </Row>
           )}
 
-          {/* Special case for Azure Base Model help text */}
           {field.key === "base_model" && (
             <Row>
               <Col span={10}></Col>
               <Col span={10}>
                 <Text className="mb-2">
-                  The actual model your azure deployment uses. Used for accurate cost tracking. Select name from{" "}
+                  {t("addModel.providerSpecificFields.baseModelHelp")}{" "}
                   <Link
                     href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                     target="_blank"
                   >
-                    here
+                    {t("addModel.providerSpecificFields.baseModelHelpLink")}
                   </Link>
                 </Text>
               </Col>
