@@ -2,7 +2,34 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { vi } from "vitest";
 import { flexRender, getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { TFunction } from "i18next";
 import { getAgentHubTableColumns, AgentHubData } from "./AgentHubTableColumns";
+
+const mockT = ((key: string, opts?: Record<string, unknown>) => {
+  if (key === "aiHub.agentHubTableColumns.skillCount") {
+    const count = opts?.count as number;
+    return count === 1 ? `${count} skill` : `${count} skills`;
+  }
+  const last = key.split(".").pop() ?? key;
+  const map: Record<string, string> = {
+    colAgentName: "Agent Name",
+    copyAgentName: "Copy agent name",
+    colVersion: "Version",
+    colProtocol: "Protocol",
+    colSkills: "Skills",
+    colCapabilities: "Capabilities",
+    colIOModes: "I/O Modes",
+    ioIn: "In:",
+    ioOut: "Out:",
+    colPublic: "Public",
+    detailsShort: "Info",
+    description: "Description",
+    details: "Details",
+    yes: "Yes",
+    no: "No",
+  };
+  return map[last] ?? key;
+}) as unknown as TFunction;
 
 const mockAgent: AgentHubData = {
   agent_id: "agent-1",
@@ -33,7 +60,7 @@ function TestTable({
   showModal?: ReturnType<typeof vi.fn>;
   copyToClipboard?: ReturnType<typeof vi.fn>;
 }) {
-  const columns = getAgentHubTableColumns(showModal, copyToClipboard, publicPage);
+  const columns = getAgentHubTableColumns(mockT, showModal, copyToClipboard, publicPage);
   const table = useReactTable({ data, columns, getCoreRowModel: getCoreRowModel() });
 
   return (
