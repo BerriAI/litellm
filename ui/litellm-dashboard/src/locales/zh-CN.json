@@ -7059,5 +7059,69 @@
       "deleteMessage": "确定要删除此访问组吗？此操作无法撤销。",
       "resourceInfoTitle": "访问组信息"
     }
+  },
+  "cloudZero": {
+    "cloudZeroCostTracking": {
+      "loadingSettings": "正在加载 CloudZero 设置...",
+      "errorLoadingSettings": "加载 CloudZero 设置时出错：{{error}}"
+    },
+    "cloudZeroCreateModal": {
+      "title": "创建 CloudZero 集成",
+      "creating": "创建中...",
+      "createSuccess": "CloudZero 集成已成功创建",
+      "createFailed": "创建 CloudZero 集成失败",
+      "apiKeyLabel": "CloudZero API 密钥",
+      "apiKeyRequired": "请输入您的 CloudZero API 密钥",
+      "apiKeyPlaceholder": "输入您的 CloudZero API 密钥",
+      "connectionIdLabel": "Connection ID",
+      "connectionIdRequired": "请输入您的 CloudZero 连接 ID",
+      "connectionIdPlaceholder": "输入您的 CloudZero 连接 ID",
+      "timezoneLabel": "时区",
+      "timezoneTooltip": "日期处理时区（未提供时默认为 UTC）"
+    },
+    "cloudZeroEmptyPlaceholder": {
+      "title": "未找到 CloudZero 集成",
+      "description": "连接您的 CloudZero 账户，即可直接在 LiteLLM 中追踪和分析云端成本。",
+      "addButton": "添加 CloudZero 集成"
+    },
+    "cloudZeroIntegrationSettings": {
+      "cardTitle": "CloudZero 配置",
+      "apiKeyRedacted": "API 密钥（已脱敏）",
+      "connectionId": "Connection ID",
+      "timezone": "时区",
+      "notConfigured": "未配置",
+      "defaultUtc": "默认 (UTC)",
+      "runDryRun": "运行试运行模拟",
+      "exportPopconfirmTitle": "将数据导出至 CloudZero",
+      "exportPopconfirmDescription": "此操作将把当前累计的成本数据推送至 CloudZero。是否继续？",
+      "exportOkText": "导出",
+      "exportDataNow": "立即导出数据",
+      "dryRunSuccess": "试运行已成功完成",
+      "dryRunFailed": "执行试运行失败",
+      "exportSuccess": "数据已成功导出至 CloudZero",
+      "exportFailed": "导出数据失败",
+      "deleteSuccess": "CloudZero 集成已成功删除",
+      "deleteFailed": "删除 CloudZero 集成失败",
+      "dryRunResultsTitle": "试运行结果",
+      "dryRunSimulationOutput": "连接 {{connectionId}} 的模拟输出",
+      "deleteModalTitle": "删除 CloudZero 集成？",
+      "deleteModalMessage": "确定要删除此 CloudZero 集成吗？所有相关设置和配置将被永久移除。",
+      "integrationDetails": "集成详情"
+    },
+    "cloudZeroUpdateModal": {
+      "title": "编辑 CloudZero 集成",
+      "updating": "更新中...",
+      "updateSuccess": "CloudZero 集成已成功更新",
+      "updateFailed": "更新 CloudZero 集成失败",
+      "apiKeyLabel": "CloudZero API 密钥",
+      "apiKeyRuleMessage": "请输入您的 CloudZero API 密钥",
+      "apiKeyTooltip": "留空则保留现有 API 密钥",
+      "apiKeyPlaceholder": "留空则保留现有密钥",
+      "connectionIdLabel": "Connection ID",
+      "connectionIdRequired": "请输入您的 CloudZero 连接 ID",
+      "connectionIdPlaceholder": "输入您的 CloudZero 连接 ID",
+      "timezoneLabel": "时区",
+      "timezoneTooltip": "日期处理时区（未提供时默认为 UTC）"
+    }
   }
 }

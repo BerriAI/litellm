@@ -7059,5 +7059,69 @@
       "deleteMessage": "Are you sure you want to delete this access group? This action cannot be undone.",
       "resourceInfoTitle": "Access Group Information"
     }
+  },
+  "cloudZero": {
+    "cloudZeroCostTracking": {
+      "loadingSettings": "Loading CloudZero settings...",
+      "errorLoadingSettings": "Error loading CloudZero settings: {{error}}"
+    },
+    "cloudZeroCreateModal": {
+      "title": "Create CloudZero Integration",
+      "creating": "Creating...",
+      "createSuccess": "CloudZero integration created successfully",
+      "createFailed": "Failed to create CloudZero integration",
+      "apiKeyLabel": "CloudZero API Key",
+      "apiKeyRequired": "Please enter your CloudZero API key",
+      "apiKeyPlaceholder": "Enter your CloudZero API key",
+      "connectionIdLabel": "Connection ID",
+      "connectionIdRequired": "Please enter your CloudZero connection ID",
+      "connectionIdPlaceholder": "Enter your CloudZero connection ID",
+      "timezoneLabel": "Timezone",
+      "timezoneTooltip": "Timezone for date handling (defaults to UTC if not provided)"
+    },
+    "cloudZeroEmptyPlaceholder": {
+      "title": "No CloudZero Integration Found",
+      "description": "Connect your CloudZero account to start tracking and analyzing your cloud costs directly from LiteLLM.",
+      "addButton": "Add CloudZero Integration"
+    },
+    "cloudZeroIntegrationSettings": {
+      "cardTitle": "CloudZero Configuration",
+      "apiKeyRedacted": "API Key (Redacted)",
+      "connectionId": "Connection ID",
+      "timezone": "Timezone",
+      "notConfigured": "Not configured",
+      "defaultUtc": "Default (UTC)",
+      "runDryRun": "Run Dry Run Simulation",
+      "exportPopconfirmTitle": "Export Data to CloudZero",
+      "exportPopconfirmDescription": "This will push the current accumulated cost data to CloudZero. Continue?",
+      "exportOkText": "Export",
+      "exportDataNow": "Export Data Now",
+      "dryRunSuccess": "Dry run completed successfully",
+      "dryRunFailed": "Failed to perform dry run",
+      "exportSuccess": "Data successfully exported to CloudZero",
+      "exportFailed": "Failed to export data",
+      "deleteSuccess": "CloudZero integration deleted successfully",
+      "deleteFailed": "Failed to delete CloudZero integration",
+      "dryRunResultsTitle": "Dry Run Results",
+      "dryRunSimulationOutput": "Simulation output for connection: {{connectionId}}",
+      "deleteModalTitle": "Delete CloudZero Integration?",
+      "deleteModalMessage": "Are you sure you want to delete this CloudZero integration? All associated settings and configurations will be permanently removed.",
+      "integrationDetails": "Integration Details"
+    },
+    "cloudZeroUpdateModal": {
+      "title": "Edit CloudZero Integration",
+      "updating": "Updating...",
+      "updateSuccess": "CloudZero integration updated successfully",
+      "updateFailed": "Failed to update CloudZero integration",
+      "apiKeyLabel": "CloudZero API Key",
+      "apiKeyRuleMessage": "Please enter your CloudZero API key",
+      "apiKeyTooltip": "Leave empty to keep the existing API key",
+      "apiKeyPlaceholder": "Leave empty to keep existing",
+      "connectionIdLabel": "Connection ID",
+      "connectionIdRequired": "Please enter your CloudZero connection ID",
+      "connectionIdPlaceholder": "Enter your CloudZero connection ID",
+      "timezoneLabel": "Timezone",
+      "timezoneTooltip": "Timezone for date handling (defaults to UTC if not provided)"
+    }
   }
 }

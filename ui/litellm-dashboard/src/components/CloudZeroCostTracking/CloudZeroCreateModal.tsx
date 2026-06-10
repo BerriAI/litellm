@@ -3,6 +3,7 @@ import MessageManager from "@/components/molecules/message_manager";
 import { useEffect } from "react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCloudZeroCreate } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroCreate";
+import { useTranslation } from "react-i18next";
 
 interface CloudZeroCreationModalProps {
   open: boolean;
@@ -11,6 +12,7 @@ interface CloudZeroCreationModalProps {
 }
 
 export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZeroCreationModalProps) {
+  const { t } = useTranslation();
   const { accessToken } = useAuthorized();
   const [form] = Form.useForm();
   const createMutation = useCloudZeroCreate(accessToken || "");
@@ -32,7 +34,7 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
         },
         {
           onSuccess: () => {
-            MessageManager.success("CloudZero integration created successfully");
+            MessageManager.success(t("cloudZero.cloudZeroCreateModal.createSuccess"));
             form.resetFields();
             onOk();
           },
@@ -40,7 +42,7 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
             if (error?.errorFields) {
               return;
             }
-            MessageManager.error(error?.message || "Failed to create CloudZero integration");
+            MessageManager.error(error?.message || t("cloudZero.cloudZeroCreateModal.createFailed"));
           },
         },
       );
@@ -48,7 +50,7 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
       if (error?.errorFields) {
         return;
       }
-      MessageManager.error(error?.message || "Failed to create CloudZero integration");
+      MessageManager.error(error?.message || t("cloudZero.cloudZeroCreateModal.createFailed"));
     }
   };
 
@@ -59,13 +61,13 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
 
   return (
     <Modal
-      title="Create CloudZero Integration"
+      title={t("cloudZero.cloudZeroCreateModal.title")}
       open={open}
       onOk={handleSubmit}
       onCancel={handleCancel}
       confirmLoading={createMutation.isPending}
-      okText={createMutation.isPending ? "Creating..." : "Create"}
-      cancelText="Cancel"
+      okText={createMutation.isPending ? t("cloudZero.cloudZeroCreateModal.creating") : t("common.create")}
+      cancelText={t("common.cancel")}
       okButtonProps={{
         disabled: createMutation.isPending,
       }}
@@ -75,23 +77,23 @@ export default function CloudZeroCreationModal({ open, onOk, onCancel }: CloudZe
     >
       <Form form={form} layout="vertical" onFinish={handleSubmit}>
         <Form.Item
-          label="CloudZero API Key"
+          label={t("cloudZero.cloudZeroCreateModal.apiKeyLabel")}
           name="api_key"
-          rules={[{ required: true, message: "Please enter your CloudZero API key" }]}
+          rules={[{ required: true, message: t("cloudZero.cloudZeroCreateModal.apiKeyRequired") }]}
         >
-          <Input.Password placeholder="Enter your CloudZero API key" />
+          <Input.Password placeholder={t("cloudZero.cloudZeroCreateModal.apiKeyPlaceholder")} />
         </Form.Item>
         <Form.Item
-          label="Connection ID"
+          label={t("cloudZero.cloudZeroCreateModal.connectionIdLabel")}
           name="connection_id"
-          rules={[{ required: true, message: "Please enter your CloudZero connection ID" }]}
+          rules={[{ required: true, message: t("cloudZero.cloudZeroCreateModal.connectionIdRequired") }]}
         >
-          <Input placeholder="Enter your CloudZero connection ID" />
+          <Input placeholder={t("cloudZero.cloudZeroCreateModal.connectionIdPlaceholder")} />
         </Form.Item>
         <Form.Item
-          label="Timezone"
+          label={t("cloudZero.cloudZeroCreateModal.timezoneLabel")}
           name="timezone"
-          tooltip="Timezone for date handling (defaults to UTC if not provided)"
+          tooltip={t("cloudZero.cloudZeroCreateModal.timezoneTooltip")}
         >
           <Input placeholder="UTC" />
         </Form.Item>
