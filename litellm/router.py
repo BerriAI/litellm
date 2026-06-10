@@ -2196,9 +2196,21 @@ class Router:
                     self._update_kwargs_before_fallbacks(
                         model=model_group, kwargs=initial_kwargs
                     )
+                    # Unwrap errors with dedicated fallback configs so the
+                    # isinstance checks in the common utils can route them to
+                    # context_window_fallbacks / content_policy_fallbacks.
+                    fallback_trigger_exception: Exception = e
+                    if isinstance(
+                        e.original_exception,
+                        (
+                            litellm.ContextWindowExceededError,
+                            litellm.ContentPolicyViolationError,
+                        ),
+                    ):
+                        fallback_trigger_exception = e.original_exception
                     fallback_response = (
                         await self.async_function_with_fallbacks_common_utils(
-                            e=e,
+                            e=fallback_trigger_exception,
                             disable_fallbacks=False,
                             fallbacks=fallbacks,
                             context_window_fallbacks=context_window_fallbacks,

@@ -2318,8 +2318,15 @@ class CustomStreamWrapper:
 
         429 (rate-limit) is explicitly exempted from the 4xx filter because
         it is transient and the Router should switch to another model group.
+        Context-window and content-policy errors are also exempted because
+        the Router has dedicated fallback configs for them
+        (context_window_fallbacks / content_policy_fallbacks).
         """
-        from litellm.exceptions import MidStreamFallbackError
+        from litellm.exceptions import (
+            ContentPolicyViolationError,
+            ContextWindowExceededError,
+            MidStreamFallbackError,
+        )
 
         # Map to OpenAI exception format
         if isinstance(e, OpenAIError):
@@ -2358,19 +2365,27 @@ class CustomStreamWrapper:
         mapped_status_code = _normalize_status_code(mapped_exception)
         original_status_code = _normalize_status_code(e)
 
+        has_dedicated_fallback_config = isinstance(
+            mapped_exception,
+            (ContentPolicyViolationError, ContextWindowExceededError),
+        )
+
         # Raise non-retriable client errors directly (skip fallback).
         # Exception: 429 (rate-limit) IS retriable/transient — allow it
         # through so the Router can switch to a different model group.
+        # Same for errors with dedicated fallback configs.
         if (
             mapped_status_code is not None
             and 400 <= mapped_status_code < 500
             and mapped_status_code != 429
+            and not has_dedicated_fallback_config
         ):
             raise mapped_exception
         if (
             original_status_code is not None
             and 400 <= original_status_code < 500
             and original_status_code != 429
+            and not has_dedicated_fallback_config
         ):
             raise mapped_exception
 
