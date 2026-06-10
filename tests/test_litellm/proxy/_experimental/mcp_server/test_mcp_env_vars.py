@@ -872,6 +872,7 @@ def _mock_env_vars_prisma(row=None):
     prisma.db.litellm_mcpuserenvvars.find_many = AsyncMock(return_value=[])
     prisma.db.litellm_mcpuserenvvars.upsert = AsyncMock()
     prisma.db.litellm_mcpuserenvvars.delete_many = AsyncMock()
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock()
     return prisma
 
 
@@ -1249,6 +1250,64 @@ async def test_delete_mcp_server_succeeds_when_orphan_cleanup_fails():
     result = await delete_mcp_server(prisma, "srv-1")
 
     assert result is deleted
+    prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_removes_orphaned_user_credentials():
+    """Deleting a server must also drop every user's stored BYOK/OAuth credential
+    rows for it; there is no FK cascade, so skipping this leaves encrypted secrets
+    pointing at a now-missing server."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=object())
+
+    await delete_mcp_server(prisma, "srv-1")
+
+    prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once()
+    call = prisma.db.litellm_mcpusercredentials.delete_many.call_args
+    assert call.kwargs["where"] == {"server_id": "srv-1"}
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_skips_credential_cleanup_when_server_missing():
+    """A no-op delete (server not found) must not touch the credential table."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=None)
+
+    result = await delete_mcp_server(prisma, "srv-1")
+
+    assert result is None
+    prisma.db.litellm_mcpusercredentials.delete_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_delete_mcp_server_credential_cleanup_failure_still_cleans_env_vars():
+    """Each per-user table is cleaned independently: a failure dropping credential
+    rows must not skip the env var cleanup (or vice versa), and the delete must
+    still succeed for the caller."""
+    from unittest.mock import AsyncMock
+
+    from litellm.proxy._experimental.mcp_server.db import delete_mcp_server
+
+    deleted = object()
+    prisma = _mock_env_vars_prisma()
+    prisma.db.litellm_mcpservertable.delete = AsyncMock(return_value=deleted)
+    prisma.db.litellm_mcpusercredentials.delete_many = AsyncMock(
+        side_effect=Exception("connection pool exhausted")
+    )
+
+    result = await delete_mcp_server(prisma, "srv-1")
+
+    assert result is deleted
+    prisma.db.litellm_mcpusercredentials.delete_many.assert_awaited_once()
     prisma.db.litellm_mcpuserenvvars.delete_many.assert_awaited_once()
 
 
