@@ -2385,6 +2385,17 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "`statement_cache_size`). Keys here override any default LiteLLM sets."
         ),
     )
+    database_disable_prepared_statements: Optional[bool] = Field(
+        None,
+        description=(
+            "Disable server-side prepared statements by setting Prisma's "
+            "`pgbouncer=true` URL param. Use this for pgbouncer transaction-pooling "
+            "deployments, or to prevent the 'cached plan must not change result "
+            "type' error that pooled connections hit during rolling schema "
+            "migrations. An explicit `pgbouncer` in `database_extra_connection_params` "
+            "takes precedence."
+        ),
+    )
     database_type: Optional[Literal["dynamo_db"]] = Field(
         None, description="to use dynamodb instead of postgres db"
     )
