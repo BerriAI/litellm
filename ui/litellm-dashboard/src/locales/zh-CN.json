@@ -1897,6 +1897,59 @@
     "spendPerTag": "按标签花费",
     "spendPerTagDesc": "从按标签追踪成本开始 <docsLink>此处</docsLink>"
   },
+  "userDashboard": {
+    "userIdNotSet": "用户 ID 未设置"
+  },
+  "userEditView": {
+    "userIdLabel": "用户 ID",
+    "emailLabel": "邮箱",
+    "userAliasLabel": "用户别名",
+    "globalProxyRoleLabel": "全局代理角色",
+    "globalProxyRoleTooltip": "这是用户在代理上的全局角色，与任何团队/组织特定角色无关。",
+    "personalModelsLabel": "个人模型",
+    "personalModelsTooltip": "选择此用户在团队范围外可访问的模型。选择「所有代理模型」以授予对代理上所有可用模型的访问权限。",
+    "selectModelsPlaceholder": "选择模型",
+    "allProxyModels": "所有代理模型",
+    "noDefaultModels": "无默认模型",
+    "maxBudgetLabel": "最大预算（USD）",
+    "unlimitedBudget": "无限预算",
+    "budgetValidationMessage": "请输入预算或选择无限预算",
+    "resetBudgetLabel": "重置预算",
+    "metadataLabel": "元数据",
+    "metadataPlaceholder": "以 JSON 格式输入元数据",
+    "saveChangesButton": "保存更改"
+  },
+  "viewUserSpend": {
+    "totalSpend": "总花费",
+    "maxBudget": "最大预算",
+    "budgetLimit": "${{amount}} 上限",
+    "noLimit": "无上限"
+  },
+  "viewUsers": {
+    "selectUsers": "选择用户",
+    "cancelSelection": "取消选择",
+    "bulkEdit": "批量编辑（已选 {{count}} 个）",
+    "tabUsers": "用户",
+    "tabDefaultUserSettings": "默认用户设置",
+    "notifications": {
+      "accessTokenNotFound": "未找到访问令牌",
+      "generatingPasswordResetLink": "正在生成密码重置链接...",
+      "failedGeneratePasswordReset": "生成密码重置链接失败",
+      "userDeletedSuccess": "用户已成功删除",
+      "failedDeleteUser": "删除用户失败",
+      "selectUsersToEdit": "请选择要编辑的用户",
+      "userUpdatedSuccess": "用户 {{userId}} 更新成功"
+    },
+    "deleteModal": {
+      "title": "删除用户？",
+      "message": "确定要删除此用户吗？此操作无法撤销。",
+      "resourceInfoTitle": "用户信息",
+      "labelEmail": "邮箱",
+      "labelUserId": "用户 ID",
+      "labelGlobalProxyRole": "全局代理角色",
+      "labelTotalSpend": "总花费（USD）"
+    }
+  },
   "userAgentActivity": {
     "summaryTitle": "按 User Agent 汇总",
     "summarySubtitle": "不同 User Agent 的性能指标",

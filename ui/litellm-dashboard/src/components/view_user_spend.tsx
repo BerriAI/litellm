@@ -1,5 +1,6 @@
 "use client";
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { modelAvailableCall } from "./networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -16,6 +17,7 @@ interface ViewUserSpendProps {
   selectedTeam: any | null;
 }
 const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget, selectedTeam }) => {
+  const { t } = useTranslation();
   const { accessToken, userRole, userId: userID } = useAuthorized();
   let [spend, setSpend] = useState(userSpend !== null ? userSpend : 0.0);
   const [maxBudget, setMaxBudget] = useState(
@@ -114,7 +116,10 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
     modelsToDisplay = userModels;
   }
 
-  const displayMaxBudget = maxBudget !== null ? `$${formatNumberWithCommas(Number(maxBudget), 4)} limit` : "No limit";
+  const displayMaxBudget =
+    maxBudget !== null
+      ? t("viewUserSpend.budgetLimit", { amount: formatNumberWithCommas(Number(maxBudget), 4) })
+      : t("viewUserSpend.noLimit");
 
   const roundedSpend = spend !== undefined ? formatNumberWithCommas(spend, 4) : null;
 
@@ -123,13 +128,17 @@ const ViewUserSpend: React.FC<ViewUserSpendProps> = ({ userSpend, userMaxBudget,
     <div className="flex items-center">
       <div className="flex justify-between gap-x-6">
         <div>
-          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Total Spend</p>
+          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">
+            {t("viewUserSpend.totalSpend")}
+          </p>
           <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
             ${roundedSpend}
           </p>
         </div>
         <div>
-          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">Max Budget</p>
+          <p className="text-tremor-default text-tremor-content dark:text-dark-tremor-content">
+            {t("viewUserSpend.maxBudget")}
+          </p>
           <p className="text-2xl text-tremor-content-strong dark:text-dark-tremor-content-strong font-semibold">
             {displayMaxBudget}
           </p>

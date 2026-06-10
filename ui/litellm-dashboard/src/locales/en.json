@@ -1897,6 +1897,59 @@
     "spendPerTag": "Spend Per Tag",
     "spendPerTagDesc": "Get Started by Tracking cost per tag <docsLink>here</docsLink>"
   },
+  "userDashboard": {
+    "userIdNotSet": "User ID is not set"
+  },
+  "userEditView": {
+    "userIdLabel": "User ID",
+    "emailLabel": "Email",
+    "userAliasLabel": "User Alias",
+    "globalProxyRoleLabel": "Global Proxy Role",
+    "globalProxyRoleTooltip": "This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.",
+    "personalModelsLabel": "Personal Models",
+    "personalModelsTooltip": "Select which models this user can access outside of team-scope. Choose 'All Proxy Models' to grant access to all models available on the proxy.",
+    "selectModelsPlaceholder": "Select models",
+    "allProxyModels": "All Proxy Models",
+    "noDefaultModels": "No Default Models",
+    "maxBudgetLabel": "Max Budget (USD)",
+    "unlimitedBudget": "Unlimited Budget",
+    "budgetValidationMessage": "Please enter a budget or select Unlimited Budget",
+    "resetBudgetLabel": "Reset Budget",
+    "metadataLabel": "Metadata",
+    "metadataPlaceholder": "Enter metadata as JSON",
+    "saveChangesButton": "Save Changes"
+  },
+  "viewUserSpend": {
+    "totalSpend": "Total Spend",
+    "maxBudget": "Max Budget",
+    "budgetLimit": "${{amount}} limit",
+    "noLimit": "No limit"
+  },
+  "viewUsers": {
+    "selectUsers": "Select Users",
+    "cancelSelection": "Cancel Selection",
+    "bulkEdit": "Bulk Edit ({{count}} selected)",
+    "tabUsers": "Users",
+    "tabDefaultUserSettings": "Default User Settings",
+    "notifications": {
+      "accessTokenNotFound": "Access token not found",
+      "generatingPasswordResetLink": "Generating password reset link...",
+      "failedGeneratePasswordReset": "Failed to generate password reset link",
+      "userDeletedSuccess": "User deleted successfully",
+      "failedDeleteUser": "Failed to delete user",
+      "selectUsersToEdit": "Please select users to edit",
+      "userUpdatedSuccess": "User {{userId}} updated successfully"
+    },
+    "deleteModal": {
+      "title": "Delete User?",
+      "message": "Are you sure you want to delete this user? This action cannot be undone.",
+      "resourceInfoTitle": "User Information",
+      "labelEmail": "Email",
+      "labelUserId": "User ID",
+      "labelGlobalProxyRole": "Global Proxy Role",
+      "labelTotalSpend": "Total Spend (USD)"
+    }
+  },
   "userAgentActivity": {
     "summaryTitle": "Summary by User Agent",
     "summarySubtitle": "Performance metrics for different user agents",
