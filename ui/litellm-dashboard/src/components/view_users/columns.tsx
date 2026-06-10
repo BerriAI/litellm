@@ -67,12 +67,7 @@ export const columns = (
           (row.original.metadata as Record<string, unknown> | null | undefined)?.scim_active === false;
         if (isScimInactive) {
           return (
-            <Tooltip
-              title={tr(
-                "scimInactiveTooltip",
-                "Deactivated via SCIM (external identity provider). The user's virtual keys are blocked.",
-              )}
-            >
+            <Tooltip title={tr("scimInactiveTooltip")}>
               <Tag color="red" data-testid={`user-status-${row.original.user_id}`}>
                 {tr("inactive")}
               </Tag>
@@ -118,12 +113,7 @@ export const columns = (
       header: () => (
         <div className="flex items-center gap-2">
           <span>{tr("ssoId")}</span>
-          <Tooltip
-            title={tr(
-              "ssoIdTooltip",
-              "SSO ID is the ID of the user in the SSO provider. If the user is not using SSO, this will be null.",
-            )}
-          >
+          <Tooltip title={tr("ssoIdTooltip")}>
             <InformationCircleIcon className="w-4 h-4" />
           </Tooltip>
         </div>

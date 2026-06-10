@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import i18n from "@/lib/i18n";
 import { describe, expect, it, vi } from "vitest";
 import { columns } from "./columns";
 import { UserDataTable } from "./table";
@@ -120,7 +121,15 @@ describe("UserDataTable", () => {
   it("should render the user-row Status cell as Active when scim_active is not set to false", () => {
     const possibleUIRoles = { admin: { ui_label: "Admin" } };
     const handlers = { edit: vi.fn(), del: vi.fn(), reset: vi.fn(), click: vi.fn() };
-    const cols = columns(possibleUIRoles, handlers.edit, handlers.del, handlers.reset, handlers.click);
+    const cols = columns(
+      possibleUIRoles,
+      handlers.edit,
+      handlers.del,
+      handlers.reset,
+      handlers.click,
+      undefined,
+      i18n.t,
+    );
     const statusCol = cols.find((c) => (c as { id?: string }).id === "status");
     expect(statusCol).toBeDefined();
 
@@ -147,7 +156,7 @@ describe("UserDataTable", () => {
 
   it("should render the user-row Status cell as Inactive when scim_active is false", () => {
     const possibleUIRoles = { admin: { ui_label: "Admin" } };
-    const cols = columns(possibleUIRoles, vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const cols = columns(possibleUIRoles, vi.fn(), vi.fn(), vi.fn(), vi.fn(), undefined, i18n.t);
     const statusCol = cols.find((c) => (c as { id?: string }).id === "status")!;
 
     const inactiveUser: UserInfo = {
@@ -174,7 +183,7 @@ describe("UserDataTable", () => {
 
   it("should treat scim_active=true as Active (not Inactive)", () => {
     const possibleUIRoles = { admin: { ui_label: "Admin" } };
-    const cols = columns(possibleUIRoles, vi.fn(), vi.fn(), vi.fn(), vi.fn());
+    const cols = columns(possibleUIRoles, vi.fn(), vi.fn(), vi.fn(), vi.fn(), undefined, i18n.t);
     const statusCol = cols.find((c) => (c as { id?: string }).id === "status")!;
 
     const reactivated: UserInfo = {
