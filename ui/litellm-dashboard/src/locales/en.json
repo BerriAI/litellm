@@ -4648,6 +4648,11 @@
       "invalidJsonError": "Invalid JSON format. Please check your syntax.",
       "placeholder": "Paste your tool JSON here...",
       "addButton": "Add"
+    },
+    "variableTextarea": {
+      "detectedVariables": "Detected variables:",
+      "editVariableName": "Edit variable name",
+      "variableNamePlaceholder": "Variable name"
     }
   }
 }

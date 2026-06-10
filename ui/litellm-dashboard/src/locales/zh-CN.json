@@ -4648,6 +4648,11 @@
       "invalidJsonError": "JSON 格式无效，请检查语法。",
       "placeholder": "在此粘贴工具 JSON...",
       "addButton": "添加"
+    },
+    "variableTextarea": {
+      "detectedVariables": "检测到的变量：",
+      "editVariableName": "编辑变量名",
+      "variableNamePlaceholder": "变量名"
     }
   }
 }
