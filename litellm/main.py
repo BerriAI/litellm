@@ -1638,6 +1638,7 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
+            use_xai_oauth=kwargs.get("use_xai_oauth", False),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -2134,9 +2135,6 @@ def completion(  # type: ignore # noqa: PLR0915
 
             headers = headers or litellm.headers
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
-
             ## LOAD CONFIG - if set
             config = litellm.OpenAITextCompletionConfig.get_config()
             for k, v in config.items():
@@ -2162,6 +2160,7 @@ def completion(  # type: ignore # noqa: PLR0915
             _response = openai_text_completions.completion(
                 model=model,
                 messages=messages,
+                headers=headers,
                 model_response=model_response,
                 print_verbose=print_verbose,
                 api_key=api_key,
