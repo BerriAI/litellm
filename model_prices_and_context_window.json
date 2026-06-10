@@ -41902,5 +41902,23 @@
     "source": "https://soniox.com/pricing",
     "supported_endpoints": ["/v1/audio/transcriptions"],
     "supports_audio_input": true
+  },
+  "qwen3.7-max": {
+    "input_cost_per_token": 1.77e-06,
+    "cache_creation_input_token_cost": 2.21e-06,
+    "cache_read_input_token_cost": 3.54e-07,
+    "litellm_provider": "anthropic",
+    "max_input_tokens": 991000,
+    "max_output_tokens": 65536,
+    "max_tokens": 65536,
+    "mode": "chat",
+    "output_cost_per_token": 5.31e-06,
+    "source": "https://help.aliyun.com/zh/model-studio/models",
+    "supports_function_calling": true,
+    "supports_reasoning": true,
+    "supports_tool_choice": true,
+    "supports_assistant_prefill": true,
+    "supports_prompt_caching": true,
+    "supports_web_search": true
   }
  }
