@@ -1083,6 +1083,28 @@ def _build_custom_pricing_entry(
     return entry
 
 
+def _model_has_known_pricing(model: str, custom_llm_provider: str) -> bool:
+    """
+    Check if the model already has pricing in the global cost map.
+
+    register_model() resolves "<provider>/<model>" to the canonical cost-map
+    key, so registering request-scoped rates for a known model overwrites the
+    shared entry and re-prices every other request for that model in the
+    process (e.g. a zero-cost BYOK deployment zeroing the real model's
+    billing). Known models get their per-request rates via
+    custom_cost_per_token at cost-calculation time instead; registration is
+    only needed so unknown models can be priced at all.
+    """
+    for key in (model, f"{custom_llm_provider}/{model}"):
+        entry = litellm.model_cost.get(key)
+        if entry is not None and (
+            entry.get("input_cost_per_token") is not None
+            or entry.get("input_cost_per_second") is not None
+        ):
+            return True
+    return False
+
+
 @tracer.wrap()
 @client
 def completion(  # type: ignore # noqa: PLR0915
@@ -1451,8 +1473,9 @@ def completion(  # type: ignore # noqa: PLR0915
 
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if (
-            input_cost_per_token is not None and output_cost_per_token is not None
-        ) or input_cost_per_second is not None:
+            (input_cost_per_token is not None and output_cost_per_token is not None)
+            or input_cost_per_second is not None
+        ) and not _model_has_known_pricing(model, custom_llm_provider):
             litellm.register_model(
                 {
                     f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(
@@ -4988,8 +5011,9 @@ def embedding(  # noqa: PLR0915
 
     ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
     if (
-        input_cost_per_token is not None and output_cost_per_token is not None
-    ) or input_cost_per_second is not None:
+        (input_cost_per_token is not None and output_cost_per_token is not None)
+        or input_cost_per_second is not None
+    ) and not _model_has_known_pricing(model, custom_llm_provider):
         litellm.register_model(
             {
                 f"{custom_llm_provider}/{model}": _build_custom_pricing_entry(

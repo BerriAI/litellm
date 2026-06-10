@@ -2554,3 +2554,88 @@ def test_openrouter_gemini_3_1_flash_lite_stable_pricing():
     assert model_info["cache_read_input_token_cost"] == 2.5e-08
     assert model_info["max_input_tokens"] == 1048576
     assert model_info["max_output_tokens"] == 65536
+
+
+def _logging_obj_with_custom_pricing(litellm_params: dict, model: str):
+    import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="acompletion",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="test-call-id",
+        function_id="test",
+    )
+    logging_obj.update_environment_variables(
+        model=model, user=None, optional_params={}, litellm_params=litellm_params
+    )
+    return logging_obj
+
+
+def _response_with_usage(model: str) -> ModelResponse:
+    response = ModelResponse(model=model)
+    response.usage = Usage(
+        prompt_tokens=100_000, completion_tokens=10_000, total_tokens=110_000
+    )
+    return response
+
+
+def test_response_cost_calculator_uses_deployment_rates_when_map_entry_missing():
+    """A zero-cost BYOK deployment whose router_model_id entry is absent from
+    litellm.model_cost (post cost-map reload) must be priced at 0, not at the
+    concrete model's public price."""
+    logging_obj = _logging_obj_with_custom_pricing(
+        litellm_params={
+            "metadata": {
+                "model_info": {
+                    "id": "byok-deployment-id-not-in-model-cost",
+                    "input_cost_per_token": 0,
+                    "output_cost_per_token": 0,
+                }
+            }
+        },
+        model="anthropic/claude-opus-4-6",
+    )
+
+    cost = logging_obj._response_cost_calculator(
+        result=_response_with_usage("claude-opus-4-6")
+    )
+
+    assert cost == 0.0
+
+
+def test_response_cost_calculator_custom_pricing_survives_model_cost_reload(
+    monkeypatch,
+):
+    """Deployment custom pricing must produce the same cost before and after
+    litellm.model_cost is wholesale-replaced (proxy model-cost-map reload),
+    which drops every router-registered deployment-id entry."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    deployment_id = "custom-priced-deployment-reload-test"
+    rates = {"input_cost_per_token": 1e-06, "output_cost_per_token": 2e-06}
+    litellm.register_model({deployment_id: {"litellm_provider": "anthropic", **rates}})
+    logging_obj = _logging_obj_with_custom_pricing(
+        litellm_params={
+            "litellm_metadata": {"model_info": {"id": deployment_id, **rates}}
+        },
+        model="anthropic/claude-opus-4-6",
+    )
+    expected = 100_000 * 1e-06 + 10_000 * 2e-06
+
+    cost_before_reload = logging_obj._response_cost_calculator(
+        result=_response_with_usage("claude-opus-4-6")
+    )
+    assert cost_before_reload == pytest.approx(expected)
+
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    assert deployment_id not in litellm.model_cost
+
+    cost_after_reload = logging_obj._response_cost_calculator(
+        result=_response_with_usage("claude-opus-4-6")
+    )
+    assert cost_after_reload == pytest.approx(expected)

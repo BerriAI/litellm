@@ -1962,3 +1962,45 @@ class TestCallTypesOCR:
 
         call_type = CallTypes("aocr")
         assert call_type == CallTypes.aocr
+
+
+def test_completion_custom_pricing_does_not_overwrite_canonical_model_cost(
+    monkeypatch,
+):
+    """Per-request custom pricing must apply to that request only. One request
+    with zero rates must not re-price the shared model_cost entry, which
+    register_model resolves "<provider>/<model>" to."""
+    model = "gpt-3.5-turbo"
+    original_input_cost = litellm.model_cost[model]["input_cost_per_token"]
+    assert original_input_cost > 0
+    monkeypatch.setitem(litellm.model_cost, model, dict(litellm.model_cost[model]))
+
+    response = litellm.completion(
+        model=f"openai/{model}",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ok",
+        api_key="sk-test",
+        input_cost_per_token=0.0,
+        output_cost_per_token=0.0,
+    )
+
+    assert litellm.model_cost[model]["input_cost_per_token"] == original_input_cost
+    assert response._hidden_params["response_cost"] == 0.0
+
+
+def test_completion_custom_pricing_still_registers_unknown_model():
+    model = "openai/unknown-custom-priced-model-xyz"
+    litellm.model_cost.pop(model, None)
+    try:
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "hi"}],
+            mock_response="ok",
+            api_key="sk-test",
+            input_cost_per_token=1e-07,
+            output_cost_per_token=2e-07,
+        )
+        assert litellm.model_cost[model]["input_cost_per_token"] == 1e-07
+        assert litellm.model_cost[model]["output_cost_per_token"] == 2e-07
+    finally:
+        litellm.model_cost.pop(model, None)
