@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { ToolTestPanel } from "./ToolTestPanel";
 import { MCPTool, MCPToolsViewerProps, MCPContent, CallMCPToolResponse, getMcpOAuthMode } from "./types";
@@ -25,6 +26,7 @@ const MCPToolsViewer = ({
   serverAlias,
   extraHeaders,
 }: MCPToolsViewerProps) => {
+  const { t } = useTranslation();
   const [selectedTool, setSelectedTool] = useState<MCPTool | null>(null);
   const [toolResult, setToolResult] = useState<MCPContent[] | null>(null);
   const [toolError, setToolError] = useState<Error | null>(null);
@@ -260,7 +262,7 @@ const MCPToolsViewer = ({
         <div className="flex h-auto w-full gap-4">
           {/* Left Sidebar with Controls */}
           <div className="w-1/4 p-4 bg-gray-50 flex flex-col">
-            <Title className="text-xl font-semibold mb-6 mt-2">MCP Tools</Title>
+            <Title className="text-xl font-semibold mb-6 mt-2">{t("mcpTools.mcpTools.title")}</Title>
 
             <div className="flex flex-col flex-1">
               {/* Extra Headers Input Section */}
@@ -269,7 +271,9 @@ const MCPToolsViewer = ({
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center">
                       <KeyOutlined className="text-blue-600 mr-2" />
-                      <Text className="text-sm font-medium text-blue-800">Additional Headers</Text>
+                      <Text className="text-sm font-medium text-blue-800">
+                        {t("mcpTools.mcpTools.additionalHeaders")}
+                      </Text>
                     </div>
                     <AntdButton
                       size="small"
@@ -277,14 +281,12 @@ const MCPToolsViewer = ({
                       onClick={() => setShowHeaderInput(!showHeaderInput)}
                       className="text-blue-700 p-0 h-auto"
                     >
-                      {showHeaderInput ? "Hide" : "Configure"}
+                      {showHeaderInput ? t("mcpTools.mcpTools.hide") : t("mcpTools.mcpTools.configure")}
                     </AntdButton>
                   </div>
 
                   {!showHeaderInput && Object.keys(passthroughHeaders).length === 0 && (
-                    <Text className="text-xs text-blue-700">
-                      This server requires additional headers. Click &quot;Configure&quot; to provide values.
-                    </Text>
+                    <Text className="text-xs text-blue-700">{t("mcpTools.mcpTools.headersRequiredHint")}</Text>
                   )}
 
                   {showHeaderInput && (
@@ -294,7 +296,7 @@ const MCPToolsViewer = ({
                           <label className="block text-xs font-medium text-gray-700 mb-1">{headerName}</label>
                           <Input
                             size="small"
-                            placeholder={`Enter ${headerName}`}
+                            placeholder={t("mcpTools.mcpTools.enterHeaderPlaceholder", { header: headerName })}
                             value={passthroughHeaders[headerName] || ""}
                             onChange={(e) => {
                               setPassthroughHeaders({
@@ -317,7 +319,7 @@ const MCPToolsViewer = ({
                         disabled={Object.values(passthroughHeaders).every((v) => !v || !v.trim())}
                         className="w-full mt-2"
                       >
-                        Load Tools
+                        {t("mcpTools.mcpTools.loadTools")}
                       </AntdButton>
                     </div>
                   )}
@@ -326,7 +328,7 @@ const MCPToolsViewer = ({
                     <div className="mt-2">
                       <Text className="text-xs text-green-700 flex items-center">
                         <span className="inline-block w-2 h-2 bg-green-500 rounded-full mr-2"></span>
-                        {Object.keys(passthroughHeaders).length} header(s) configured
+                        {t("mcpTools.mcpTools.headersConfigured", { count: Object.keys(passthroughHeaders).length })}
                       </Text>
                     </div>
                   )}
@@ -336,7 +338,7 @@ const MCPToolsViewer = ({
               {/* Tool Selection - Show tools first */}
               <div className="flex flex-col flex-1 min-h-0">
                 <Text className="font-medium block mb-3 text-gray-700 flex items-center">
-                  <ToolOutlined className="mr-2" /> Available Tools
+                  <ToolOutlined className="mr-2" /> {t("mcpTools.mcpTools.availableTools")}
                   {toolsData.length > 0 && (
                     <span className="ml-2 bg-blue-100 text-blue-800 text-xs font-medium px-2 py-0.5 rounded-full">
                       {toolsData.length}
@@ -348,8 +350,8 @@ const MCPToolsViewer = ({
                 {isPassthrough && !oauthToken && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
-                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
-                    <p className="text-xs text-gray-500 mb-3">Authenticate to view available tools</p>
+                    <p className="text-xs font-medium text-gray-700 mb-1">{t("mcpTools.mcpTools.authRequired")}</p>
+                    <p className="text-xs text-gray-500 mb-3">{t("mcpTools.mcpTools.authenticateToViewTools")}</p>
                     <AntdButton
                       size="small"
                       type="primary"
@@ -357,7 +359,7 @@ const MCPToolsViewer = ({
                       onClick={startOAuthFlow}
                       disabled={!accessToken}
                     >
-                      Authorize
+                      {t("mcpTools.mcpTools.authorize")}
                     </AntdButton>
                     {oauthError && <p className="text-xs text-red-500 mt-2">{oauthError}</p>}
                   </div>
@@ -369,10 +371,8 @@ const MCPToolsViewer = ({
                 {oboNeedsAuth && (
                   <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                     <LockOutlined className="text-2xl text-gray-400 mb-2" />
-                    <p className="text-xs font-medium text-gray-700 mb-1">Authentication required</p>
-                    <p className="text-xs text-gray-500 mb-3">
-                      Authenticate with the upstream provider to view available tools
-                    </p>
+                    <p className="text-xs font-medium text-gray-700 mb-1">{t("mcpTools.mcpTools.authRequired")}</p>
+                    <p className="text-xs text-gray-500 mb-3">{t("mcpTools.mcpTools.authenticateWithUpstream")}</p>
                     <AntdButton
                       size="small"
                       type="primary"
@@ -380,7 +380,7 @@ const MCPToolsViewer = ({
                       onClick={startOboAuthorize}
                       disabled={!accessToken}
                     >
-                      Authorize
+                      {t("mcpTools.mcpTools.authorize")}
                     </AntdButton>
                     {dbOAuthError && <p className="text-xs text-red-500 mt-2">{dbOAuthError}</p>}
                   </div>
@@ -392,7 +392,7 @@ const MCPToolsViewer = ({
                     {toolsData.length > 0 && (
                       <div className="mb-3">
                         <Input
-                          placeholder="Search tools..."
+                          placeholder={t("mcpTools.mcpTools.searchToolsPlaceholder")}
                           prefix={<SearchOutlined className="text-gray-400" />}
                           value={toolSearchTerm}
                           onChange={(e) => setToolSearchTerm(e.target.value)}
@@ -410,7 +410,7 @@ const MCPToolsViewer = ({
                           <div className="animate-spin rounded-full h-6 w-6 border-2 border-gray-200"></div>
                           <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent absolute top-0"></div>
                         </div>
-                        <p className="text-xs font-medium text-gray-700">Loading tools...</p>
+                        <p className="text-xs font-medium text-gray-700">{t("mcpTools.mcpTools.loadingTools")}</p>
                       </div>
                     )}
 
@@ -418,7 +418,8 @@ const MCPToolsViewer = ({
                     {(mcpToolsResponse?.error || mcpToolsError) && !toolsAreaLoading && !toolsData.length && (
                       <div className="p-3 text-xs text-red-800 rounded-lg bg-red-50 border border-red-200">
                         <p className="font-medium">
-                          Error: {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
+                          {t("mcpTools.mcpTools.errorPrefix")}
+                          {mcpToolsResponse?.message || (mcpToolsError as Error)?.message}
                         </p>
                       </div>
                     )}
@@ -444,8 +445,10 @@ const MCPToolsViewer = ({
                               />
                             </svg>
                           </div>
-                          <p className="text-xs font-medium text-gray-700 mb-1">No tools available</p>
-                          <p className="text-xs text-gray-500">No tools found for this server</p>
+                          <p className="text-xs font-medium text-gray-700 mb-1">
+                            {t("mcpTools.mcpTools.noToolsAvailable")}
+                          </p>
+                          <p className="text-xs text-gray-500">{t("mcpTools.mcpTools.noToolsFoundForServer")}</p>
                         </div>
                       )}
 
@@ -455,8 +458,12 @@ const MCPToolsViewer = ({
                         {filteredTools.length === 0 ? (
                           <div className="p-4 text-center bg-white border border-gray-200 rounded-lg">
                             <SearchOutlined className="text-2xl text-gray-400 mb-2" />
-                            <p className="text-xs font-medium text-gray-700 mb-1">No tools found</p>
-                            <p className="text-xs text-gray-500">No tools match &quot;{toolSearchTerm}&quot;</p>
+                            <p className="text-xs font-medium text-gray-700 mb-1">
+                              {t("mcpTools.mcpTools.noToolsFound")}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {t("mcpTools.mcpTools.noToolsMatchSearch", { term: toolSearchTerm })}
+                            </p>
                           </div>
                         ) : (
                           <div
@@ -485,7 +492,7 @@ const MCPToolsViewer = ({
                                   {tool.mcp_info.logo_url && (
                                     <img
                                       src={tool.mcp_info.logo_url}
-                                      alt={`${tool.mcp_info.server_name} logo`}
+                                      alt={t("mcpTools.mcpTools.serverLogoAlt", { name: tool.mcp_info.server_name })}
                                       className="w-4 h-4 object-contain flex-shrink-0 mt-0.5"
                                     />
                                   )}
@@ -509,7 +516,7 @@ const MCPToolsViewer = ({
                                           clipRule="evenodd"
                                         />
                                       </svg>
-                                      Selected
+                                      {t("mcpTools.mcpTools.selected")}
                                     </div>
                                   </div>
                                 )}
@@ -528,7 +535,7 @@ const MCPToolsViewer = ({
           {/* Main Testing Area */}
           <div className="w-3/4 flex flex-col bg-white">
             <div className="p-4 border-b border-gray-200 flex justify-between items-center">
-              <Title className="text-xl font-semibold mb-0">Tool Testing Playground</Title>
+              <Title className="text-xl font-semibold mb-0">{t("mcpTools.mcpTools.testingPlaygroundTitle")}</Title>
             </div>
 
             <div className="flex-1 overflow-auto p-4">
@@ -536,10 +543,10 @@ const MCPToolsViewer = ({
                 /* Empty State */
                 <div className="h-full flex flex-col items-center justify-center text-gray-400">
                   <RobotOutlined style={{ fontSize: "48px", marginBottom: "16px" }} />
-                  <Text className="text-lg font-medium text-gray-600 mb-2">Select a Tool to Test</Text>
-                  <Text className="text-center text-gray-500 max-w-md">
-                    Choose a tool from the left sidebar to start testing its functionality with custom inputs.
+                  <Text className="text-lg font-medium text-gray-600 mb-2">
+                    {t("mcpTools.mcpTools.selectToolToTest")}
                   </Text>
+                  <Text className="text-center text-gray-500 max-w-md">{t("mcpTools.mcpTools.selectToolHint")}</Text>
                 </div>
               ) : (
                 /* Tool Test Panel */
