@@ -856,7 +856,12 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_sampling_params": {"type": "boolean"},
                 "supports_service_tier": {"type": "boolean"},
                 "supports_preset": {"type": "boolean"},
+                "supports_output_config": {"type": "boolean"},
                 "tool_use_system_prompt_tokens": {"type": "number"},
+                "bedrock_output_config_effort_ceiling": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high", "max", "xhigh"],
+                },
                 "tpm": {"type": "number"},
                 "provider_specific_entry": {"type": "object"},
                 "supported_endpoints": {
