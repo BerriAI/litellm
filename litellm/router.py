@@ -8521,6 +8521,13 @@ class Router:
                     credential_values.get("api_key")
                     or deployment.litellm_params.api_key
                 )
+                if api_key is None:
+                    verbose_router_logger.debug(
+                        "Skipping pass-through credential setup for deployment model=%s, custom_llm_provider=%s; no api_key set. Providers like bedrock resolve credentials at request time.",
+                        model,
+                        custom_llm_provider,
+                    )
+                    return
                 passthrough_endpoint_router.set_pass_through_credentials(
                     custom_llm_provider=custom_llm_provider,
                     api_base=api_base,
