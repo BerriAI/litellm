@@ -1378,6 +1378,40 @@ def test_container_in_provider_specific_fields_streaming():
     assert container_field["skills"][0]["version"] == "20251013", "version should match"
 
 
+def test_anthropic_streaming_usage_preserves_cache_creation_details():
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+    chunk = {
+        "type": "message_delta",
+        "delta": {
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+        },
+        "usage": {
+            "input_tokens": 48,
+            "cache_creation_input_tokens": 14055,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 832,
+            "cache_creation": {
+                "ephemeral_5m_input_tokens": 56,
+                "ephemeral_1h_input_tokens": 13999,
+            },
+        },
+    }
+
+    parsed = iterator.chunk_parser(chunk)
+    usage = getattr(parsed, "usage")
+
+    assert usage.cache_creation_input_tokens == 14055
+    assert usage.cache_creation.ephemeral_5m_input_tokens == 56
+    assert usage.cache_creation.ephemeral_1h_input_tokens == 13999
+    assert usage.model_dump()["cache_creation"] == {
+        "ephemeral_5m_input_tokens": 56,
+        "ephemeral_1h_input_tokens": 13999,
+    }
+
+
 def test_container_in_provider_specific_fields_non_streaming():
     """
     Test that container is captured in provider_specific_fields for non-streaming responses.

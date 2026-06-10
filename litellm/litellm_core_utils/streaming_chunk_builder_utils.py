@@ -7,6 +7,7 @@ from litellm.types.llms.openai import (
     ChatCompletionAudioDelta,
 )
 from litellm.types.utils import (
+    CacheCreationTokenDetails,
     ChatCompletionAudioResponse,
     ChatCompletionMessageToolCall,
     Choices,
@@ -470,6 +471,7 @@ class ChunkProcessor:
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
+        cache_creation: Optional[CacheCreationTokenDetails] = None
         completion_tokens_details: Optional[CompletionTokensDetails] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
 
@@ -481,6 +483,12 @@ class ChunkProcessor:
             cache_creation_input_tokens = usage_chunk.get("cache_creation_input_tokens")
         if "cache_read_input_tokens" in usage_chunk:
             cache_read_input_tokens = usage_chunk.get("cache_read_input_tokens")
+        if "cache_creation" in usage_chunk:
+            usage_cache_creation = usage_chunk.get("cache_creation")
+            if isinstance(usage_cache_creation, dict):
+                cache_creation = CacheCreationTokenDetails(**usage_cache_creation)
+            elif isinstance(usage_cache_creation, CacheCreationTokenDetails):
+                cache_creation = usage_cache_creation
         if hasattr(usage_chunk, "completion_tokens_details"):
             if isinstance(usage_chunk.completion_tokens_details, dict):
                 completion_tokens_details = CompletionTokensDetails(
@@ -505,6 +513,7 @@ class ChunkProcessor:
             "completion_tokens": completion_tokens,
             "cache_creation_input_tokens": cache_creation_input_tokens,
             "cache_read_input_tokens": cache_read_input_tokens,
+            "cache_creation": cache_creation,
             "completion_tokens_details": completion_tokens_details,
             "prompt_tokens_details": prompt_tokens_details,
         }
@@ -539,6 +548,7 @@ class ChunkProcessor:
         ## anthropic prompt caching information ##
         cache_creation_input_tokens: Optional[int] = None
         cache_read_input_tokens: Optional[int] = None
+        cache_creation: Optional[CacheCreationTokenDetails] = None
 
         server_tool_use: Optional[ServerToolUse] = None
         web_search_requests: Optional[int] = None
@@ -580,6 +590,8 @@ class ChunkProcessor:
                     cache_read_input_tokens = usage_chunk_dict[
                         "cache_read_input_tokens"
                     ]
+                if usage_chunk_dict["cache_creation"] is not None:
+                    cache_creation = usage_chunk_dict["cache_creation"]
                 if usage_chunk_dict["completion_tokens_details"] is not None:
                     completion_tokens_details = usage_chunk_dict[
                         "completion_tokens_details"
@@ -610,6 +622,7 @@ class ChunkProcessor:
             completion_tokens=completion_tokens,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
+            cache_creation=cache_creation,
             server_tool_use=server_tool_use,
             web_search_requests=web_search_requests,
             completion_tokens_details=completion_tokens_details,
@@ -639,6 +652,9 @@ class ChunkProcessor:
         ]
         cache_read_input_tokens: Optional[int] = calculated_usage_per_chunk[
             "cache_read_input_tokens"
+        ]
+        cache_creation: Optional[CacheCreationTokenDetails] = calculated_usage_per_chunk[
+            "cache_creation"
         ]
 
         server_tool_use: Optional[ServerToolUse] = calculated_usage_per_chunk[
@@ -684,6 +700,8 @@ class ChunkProcessor:
             setattr(
                 returned_usage, "cache_read_input_tokens", cache_read_input_tokens
             )  # for anthropic
+        if cache_creation is not None:
+            returned_usage.cache_creation = cache_creation
         if completion_tokens_details is not None:
             if isinstance(completion_tokens_details, CompletionTokensDetails):
                 returned_usage.completion_tokens_details = (

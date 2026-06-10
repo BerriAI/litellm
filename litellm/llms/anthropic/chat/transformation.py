@@ -2266,6 +2266,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             completion_tokens=completion_tokens,
             total_tokens=total_tokens,
             prompt_tokens_details=prompt_tokens_details,
+            cache_creation=cache_creation_token_details,
             cache_creation_input_tokens=cache_creation_input_tokens,
             cache_read_input_tokens=cache_read_input_tokens,
             completion_tokens_details=completion_token_details,
