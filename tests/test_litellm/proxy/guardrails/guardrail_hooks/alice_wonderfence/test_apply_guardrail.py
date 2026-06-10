@@ -231,6 +231,34 @@ async def test_apply_guardrail_masks_tool_call_arguments_in_place(
 
 
 @pytest.mark.asyncio
+async def test_apply_guardrail_detect_on_tool_call_args_passes_through(
+    guardrail_and_client, make_request_data
+):
+    """A DETECT verdict on a tool-call argument logs but does not block or mutate
+    the arguments (symmetric with the text-side DETECT behavior)."""
+    guardrail, client = guardrail_and_client
+
+    def evaluate(prompt, **kwargs):
+        r = Mock()
+        r.action = "DETECT" if "watch me" in prompt else "NO_ACTION"
+        r.action_text = None
+        r.detections = []
+        r.correlation_id = "corr-detect"
+        return r
+
+    client.evaluate_prompt.side_effect = evaluate
+
+    inputs = {"texts": ["benign"], "tool_calls": [_tool_call('{"x": "watch me"}')]}
+    out = await guardrail.apply_guardrail(
+        inputs=inputs,
+        request_data=make_request_data(),
+        input_type="request",
+    )
+    assert out["tool_calls"][0]["function"]["arguments"] == '{"x": "watch me"}'
+    assert out["texts"] == ["benign"]
+
+
+@pytest.mark.asyncio
 async def test_apply_guardrail_scans_tool_calls_when_no_texts(
     guardrail_and_client, make_request_data
 ):
