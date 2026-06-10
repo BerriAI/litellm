@@ -28,7 +28,9 @@ jobs:
         if: inputs.mode == 'list'
         run: |
           gh api --paginate "repos/${{ github.repository }}/code-scanning/alerts?state=open&per_page=100" > alerts.json
-          echo "Open alerts: $(jq length alerts.json)" >> $GITHUB_STEP_SUMMARY
+          total=$(jq length alerts.json)
+          echo "Open alerts: $total" | tee -a $GITHUB_STEP_SUMMARY
+          jq -r 'group_by(.rule.id) | .[] | "\(.[0].rule.id) [\(.[0].rule.severity)]: \(length) alerts — numbers: \([.[].number] | join(","))"' alerts.json | tee -a $GITHUB_STEP_SUMMARY
 
       - name: Upload alerts artifact
         if: inputs.mode == 'list'
@@ -36,6 +38,7 @@ jobs:
         with:
           name: alerts
           path: alerts.json
+          overwrite: true
 
       - name: Dismiss alerts
         if: inputs.mode == 'dismiss'
@@ -48,5 +51,5 @@ jobs:
               -f state=dismissed \
               -f dismissed_reason="$r" \
               -f dismissed_comment="$c" \
-              && echo "dismissed #$n ($r)" >> $GITHUB_STEP_SUMMARY
+              && echo "dismissed #$n ($r)" | tee -a $GITHUB_STEP_SUMMARY
           done
