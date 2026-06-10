@@ -7385,5 +7385,82 @@
       "description": "Help us improve LiteLLM! Share your experience in 5 quick questions.",
       "buttonText": "Share feedback"
     }
+  },
+  "tagManagement": {
+    "tagSelector": {
+      "placeholder": "Select or create tags"
+    },
+    "tagTable": {
+      "colTagName": "Tag Name",
+      "colAllowedModels": "Allowed Models",
+      "colCreated": "Created",
+      "allModels": "All Models",
+      "dynamicTagViewDisabled": "You cannot view the information of a dynamically generated spend tag",
+      "dynamicTagEditDisabled": "Dynamically generated spend tags cannot be edited",
+      "dynamicTagDeleteDisabled": "Dynamically generated spend tags cannot be deleted",
+      "editTagTooltip": "Edit tag",
+      "editTagDisabledAriaLabel": "Edit tag (disabled)",
+      "deleteTagTooltip": "Delete tag",
+      "deleteTagDisabledAriaLabel": "Delete tag (disabled)",
+      "noTagsFound": "No tags found"
+    },
+    "createTagModal": {
+      "title": "Create New Tag",
+      "tagNameLabel": "Tag Name",
+      "tagNameRequired": "Please input a tag name",
+      "allowedModelsLabel": "Allowed Models",
+      "allowedModelsTooltip": "Select which models are allowed to process requests from this tag",
+      "selectModelsPlaceholder": "Select Models",
+      "budgetRateLimitsOptional": "Budget & Rate Limits (Optional)",
+      "maxBudgetLabel": "Max Budget (USD)",
+      "maxBudgetTooltip": "Maximum amount in USD this tag can spend. When reached, requests with this tag will be blocked",
+      "resetBudgetLabel": "Reset Budget",
+      "resetBudgetTooltip": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours",
+      "tpmRpmNotSupported": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <githubLink>create a GitHub issue</githubLink>.",
+      "createTagButton": "+ Create New Tag"
+    },
+    "index": {
+      "pageTitle": "Tag Management",
+      "lastRefreshed": "Last Refreshed: {{time}}",
+      "clickTagNameHint": "Click on a tag name to view and edit its details.",
+      "tagRoutingDescription": "You can use tags to restrict the usage of certain LLMs based on tags passed in the request. Read more about tag routing <docsLink>here</docsLink>.",
+      "createNewTagButton": "+ Create New Tag",
+      "deleteTagTitle": "Delete Tag",
+      "deleteTagConfirm": "Are you sure you want to delete this tag?",
+      "errorFetchingTags": "Error fetching tags: {{error}}",
+      "tagCreatedSuccess": "Tag created successfully",
+      "errorCreatingTag": "Error creating tag: {{error}}",
+      "tagDeletedSuccess": "Tag deleted successfully",
+      "errorDeletingTag": "Error deleting tag: {{error}}",
+      "errorFetchingModels": "Error fetching models: {{error}}"
+    },
+    "tagInfo": {
+      "backToTags": "← Back to Tags",
+      "tagNameLabel": "Tag Name:",
+      "noDescription": "No description",
+      "editTagButton": "Edit Tag",
+      "tagNameRequired": "Please input a tag name",
+      "allowedModelsLabel": "Allowed Models",
+      "allowedModelsTooltip": "Select which models are allowed to process this type of data",
+      "selectModelsPlaceholder": "Select Models",
+      "budgetRateLimits": "Budget & Rate Limits",
+      "maxBudgetLabel": "Max Budget (USD)",
+      "maxBudgetTooltip": "Maximum amount in USD this tag can spend",
+      "resetBudgetLabel": "Reset Budget",
+      "resetBudgetTooltip": "How often the budget should reset",
+      "tpmRpmNotSupported": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <githubLink>create a GitHub issue</githubLink>.",
+      "saveChanges": "Save Changes",
+      "tagDetails": "Tag Details",
+      "allModels": "All Models",
+      "created": "Created",
+      "lastUpdated": "Last Updated",
+      "maxBudget": "Max Budget",
+      "budgetDuration": "Budget Duration",
+      "tpmLimit": "TPM Limit",
+      "rpmLimit": "RPM Limit",
+      "errorFetchingTagDetails": "Error fetching tag details: {{error}}",
+      "tagUpdatedSuccess": "Tag updated successfully",
+      "errorUpdatingTag": "Error updating tag: {{error}}"
+    }
   }
 }

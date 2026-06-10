@@ -7385,5 +7385,82 @@
       "description": "帮助我们改进 LiteLLM！通过 5 个简短问题分享您的使用体验。",
       "buttonText": "分享反馈"
     }
+  },
+  "tagManagement": {
+    "tagSelector": {
+      "placeholder": "选择或创建标签"
+    },
+    "tagTable": {
+      "colTagName": "标签名称",
+      "colAllowedModels": "允许的模型",
+      "colCreated": "创建时间",
+      "allModels": "所有模型",
+      "dynamicTagViewDisabled": "您无法查看动态生成的花费标签的信息",
+      "dynamicTagEditDisabled": "动态生成的花费标签无法编辑",
+      "dynamicTagDeleteDisabled": "动态生成的花费标签无法删除",
+      "editTagTooltip": "编辑标签",
+      "editTagDisabledAriaLabel": "编辑标签（已禁用）",
+      "deleteTagTooltip": "删除标签",
+      "deleteTagDisabledAriaLabel": "删除标签（已禁用）",
+      "noTagsFound": "未找到标签"
+    },
+    "createTagModal": {
+      "title": "创建新标签",
+      "tagNameLabel": "标签名称",
+      "tagNameRequired": "请输入标签名称",
+      "allowedModelsLabel": "允许的模型",
+      "allowedModelsTooltip": "选择允许处理此标签请求的模型",
+      "selectModelsPlaceholder": "选择模型",
+      "budgetRateLimitsOptional": "预算与速率限制（可选）",
+      "maxBudgetLabel": "最大预算（美元）",
+      "maxBudgetTooltip": "此标签可花费的最大金额（美元）。达到上限后，携带此标签的请求将被拒绝",
+      "resetBudgetLabel": "重置预算",
+      "resetBudgetTooltip": "预算重置频率。例如，设置为「每天」将每 24 小时重置一次预算",
+      "tpmRpmNotSupported": "标签的 TPM/RPM 限制暂不支持。如需此功能，请 <githubLink>创建 GitHub Issue</githubLink>。",
+      "createTagButton": "+ 创建新标签"
+    },
+    "index": {
+      "pageTitle": "标签管理",
+      "lastRefreshed": "最后刷新：{{time}}",
+      "clickTagNameHint": "点击标签名称可查看并编辑其详情。",
+      "tagRoutingDescription": "您可以使用标签，根据请求中携带的标签来限制特定 LLM 的使用。了解更多标签路由内容，请查阅 <docsLink>文档</docsLink>。",
+      "createNewTagButton": "+ 创建新标签",
+      "deleteTagTitle": "删除标签",
+      "deleteTagConfirm": "确定要删除此标签吗？",
+      "errorFetchingTags": "获取标签失败：{{error}}",
+      "tagCreatedSuccess": "标签创建成功",
+      "errorCreatingTag": "创建标签失败：{{error}}",
+      "tagDeletedSuccess": "标签删除成功",
+      "errorDeletingTag": "删除标签失败：{{error}}",
+      "errorFetchingModels": "获取模型失败：{{error}}"
+    },
+    "tagInfo": {
+      "backToTags": "← 返回标签列表",
+      "tagNameLabel": "标签名称：",
+      "noDescription": "暂无描述",
+      "editTagButton": "编辑标签",
+      "tagNameRequired": "请输入标签名称",
+      "allowedModelsLabel": "允许的模型",
+      "allowedModelsTooltip": "选择允许处理此类数据的模型",
+      "selectModelsPlaceholder": "选择模型",
+      "budgetRateLimits": "预算与速率限制",
+      "maxBudgetLabel": "最大预算（美元）",
+      "maxBudgetTooltip": "此标签可花费的最大金额（美元）",
+      "resetBudgetLabel": "重置预算",
+      "resetBudgetTooltip": "预算重置频率",
+      "tpmRpmNotSupported": "标签的 TPM/RPM 限制暂不支持。如需此功能，请 <githubLink>创建 GitHub Issue</githubLink>。",
+      "saveChanges": "保存更改",
+      "tagDetails": "标签详情",
+      "allModels": "所有模型",
+      "created": "创建时间",
+      "lastUpdated": "最后更新",
+      "maxBudget": "最大预算",
+      "budgetDuration": "预算周期",
+      "tpmLimit": "TPM 限制",
+      "rpmLimit": "RPM 限制",
+      "errorFetchingTagDetails": "获取标签详情失败：{{error}}",
+      "tagUpdatedSuccess": "标签更新成功",
+      "errorUpdatingTag": "更新标签失败：{{error}}"
+    }
   }
 }
