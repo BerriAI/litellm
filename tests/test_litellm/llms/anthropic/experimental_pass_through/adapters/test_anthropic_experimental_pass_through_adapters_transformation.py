@@ -2645,6 +2645,63 @@ class TestAnthropicStreamWrapperTextDeltas:
             model="claude-code-proxy",
         )
 
+    def test_should_queue_block_transition_delta_ignores_non_payload_chunks(self):
+        wrapper = self._make_stream_wrapper([])
+
+        assert (
+            wrapper._should_queue_block_transition_delta({"type": "message_delta"})
+            is False
+        )
+        assert (
+            wrapper._should_queue_block_transition_delta(
+                {"type": "content_block_delta", "delta": None}
+            )
+            is False
+        )
+        assert (
+            wrapper._should_queue_block_transition_delta(
+                {
+                    "type": "content_block_delta",
+                    "delta": {"type": None, "text": "hello"},
+                }
+            )
+            is False
+        )
+        assert (
+            wrapper._should_queue_block_transition_delta(
+                {
+                    "type": "content_block_delta",
+                    "delta": {"type": "text_delta", "text": ""},
+                }
+            )
+            is False
+        )
+        assert (
+            wrapper._should_queue_block_transition_delta(
+                {
+                    "type": "content_block_delta",
+                    "delta": {"type": "unknown_delta", "text": "hello"},
+                }
+            )
+            is False
+        )
+
+    def test_should_queue_block_transition_delta_accepts_signature_payload(self):
+        wrapper = self._make_stream_wrapper([])
+
+        assert (
+            wrapper._should_queue_block_transition_delta(
+                {
+                    "type": "content_block_delta",
+                    "delta": {
+                        "type": "signature_delta",
+                        "signature": "signature-value",
+                    },
+                }
+            )
+            is True
+        )
+
     def _find_text_deltas(self, events):
         return [
             e
