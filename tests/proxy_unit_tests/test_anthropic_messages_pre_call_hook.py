@@ -77,7 +77,8 @@ def test_anthropic_messages_runs_proxy_async_pre_call_hook(
     assert response.json()["content"][0]["text"] == "Hello from LiteLLM"
     assert hook_calls == ["anthropic_messages"]
     mock_anthropic_messages.assert_called_once()
-    assert mock_anthropic_messages.call_args.kwargs["metadata"]["source"] == "unit-test"
+    metadata = mock_anthropic_messages.call_args.kwargs.get("metadata")
+    assert metadata == {"source": "unit-test"}
 
 
 @pytest.mark.asyncio
