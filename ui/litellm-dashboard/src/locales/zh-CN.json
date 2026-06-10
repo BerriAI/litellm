@@ -7616,5 +7616,64 @@
       "needHelp": "需要帮助？",
       "reuseCredentials": "复用凭据"
     }
+  },
+  "budgets": {
+    "budgetModal": {
+      "title": "创建预算",
+      "makingApiCall": "正在调用 API",
+      "budgetCreated": "预算已创建",
+      "errorCreating": "创建预算时出错：{{error}}",
+      "budgetIdLabel": "预算 ID",
+      "budgetIdRequired": "请输入一个易于识别的预算名称",
+      "budgetIdHelp": "一个易于识别的预算名称",
+      "tpmLimitLabel": "每分钟最大 Token 数",
+      "rpmLimitLabel": "每分钟最大请求数",
+      "defaultModelLimit": "默认使用模型限制。",
+      "optionalSettings": "可选设置",
+      "maxBudgetLabel": "最大预算（美元）",
+      "resetBudgetLabel": "重置预算",
+      "daily": "每天",
+      "weekly": "每周",
+      "monthly": "每月",
+      "createBudgetButton": "创建预算"
+    },
+    "budgetPanel": {
+      "budgetDeleted": "预算已删除。",
+      "failedToDelete": "删除预算失败",
+      "createBudgetButton": "+ 创建预算",
+      "tabBudgets": "预算",
+      "tabExamples": "示例",
+      "createBudgetDescription": "创建预算以分配给客户。",
+      "colBudgetId": "预算 ID",
+      "colMaxBudget": "最大预算",
+      "colTpm": "TPM",
+      "colRpm": "RPM",
+      "editBudgetTooltip": "编辑预算",
+      "deleteBudgetTooltip": "删除预算",
+      "deleteTitle": "删除预算？",
+      "deleteMessage": "确定要删除此预算吗？此操作不可撤销。",
+      "budgetInformation": "预算信息",
+      "howToUseBudgetId": "如何使用预算 ID",
+      "tabAssignBudget": "分配预算给客户",
+      "tabTestCurl": "测试（Curl）",
+      "tabTestSdk": "测试（OpenAI SDK）"
+    },
+    "editBudgetModal": {
+      "title": "编辑预算",
+      "makingApiCall": "正在调用 API",
+      "budgetUpdated": "预算已更新",
+      "errorUpdating": "更新预算时出错：{{error}}",
+      "budgetIdLabel": "预算 ID",
+      "budgetIdHelp": "预算 ID 创建后不可更改",
+      "tpmLimitLabel": "每分钟最大 Token 数",
+      "rpmLimitLabel": "每分钟最大请求数",
+      "defaultModelLimit": "默认使用模型限制。",
+      "optionalSettings": "可选设置",
+      "maxBudgetLabel": "最大预算（美元）",
+      "resetBudgetLabel": "重置预算",
+      "daily": "每天",
+      "weekly": "每周",
+      "monthly": "每月"
+    }
   }
 }

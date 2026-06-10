@@ -7616,5 +7616,64 @@
       "needHelp": "Need Help?",
       "reuseCredentials": "Reuse Credentials"
     }
+  },
+  "budgets": {
+    "budgetModal": {
+      "title": "Create Budget",
+      "makingApiCall": "Making API Call",
+      "budgetCreated": "Budget Created",
+      "errorCreating": "Error creating the budget: {{error}}",
+      "budgetIdLabel": "Budget ID",
+      "budgetIdRequired": "Please input a human-friendly name for the budget",
+      "budgetIdHelp": "A human-friendly name for the budget",
+      "tpmLimitLabel": "Max Tokens per minute",
+      "rpmLimitLabel": "Max Requests per minute",
+      "defaultModelLimit": "Default is model limit.",
+      "optionalSettings": "Optional Settings",
+      "maxBudgetLabel": "Max Budget (USD)",
+      "resetBudgetLabel": "Reset Budget",
+      "daily": "daily",
+      "weekly": "weekly",
+      "monthly": "monthly",
+      "createBudgetButton": "Create Budget"
+    },
+    "budgetPanel": {
+      "budgetDeleted": "Budget deleted.",
+      "failedToDelete": "Failed to delete budget",
+      "createBudgetButton": "+ Create Budget",
+      "tabBudgets": "Budgets",
+      "tabExamples": "Examples",
+      "createBudgetDescription": "Create a budget to assign to customers.",
+      "colBudgetId": "Budget ID",
+      "colMaxBudget": "Max Budget",
+      "colTpm": "TPM",
+      "colRpm": "RPM",
+      "editBudgetTooltip": "Edit budget",
+      "deleteBudgetTooltip": "Delete budget",
+      "deleteTitle": "Delete Budget?",
+      "deleteMessage": "Are you sure you want to delete this budget? This action cannot be undone.",
+      "budgetInformation": "Budget Information",
+      "howToUseBudgetId": "How to use budget id",
+      "tabAssignBudget": "Assign Budget to Customer",
+      "tabTestCurl": "Test it (Curl)",
+      "tabTestSdk": "Test it (OpenAI SDK)"
+    },
+    "editBudgetModal": {
+      "title": "Edit Budget",
+      "makingApiCall": "Making API Call",
+      "budgetUpdated": "Budget Updated",
+      "errorUpdating": "Error updating the budget: {{error}}",
+      "budgetIdLabel": "Budget ID",
+      "budgetIdHelp": "Budget ID cannot be changed after creation",
+      "tpmLimitLabel": "Max Tokens per minute",
+      "rpmLimitLabel": "Max Requests per minute",
+      "defaultModelLimit": "Default is model limit.",
+      "optionalSettings": "Optional Settings",
+      "maxBudgetLabel": "Max Budget (USD)",
+      "resetBudgetLabel": "Reset Budget",
+      "daily": "daily",
+      "weekly": "weekly",
+      "monthly": "monthly"
+    }
   }
 }
