@@ -5775,6 +5775,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         ]
         split_model = potential_model_names["split_model"]
         custom_llm_provider = potential_model_names["custom_llm_provider"]
+        model_cost_custom_llm_provider = custom_llm_provider
         #########################
         provider_config: Optional[BaseLLMModelInfo] = None
         if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
@@ -5840,7 +5841,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                 key = _matched_key
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    model_info=_model_info,
+                    custom_llm_provider=model_cost_custom_llm_provider,
                 ):
                     _model_info = None
             if _model_info is None:
@@ -5849,7 +5851,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5858,7 +5861,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5867,7 +5871,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
             if _model_info is None:
@@ -5876,7 +5881,8 @@ def _get_model_info_helper(  # noqa: PLR0915
                     key = _matched_key
                     _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                     if not _check_provider_match(
-                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
                     ):
                         _model_info = None
 
@@ -5884,7 +5890,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 raise ValueError(
                     "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
                 )
-
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
             )
