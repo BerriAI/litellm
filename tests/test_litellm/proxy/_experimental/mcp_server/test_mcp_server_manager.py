@@ -943,6 +943,41 @@ class TestMCPServerManager:
         assert scopes == ["read", "write"]
 
     @pytest.mark.asyncio
+    async def test_fetch_oauth_metadata_from_resource_ignores_non_list_servers(self):
+        """A non-conformant payload whose ``authorization_servers`` is not a
+        list yields no servers instead of crashing the lenient fallback."""
+        manager = MCPServerManager()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "authorization_servers": "https://auth.example.com",
+            "scopes_supported": ["read"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.get = AsyncMock(return_value=mock_response)
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.get_async_httpx_client",
+            return_value=mock_client,
+        ):
+            servers, scopes = await manager._fetch_oauth_metadata_from_resource(
+                "https://protected.example.com/.well-known/oauth-protected-resource",
+                "https://protected.example.com/mcp",
+            )
+
+        assert servers == []
+        assert scopes == ["read"]
+
+    def test_oauth_metadata_from_asm_payload_without_usable_fields_is_none(self):
+        """An object payload with no endpoint or scope fields yields None so
+        discovery moves on to the next candidate URL."""
+        manager = MCPServerManager()
+
+        assert manager._oauth_metadata_from_asm_payload({"error": "not_found"}) is None
+
+    @pytest.mark.asyncio
     async def test_discovery_payloads_that_are_not_json_objects_yield_no_metadata(
         self,
     ):
