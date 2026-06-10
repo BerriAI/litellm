@@ -4290,6 +4290,35 @@ def _deduplicate_bedrock_tool_content(
     return _deduplicate_bedrock_content_blocks(tool_content, "toolResult")
 
 
+def _rename_duplicate_bedrock_document_names(
+    contents: List[BedrockMessageBlock],
+) -> List[BedrockMessageBlock]:
+    """
+    Rename duplicate document names across all messages in a Bedrock request.
+
+    Document names are derived from a content hash, so the same file appearing
+    in multiple conversation turns produces identical names and Bedrock rejects
+    the request with "Messages can not contain duplicate document names".  The
+    first occurrence keeps its original name so prompt-cache prefixes stay
+    stable; later occurrences get a deterministic positional suffix
+    (``_2``, ``_3``, ...).
+    """
+    name_counts: Dict[str, int] = {}
+    for message in contents:
+        for block in message.get("content") or []:
+            document = block.get("document")
+            if not isinstance(document, dict):
+                continue
+            name = document.get("name")
+            if not name:
+                continue
+            count = name_counts.get(name, 0) + 1
+            name_counts[name] = count
+            if count > 1:
+                document["name"] = f"{name}_{count}"
+    return contents
+
+
 def _sort_bedrock_assistant_content_blocks(
     blocks: List[BedrockContentBlock],
 ) -> List[BedrockContentBlock]:
@@ -4938,7 +4967,7 @@ class BedrockConverseMessagesProcessor:
                     llm_provider=llm_provider,
                 )
 
-        return contents
+        return _rename_duplicate_bedrock_document_names(contents)
 
     @staticmethod
     def translate_thinking_blocks_to_reasoning_content_blocks(
@@ -5360,7 +5389,7 @@ def _bedrock_converse_messages_pt(  # noqa: PLR0915
                 llm_provider=llm_provider,
             )
 
-    return contents
+    return _rename_duplicate_bedrock_document_names(contents)
 
 
 def make_valid_bedrock_tool_name(input_tool_name: str) -> str:

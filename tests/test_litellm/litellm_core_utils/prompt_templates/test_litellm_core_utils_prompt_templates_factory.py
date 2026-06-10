@@ -2809,6 +2809,64 @@ def test_bedrock_converse_messages_pt_document_deterministic_name():
     assert name1 == name2
 
 
+def test_bedrock_converse_messages_pt_renames_duplicate_document_names():
+    """
+    The same document in multiple turns must not produce duplicate names;
+    Bedrock rejects requests with "Messages can not contain duplicate
+    document names". The first occurrence keeps its hash-based name and
+    later occurrences get a deterministic positional suffix.
+    """
+    document_block = {
+        "type": "document",
+        "source": {
+            "type": "base64",
+            "media_type": "application/pdf",
+            "data": "dGVzdA==",
+        },
+    }
+    messages = [
+        {
+            "role": "user",
+            "content": [document_block, {"type": "text", "text": "summarize this"}],
+        },
+        {"role": "assistant", "content": "It says test."},
+        {
+            "role": "user",
+            "content": [document_block, {"type": "text", "text": "summarize again"}],
+        },
+    ]
+
+    result1 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    result2 = _bedrock_converse_messages_pt(
+        messages, "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+
+    names1 = [
+        block["document"]["name"]
+        for message in result1
+        for block in message["content"]
+        if "document" in block
+    ]
+    names2 = [
+        block["document"]["name"]
+        for message in result2
+        for block in message["content"]
+        if "document" in block
+    ]
+
+    assert len(names1) == 2
+    assert len(set(names1)) == 2
+    assert names1[1] == f"{names1[0]}_2"
+    assert names1 == names2
+
+    single_turn = _bedrock_converse_messages_pt(
+        [messages[0]], "anthropic.claude-sonnet-4-6", "bedrock"
+    )
+    assert names1[0] == single_turn[0]["content"][0]["document"]["name"]
+
+
 def test_bedrock_converse_messages_pt_document_rejects_url_source():
     """Test that a URL-type document source raises a clear error instead of KeyError."""
     messages = [
