@@ -2342,3 +2342,145 @@ class TestAsyncStreamingDataGeneratorFastPath:
         hook_spy.assert_awaited_once()
 
         ProxyLogging._callback_capabilities_cache.clear()
+
+
+class TestCheckRequestDisconnection:
+    @pytest.mark.asyncio
+    async def test_cancels_task_when_client_disconnects(self, monkeypatch):
+        import asyncio
+
+        import litellm.proxy.common_request_processing as cpr
+        from litellm.proxy.common_request_processing import _check_request_disconnection
+
+        task_cancelled = False
+
+        async def never_ending():
+            nonlocal task_cancelled
+            try:
+                await asyncio.sleep(9999)
+            except asyncio.CancelledError:
+                task_cancelled = True
+                raise
+
+        task = asyncio.create_task(never_ending())
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        monkeypatch.setattr(cpr.asyncio, "sleep", AsyncMock())
+
+        await _check_request_disconnection(mock_request, task)
+        await asyncio.sleep(0)
+
+        assert task.cancelled() or task_cancelled
+
+    @pytest.mark.asyncio
+    async def test_does_not_cancel_task_when_client_stays_connected(self, monkeypatch):
+        import asyncio
+
+        import litellm.proxy.common_request_processing as cpr
+        from litellm.proxy.common_request_processing import _check_request_disconnection
+
+        call_count = 0
+
+        async def fake_sleep(_):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 3:
+                raise asyncio.CancelledError
+
+        task = asyncio.create_task(asyncio.sleep(9999))
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=False)
+        monkeypatch.setattr(cpr.asyncio, "sleep", fake_sleep)
+
+        with pytest.raises(asyncio.CancelledError):
+            await _check_request_disconnection(mock_request, task)
+
+        assert not task.cancelled()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    @pytest.mark.asyncio
+    async def test_exits_gracefully_when_is_disconnected_raises(self, monkeypatch):
+        import asyncio
+
+        import litellm.proxy.common_request_processing as cpr
+        from litellm.proxy.common_request_processing import _check_request_disconnection
+
+        task = asyncio.create_task(asyncio.sleep(9999))
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(
+            side_effect=RuntimeError("transport closed")
+        )
+        monkeypatch.setattr(cpr.asyncio, "sleep", AsyncMock())
+
+        await _check_request_disconnection(mock_request, task)
+
+        assert not task.cancelled()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    @pytest.mark.asyncio
+    async def test_base_process_llm_request_raises_499_on_client_disconnect(
+        self, monkeypatch
+    ):
+        """When _check_request_disconnection cancels the LLM task, base_process_llm_request
+        must raise HTTPException(499) instead of propagating CancelledError."""
+        import asyncio
+
+        import litellm.proxy.common_request_processing as cpr
+        from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+
+        async def slow_llm():
+            await asyncio.sleep(9999)
+
+        async def fake_route_request(**_kwargs):
+            return slow_llm()
+
+        async def instant_disconnect(request, task):
+            task.cancel()
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.litellm_call_id = "test-call-id"
+        mock_logging_obj._defer_async_logging = False
+
+        mock_proxy_logging = MagicMock(spec=ProxyLogging)
+        mock_proxy_logging.during_call_hook = AsyncMock(return_value=None)
+        mock_proxy_logging._callback_capabilities_cache = {}
+
+        monkeypatch.setattr(cpr, "route_request", fake_route_request)
+        monkeypatch.setattr(cpr, "_check_request_disconnection", instant_disconnect)
+
+        processing_obj = ProxyBaseLLMRequestProcessing(data={"model": "gemini-2.0-flash"})
+        monkeypatch.setattr(
+            processing_obj,
+            "common_processing_pre_call_logic",
+            AsyncMock(return_value=({"model": "gemini-2.0-flash"}, mock_logging_obj)),
+        )
+        monkeypatch.setattr(
+            processing_obj, "_has_post_call_guardrails", MagicMock(return_value=False)
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.is_disconnected = AsyncMock(return_value=True)
+        mock_request.headers = {}
+
+        with pytest.raises(HTTPException) as exc_info:
+            await processing_obj.base_process_llm_request(
+                request=mock_request,
+                fastapi_response=MagicMock(),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+                proxy_logging_obj=mock_proxy_logging,
+                general_settings={},
+                proxy_config=MagicMock(spec=ProxyConfig),
+                route_type="acompletion",
+                version=None,
+            )
+
+        assert exc_info.value.status_code == 499
+        assert "disconnected" in exc_info.value.detail.lower()

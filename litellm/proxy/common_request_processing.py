@@ -73,6 +73,20 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 _DD_STREAMING_TRACE_ENABLED = not isinstance(tracer, NullTracer)
 
 
+async def _check_request_disconnection(
+    request: Request, llm_api_call_task: "asyncio.Task[Any]"
+) -> None:
+    start_time = time.time()
+    while time.time() - start_time < 600:
+        await asyncio.sleep(1)
+        try:
+            if await request.is_disconnected():
+                llm_api_call_task.cancel()
+                return
+        except Exception:
+            return
+
+
 def _serialize_http_exception_detail(
     detail: Any,
 ) -> Tuple[str, Optional[dict]]:
@@ -1215,14 +1229,31 @@ class ProxyBaseLLMRequestProcessing:
             user_model=user_model,
             user_api_key_dict=user_api_key_dict,
         )
-        tasks.append(llm_call)
+        llm_call_task = asyncio.create_task(llm_call)
+        tasks.append(llm_call_task)
+
+        disconnect_task = asyncio.create_task(
+            _check_request_disconnection(request, llm_call_task)
+        )
 
         # wait for call to end
         llm_responses = asyncio.gather(
             *tasks
         )  # run the moderation check in parallel to the actual llm api call
 
-        responses = await llm_responses
+        try:
+            responses = await llm_responses
+        except asyncio.CancelledError:
+            raise HTTPException(
+                status_code=499,
+                detail="Client disconnected the request",
+            )
+        finally:
+            disconnect_task.cancel()
+            try:
+                await disconnect_task
+            except asyncio.CancelledError:
+                pass
 
         response = responses[1]
 
