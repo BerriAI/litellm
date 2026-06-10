@@ -11875,6 +11875,9 @@ async def model_info_v2(
     # Update total count to include agents
     search_total_count = len(all_models)
 
+    # Translate `model_name` to the public name for team-scoped rows.
+    all_models = [_translate_model_name_for_response(m) for m in all_models]
+
     return _paginate_models_response(
         all_models=all_models,
         page=page,
