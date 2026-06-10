@@ -7708,5 +7708,26 @@
       "testConnection": "Test Connection",
       "saveChanges": "Save Changes"
     }
+  },
+  "permissions": {
+    "agentPermissions": {
+      "title": "Agents",
+      "fullIdTooltip": "Full ID: {{id}}",
+      "groupBadge": "Group",
+      "empty": "No agents or access groups configured"
+    },
+    "mcpServerPermissions": {
+      "title": "MCP Servers",
+      "fullIdTooltip": "Full ID: {{id}}",
+      "groupBadge": "Group",
+      "toolsetBadge": "Toolset",
+      "toolCount_one": "tool",
+      "toolCount_other": "tools",
+      "empty": "No MCP servers, access groups, or toolsets configured"
+    },
+    "vectorStorePermissions": {
+      "title": "Vector Stores",
+      "empty": "No vector stores configured"
+    }
   }
 }

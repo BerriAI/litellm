@@ -7708,5 +7708,26 @@
       "testConnection": "测试连接",
       "saveChanges": "保存更改"
     }
+  },
+  "permissions": {
+    "agentPermissions": {
+      "title": "Agent",
+      "fullIdTooltip": "完整 ID: {{id}}",
+      "groupBadge": "Group",
+      "empty": "未配置任何 Agent 或访问组"
+    },
+    "mcpServerPermissions": {
+      "title": "MCP 服务器",
+      "fullIdTooltip": "完整 ID: {{id}}",
+      "groupBadge": "Group",
+      "toolsetBadge": "工具集",
+      "toolCount_one": "个工具",
+      "toolCount_other": "个工具",
+      "empty": "未配置任何 MCP 服务器、访问组或工具集"
+    },
+    "vectorStorePermissions": {
+      "title": "向量存储",
+      "empty": "未配置任何向量存储"
+    }
   }
 }
