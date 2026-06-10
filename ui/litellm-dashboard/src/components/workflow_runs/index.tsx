@@ -148,13 +148,14 @@ const TruncatedValue: React.FC<{ value: string }> = ({ value }) => {
 // ── metadata card ─────────────────────────────────────────────────────────────
 
 const MetadataCard: React.FC<{ run: WorkflowRun }> = ({ run }) => {
+  const { t } = useTranslation();
   const meta = run.metadata ?? {};
 
   const primaryFields: { key: string; label: string }[] = [
-    { key: "state", label: "state" },
-    { key: "worktree_path", label: "worktree" },
-    { key: "grill_session_id", label: "grill session" },
-    { key: "session_id", label: "session" },
+    { key: "state", label: t("workflowRuns.index.metaState") },
+    { key: "worktree_path", label: t("workflowRuns.index.metaWorktree") },
+    { key: "grill_session_id", label: t("workflowRuns.index.grillSession") },
+    { key: "session_id", label: t("workflowRuns.index.metaSession") },
   ];
 
   const primaryKeys = new Set(["title", ...primaryFields.map((f) => f.key)]);

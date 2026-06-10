@@ -98,7 +98,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
           <div className="flex items-center space-x-3">
             <img
               src={mcpLogoImg}
-              alt="MCP Logo"
+              alt={t("mcpTools.mcpDiscovery.mcpLogoAlt")}
               className="w-8 h-8 object-contain"
               style={{
                 height: "20px",

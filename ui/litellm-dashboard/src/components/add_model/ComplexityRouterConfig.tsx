@@ -129,16 +129,20 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({ modelIn
         </Text>
         <ul style={{ marginTop: 8, marginBottom: 0, paddingLeft: 20, fontSize: 13, color: "rgba(0, 0, 0, 0.45)" }}>
           <li>
-            <strong>SIMPLE</strong>: Score &lt; 0.15
+            <strong>SIMPLE</strong>
+            {t("addModel.complexityRouterConfig.scoreRangeSimple")}
           </li>
           <li>
-            <strong>MEDIUM</strong>: Score 0.15 - 0.35
+            <strong>MEDIUM</strong>
+            {t("addModel.complexityRouterConfig.scoreRangeMedium")}
           </li>
           <li>
-            <strong>COMPLEX</strong>: Score 0.35 - 0.60
+            <strong>COMPLEX</strong>
+            {t("addModel.complexityRouterConfig.scoreRangeComplex")}
           </li>
           <li>
-            <strong>REASONING</strong>: Score &gt; 0.60 (or 2+ reasoning markers)
+            <strong>REASONING</strong>
+            {t("addModel.complexityRouterConfig.scoreRangeReasoning")}
           </li>
         </ul>
       </Card>

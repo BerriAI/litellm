@@ -333,7 +333,9 @@ function AssistantBubble({ message, isLastMessage, isStreaming, isTypingIndicato
         >
           {mainContent}
         </ReactMarkdown>
-        {stoppedSuffix && <span style={{ color: "#9ca3af", fontStyle: "italic" }}> [stopped]</span>}
+        {stoppedSuffix && (
+          <span style={{ color: "#9ca3af", fontStyle: "italic" }}> {t("chat.chatMessages.streamStopped")}</span>
+        )}
       </div>
 
       <CopyButton text={mainContent} />

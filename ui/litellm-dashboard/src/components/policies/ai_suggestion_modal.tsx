@@ -452,7 +452,9 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
                                 : "bg-amber-50 text-amber-600 border-amber-200"
                             }`}
                           >
-                            +{template.estimated_latency_ms <= 1 ? "<1" : template.estimated_latency_ms}ms latency
+                            {t("policies.aiSuggestionModal.msLatencyDisplay", {
+                              value: template.estimated_latency_ms <= 1 ? "<1" : template.estimated_latency_ms,
+                            })}
                           </span>
                         </Tooltip>
                       )}

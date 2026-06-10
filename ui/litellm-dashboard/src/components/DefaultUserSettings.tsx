@@ -276,10 +276,10 @@ const DefaultUserSettings: React.FC<DefaultUserSettingsProps> = ({
           className="mt-2"
         >
           <Option key="no-default-models" value="no-default-models">
-            No Default Models
+            {t("defaultUserSettings.noDefaultModels")}
           </Option>
           <Option key="all-proxy-models" value="all-proxy-models">
-            All Proxy Models
+            {t("defaultUserSettings.allProxyModels")}
           </Option>
           {availableModels.map((model: string) => (
             <Option key={model} value={model}>

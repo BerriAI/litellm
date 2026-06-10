@@ -198,7 +198,7 @@ function CreateToolsetModal({ open, onClose, onSave, accessToken, initialToolset
             rules={[{ required: true, message: t("mcpTools.mCPToolsetsTab.toolsetNameRequired") }]}
             className="flex-1 mb-0"
           >
-            <Input placeholder="e.g. github-linear-tools" />
+            <Input placeholder={t("mcpTools.mCPToolsetsTab.toolsetNamePlaceholder")} />
           </Form.Item>
           <Form.Item label={t("common.description")} name="description" className="flex-1 mb-0">
             <Input placeholder={t("mcpTools.mCPToolsetsTab.descriptionPlaceholder")} />

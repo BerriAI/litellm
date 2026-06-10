@@ -116,7 +116,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
               </Tag>
             </Flex>
             <Text type="secondary">
-              ID: <Text copyable>{project.project_id}</Text>
+              {t("projects.projectDetailsPage.id")} <Text copyable>{project.project_id}</Text>
             </Text>
           </div>
         </div>
@@ -255,7 +255,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
                       </Text>
                       <br />
                       <Text type="secondary" style={{ fontSize: 12 }}>
-                        ID:{" "}
+                        {t("projects.projectDetailsPage.id")}{" "}
                         <Text copyable style={{ fontSize: 12 }}>
                           {teamInfo.team_id}
                         </Text>

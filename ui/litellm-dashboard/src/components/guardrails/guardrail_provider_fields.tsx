@@ -193,8 +193,8 @@ const GuardrailProviderFields: React.FC<GuardrailProviderFieldsProps> = ({
             </Select>
           ) : field.type === "bool" || field.type === "boolean" ? (
             <Select placeholder={field.description}>
-              <Select.Option value={true}>True</Select.Option>
-              <Select.Option value={false}>False</Select.Option>
+              <Select.Option value={true}>{t("guardrails.guardrailProviderFields.trueLabel")}</Select.Option>
+              <Select.Option value={false}>{t("guardrails.guardrailProviderFields.falseLabel")}</Select.Option>
             </Select>
           ) : field.type === "percentage" && field.min != null && field.max != null ? (
             <Slider

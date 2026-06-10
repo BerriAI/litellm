@@ -119,7 +119,9 @@ export function EvaluationSettingsModal({
           <label className="block text-sm font-medium text-gray-700 mb-1.5">
             {t("guardrailsMonitor.evaluationSettingsModal.schemaLabel")}
           </label>
-          <p className="text-xs text-gray-400 mb-1">response_format: json_schema</p>
+          <p className="text-xs text-gray-400 mb-1">
+            {t("guardrailsMonitor.evaluationSettingsModal.responseFormatHint")}
+          </p>
           <Input.TextArea
             value={schema}
             onChange={(e) => setSchema(e.target.value)}

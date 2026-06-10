@@ -316,7 +316,15 @@
       "responseFieldsTooltipTitle": "Specify which response fields to check",
       "examples": "Examples:",
       "requestFieldsPlaceholder": "Type field name or use + buttons above (e.g., query, documents[*].text)",
-      "responseFieldsPlaceholder": "Type field name or use + buttons above (e.g., results[*].text)"
+      "responseFieldsPlaceholder": "Type field name or use + buttons above (e.g., results[*].text)",
+      "tooltipExampleQuery": "• query",
+      "tooltipExampleDocuments": "• documents[*].text",
+      "tooltipExampleMessages": "• messages[*].content",
+      "addQueryButton": "+ query",
+      "addDocumentsButton": "+ documents[*]",
+      "tooltipExampleResults": "• results[*].text",
+      "tooltipExampleChoices": "• choices[*].message.content",
+      "addResultsButton": "+ results[*]"
     },
     "passThroughSecuritySection": {
       "title": "Security",
@@ -556,7 +564,9 @@
     "notifications": {
       "fetchFailed": "Failed to fetch SSO settings",
       "updateFailed": "Failed to update settings: {{error}}"
-    }
+    },
+    "noDefaultModels": "No Default Models",
+    "allProxyModels": "All Proxy Models"
   },
   "guardrailSettingsView": {
     "noGuardrailsConfigured": "No guardrails configured",
@@ -1892,7 +1902,9 @@
       "loadFailed": "Failed to load provider parameters",
       "loadingTip": "Loading provider parameters...",
       "noFields": "No configuration fields available for this provider.",
-      "fieldRequired": "{{fieldKey}} is required"
+      "fieldRequired": "{{fieldKey}} is required",
+      "trueLabel": "True",
+      "falseLabel": "False"
     },
     "guardrailTable": {
       "colGuardrailId": "Guardrail ID",
@@ -3549,7 +3561,8 @@
       "howToolsetsWorkDesc1": "Create a toolset, assign it to a key via",
       "howToolsetsWorkPath": "API Keys → Edit Key → MCP Servers",
       "howToolsetsWorkDesc2": ", then point your MCP client at the toolset URL. The client only sees the tools you picked.",
-      "configLabel": "Claude Code / Cursor config"
+      "configLabel": "Claude Code / Cursor config",
+      "toolsetNamePlaceholder": "e.g. github-linear-tools"
     },
     "oAuthFormFields": {
       "leaveBlankToKeep": "leave blank to keep existing",
@@ -3786,7 +3799,8 @@
       "failedToLoadServers": "Failed to load MCP servers",
       "failedToLoadServersError": "Failed to load servers: {{error}}",
       "noServersFound": "No servers found.",
-      "addCustomServer": "Add a custom server"
+      "addCustomServer": "Add a custom server",
+      "mcpLogoAlt": "MCP Logo"
     },
     "mcpServerCostConfig": {
       "title": "Cost Configuration",
@@ -5031,7 +5045,8 @@
       "noTestableGuardrails": "No testable guardrails in selected templates.",
       "testSuggestions": "Test Suggestions",
       "useSelectedTemplates_one": "Use {{count}} Selected Template",
-      "useSelectedTemplates_other": "Use {{count}} Selected Templates"
+      "useSelectedTemplates_other": "Use {{count}} Selected Templates",
+      "msLatencyDisplay": "+{{value}}ms latency"
     },
     "attachmentTable": {
       "attachmentId": "Attachment ID",
@@ -5440,7 +5455,11 @@
       "examplesLabel": "Examples: {{examples}}",
       "selectModelPlaceholder": "Select model for {{label}} queries",
       "howClassificationWorksTitle": "How Classification Works",
-      "howClassificationWorksDesc": "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:"
+      "howClassificationWorksDesc": "The router scores each request across 7 dimensions: token count, code presence, reasoning markers, technical terms, simple indicators, multi-step patterns, and question complexity. The weighted score determines the tier:",
+      "scoreRangeSimple": ": Score < 0.15",
+      "scoreRangeMedium": ": Score 0.15 - 0.35",
+      "scoreRangeComplex": ": Score 0.35 - 0.60",
+      "scoreRangeReasoning": ": Score > 0.60 (or 2+ reasoning markers)"
     },
     "routerConfigBuilder": {
       "title": "Routes Configuration",
@@ -6980,7 +6999,8 @@
       "spendLabel": "Spend",
       "unlimited": "Unlimited",
       "membersLabel": "Members",
-      "noTeamAssigned": "No team assigned"
+      "noTeamAssigned": "No team assigned",
+      "id": "ID:"
     },
     "projectKeysSection": {
       "title": "Keys",
@@ -7066,7 +7086,8 @@
       "selectModel": "Select a model",
       "signInToSeeModels": "Sign in to see models",
       "noModelsAvailable": "No models available",
-      "runEvaluation": "Run Evaluation"
+      "runEvaluation": "Run Evaluation",
+      "responseFormatHint": "response_format: json_schema"
     },
     "guardrailConfig": {
       "current": "current",
@@ -7159,7 +7180,8 @@
       "thinking": "Thinking...",
       "toolCall": "Tool call",
       "arguments": "Arguments",
-      "result": "Result"
+      "result": "Result",
+      "streamStopped": "[stopped]"
     },
     "chatPage": {
       "goodMorning": "Good morning",
@@ -8586,7 +8608,11 @@
       "noEvents": "No events recorded",
       "noMessages": "No messages",
       "less": "less",
-      "more": "more"
+      "more": "more",
+      "grillSession": "grill session",
+      "metaState": "state",
+      "metaWorktree": "worktree",
+      "metaSession": "session"
     }
   },
   "pages": {

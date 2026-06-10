@@ -160,9 +160,9 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                             </div>
                             <div className="text-xs space-y-1">
                               <div>{t("commonComponents.passThroughGuardrailsSection.examples")}</div>
-                              <div>• query</div>
-                              <div>• documents[*].text</div>
-                              <div>• messages[*].content</div>
+                              <div>{t("commonComponents.passThroughGuardrailsSection.tooltipExampleQuery")}</div>
+                              <div>{t("commonComponents.passThroughGuardrailsSection.tooltipExampleDocuments")}</div>
+                              <div>{t("commonComponents.passThroughGuardrailsSection.tooltipExampleMessages")}</div>
                             </div>
                           </div>
                         }
@@ -180,7 +180,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                         className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
                         disabled={disabled}
                       >
-                        + query
+                        {t("commonComponents.passThroughGuardrailsSection.addQueryButton")}
                       </button>
                       <button
                         type="button"
@@ -191,7 +191,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                         className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
                         disabled={disabled}
                       >
-                        + documents[*]
+                        {t("commonComponents.passThroughGuardrailsSection.addDocumentsButton")}
                       </button>
                     </div>
                   </div>
@@ -217,8 +217,8 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                             </div>
                             <div className="text-xs space-y-1">
                               <div>{t("commonComponents.passThroughGuardrailsSection.examples")}</div>
-                              <div>• results[*].text</div>
-                              <div>• choices[*].message.content</div>
+                              <div>{t("commonComponents.passThroughGuardrailsSection.tooltipExampleResults")}</div>
+                              <div>{t("commonComponents.passThroughGuardrailsSection.tooltipExampleChoices")}</div>
                             </div>
                           </div>
                         }
@@ -236,7 +236,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                         className="text-xs px-2 py-1 bg-white border border-gray-300 rounded hover:bg-gray-50"
                         disabled={disabled}
                       >
-                        + results[*]
+                        {t("commonComponents.passThroughGuardrailsSection.addResultsButton")}
                       </button>
                     </div>
                   </div>

@@ -316,7 +316,15 @@
       "responseFieldsTooltipTitle": "指定要检查的响应字段",
       "examples": "示例：",
       "requestFieldsPlaceholder": "输入字段名或使用上方 + 按钮（如：query、documents[*].text）",
-      "responseFieldsPlaceholder": "输入字段名或使用上方 + 按钮（如：results[*].text）"
+      "responseFieldsPlaceholder": "输入字段名或使用上方 + 按钮（如：results[*].text）",
+      "tooltipExampleQuery": "• query",
+      "tooltipExampleDocuments": "• documents[*].text",
+      "tooltipExampleMessages": "• messages[*].content",
+      "addQueryButton": "+ query",
+      "addDocumentsButton": "+ documents[*]",
+      "tooltipExampleResults": "• results[*].text",
+      "tooltipExampleChoices": "• choices[*].message.content",
+      "addResultsButton": "+ results[*]"
     },
     "passThroughSecuritySection": {
       "title": "安全",
@@ -556,7 +564,9 @@
     "notifications": {
       "fetchFailed": "获取 SSO 设置失败",
       "updateFailed": "更新设置失败：{{error}}"
-    }
+    },
+    "noDefaultModels": "无默认模型",
+    "allProxyModels": "所有代理模型"
   },
   "guardrailSettingsView": {
     "noGuardrailsConfigured": "未配置护栏",
@@ -1892,7 +1902,9 @@
       "loadFailed": "加载提供商参数失败",
       "loadingTip": "正在加载提供商参数...",
       "noFields": "此提供商暂无可配置字段。",
-      "fieldRequired": "{{fieldKey}} 为必填项"
+      "fieldRequired": "{{fieldKey}} 为必填项",
+      "trueLabel": "是",
+      "falseLabel": "否"
     },
     "guardrailTable": {
       "colGuardrailId": "护栏 ID",
@@ -3549,7 +3561,8 @@
       "howToolsetsWorkDesc1": "创建工具集，通过",
       "howToolsetsWorkPath": "API 密钥 → 编辑密钥 → MCP 服务器",
       "howToolsetsWorkDesc2": "将其分配给密钥，然后将您的 MCP 客户端指向工具集 URL。客户端只会看到您选定的工具。",
-      "configLabel": "Claude Code / Cursor 配置"
+      "configLabel": "Claude Code / Cursor 配置",
+      "toolsetNamePlaceholder": "例如：github-linear-tools"
     },
     "oAuthFormFields": {
       "leaveBlankToKeep": "留空以保留现有值",
@@ -3786,7 +3799,8 @@
       "failedToLoadServers": "加载 MCP 服务器失败",
       "failedToLoadServersError": "加载服务器失败：{{error}}",
       "noServersFound": "未找到服务器。",
-      "addCustomServer": "添加自定义服务器"
+      "addCustomServer": "添加自定义服务器",
+      "mcpLogoAlt": "MCP Logo"
     },
     "mcpServerCostConfig": {
       "title": "费用配置",
@@ -5031,7 +5045,8 @@
       "noTestableGuardrails": "所选模板中没有可测试的护栏。",
       "testSuggestions": "测试建议",
       "useSelectedTemplates_one": "使用 {{count}} 个选中的模板",
-      "useSelectedTemplates_other": "使用 {{count}} 个选中的模板"
+      "useSelectedTemplates_other": "使用 {{count}} 个选中的模板",
+      "msLatencyDisplay": "+{{value}}ms 延迟"
     },
     "attachmentTable": {
       "attachmentId": "附件 ID",
@@ -5440,7 +5455,11 @@
       "examplesLabel": "示例：{{examples}}",
       "selectModelPlaceholder": "为{{label}}查询选择模型",
       "howClassificationWorksTitle": "分类原理",
-      "howClassificationWorksDesc": "路由器从 7 个维度对每个请求进行评分：Token 数量、代码存在性、推理标记、技术术语、简单指标、多步骤模式和问题复杂度。加权分数决定层级："
+      "howClassificationWorksDesc": "路由器从 7 个维度对每个请求进行评分：Token 数量、代码存在性、推理标记、技术术语、简单指标、多步骤模式和问题复杂度。加权分数决定层级：",
+      "scoreRangeSimple": "：评分 < 0.15",
+      "scoreRangeMedium": "：评分 0.15 - 0.35",
+      "scoreRangeComplex": "：评分 0.35 - 0.60",
+      "scoreRangeReasoning": "：评分 > 0.60（或含 2+ 个推理标记）"
     },
     "routerConfigBuilder": {
       "title": "路由配置",
@@ -6980,7 +6999,8 @@
       "spendLabel": "花费",
       "unlimited": "无限制",
       "membersLabel": "成员",
-      "noTeamAssigned": "未分配团队"
+      "noTeamAssigned": "未分配团队",
+      "id": "ID："
     },
     "projectKeysSection": {
       "title": "密钥",
@@ -7066,7 +7086,8 @@
       "selectModel": "选择模型",
       "signInToSeeModels": "请登录以查看可用模型",
       "noModelsAvailable": "暂无可用模型",
-      "runEvaluation": "运行评估"
+      "runEvaluation": "运行评估",
+      "responseFormatHint": "response_format: json_schema"
     },
     "guardrailConfig": {
       "current": "当前",
@@ -7159,7 +7180,8 @@
       "thinking": "思考中...",
       "toolCall": "工具调用",
       "arguments": "参数",
-      "result": "结果"
+      "result": "结果",
+      "streamStopped": "[已停止]"
     },
     "chatPage": {
       "goodMorning": "早上好",
@@ -8586,7 +8608,11 @@
       "noEvents": "暂无事件记录",
       "noMessages": "暂无消息",
       "less": "收起",
-      "more": "展开"
+      "more": "展开",
+      "grillSession": "grill session",
+      "metaState": "状态",
+      "metaWorktree": "工作树",
+      "metaSession": "会话"
     }
   },
   "pages": {
