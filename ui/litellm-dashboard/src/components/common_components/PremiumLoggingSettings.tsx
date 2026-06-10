@@ -1,5 +1,6 @@
 import React from "react";
 import { Text } from "@tremor/react";
+import { Trans, useTranslation } from "react-i18next";
 import LoggingSettings from "../team/LoggingSettings";
 
 interface PremiumLoggingSettingsProps {
@@ -17,6 +18,8 @@ export function PremiumLoggingSettings({
   disabledCallbacks = [],
   onDisabledCallbacksChange,
 }: PremiumLoggingSettingsProps) {
+  const { t } = useTranslation();
+
   if (!premiumUser) {
     return (
       <div>
@@ -30,12 +33,19 @@ export function PremiumLoggingSettings({
         </div>
         <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
           <Text className="text-sm text-yellow-800">
-            Setting Key/Team logging settings is a LiteLLM Enterprise feature. Global Logging Settings are available for
-            all free users. Get a trial key{" "}
-            <a href="https://www.litellm.ai/#pricing" target="_blank" rel="noopener noreferrer" className="underline">
-              here
-            </a>
-            .
+            <Trans
+              i18nKey="commonComponents.premiumLoggingSettings.enterpriseNotice"
+              components={{
+                pricingLink: (
+                  <a
+                    href="https://www.litellm.ai/#pricing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                  />
+                ),
+              }}
+            />
           </Text>
         </div>
       </div>

@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useImperativeHandle, forwardRef, useRef } from "react";
 import { TabPanel, TabPanels, TabGroup, TabList, Tab } from "@tremor/react";
+import { useTranslation } from "react-i18next";
 import { getRouterSettingsCall } from "../networking";
 import RouterSettingsForm, { RouterSettingsFormValue } from "../router_settings/RouterSettingsForm";
 import { Fallbacks } from "../Settings/RouterSettings/Fallbacks/AddFallbacks";
@@ -37,6 +38,7 @@ export interface RouterSettingsAccordionRef {
 
 const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSettingsAccordionProps>(
   ({ accessToken, value, onChange, modelData }, ref) => {
+    const { t } = useTranslation();
     const [formValue, setFormValue] = useState<RouterSettingsFormValue>({
       routerSettings: {},
       selectedStrategy: null,
@@ -347,8 +349,8 @@ const RouterSettingsAccordion = forwardRef<RouterSettingsAccordionRef, RouterSet
       <div className="w-full">
         <TabGroup className="w-full">
           <TabList variant="line" defaultValue="1" className="px-8 pt-4">
-            <Tab value="1">Loadbalancing</Tab>
-            <Tab value="2">Fallbacks</Tab>
+            <Tab value="1">{t("commonComponents.routerSettingsAccordion.loadbalancing")}</Tab>
+            <Tab value="2">{t("commonComponents.routerSettingsAccordion.fallbacks")}</Tab>
           </TabList>
           <TabPanels className="px-8 py-6">
             <TabPanel>

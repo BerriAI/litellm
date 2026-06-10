@@ -3,6 +3,8 @@ import { Form, Input, InputNumber, Select } from "antd";
 import { TextInput } from "@tremor/react";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Tooltip } from "antd";
+import { useTranslation } from "react-i18next";
+import { TFunction } from "i18next";
 import { getOpenAPISchema } from "../networking";
 import { formatLabel } from "@/utils/textUtils";
 
@@ -53,44 +55,42 @@ const validateJSON = (value: string): boolean => {
   }
 };
 
-const getFieldHelp = (key: string, property: SchemaProperty, type: string): string => {
-  // Default help text based on type
+const getFieldHelp = (key: string, property: SchemaProperty, type: string, t: TFunction): string => {
   const defaultHelp =
     {
-      string: "Text input",
-      number: "Numeric input",
-      integer: "Whole number input",
-      boolean: "True/False value",
-    }[type] || "Text input";
+      string: t("commonComponents.checkOpenapiSchema.helpText"),
+      number: t("commonComponents.checkOpenapiSchema.helpNumber"),
+      integer: t("commonComponents.checkOpenapiSchema.helpInteger"),
+      boolean: t("commonComponents.checkOpenapiSchema.helpBoolean"),
+    }[type] || t("commonComponents.checkOpenapiSchema.helpText");
 
-  // Specific field help text
   const specificHelp: { [key: string]: string } = {
-    max_budget: "Enter maximum budget in USD (e.g., 100.50)",
-    budget_duration: "Select a time period for budget reset",
-    tpm_limit: "Enter maximum tokens per minute (whole number)",
-    rpm_limit: "Enter maximum requests per minute (whole number)",
-    duration: "Enter duration (e.g., 30s, 24h, 7d)",
-    metadata: 'Enter JSON object with key-value pairs\nExample: {"team": "research", "project": "nlp"}',
-    config: 'Enter configuration as JSON object\nExample: {"setting": "value"}',
-    permissions: "Enter comma-separated permission strings",
-    enforced_params: 'Enter parameters as JSON object\nExample: {"param": "value"}',
-    blocked: "Enter true/false or specific block conditions",
-    aliases: 'Enter aliases as JSON object\nExample: {"alias1": "value1", "alias2": "value2"}',
-    models: "Select one or more model names",
-    key_alias: "Enter a unique identifier for this key",
-    tags: "Enter comma-separated tag strings",
+    max_budget: t("commonComponents.checkOpenapiSchema.helpMaxBudget"),
+    budget_duration: t("commonComponents.checkOpenapiSchema.helpBudgetDuration"),
+    tpm_limit: t("commonComponents.checkOpenapiSchema.helpTpmLimit"),
+    rpm_limit: t("commonComponents.checkOpenapiSchema.helpRpmLimit"),
+    duration: t("commonComponents.checkOpenapiSchema.helpDuration"),
+    metadata: t("commonComponents.checkOpenapiSchema.helpMetadata"),
+    config: t("commonComponents.checkOpenapiSchema.helpConfig"),
+    permissions: t("commonComponents.checkOpenapiSchema.helpPermissions"),
+    enforced_params: t("commonComponents.checkOpenapiSchema.helpEnforcedParams"),
+    blocked: t("commonComponents.checkOpenapiSchema.helpBlocked"),
+    aliases: t("commonComponents.checkOpenapiSchema.helpAliases"),
+    models: t("commonComponents.checkOpenapiSchema.helpModels"),
+    key_alias: t("commonComponents.checkOpenapiSchema.helpKeyAlias"),
+    tags: t("commonComponents.checkOpenapiSchema.helpTags"),
   };
 
-  // Get specific help text or use default based on type
   const helpText = specificHelp[key] || defaultHelp;
 
-  // Add format requirements for special cases
   if (isJSONField(key, property)) {
-    return `${helpText}\nMust be valid JSON format`;
+    return `${helpText}\n${t("commonComponents.checkOpenapiSchema.mustBeValidJson")}`;
   }
 
   if (property.enum) {
-    return `Select from available options\nAllowed values: ${property.enum.join(", ")}`;
+    return t("commonComponents.checkOpenapiSchema.selectFromOptions", {
+      values: property.enum.join(", "),
+    });
   }
 
   return helpText;
@@ -105,6 +105,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   customValidation = {},
   defaultValues = {},
 }) => {
+  const { t } = useTranslation();
   const [schemaProperties, setSchemaProperties] = useState<OpenAPISchema | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -130,7 +131,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
         form.setFieldsValue(defaultFormValues);
       } catch (error) {
         console.error("Schema fetch error:", error);
-        setError(error instanceof Error ? error.message : "Failed to fetch schema");
+        setError(error instanceof Error ? error.message : t("commonComponents.checkOpenapiSchema.fetchFailed"));
       }
     };
 
@@ -158,7 +159,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
 
     const rules = [];
     if (isRequired) {
-      rules.push({ required: true, message: `${label} is required` });
+      rules.push({ required: true, message: t("commonComponents.checkOpenapiSchema.fieldRequired", { label }) });
     }
     if (customValidation[key]) {
       rules.push({ validator: customValidation[key] });
@@ -167,7 +168,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
       rules.push({
         validator: async (_: any, value: string) => {
           if (value && !validateJSON(value)) {
-            throw new Error("Please enter valid JSON");
+            throw new Error(t("commonComponents.checkOpenapiSchema.invalidJson"));
           }
         },
       });
@@ -186,7 +187,13 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
 
     let inputComponent;
     if (isJSONField(key, property)) {
-      inputComponent = <Input.TextArea rows={4} placeholder="Enter as JSON" className="font-mono" />;
+      inputComponent = (
+        <Input.TextArea
+          rows={4}
+          placeholder={t("commonComponents.checkOpenapiSchema.enterAsJson")}
+          className="font-mono"
+        />
+      );
     } else if (property.enum) {
       inputComponent = (
         <Select>
@@ -200,7 +207,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
     } else if (type === "number" || type === "integer") {
       inputComponent = <InputNumber style={{ width: "100%" }} precision={type === "integer" ? 0 : undefined} />;
     } else if (key === "duration") {
-      inputComponent = <TextInput placeholder="eg: 30s, 30h, 30d" />;
+      inputComponent = <TextInput placeholder={t("commonComponents.checkOpenapiSchema.durationPlaceholder")} />;
     } else {
       inputComponent = <TextInput placeholder={tooltip || ""} />;
     }
@@ -213,7 +220,7 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
         className="mt-8"
         rules={rules}
         initialValue={defaultValues[key]}
-        help={<div className="text-xs text-gray-500">{getFieldHelp(key, property, type)}</div>}
+        help={<div className="text-xs text-gray-500">{getFieldHelp(key, property, type, t)}</div>}
       >
         {inputComponent}
       </Form.Item>
@@ -221,7 +228,11 @@ const SchemaFormFields: React.FC<SchemaFormFieldsProps> = ({
   };
 
   if (error) {
-    return <div className="text-red-500">Error: {error}</div>;
+    return (
+      <div className="text-red-500">
+        {t("commonComponents.checkOpenapiSchema.errorPrefix")} {error}
+      </div>
+    );
   }
 
   if (!schemaProperties?.properties) {

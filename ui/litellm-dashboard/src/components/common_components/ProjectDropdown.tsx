@@ -1,6 +1,7 @@
 import React from "react";
 import { Select, Spin } from "antd";
 import { LoadingOutlined } from "@ant-design/icons";
+import { useTranslation } from "react-i18next";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 
 interface ProjectDropdownProps {
@@ -14,12 +15,13 @@ interface ProjectDropdownProps {
 }
 
 const ProjectDropdown: React.FC<ProjectDropdownProps> = ({ projects, value, onChange, disabled, loading, teamId }) => {
+  const { t } = useTranslation();
   const filtered = teamId ? projects?.filter((p) => p.team_id === teamId) : projects;
 
   return (
     <Select
       showSearch
-      placeholder="Search or select a project"
+      placeholder={t("commonComponents.projectDropdown.placeholder")}
       value={value}
       onChange={onChange}
       disabled={disabled}

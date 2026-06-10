@@ -278,6 +278,93 @@
       "labelText": "选择模型",
       "enterCustomModel": "输入自定义模型",
       "customModelPlaceholder": "输入自定义模型名称"
+    },
+    "organizationDropdown": {
+      "placeholder": "所有组织"
+    },
+    "passThroughGuardrailsSection": {
+      "title": "护栏",
+      "subtitle": "配置护栏以对请求和响应执行策略。护栏对透传端点为按需启用。",
+      "fieldLevelTargeting": "字段级定向",
+      "fieldLevelDesc": "可选择性指定要检查的字段。若留空，整个请求/响应将发送给护栏。",
+      "commonExamples": "常见示例：",
+      "singleField": "单个字段",
+      "allTextInDocuments": "文档数组中的所有文本",
+      "allMessageContents": "所有消息内容",
+      "selectGuardrails": "选择护栏",
+      "selectGuardrailsTooltip": "选择应在此端点运行的护栏。组织/团队/密钥级别的护栏也将被包含。",
+      "fieldTargetingOptional": "字段定向（可选）",
+      "leaveEmptyTip": "提示：留空则检查整个载荷",
+      "requestFields": "请求字段 (pre_call)",
+      "requestFieldsTooltipTitle": "指定要检查的请求字段",
+      "responseFields": "响应字段 (post_call)",
+      "responseFieldsTooltipTitle": "指定要检查的响应字段",
+      "examples": "示例：",
+      "requestFieldsPlaceholder": "输入字段名或使用上方 + 按钮（如：query、documents[*].text）",
+      "responseFieldsPlaceholder": "输入字段名或使用上方 + 按钮（如：results[*].text）"
+    },
+    "passThroughSecuritySection": {
+      "title": "安全",
+      "subtitle": "启用后，发往此端点的请求将需要有效的 LiteLLM 虚拟密钥",
+      "authenticationPremium": "认证（高级版）",
+      "enterpriseNotice": "为透传端点设置认证是 LiteLLM 企业版功能。获取试用密钥请访问<pricingLink>此处</pricingLink>。"
+    },
+    "premiumLoggingSettings": {
+      "enterpriseNotice": "设置密钥/团队日志配置是 LiteLLM 企业版功能。所有免费用户均可使用全局日志设置。获取试用密钥请访问<pricingLink>此处</pricingLink>。"
+    },
+    "projectDropdown": {
+      "placeholder": "搜索或选择项目"
+    },
+    "rateLimitTypeFormItem": {
+      "label": "{{limitTypeUpper}} 速率限制类型",
+      "tooltip": "选择 guaranteed_throughput 可防止在密钥属于具有特定 {{limitTypeUpper}} 限制的团队时过度分配 {{limitTypeUpper}} 限额。",
+      "selectPlaceholder": "选择速率限制类型",
+      "bestEffortThroughput": "尽力吞吐",
+      "bestEffortDesc": "尽力吞吐 — 过度分配 {{limitTypeLower}} 时不报错（运行时检查团队/密钥限制）。",
+      "guaranteedThroughput": "保障吞吐",
+      "guaranteedThroughputDesc": "保障吞吐 — 过度分配 {{limitTypeLower}} 时报错（同时检查模型专属限制）",
+      "dynamic": "动态",
+      "dynamicDesc": "若密钥设置了 {{limitTypeUpper}}（例如 2 {{limitTypeUpper}}）且无 429 错误，则当被调用的模型未报错时可动态超出限制。"
+    },
+    "routerSettingsAccordion": {
+      "loadbalancing": "负载均衡",
+      "fallbacks": "回退"
+    },
+    "tableHeaderSortDropdown": {
+      "ascending": "升序",
+      "descending": "降序"
+    },
+    "checkOpenapiSchema": {
+      "helpText": "文本输入",
+      "helpNumber": "数值输入",
+      "helpInteger": "整数输入",
+      "helpBoolean": "True/False 值",
+      "helpMaxBudget": "输入最大预算（美元，例如：100.50）",
+      "helpBudgetDuration": "选择预算重置的时间周期",
+      "helpTpmLimit": "输入每分钟最大 Token 数（整数）",
+      "helpRpmLimit": "输入每分钟最大请求数（整数）",
+      "helpDuration": "输入时长（例如：30s、24h、7d）",
+      "helpMetadata": "输入键值对 JSON 对象\n示例：{\"team\": \"research\", \"project\": \"nlp\"}",
+      "helpConfig": "以 JSON 对象输入配置\n示例：{\"setting\": \"value\"}",
+      "helpPermissions": "输入逗号分隔的权限字符串",
+      "helpEnforcedParams": "以 JSON 对象输入参数\n示例：{\"param\": \"value\"}",
+      "helpBlocked": "输入 true/false 或具体的屏蔽条件",
+      "helpAliases": "以 JSON 对象输入别名\n示例：{\"alias1\": \"value1\", \"alias2\": \"value2\"}",
+      "helpModels": "选择一个或多个模型名称",
+      "helpKeyAlias": "为此密钥输入唯一标识符",
+      "helpTags": "输入逗号分隔的标签字符串",
+      "mustBeValidJson": "必须为有效的 JSON 格式",
+      "selectFromOptions": "从可用选项中选择\n允许的值：{{values}}",
+      "fieldRequired": "{{label}} 为必填项",
+      "invalidJson": "请输入有效的 JSON",
+      "enterAsJson": "以 JSON 格式输入",
+      "durationPlaceholder": "例如：30s、30h、30d",
+      "fetchFailed": "获取 schema 失败",
+      "errorPrefix": "错误："
+    },
+    "teamDropdown": {
+      "placeholder": "搜索或选择团队",
+      "notFound": "未找到团队"
     }
   },
   "common": {

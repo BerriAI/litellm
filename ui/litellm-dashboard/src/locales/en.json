@@ -278,6 +278,93 @@
       "labelText": "Select Model",
       "enterCustomModel": "Enter custom model",
       "customModelPlaceholder": "Enter custom model name"
+    },
+    "organizationDropdown": {
+      "placeholder": "All Organizations"
+    },
+    "passThroughGuardrailsSection": {
+      "title": "Guardrails",
+      "subtitle": "Configure guardrails to enforce policies on requests and responses. Guardrails are opt-in for passthrough endpoints.",
+      "fieldLevelTargeting": "Field-Level Targeting",
+      "fieldLevelDesc": "Optionally specify which fields to check. If left empty, the entire request/response is sent to the guardrail.",
+      "commonExamples": "Common Examples:",
+      "singleField": "Single field",
+      "allTextInDocuments": "All text in documents array",
+      "allMessageContents": "All message contents",
+      "selectGuardrails": "Select Guardrails",
+      "selectGuardrailsTooltip": "Choose which guardrails should run on this endpoint. Org/team/key level guardrails will also be included.",
+      "fieldTargetingOptional": "Field Targeting (Optional)",
+      "leaveEmptyTip": "Tip: Leave empty to check entire payload",
+      "requestFields": "Request Fields (pre_call)",
+      "requestFieldsTooltipTitle": "Specify which request fields to check",
+      "responseFields": "Response Fields (post_call)",
+      "responseFieldsTooltipTitle": "Specify which response fields to check",
+      "examples": "Examples:",
+      "requestFieldsPlaceholder": "Type field name or use + buttons above (e.g., query, documents[*].text)",
+      "responseFieldsPlaceholder": "Type field name or use + buttons above (e.g., results[*].text)"
+    },
+    "passThroughSecuritySection": {
+      "title": "Security",
+      "subtitle": "When enabled, requests to this endpoint will require a valid LiteLLM Virtual Key",
+      "authenticationPremium": "Authentication (Premium)",
+      "enterpriseNotice": "Setting authentication for pass-through endpoints is a LiteLLM Enterprise feature. Get a trial key <pricingLink>here</pricingLink>."
+    },
+    "premiumLoggingSettings": {
+      "enterpriseNotice": "Setting Key/Team logging settings is a LiteLLM Enterprise feature. Global Logging Settings are available for all free users. Get a trial key <pricingLink>here</pricingLink>."
+    },
+    "projectDropdown": {
+      "placeholder": "Search or select a project"
+    },
+    "rateLimitTypeFormItem": {
+      "label": "{{limitTypeUpper}} Rate Limit Type",
+      "tooltip": "Select 'guaranteed_throughput' to prevent overallocating {{limitTypeUpper}} limit when the key belongs to a Team with specific {{limitTypeUpper}} limits.",
+      "selectPlaceholder": "Select rate limit type",
+      "bestEffortThroughput": "Best effort throughput",
+      "bestEffortDesc": "Best effort throughput - no error if we're overallocating {{limitTypeLower}} (Team/Key Limits checked at runtime).",
+      "guaranteedThroughput": "Guaranteed throughput",
+      "guaranteedThroughputDesc": "Guaranteed throughput - raise an error if we're overallocating {{limitTypeLower}} (also checks model-specific limits)",
+      "dynamic": "Dynamic",
+      "dynamicDesc": "If the key has a set {{limitTypeUpper}} (e.g. 2 {{limitTypeUpper}}) and there are no 429 errors, it can dynamically exceed the limit when the model being called is not erroring."
+    },
+    "routerSettingsAccordion": {
+      "loadbalancing": "Loadbalancing",
+      "fallbacks": "Fallbacks"
+    },
+    "tableHeaderSortDropdown": {
+      "ascending": "Ascending",
+      "descending": "Descending"
+    },
+    "checkOpenapiSchema": {
+      "helpText": "Text input",
+      "helpNumber": "Numeric input",
+      "helpInteger": "Whole number input",
+      "helpBoolean": "True/False value",
+      "helpMaxBudget": "Enter maximum budget in USD (e.g., 100.50)",
+      "helpBudgetDuration": "Select a time period for budget reset",
+      "helpTpmLimit": "Enter maximum tokens per minute (whole number)",
+      "helpRpmLimit": "Enter maximum requests per minute (whole number)",
+      "helpDuration": "Enter duration (e.g., 30s, 24h, 7d)",
+      "helpMetadata": "Enter JSON object with key-value pairs\nExample: {\"team\": \"research\", \"project\": \"nlp\"}",
+      "helpConfig": "Enter configuration as JSON object\nExample: {\"setting\": \"value\"}",
+      "helpPermissions": "Enter comma-separated permission strings",
+      "helpEnforcedParams": "Enter parameters as JSON object\nExample: {\"param\": \"value\"}",
+      "helpBlocked": "Enter true/false or specific block conditions",
+      "helpAliases": "Enter aliases as JSON object\nExample: {\"alias1\": \"value1\", \"alias2\": \"value2\"}",
+      "helpModels": "Select one or more model names",
+      "helpKeyAlias": "Enter a unique identifier for this key",
+      "helpTags": "Enter comma-separated tag strings",
+      "mustBeValidJson": "Must be valid JSON format",
+      "selectFromOptions": "Select from available options\nAllowed values: {{values}}",
+      "fieldRequired": "{{label}} is required",
+      "invalidJson": "Please enter valid JSON",
+      "enterAsJson": "Enter as JSON",
+      "durationPlaceholder": "eg: 30s, 30h, 30d",
+      "fetchFailed": "Failed to fetch schema",
+      "errorPrefix": "Error:"
+    },
+    "teamDropdown": {
+      "placeholder": "Search or select a team",
+      "notFound": "No teams found"
     }
   },
   "common": {
