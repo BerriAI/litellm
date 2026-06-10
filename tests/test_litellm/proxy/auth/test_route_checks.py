@@ -460,6 +460,29 @@ def test_mcp_inference_routes_classified_as_llm_api(route):
     assert RouteChecks.is_management_route(route=route) is False
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/realtime/client_secrets",
+        "/v1/realtime/client_secrets",
+        "/openai/v1/realtime/client_secrets",
+        "/realtime/calls",
+        "/v1/realtime/calls",
+        "/openai/v1/realtime/calls",
+    ],
+)
+def test_realtime_webrtc_http_routes_classified_as_llm_api(route):
+    """GA Realtime WebRTC HTTP routes must be classified as LLM API routes so
+    non-admin virtual keys can call them instead of hitting the admin-only
+    401 branch in non_proxy_admin_allowed_routes_check.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/29923
+    """
+
+    assert RouteChecks.is_llm_api_route(route=route) is True
+    assert RouteChecks.is_management_route(route=route) is False
+
+
 def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
     """Test that virtual key is denied when route is not in the allowed LiteLLMRoutes group"""
 
