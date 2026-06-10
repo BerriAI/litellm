@@ -382,6 +382,41 @@ class TestGpt5MaxCompletionTokens:
         assert _model_uses_max_completion_tokens("cohere.command-latest") is False
         assert _model_uses_max_completion_tokens("") is False
 
+    def test_helper_covers_openai_models_absent_from_catalog(self):
+        """OCI keeps adding OpenAI models (gpt-4.1, gpt-5.1..5.5, o-series)
+        faster than the litellm catalog tracks them. The vendor-prefix rule
+        must route them to maxCompletionTokens even with no catalog entry,
+        since OpenAI accepts max_completion_tokens on every chat model while
+        the reasoning families hard-reject max_tokens."""
+        import litellm
+        from litellm.llms.oci.chat.transformation import (
+            _model_uses_max_completion_tokens,
+        )
+
+        for name in (
+            "openai.gpt-5.2",
+            "openai.gpt-4.1",
+            "openai.o3",
+            "oci/openai.gpt-5.1-codex",
+        ):
+            assert f"oci/{name.removeprefix('oci/')}" not in litellm.model_cost
+            assert _model_uses_max_completion_tokens(name) is True
+
+        assert _model_uses_max_completion_tokens("openai.gpt-oss-20b") is False
+
+    def test_default_injection_uses_max_completion_tokens_for_uncataloged_gpt(self):
+        """Regression: with the injected default maxTokens, a GPT model absent
+        from the catalog got "maxTokens" on every request and OCI returned 400
+        ("Use 'max_completion_tokens' instead") even when the caller never set
+        max_tokens."""
+        from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
+        from litellm.llms.oci.chat.transformation import OCIChatConfig, OCIVendors
+
+        cfg = OCIChatConfig()
+        out = cfg._get_optional_params(OCIVendors.GENERIC, {}, model="openai.gpt-5.2")
+        assert out.get("maxCompletionTokens") == DEFAULT_OCI_CHAT_MAX_TOKENS
+        assert "maxTokens" not in out
+
     def test_gpt5_routes_max_tokens_to_max_completion_tokens(
         self, _register_oci_gpt5_in_catalog
     ):
