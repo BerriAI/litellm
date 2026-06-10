@@ -7417,7 +7417,7 @@
       "resetBudgetLabel": "Reset Budget",
       "resetBudgetTooltip": "How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours",
       "tpmRpmNotSupported": "TPM/RPM limits for tags are not currently supported. If you need this feature, please <githubLink>create a GitHub issue</githubLink>.",
-      "createTagButton": "+ Create New Tag"
+      "createTagButton": "Create Tag"
     },
     "index": {
       "pageTitle": "Tag Management",

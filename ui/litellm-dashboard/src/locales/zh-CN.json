@@ -7417,7 +7417,7 @@
       "resetBudgetLabel": "重置预算",
       "resetBudgetTooltip": "预算重置频率。例如，设置为「每天」将每 24 小时重置一次预算",
       "tpmRpmNotSupported": "标签的 TPM/RPM 限制暂不支持。如需此功能，请 <githubLink>创建 GitHub Issue</githubLink>。",
-      "createTagButton": "+ 创建新标签"
+      "createTagButton": "创建标签"
     },
     "index": {
       "pageTitle": "标签管理",
