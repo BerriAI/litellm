@@ -83,6 +83,27 @@ class TestBedrockMantleResponsesURL:
         url = cfg.get_complete_url(api_base=None, litellm_params={})
         assert url == "https://bedrock-mantle.us-west-2.api.aws/openai/v1/responses"
 
+    def test_url_region_from_aws_region_name_litellm_params(self, monkeypatch):
+        monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
+        monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)
+        monkeypatch.delenv("AWS_REGION", raising=False)
+        monkeypatch.setenv("AWS_REGION", "us-west-2")
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base=None,
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
+    def test_url_aws_region_name_overrides_env_region(self, monkeypatch):
+        monkeypatch.setenv("BEDROCK_MANTLE_REGION", "us-west-2")
+        cfg = BedrockMantleResponsesAPIConfig()
+        url = cfg.get_complete_url(
+            api_base=None,
+            litellm_params={"aws_region_name": "us-east-2"},
+        )
+        assert url == "https://bedrock-mantle.us-east-2.api.aws/openai/v1/responses"
+
     def test_url_region_default_us_east_1(self, monkeypatch):
         monkeypatch.delenv("BEDROCK_MANTLE_REGION", raising=False)
         monkeypatch.delenv("BEDROCK_MANTLE_API_BASE", raising=False)

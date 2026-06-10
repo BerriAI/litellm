@@ -34,10 +34,14 @@ class BedrockMantleChatConfig(OpenAILikeChatConfig):
         return super().get_config()
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        aws_region_name: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         region = (
             get_secret_str("BEDROCK_MANTLE_REGION")
+            or aws_region_name
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
