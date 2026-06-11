@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .highflame import HighflameGuardrail
@@ -10,6 +11,16 @@ if TYPE_CHECKING:
 
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"):
     import litellm
+
+    # `javelin` is a deprecated alias of `highflame` — Javelin was renamed to
+    # Highflame. Existing `guardrail: javelin` configs keep working (routed to the
+    # Highflame guardrail) but should migrate.
+    if str(getattr(litellm_params, "guardrail", "") or "").lower() == "javelin":
+        verbose_proxy_logger.warning(
+            "The 'javelin' guardrail is deprecated and now routes to 'highflame'. "
+            "Update your config to `guardrail: highflame` and set `api_base` to "
+            "https://api.highflame.ai. See https://docs.highflame.ai"
+        )
 
     _highflame_callback = HighflameGuardrail(
         api_base=litellm_params.api_base,
@@ -30,9 +41,13 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
 
 guardrail_initializer_registry = {
     SupportedGuardrailIntegrations.HIGHFLAME.value: initialize_guardrail,
+    # Deprecated alias — keeps existing `guardrail: javelin` deployments working.
+    SupportedGuardrailIntegrations.JAVELIN.value: initialize_guardrail,
 }
 
 
 guardrail_class_registry = {
     SupportedGuardrailIntegrations.HIGHFLAME.value: HighflameGuardrail,
+    # Deprecated alias — keeps existing `guardrail: javelin` deployments working.
+    SupportedGuardrailIntegrations.JAVELIN.value: HighflameGuardrail,
 }

@@ -82,6 +82,9 @@ class SupportedGuardrailIntegrations(Enum):
     TOOL_PERMISSION = "tool_permission"
     ZSCALER_AI_GUARD = "zscaler_ai_guard"
     HIGHFLAME = "highflame"
+    JAVELIN = (
+        "javelin"  # deprecated alias of HIGHFLAME (Javelin was renamed to Highflame)
+    )
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
@@ -544,6 +547,29 @@ class HighflameGuardrailConfigModel(BaseModel):
     )
 
 
+class JavelinGuardrailConfigModel(BaseModel):
+    """[DEPRECATED] Kept so existing ``guardrail: javelin`` configs still parse.
+    Javelin was renamed to Highflame; the ``javelin`` guardrail now routes to the
+    Highflame guardrail (with a deprecation warning). Migrate to
+    ``guardrail: highflame``."""
+
+    guard_name: Optional[str] = Field(
+        default=None, description="[Deprecated] Name of the Javelin guard to use"
+    )
+    api_version: Optional[str] = Field(
+        default="v1", description="[Deprecated] API version for the Javelin service"
+    )
+    metadata: Optional[Dict] = Field(
+        default=None, description="Additional metadata to send with requests"
+    )
+    application: Optional[str] = Field(
+        default=None, description="Application name for policy-scoped guardrails"
+    )
+    config: Optional[Dict] = Field(
+        default=None, description="[Deprecated] Additional configuration"
+    )
+
+
 class ContentFilterAction(str, Enum):
     """Action to take when content filter detects a match"""
 
@@ -791,6 +817,7 @@ class LitellmParams(
     ZscalerAIGuardConfigModel,
     AktoConfigModel,
     HighflameGuardrailConfigModel,
+    JavelinGuardrailConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
