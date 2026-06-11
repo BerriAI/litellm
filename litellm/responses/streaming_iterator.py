@@ -67,10 +67,12 @@ class BaseResponsesAPIStreamingIterator:
         custom_llm_provider: Optional[str] = None,
         request_data: Optional[Dict[str, Any]] = None,
         call_type: Optional[str] = None,
+        log_completed_response: bool = True,
     ):
         self.response = response
         self.model = model
         self.logging_obj = logging_obj
+        self.log_completed_response = log_completed_response
         self.finished = False
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[Any] = None
@@ -301,7 +303,7 @@ class BaseResponsesAPIStreamingIterator:
             raise
 
     def _log_completed_response(self, *, is_async: bool) -> None:
-        if self._completed_response_logged:
+        if not self.log_completed_response or self._completed_response_logged:
             return
         self._completed_response_logged = True
 
@@ -659,6 +661,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         custom_llm_provider: Optional[str] = None,
         request_data: Optional[Dict[str, Any]] = None,
         call_type: Optional[str] = None,
+        log_completed_response: bool = True,
     ):
         super().__init__(
             response,
@@ -669,6 +672,7 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             custom_llm_provider,
             request_data,
             call_type,
+            log_completed_response,
         )
         self.stream_iterator = SSEDecoder().aiter_bytes(response.aiter_bytes())
 
@@ -733,6 +737,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         custom_llm_provider: Optional[str] = None,
         request_data: Optional[Dict[str, Any]] = None,
         call_type: Optional[str] = None,
+        log_completed_response: bool = True,
     ):
         super().__init__(
             response,
@@ -743,6 +748,7 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
             custom_llm_provider,
             request_data,
             call_type,
+            log_completed_response,
         )
         self.stream_iterator = SSEDecoder().iter_bytes(response.iter_bytes())
 

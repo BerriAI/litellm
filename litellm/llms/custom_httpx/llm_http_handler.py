@@ -2397,6 +2397,7 @@ class BaseLLMHTTPHandler:
                     custom_llm_provider=custom_llm_provider,
                     request_data=request_context,
                     call_type=CallTypes.responses.value,
+                    log_completed_response=is_stream_request,
                 )
                 if is_stream_request:
                     return response_iterator
@@ -2578,6 +2579,7 @@ class BaseLLMHTTPHandler:
                     custom_llm_provider=custom_llm_provider,
                     request_data=request_context,
                     call_type=CallTypes.responses.value,
+                    log_completed_response=is_stream_request,
                 )
                 if is_stream_request:
                     return response_iterator

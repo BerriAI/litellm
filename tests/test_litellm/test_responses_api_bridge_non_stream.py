@@ -297,6 +297,7 @@ def test_response_handler_forced_stream_requires_completed_response():
     mock_stream = MagicMock()
     mock_stream.__iter__.return_value = iter([])
     mock_stream._get_completed_response_object.return_value = None
+    mock_stream_factory = Mock(return_value=mock_stream)
     mock_client = Mock(spec=HTTPHandler)
     mock_client.post.return_value = Mock()
 
@@ -305,7 +306,7 @@ def test_response_handler_forced_stream_requires_completed_response():
             monkeypatch.setattr(
                 "litellm.llms.custom_httpx.llm_http_handler"
                 ".SyncResponsesAPIStreamingIterator",
-                Mock(return_value=mock_stream),
+                mock_stream_factory,
             )
             BaseLLMHTTPHandler().response_api_handler(
                 model="gpt-5.5",
@@ -321,6 +322,7 @@ def test_response_handler_forced_stream_requires_completed_response():
 
     assert provider_config.sign_request.call_args.kwargs["stream"] is True
     assert mock_client.post.call_args.kwargs["stream"] is True
+    assert mock_stream_factory.call_args.kwargs["log_completed_response"] is False
 
 
 @pytest.mark.asyncio
@@ -334,6 +336,7 @@ async def test_async_response_handler_forced_stream_requires_completed_response(
     mock_stream = MagicMock()
     mock_stream.__aiter__.return_value = []
     mock_stream._get_completed_response_object.return_value = None
+    mock_stream_factory = Mock(return_value=mock_stream)
     mock_client = Mock(spec=AsyncHTTPHandler)
     mock_client.post = AsyncMock(return_value=Mock())
 
@@ -342,7 +345,7 @@ async def test_async_response_handler_forced_stream_requires_completed_response(
             monkeypatch.setattr(
                 "litellm.llms.custom_httpx.llm_http_handler"
                 ".ResponsesAPIStreamingIterator",
-                Mock(return_value=mock_stream),
+                mock_stream_factory,
             )
             await BaseLLMHTTPHandler().async_response_api_handler(
                 model="gpt-5.5",
@@ -358,6 +361,7 @@ async def test_async_response_handler_forced_stream_requires_completed_response(
 
     assert provider_config.sign_request.call_args.kwargs["stream"] is True
     assert mock_client.post.await_args.kwargs["stream"] is True
+    assert mock_stream_factory.call_args.kwargs["log_completed_response"] is False
 
 
 def test_streaming_iterator_logs_inner_completed_response_object():
