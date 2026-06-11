@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import datetime
 from typing import AsyncGenerator
@@ -21,6 +22,7 @@ from litellm.proxy.common_request_processing import (
     _is_azure_model_router_request,
     _override_openai_response_model,
     _parse_event_data_for_error,
+    _UpstreamClosingStreamingResponse,
     create_response,
 )
 from litellm.proxy.dd_span_tagger import DDSpanTagger
@@ -2298,6 +2300,147 @@ class TestHandleLLMApiExceptionDictDetail:
         exc = ValueError("Something broke")
         proxy_exc = await self._invoke(exc)
         assert proxy_exc.code == "500"
+
+
+class TestStreamCloseOnDisconnect:
+    """
+    Coverage for closing the upstream LLM stream when the client disconnects
+    mid-stream. Starlette abandons the response body iterator without calling
+    aclose(), so without these hooks the proxy->backend connection stays open
+    and the backend (e.g. vLLM) keeps generating into a dead pipe.
+    """
+
+    async def test_response_closes_body_iterator_when_task_cancelled(self):
+        """Cancellation landing in send() leaves the generator suspended at a
+        yield; only the response-level finally can close it."""
+        closed = asyncio.Event()
+
+        async def body():
+            try:
+                while True:
+                    yield "data: x\n\n"
+            finally:
+                closed.set()
+
+        response = _UpstreamClosingStreamingResponse(
+            body(), media_type="text/event-stream"
+        )
+
+        async def receive():
+            await asyncio.Event().wait()
+
+        async def send(message):
+            if message["type"] == "http.response.body":
+                await asyncio.Event().wait()
+
+        task = asyncio.create_task(response({"type": "http"}, receive, send))
+        await asyncio.sleep(0.05)
+        assert not closed.is_set()
+
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert closed.is_set()
+
+    async def test_response_closes_body_iterator_on_http_disconnect(self):
+        closed = asyncio.Event()
+        disconnected = asyncio.Event()
+        body_sends = 0
+
+        async def body():
+            try:
+                for i in range(1000):
+                    yield f"data: {i}\n\n"
+            finally:
+                closed.set()
+
+        response = _UpstreamClosingStreamingResponse(
+            body(), media_type="text/event-stream"
+        )
+
+        async def receive():
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            nonlocal body_sends
+            if message["type"] == "http.response.body":
+                body_sends += 1
+                if body_sends == 3:
+                    disconnected.set()
+                await asyncio.sleep(0.05)
+
+        await response({"type": "http"}, receive, send)
+
+        assert closed.is_set()
+        assert body_sends < 1000
+
+    async def test_create_response_closes_wrapped_generator_on_cancellation(self):
+        """End to end through create_response: the upstream-facing generator
+        must be closed even when the body iterator was never started (client
+        gone before the first chunk could be sent)."""
+        inner_closed = asyncio.Event()
+
+        async def wrapped():
+            try:
+                while True:
+                    yield "data: a\n\n"
+            finally:
+                inner_closed.set()
+
+        response = await create_response(
+            generator=wrapped(), media_type="text/event-stream", headers={}
+        )
+
+        async def receive():
+            await asyncio.Event().wait()
+
+        async def send(message):
+            await asyncio.Event().wait()
+
+        task = asyncio.create_task(response({"type": "http"}, receive, send))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert inner_closed.is_set()
+
+    async def test_async_streaming_data_generator_closes_upstream_on_early_close(
+        self,
+    ):
+        class FakeUpstream:
+            def __init__(self):
+                self.aclosed = False
+
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                return {"type": "chunk"}
+
+            async def aclose(self):
+                self.aclosed = True
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        upstream = FakeUpstream()
+        gen = ProxyBaseLLMRequestProcessing.async_streaming_data_generator(
+            response=upstream,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            request_data={"model": "mock-model"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+            serialize_chunk=lambda c: "data: x\n\n",
+            serialize_error=lambda e: "data: error\n\n",
+        )
+
+        await gen.__anext__()
+        await gen.__anext__()
+        assert not upstream.aclosed
+
+        await gen.aclose()
+
+        assert upstream.aclosed
 
 
 class TestAsyncStreamingDataGeneratorFastPath:
