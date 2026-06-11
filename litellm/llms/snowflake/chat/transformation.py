@@ -145,15 +145,15 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
     def _extract_system_and_messages(
         self, messages: List[AllMessageValues]
-    ) -> tuple[Optional[Union[str, List[Dict]]], List[Dict]]:
+    ) -> tuple[Optional[str], List[Dict]]:
         """
         Split messages into system prompt and conversation turns for Anthropic format.
 
-        - system messages → top-level system param
+        - system messages → collected and joined (preserves guardrail prompts)
         - assistant messages with tool_calls → tool_use content blocks
         - tool role messages → user role with tool_result content blocks
         """
-        system: Optional[Union[str, List[Dict]]] = None
+        system_parts: List[str] = []
         conversation: List[Dict] = []
 
         for msg in messages:
@@ -165,7 +165,16 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 content = getattr(msg, "content", "")
 
             if role == "system":
-                system = content
+                if isinstance(content, str) and content:
+                    system_parts.append(content)
+                elif isinstance(content, list):
+                    system_parts.append(
+                        "\n".join(
+                            b.get("text", "")
+                            for b in content
+                            if b.get("type") == "text"
+                        )
+                    )
             elif role == "assistant":
                 tool_calls = (
                     msg.get("tool_calls")
@@ -242,6 +251,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             else:
                 conversation.append({"role": role, "content": content})
 
+        system: Optional[str] = "\n\n".join(system_parts) if system_parts else None
         return system, conversation
 
     def transform_request(
