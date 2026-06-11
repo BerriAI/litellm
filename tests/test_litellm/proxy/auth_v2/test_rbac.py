@@ -159,3 +159,41 @@ def test_filter_claim_roles(roles, allowed, allow_platform, expected):
     from litellm.proxy.auth_v2.rbac import filter_claim_roles
 
     assert filter_claim_roles(roles, allowed, allow_platform) == expected
+
+
+# --------------------------------------------------------------------------- #
+# Object matcher spans path separators (keyMatch): multi-segment authorization
+# --------------------------------------------------------------------------- #
+
+
+def test_enforce_matches_multi_segment_paths(engine):
+    # "/*" now spans separators, so nested routes are covered by the default policy
+    assert engine.enforce(
+        _principal(roles=[Role.PLATFORM_VIEWER]), "/api/v1/models", "GET"
+    )
+    assert engine.enforce(
+        _principal(roles=[Role.PLATFORM_ADMIN]), "/api/v1/x/y", "POST"
+    )
+
+
+def test_enforce_denies_multi_segment_when_unauthorized(engine):
+    # viewer is GET-only and org_viewer has no write grant, even on nested paths;
+    # the act anchor still rejects a superstring verb
+    assert not engine.enforce(
+        _principal(roles=[Role.ORG_VIEWER]), "/api/v1/models", "POST"
+    )
+    assert not engine.enforce(
+        _principal(roles=[Role.PLATFORM_VIEWER]), "/api/v1/models", "POST"
+    )
+    assert not engine.enforce(
+        _principal(roles=[Role.PLATFORM_VIEWER]), "/api/v1/models", "GETX"
+    )
+
+
+def test_operator_csv_object_pattern_spans_segments(tmp_path):
+    policy = tmp_path / "policy.csv"
+    policy.write_text("p, org_viewer, /api/*, GET\n")
+    engine = RBACEngine(policy_path=str(policy))
+    viewer = _principal(roles=[Role.ORG_VIEWER])
+    assert engine.enforce(viewer, "/api/v1/models", "GET")
+    assert not engine.enforce(viewer, "/api/v1/models", "GETX")
