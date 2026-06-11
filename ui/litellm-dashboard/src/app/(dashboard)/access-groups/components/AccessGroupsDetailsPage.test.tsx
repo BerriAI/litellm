@@ -3,7 +3,7 @@ import { AccessGroupResponse } from "@/app/(dashboard)/hooks/accessGroups/useAcc
 import { screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { renderWithProviders } from "../../../../../tests/test-utils";
 import { AccessGroupDetail } from "./AccessGroupsDetailsPage";
 
 vi.mock("@/app/(dashboard)/hooks/accessGroups/useAccessGroupDetails");

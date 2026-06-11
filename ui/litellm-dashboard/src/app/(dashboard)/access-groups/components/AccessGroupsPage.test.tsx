@@ -65,7 +65,7 @@ vi.mock("./AccessGroupsModal/AccessGroupCreateModal", () => ({
     ) : null,
 }));
 
-vi.mock("../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton", () => ({
+vi.mock("@/components/common_components/IconActionButton/TableIconActionButtons/TableIconActionButton", () => ({
   default: ({ variant, tooltipText, onClick }: { variant: string; tooltipText: string; onClick: () => void }) => (
     <button data-testid={`action-button-${variant.toLowerCase()}`} aria-label={tooltipText} onClick={onClick}>
       {variant}
