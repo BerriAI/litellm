@@ -395,6 +395,36 @@ class TestAgentRBACProxyAdmin:
             )
             assert resp.status_code == 200
 
+    def test_create_agent_applies_litellm_merge_to_stored_card(self):
+        """The card stored in the DB must reflect the LiteLLM-fronting merge."""
+        with patch("litellm.proxy.proxy_server.prisma_client"):
+            self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
+            self.mock_registry.add_agent_to_db = AsyncMock(
+                return_value=_sample_agent_response()
+            )
+            self.mock_registry.register_agent = MagicMock()
+
+            self.admin_client.post(
+                "/v1/agents",
+                json=_sample_agent_config(),
+                headers={"Authorization": "Bearer k"},
+            )
+
+            call_kwargs = self.mock_registry.add_agent_to_db.await_args.kwargs
+            stored_card = call_kwargs["agent"]["agent_card_params"]
+            new_agent_id = call_kwargs["agent_id"]
+
+            # Top-level url is retained for runtime A2A invocation (the public
+            # well-known endpoint rewrites it before exposing to clients);
+            # supportedInterfaces points at the proxy.
+            assert stored_card["url"] == "http://localhost"
+            assert stored_card["supportedInterfaces"][0]["protocolBinding"] == "JSONRPC"
+            assert stored_card["supportedInterfaces"][0]["url"].endswith(
+                f"/a2a/{new_agent_id}"
+            )
+            # Security scheme is the LiteLLM scheme.
+            assert "LiteLLMKey" in stored_card["securitySchemes"]
+
     def test_should_allow_admin_to_delete_agent(self):
         existing = {
             "agent_id": "agent-123",

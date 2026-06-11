@@ -1,10 +1,5 @@
 import { CopyOutlined } from "@ant-design/icons";
-import {
-  ChevronDownIcon,
-  ChevronUpIcon,
-  SwitchVerticalIcon,
-  TrashIcon,
-} from "@heroicons/react/outline";
+import { ChevronDownIcon, ChevronUpIcon, SwitchVerticalIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   ColumnDef,
   flexRender,
@@ -13,22 +8,11 @@ import {
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
-import {
-  Badge,
-  Button,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeaderCell,
-  TableRow,
-} from "@tremor/react";
+import { Badge, Button, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import {
-  getCategoryBadgeColor
-} from "./helpers";
+import { getCategoryBadgeColor } from "./helpers";
 import { Plugin } from "./types";
 
 interface PluginTableProps {
@@ -48,9 +32,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
   isAdmin,
   onPluginClick,
 }) => {
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: "created_at", desc: true },
-  ]);
+  const [sorting, setSorting] = useState<SortingState>([{ id: "created_at", desc: true }]);
 
   const formatDate = (dateString?: string) => {
     if (!dateString) return "-";
@@ -110,9 +92,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
         const description = row.original.description || "No description";
         return (
           <Tooltip title={description}>
-            <span className="text-xs text-gray-600 block max-w-[300px] truncate">
-              {description}
-            </span>
+            <span className="text-xs text-gray-600 block max-w-[300px] truncate">{description}</span>
           </Tooltip>
         );
       },
@@ -143,11 +123,7 @@ const PluginTable: React.FC<PluginTableProps> = ({
       cell: ({ row }) => {
         const plugin = row.original;
         return (
-          <Badge
-            color={plugin.enabled ? "green" : "gray"}
-            className="text-xs font-normal"
-            size="xs"
-          >
+          <Badge color={plugin.enabled ? "green" : "gray"} className="text-xs font-normal" size="xs">
             {plugin.enabled ? "Yes" : "No"}
           </Badge>
         );
@@ -167,33 +143,33 @@ const PluginTable: React.FC<PluginTableProps> = ({
     },
     ...(isAdmin
       ? [
-        {
-          header: "Actions",
-          id: "actions",
-          enableSorting: false,
-          cell: ({ row }: any) => {
-            const plugin = row.original;
+          {
+            header: "Actions",
+            id: "actions",
+            enableSorting: false,
+            cell: ({ row }: any) => {
+              const plugin = row.original;
 
-            return (
-              <div className="flex items-center gap-1">
-                <Tooltip title="Delete skill">
-                  <Button
-                    size="xs"
-                    variant="light"
-                    color="red"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onDeleteClick(plugin.name, plugin.name);
-                    }}
-                    icon={TrashIcon}
-                    className="text-red-500 hover:text-red-700 hover:bg-red-50"
-                  />
-                </Tooltip>
-              </div>
-            );
+              return (
+                <div className="flex items-center gap-1">
+                  <Tooltip title="Delete skill">
+                    <Button
+                      size="xs"
+                      variant="light"
+                      color="red"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteClick(plugin.name, plugin.name);
+                      }}
+                      icon={TrashIcon}
+                      className="text-red-500 hover:text-red-700 hover:bg-red-50"
+                    />
+                  </Tooltip>
+                </div>
+              );
+            },
           },
-        },
-      ]
+        ]
       : []),
   ];
 
@@ -219,35 +195,21 @@ const PluginTable: React.FC<PluginTableProps> = ({
                 {headerGroup.headers.map((header) => (
                   <TableHeaderCell
                     key={header.id}
-                    className={`py-1 h-8 ${header.id === "actions"
-                        ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
-                        : ""
-                      }`}
-                    onClick={
-                      header.column.getCanSort()
-                        ? header.column.getToggleSortingHandler()
-                        : undefined
-                    }
+                    className={`py-1 h-8 ${
+                      header.id === "actions" ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]" : ""
+                    }`}
+                    onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <div className="flex items-center">
-                        {header.isPlaceholder
-                          ? null
-                          : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )}
+                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                       </div>
                       {header.column.getCanSort() && (
                         <div className="w-4">
                           {header.column.getIsSorted() ? (
                             {
-                              asc: (
-                                <ChevronUpIcon className="h-4 w-4 text-blue-500" />
-                              ),
-                              desc: (
-                                <ChevronDownIcon className="h-4 w-4 text-blue-500" />
-                              ),
+                              asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
+                              desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
                             }[header.column.getIsSorted() as string]
                           ) : (
                             <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
@@ -279,15 +241,13 @@ const PluginTable: React.FC<PluginTableProps> = ({
                   {row.getVisibleCells().map((cell) => (
                     <TableCell
                       key={cell.id}
-                      className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${cell.column.id === "actions"
+                      className={`py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap ${
+                        cell.column.id === "actions"
                           ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                           : ""
-                        }`}
+                      }`}
                     >
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </TableCell>
                   ))}
                 </TableRow>

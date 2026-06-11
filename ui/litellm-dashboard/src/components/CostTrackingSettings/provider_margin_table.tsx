@@ -25,7 +25,10 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
   const [editPercentage, setEditPercentage] = useState<string>("");
   const [editFixedAmount, setEditFixedAmount] = useState<string>("");
 
-  const handleStartEdit = (provider: string, currentMargin: number | { percentage?: number; fixed_amount?: number }) => {
+  const handleStartEdit = (
+    provider: string,
+    currentMargin: number | { percentage?: number; fixed_amount?: number },
+  ) => {
     setEditingProvider(provider);
     if (typeof currentMargin === "number") {
       // Simple percentage format
@@ -66,9 +69,9 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent, provider: string) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       handleSaveEdit(provider);
-    } else if (e.key === 'Escape') {
+    } else if (e.key === "Escape") {
       handleCancelEdit();
     }
   };
@@ -203,4 +206,3 @@ const ProviderMarginTable: React.FC<ProviderMarginTableProps> = ({
 };
 
 export default ProviderMarginTable;
-

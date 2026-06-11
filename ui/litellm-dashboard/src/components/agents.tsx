@@ -64,16 +64,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
   const fetchKeysForAgents = async () => {
     if (!accessToken) return;
     try {
-      const { keys = [] } = await keyListCall(
-        accessToken,
-        null,
-        null,
-        null,
-        null,
-        null,
-        1,
-        500
-      );
+      const { keys = [] } = await keyListCall(accessToken, null, null, null, null, null, 1, 500);
       const map: Record<string, AgentKeyInfo> = {};
       for (const key of keys) {
         const agentId = (key as { agent_id?: string }).agent_id;
@@ -162,7 +153,10 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
     <div className="w-full mx-auto flex-auto overflow-y-auto m-8 p-2">
       <div className="flex flex-col gap-2 mb-4">
         <h1 className="text-2xl font-bold">Agents</h1>
-        <p className="text-sm text-gray-600">List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents public.</p>
+        <p className="text-sm text-gray-600">
+          List of A2A-spec agents that are available to be used in your organization. Go to AI Hub, to make agents
+          public.
+        </p>
         <Alert
           message="Why do agents need keys?"
           description="Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from the Virtual Keys page."
@@ -219,7 +213,9 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                 {sortedAgents.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={columnCount}>
-                      <Text className="text-center">No agents found. Click &quot;+ Add New Agent&quot; to create one.</Text>
+                      <Text className="text-center">
+                        No agents found. Click &quot;+ Add New Agent&quot; to create one.
+                      </Text>
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -249,11 +245,7 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <Text>
-                          {agent.created_at
-                            ? new Date(agent.created_at).toLocaleDateString()
-                            : "N/A"}
-                        </Text>
+                        <Text>{agent.created_at ? new Date(agent.created_at).toLocaleDateString() : "N/A"}</Text>
                       </TableCell>
                       <TableCell>
                         {keyInfoMap[agent.agent_id]?.has_key ? (

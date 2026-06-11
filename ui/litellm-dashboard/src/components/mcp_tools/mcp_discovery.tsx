@@ -15,22 +15,11 @@ interface MCPDiscoveryProps {
   accessToken: string | null;
 }
 
-const INITIAL_COLORS = [
-  "#3B82F6",
-  "#10B981",
-  "#F59E0B",
-  "#EF4444",
-  "#8B5CF6",
-  "#EC4899",
-  "#06B6D4",
-  "#84CC16",
-];
+const INITIAL_COLORS = ["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#06B6D4", "#84CC16"];
 
 function getInitialAvatar(name: string) {
   const initial = name.charAt(0).toUpperCase();
-  const colorIndex =
-    name.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0) %
-    INITIAL_COLORS.length;
+  const colorIndex = name.split("").reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % INITIAL_COLORS.length;
   return { initial, backgroundColor: INITIAL_COLORS[colorIndex] };
 }
 
@@ -197,10 +186,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
         <div style={{ textAlign: "center", padding: "32px 0", color: "#9ca3af" }}>
           <Text>
             No servers found.{" "}
-            <a
-              onClick={onCustomServer}
-              style={{ color: "#2563eb", cursor: "pointer" }}
-            >
+            <a onClick={onCustomServer} style={{ color: "#2563eb", cursor: "pointer" }}>
               Add a custom server
             </a>
           </Text>
@@ -304,9 +290,7 @@ const MCPDiscovery: React.FC<MCPDiscoveryProps> = ({
                     >
                       {server.title || server.name}
                     </span>
-                    <span style={{ color: "#d1d5db", fontSize: 14, flexShrink: 0, marginLeft: 8 }}>
-                      &#8250;
-                    </span>
+                    <span style={{ color: "#d1d5db", fontSize: 14, flexShrink: 0, marginLeft: 8 }}>&#8250;</span>
                   </div>
                 );
               })}

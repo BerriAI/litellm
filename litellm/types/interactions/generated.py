@@ -203,6 +203,8 @@ class Status1(Enum):
     completed = "completed"
     failed = "failed"
     cancelled = "cancelled"
+    incomplete = "incomplete"
+    budget_exceeded = "budget_exceeded"
 
 
 class InteractionStatusUpdate(BaseModel):
@@ -386,13 +388,13 @@ class ResponseModality(Enum):
 
 
 class Status3(Enum):
-    UNSPECIFIED = "UNSPECIFIED"
-    IN_PROGRESS = "IN_PROGRESS"
-    REQUIRES_ACTION = "REQUIRES_ACTION"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
-    INCOMPLETE = "INCOMPLETE"
+    IN_PROGRESS = "in_progress"
+    REQUIRES_ACTION = "requires_action"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INCOMPLETE = "incomplete"
+    BUDGET_EXCEEDED = "budget_exceeded"
 
 
 class ModelOption(RootModel[str]):

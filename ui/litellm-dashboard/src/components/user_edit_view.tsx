@@ -158,10 +158,7 @@ export function UserEditView({
         label={
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <span>Max Budget (USD)</span>
-            <Checkbox
-              checked={unlimitedBudget}
-              onChange={handleUnlimitedBudgetChange}
-            >
+            <Checkbox checked={unlimitedBudget} onChange={handleUnlimitedBudgetChange}>
               Unlimited Budget
             </Checkbox>
           </div>
@@ -178,12 +175,7 @@ export function UserEditView({
           },
         ]}
       >
-        <NumericalInput
-          step={0.01}
-          precision={2}
-          style={{ width: "100%" }}
-          disabled={unlimitedBudget}
-        />
+        <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} disabled={unlimitedBudget} />
       </Form.Item>
 
       <Form.Item label="Reset Budget" name="budget_duration">

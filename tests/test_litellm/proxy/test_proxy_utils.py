@@ -71,6 +71,53 @@ def test_proxy_only_error_false_for_other_error_type():
     )
 
 
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_marks_no_upstream_llm_call():
+    """A proxy-gate error (auth/rate-limit) synthesizes a ``Logging`` object and
+    fires ``pre_call`` so the failure is logged — but it must tag the object with
+    ``LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL`` so tracing callbacks don't fabricate
+    an LLM-call span for a request that never reached a provider (root cause of the
+    misplaced gen-AI span on auth failure)."""
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+
+    def fake_pre_call(self, *args, **kwargs):
+        captured["flag"] = self.model_call_details.get(
+            LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+        )
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    orig_pre_call = Logging.pre_call
+    orig_async_failure = Logging.async_failure_handler
+    Logging.pre_call = fake_pre_call
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    Logging.async_failure_handler = _noop_async_failure
+    try:
+        await proxy_logging_obj._handle_logging_proxy_only_error(
+            request_data={
+                "model": "gpt-4o",
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            user_api_key_dict=UserAPIKeyAuth(
+                api_key="sk-bad", request_route="/v1/chat/completions"
+            ),
+            route="/v1/chat/completions",
+            original_exception=Exception("bad key"),
+        )
+    finally:
+        Logging.pre_call = orig_pre_call
+        Logging.async_failure_handler = orig_async_failure
+
+    assert captured.get("flag") is True
+
+
 def test_get_model_group_info_order():
     from litellm import Router
     from litellm.proxy.proxy_server import _get_model_group_info

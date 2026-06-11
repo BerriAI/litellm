@@ -613,3 +613,153 @@ def test_stream_chunk_builder_dict_snapshot_preserves_hidden_provider_fields():
     assert (
         response._hidden_params["provider_specific_fields"]["traffic_type"] == "default"
     )
+
+
+def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_chunks():
+    """Vertex AI metadata on streaming chunks must appear on assembled response."""
+    grounding_metadata = [{"webSearchQueries": ["weather in SF"]}]
+    url_context_metadata = [{"urlMetadata": [{"retrievedUrl": "https://example.com"}]}]
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-vertex-1",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="The weather", role="assistant"),
+            )
+        ],
+    )
+    setattr(chunk1, "vertex_ai_grounding_metadata", grounding_metadata)
+    chunk1._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-vertex-1",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=" is sunny.", role="assistant"),
+            )
+        ],
+    )
+    setattr(chunk2, "vertex_ai_url_context_metadata", url_context_metadata)
+    chunk2._hidden_params["vertex_ai_url_context_metadata"] = url_context_metadata
+
+    response = stream_chunk_builder(chunks=[chunk1, chunk2])
+    assert response is not None
+    assert getattr(response, "vertex_ai_grounding_metadata") == grounding_metadata
+    assert getattr(response, "vertex_ai_url_context_metadata") == url_context_metadata
+    assert response._hidden_params["vertex_ai_grounding_metadata"] == grounding_metadata
+    assert (
+        response._hidden_params["vertex_ai_url_context_metadata"]
+        == url_context_metadata
+    )
+
+    dumped = response.model_dump()
+    assert dumped["vertex_ai_grounding_metadata"] == grounding_metadata
+    assert dumped["vertex_ai_url_context_metadata"] == url_context_metadata
+
+
+def test_stream_chunk_builder_uses_assembled_model_for_provider_metadata():
+    grounding_metadata = [{"webSearchQueries": ["weather in SF"]}]
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-vertex-router",
+        created=1,
+        model="gpt-4o",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason=None,
+                index=0,
+                delta=Delta(content="The weather", role="assistant"),
+            )
+        ],
+    )
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-vertex-router",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content=" is sunny.", role=None),
+            )
+        ],
+    )
+    setattr(chunk2, "vertex_ai_grounding_metadata", grounding_metadata)
+    chunk2._hidden_params["vertex_ai_grounding_metadata"] = grounding_metadata
+
+    response = stream_chunk_builder(chunks=[chunk1, chunk2])
+    assert response is not None
+    assert response.model == "gemini-2.5-flash"
+    assert getattr(response, "vertex_ai_grounding_metadata") == grounding_metadata
+
+
+def test_stream_chunk_builder_propagates_vertex_ai_safety_results():
+    """Assembled response must expose safety data under the non-streaming field name."""
+    safety_ratings = [
+        [{"category": "HARM_CATEGORY_HATE_SPEECH", "probability": "NEGLIGIBLE"}]
+    ]
+
+    chunk = ModelResponseStream(
+        id="chatcmpl-vertex-safety",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    )
+    setattr(chunk, "vertex_ai_safety_ratings", safety_ratings)
+    setattr(chunk, "vertex_ai_safety_results", safety_ratings)
+    chunk._hidden_params["vertex_ai_safety_ratings"] = safety_ratings
+    chunk._hidden_params["vertex_ai_safety_results"] = safety_ratings
+
+    response = stream_chunk_builder(chunks=[chunk])
+    assert response is not None
+    assert getattr(response, "vertex_ai_safety_results") == safety_ratings
+    assert response._hidden_params["vertex_ai_safety_results"] == safety_ratings
+    assert response.model_dump()["vertex_ai_safety_results"] == safety_ratings
+
+
+def test_stream_chunk_builder_propagates_vertex_ai_metadata_from_dict_chunks():
+    """Dict snapshot chunks (model_dump) should also propagate Vertex AI metadata."""
+    chunk_dict = ModelResponseStream(
+        id="chatcmpl-vertex-2",
+        created=1,
+        model="gemini-2.5-flash",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                finish_reason="stop",
+                index=0,
+                delta=Delta(content="hello", role="assistant"),
+            )
+        ],
+    ).model_dump()
+    chunk_dict["_hidden_params"] = {
+        "vertex_ai_grounding_metadata": [{"webSearchQueries": ["test query"]}]
+    }
+
+    response = stream_chunk_builder(chunks=[chunk_dict])
+    assert response is not None
+    assert getattr(response, "vertex_ai_grounding_metadata") == [
+        {"webSearchQueries": ["test query"]}
+    ]
+    assert response.model_dump()["vertex_ai_grounding_metadata"] == [
+        {"webSearchQueries": ["test query"]}
+    ]

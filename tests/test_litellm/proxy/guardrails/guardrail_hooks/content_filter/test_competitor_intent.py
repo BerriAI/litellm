@@ -226,7 +226,7 @@ class TestContentFilterWithCompetitorIntent:
             await guardrail.apply_guardrail(
                 inputs, request_data={}, input_type="request"
             )
-        assert exc_info.value.status_code == 403
+        assert exc_info.value.status_code == 400
 
 
 # Exact config from litellm/proxy/_new_secret_config.yaml (lines 27-53).

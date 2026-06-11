@@ -11,7 +11,7 @@ describe("buildAttachmentData", () => {
     it("should not include teams, keys, models, or tags even when provided", () => {
       const result = buildAttachmentData(
         { policy_name: "my-policy", teams: ["team-a"], keys: ["key-1"], models: ["gpt-4"], tags: ["prod"] },
-        "global"
+        "global",
       );
       expect(result.teams).toBeUndefined();
       expect(result.keys).toBeUndefined();

@@ -14,7 +14,7 @@ import litellm
 from unittest.mock import patch, MagicMock, AsyncMock
 from create_mock_standard_logging_payload import create_standard_logging_payload
 from litellm.types.utils import StandardLoggingPayload
-from litellm.types.router import Deployment, LiteLLM_Params
+from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
 
 
 @pytest.fixture
@@ -997,9 +997,7 @@ def test_filter_cooldown_deployments(model_list):
         healthy_deployments=router._get_all_deployments(model_name="gpt-5-mini"),  # type: ignore
         cooldown_deployments=[],
     )
-    assert len(deployments) == len(
-        router._get_all_deployments(model_name="gpt-5-mini")
-    )
+    assert len(deployments) == len(router._get_all_deployments(model_name="gpt-5-mini"))
 
 
 def test_track_deployment_metrics(model_list):
@@ -2379,3 +2377,123 @@ def test_get_router_model_info_with_deployment_object():
     # Verify we got valid model info back
     assert model_info is not None
     assert isinstance(model_info, dict)
+
+
+def test_deployment_has_budget_limits():
+    router = Router(model_list=[])
+
+    with_budget = Deployment(
+        model_name="budgeted-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            max_budget=0.001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id="budget-deployment-id"),
+    )
+    without_budget = Deployment(
+        model_name="unbudgeted-model",
+        litellm_params=LiteLLM_Params(model="openai/gpt-4o-mini"),
+        model_info=ModelInfo(id="no-budget-deployment-id"),
+    )
+
+    assert router._deployment_has_budget_limits(deployment=with_budget) is True
+    assert router._deployment_has_budget_limits(deployment=without_budget) is False
+
+
+def test_sync_deployment_budget_config(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+
+    router = Router(model_list=[], optional_pre_call_checks=[])
+    deployment = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+            max_budget=0.000000000001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id="runtime-budget-deployment"),
+    )
+
+    router._sync_deployment_budget_config(deployment=deployment)
+
+    budget_limiter = router._get_router_deployment_budget_limiter()
+    assert budget_limiter is not None
+    config = budget_limiter._get_budget_config_for_deployment(
+        "runtime-budget-deployment"
+    )
+    assert config is not None
+    assert config.max_budget == 0.000000000001
+
+
+def test_sync_deployment_budget_config_clears_removed_limits(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+
+    router = Router(model_list=[], optional_pre_call_checks=[])
+    model_id = "runtime-budget-deployment"
+    budgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+            max_budget=0.000000000001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+    unbudgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+
+    router._sync_deployment_budget_config(deployment=budgeted)
+    budget_limiter = router._get_router_deployment_budget_limiter()
+    assert budget_limiter is not None
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is not None
+
+    router._sync_deployment_budget_config(deployment=unbudgeted)
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is None
+
+
+def test_upsert_deployment_clears_stale_budget_config(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: None)
+
+    router = Router(model_list=[], optional_pre_call_checks=[])
+    model_id = "upsert-budget-deployment"
+    budgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+            max_budget=0.000000000001,
+            budget_duration="1d",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+    unbudgeted = Deployment(
+        model_name="dynamic-budget-model",
+        litellm_params=LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="fake-key",
+        ),
+        model_info=ModelInfo(id=model_id),
+    )
+
+    router.upsert_deployment(deployment=budgeted)
+    budget_limiter = router._get_router_deployment_budget_limiter()
+    assert budget_limiter is not None
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is not None
+
+    router.upsert_deployment(deployment=unbudgeted)
+    assert budget_limiter._get_budget_config_for_deployment(model_id) is None
