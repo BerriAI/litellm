@@ -1581,10 +1581,12 @@ class ProxyBaseLLMRequestProcessing:
                     # warning so future regressions of the same shape
                     # surface in operator logs.
                     verbose_proxy_logger.warning(
-                        "Container ownership recording skipped on streaming /v1/responses: "
-                        "no completed_response on stream iterator %s. Any code_interpreter "
-                        "container created in this call will return 403 on follow-up file "
-                        "lookups for non-admin keys.",
+                        "Container ownership recording skipped on streaming "
+                        "/v1/responses: no completed_response on stream "
+                        "iterator %s. If this stream created any tool "
+                        "container (e.g. code_interpreter), follow-up "
+                        "/v1/containers/<id>/files calls will 403 for "
+                        "non-admin keys.",
                         type(original_stream_response).__name__,
                     )
             except Exception as e:

@@ -2561,9 +2561,16 @@ class Router:
                 # is missing many of these attributes — use getattr fallbacks
                 # so wrapper construction never raises AttributeError. The
                 # bridge stores the logging object as `litellm_logging_obj`.
-                self.response = getattr(source_iterator, "response", None)
-                self.model = getattr(source_iterator, "model", None)
-                self.logging_obj = getattr(
+                # base class declares non-Optional types for these
+                # fields but the bridge path (LiteLLMCompletionStreamingIterator)
+                # can legitimately omit them at runtime — keep the None
+                # fallback. Same lines passed mypy on the pre-fix file
+                # because the surrounding function body wasn't fully
+                # type-narrowed; the new typed terminal-event tuple above
+                # is what made these surface.
+                self.response = getattr(source_iterator, "response", None)  # type: ignore[assignment]
+                self.model = getattr(source_iterator, "model", None)  # type: ignore[assignment]
+                self.logging_obj = getattr(  # type: ignore[assignment]
                     source_iterator,
                     "logging_obj",
                     getattr(source_iterator, "litellm_logging_obj", None),
