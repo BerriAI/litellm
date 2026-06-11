@@ -8,6 +8,7 @@ from typing import Any, Optional, cast
 
 from litellm._logging import _redact_string, verbose_proxy_logger
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
@@ -35,7 +36,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         model: str,
         api_version: Optional[str],
         realtime_protocol: Optional[str] = None,
-        query_params: Optional[dict] = None,
+        query_params: Optional[RealtimeQueryParams] = None,
     ) -> str:
         """
         Construct Azure realtime WebSocket URL.
@@ -97,7 +98,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
         realtime_protocol: Optional[str] = None,
-        query_params: Optional[dict] = None,
+        query_params: Optional[RealtimeQueryParams] = None,
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[dict] = None,
     ):

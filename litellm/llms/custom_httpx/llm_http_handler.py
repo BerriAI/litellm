@@ -125,6 +125,7 @@ from litellm.types.vector_stores import (
     VectorStoreSearchOptionalRequestParams,
     VectorStoreSearchResponse,
 )
+from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.videos.main import VideoObject
 from litellm.utils import (
     CustomStreamWrapper,
@@ -5318,7 +5319,9 @@ class BaseLLMHTTPHandler:
         )
 
     @staticmethod
-    def _append_query_params(url: str, query_params: Optional[Dict[str, Any]]) -> str:
+    def _append_query_params(
+        url: str, query_params: Optional[RealtimeQueryParams]
+    ) -> str:
         """Append query_params to url, skipping keys already present in the URL."""
         if not query_params:
             return url
@@ -5345,7 +5348,7 @@ class BaseLLMHTTPHandler:
         timeout: Optional[float] = None,
         user_api_key_dict: Optional[Any] = None,
         litellm_metadata: Optional[Dict[str, Any]] = None,
-        query_params: Optional[Dict[str, Any]] = None,
+        query_params: Optional[RealtimeQueryParams] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection

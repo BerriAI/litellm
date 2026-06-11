@@ -2578,7 +2578,7 @@ def handle_realtime_transcription_cost_calculation(
             model=model_name, custom_llm_provider=custom_llm_provider
         )
     except Exception:
-        model_info = {}
+        model_info = None
 
     total_cost = 0.0
     for event in completed_events:
@@ -2608,7 +2608,9 @@ def _get_transcription_model_name_from_results(
     return None
 
 
-def _transcription_usage_cost(usage: dict, model_info: dict) -> float:
+def _transcription_usage_cost(usage: dict, model_info: Optional[ModelInfo]) -> float:
+    if model_info is None:
+        return 0.0
     usage_type = usage.get("type")
     if usage_type == "duration":
         seconds = usage.get("seconds") or 0.0
