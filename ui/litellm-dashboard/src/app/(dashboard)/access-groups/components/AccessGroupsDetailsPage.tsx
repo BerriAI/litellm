@@ -17,7 +17,7 @@ import {
 } from "antd";
 import { ArrowLeftIcon, BotIcon, EditIcon, KeyIcon, LayersIcon, ServerIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
-import DefaultProxyAdminTag from "../common_components/DefaultProxyAdminTag";
+import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
 import { AccessGroupEditModal } from "./AccessGroupsModal/AccessGroupEditModal";
 
 const { Title, Text } = Typography;

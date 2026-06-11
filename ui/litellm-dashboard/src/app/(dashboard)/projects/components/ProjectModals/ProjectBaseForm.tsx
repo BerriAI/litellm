@@ -19,9 +19,9 @@ import type { FormInstance } from "antd";
 import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { Team } from "../../key_team_helpers/key_list";
-import { fetchTeamModels } from "../../organisms/create_key_button";
-import { getModelDisplayName } from "../../key_team_helpers/fetch_available_models_team_key";
+import { Team } from "@/components/key_team_helpers/key_list";
+import { fetchTeamModels } from "@/components/organisms/create_key_button";
+import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 import { getGuardrailsList } from "@/components/networking";
 
 export interface ProjectFormValues {
