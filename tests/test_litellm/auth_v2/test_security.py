@@ -18,11 +18,12 @@ from litellm.auth_v2.config import (
     OidcProviderConfig,
 )
 from litellm.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.auth_v2.rbac import Role
+from litellm.auth_v2.rbac import RbacEngine, Role
 from litellm.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
 from litellm.auth_v2.security import (
     AuthContext,
     get_current_principal,
+    require_permission,
     require_roles,
 )
 
@@ -31,6 +32,8 @@ from auth_v2_helpers import TEST_AUDIENCE, TEST_ISSUER, FakeJwksClient
 ADMIN_KEY = "sk-admin-key"
 READER_KEY = "sk-reader-key"
 NOSCOPE_KEY = "sk-noscope-key"
+PLATFORM_ADMIN_KEY = "sk-platform-admin-key"
+PLATFORM_VIEWER_KEY = "sk-platform-viewer-key"
 
 
 def _principal(subject: str, *, scopes=None, roles=None) -> Principal:
@@ -61,6 +64,12 @@ def _build_app(public_key: Any) -> Tuple[FastAPI, InMemoryIdentityStore]:
                 "reader-principal", scopes=["models:read"]
             ),
             _hash_api_key(NOSCOPE_KEY): _principal("noscope-principal"),
+            _hash_api_key(PLATFORM_ADMIN_KEY): _principal(
+                "platform-admin-principal", roles=[Role.PLATFORM_ADMIN]
+            ),
+            _hash_api_key(PLATFORM_VIEWER_KEY): _principal(
+                "platform-viewer-principal", roles=[Role.PLATFORM_VIEWER]
+            ),
         }
     )
     ctx = AuthContext(AuthConfig(), authenticators, resolver)
@@ -89,6 +98,14 @@ def _build_app(public_key: Any) -> Tuple[FastAPI, InMemoryIdentityStore]:
     @app.get("/admin")
     async def admin_route(
         principal: Annotated[Principal, Security(require_roles(Role.ORG_ADMIN))],
+    ):
+        return {"subject": principal.subject}
+
+    @app.post("/perm-widgets")
+    async def widgets_route(
+        principal: Annotated[
+            Principal, Security(require_permission("/widgets", "POST"))
+        ],
     ):
         return {"subject": principal.subject}
 
@@ -201,3 +218,64 @@ def test_required_role_present_returns_200(client):
 def test_required_role_missing_returns_403(client):
     response = client.get("/admin", headers={"x-litellm-api-key": READER_KEY})
     assert response.status_code == 403
+
+
+def test_required_role_honors_hierarchy(client):
+    # platform_admin inherits org_admin via the Casbin g-rules, so it passes a
+    # require_roles(ORG_ADMIN) gate without holding org_admin explicitly
+    response = client.get("/admin", headers={"x-litellm-api-key": PLATFORM_ADMIN_KEY})
+    assert response.status_code == 200
+    assert response.json()["subject"] == "platform-admin-principal"
+
+
+# --------------------------------------------------------------------------- #
+# Permission enforcement (require_permission -> RbacEngine.enforce)
+# --------------------------------------------------------------------------- #
+
+
+def test_require_permission_allows_platform_admin(client):
+    response = client.post(
+        "/perm-widgets", headers={"x-litellm-api-key": PLATFORM_ADMIN_KEY}
+    )
+    assert response.status_code == 200
+
+
+def test_require_permission_denies_viewer_on_write(client):
+    # platform_viewer is GET-only in the default policy -> POST /widgets is denied
+    response = client.post(
+        "/perm-widgets", headers={"x-litellm-api-key": PLATFORM_VIEWER_KEY}
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Forbidden"
+
+
+def test_require_permission_unauthenticated_returns_401(client):
+    response = client.post("/perm-widgets")
+    assert response.status_code == 401
+    assert "WWW-Authenticate" in response.headers
+
+
+def test_injected_rbac_engine_overrides_default_policy(rsa_keypair, tmp_path):
+    # operator CSV grants only platform_viewer POST /widgets and drops the
+    # built-in platform_admin "/*" grant; the injected engine governs enforce
+    policy = tmp_path / "policy.csv"
+    policy.write_text("p, platform_viewer, /widgets, POST\n")
+
+    _, public_key = rsa_keypair
+    app, _ = _build_app(public_key)
+    app.state.auth_v2.rbac = RbacEngine(policy_path=str(policy))
+    client = TestClient(app)
+
+    # viewer now passes, platform_admin (default grant removed) now fails
+    assert (
+        client.post(
+            "/perm-widgets", headers={"x-litellm-api-key": PLATFORM_VIEWER_KEY}
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/perm-widgets", headers={"x-litellm-api-key": PLATFORM_ADMIN_KEY}
+        ).status_code
+        == 403
+    )

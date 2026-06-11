@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.security import SecurityScopes
 
 from litellm.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.auth_v2.rbac import Role, has_any_role, has_required_scopes
+from litellm.auth_v2.rbac import RbacEngine, Role, has_required_scopes
 
 
 def _principal(*, scopes=None, roles=None) -> Principal:
@@ -14,6 +15,11 @@ def _principal(*, scopes=None, roles=None) -> Principal:
         scopes=scopes or [],
         roles=roles or [],
     )
+
+
+# --------------------------------------------------------------------------- #
+# Scopes stay a plain SecurityScopes subset check (not Casbin)
+# --------------------------------------------------------------------------- #
 
 
 def test_required_scopes_is_subset_check():
@@ -31,15 +37,92 @@ def test_empty_required_scopes_always_passes():
     assert has_required_scopes(SecurityScopes([]), _principal())
 
 
-def test_has_any_role_matches_one_of_allowed():
-    principal = _principal(roles=[Role.TEAM_MEMBER, Role.ORG_VIEWER])
-    assert has_any_role(principal, (Role.ORG_VIEWER, Role.PLATFORM_ADMIN))
+# --------------------------------------------------------------------------- #
+# RbacEngine.has_role honors the role hierarchy (Casbin g-rules)
+# --------------------------------------------------------------------------- #
 
 
-def test_has_any_role_rejects_when_no_overlap():
-    principal = _principal(roles=[Role.TEAM_MEMBER])
-    assert not has_any_role(principal, (Role.PLATFORM_ADMIN, Role.ORG_ADMIN))
+@pytest.fixture
+def engine() -> RbacEngine:
+    return RbacEngine()
 
 
-def test_has_any_role_false_when_principal_has_no_roles():
-    assert not has_any_role(_principal(), (Role.PLATFORM_ADMIN,))
+@pytest.mark.parametrize(
+    "held,gate",
+    [
+        (Role.PLATFORM_ADMIN, Role.ORG_ADMIN),
+        (Role.PLATFORM_ADMIN, Role.ORG_VIEWER),
+        (Role.PLATFORM_ADMIN, Role.TEAM_ADMIN),
+        (Role.PLATFORM_ADMIN, Role.TEAM_MEMBER),
+        (Role.PLATFORM_ADMIN, Role.PLATFORM_VIEWER),
+        (Role.ORG_ADMIN, Role.ORG_VIEWER),
+        (Role.ORG_ADMIN, Role.ORG_ADMIN),  # exact match
+        (Role.TEAM_ADMIN, Role.TEAM_MEMBER),
+    ],
+)
+def test_has_role_inherits_down_the_hierarchy(engine, held, gate):
+    assert engine.has_role(_principal(roles=[held]), (gate,))
+
+
+@pytest.mark.parametrize(
+    "held,gate",
+    [
+        (Role.ORG_ADMIN, Role.TEAM_MEMBER),  # sideways, no inheritance edge
+        (Role.TEAM_MEMBER, Role.ORG_ADMIN),  # lower cannot reach higher
+        (Role.ORG_VIEWER, Role.ORG_ADMIN),
+    ],
+)
+def test_has_role_does_not_climb_the_hierarchy(engine, held, gate):
+    assert not engine.has_role(_principal(roles=[held]), (gate,))
+
+
+def test_has_role_false_without_roles(engine):
+    assert not engine.has_role(_principal(), (Role.TEAM_MEMBER,))
+
+
+# --------------------------------------------------------------------------- #
+# RbacEngine.enforce against the default policy
+# --------------------------------------------------------------------------- #
+
+
+def test_platform_admin_enforces_any_object_and_action(engine):
+    assert engine.enforce(_principal(roles=[Role.PLATFORM_ADMIN]), "/anything", "POST")
+    # keyMatch2: /scim/v2/* covers /scim/v2/Users
+    assert engine.enforce(
+        _principal(roles=[Role.PLATFORM_ADMIN]), "/scim/v2/Users", "DELETE"
+    )
+
+
+def test_platform_viewer_is_read_only(engine):
+    viewer = _principal(roles=[Role.PLATFORM_VIEWER])
+    assert engine.enforce(viewer, "/anything", "GET")
+    assert not engine.enforce(viewer, "/anything", "POST")
+
+
+def test_org_viewer_has_no_write_grant(engine):
+    assert not engine.enforce(_principal(roles=[Role.ORG_VIEWER]), "/widgets", "POST")
+
+
+def test_enforce_false_without_roles(engine):
+    assert not engine.enforce(_principal(), "/anything", "GET")
+
+
+# --------------------------------------------------------------------------- #
+# Operator CSV policy fully replaces the in-code defaults
+# --------------------------------------------------------------------------- #
+
+
+def test_csv_policy_overrides_defaults(tmp_path):
+    policy = tmp_path / "policy.csv"
+    policy.write_text("p, platform_viewer, /reports, POST\n")
+    engine = RbacEngine(policy_path=str(policy))
+
+    # the operator rule is honored
+    assert engine.enforce(_principal(roles=[Role.PLATFORM_VIEWER]), "/reports", "POST")
+    # the built-in platform_admin "/*" grant is gone, not merged
+    assert not engine.enforce(
+        _principal(roles=[Role.PLATFORM_ADMIN]), "/reports", "POST"
+    )
+    assert not engine.enforce(
+        _principal(roles=[Role.PLATFORM_ADMIN]), "/anything", "GET"
+    )
