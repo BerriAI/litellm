@@ -25,6 +25,7 @@ from typing import (
 import httpx
 
 import litellm
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -87,15 +88,20 @@ STREAMING_TIMEOUT = 60 * 5
 def _model_uses_max_completion_tokens(model: str) -> bool:
     """Return True for OCI-hosted models that require ``maxCompletionTokens``.
 
-    Reasoning models on OCI (e.g. the OpenAI GPT-5 family) reject ``maxTokens``
-    with HTTP 400 and require ``maxCompletionTokens`` per OpenAI's reasoning-API
-    convention. Driven by ``supports_reasoning`` in
-    ``model_prices_and_context_window.json`` so new model families are picked
-    up via a catalog update rather than a code change.
+    OpenAI commercial models proxied through OCI (``openai.*``) reject
+    ``maxTokens`` with HTTP 400 on the reasoning families (gpt-5.x, o-series)
+    and accept ``maxCompletionTokens`` everywhere, so route the whole vendor
+    prefix to it rather than chasing each new release in
+    ``model_prices_and_context_window.json``. The ``openai.gpt-oss-*`` open
+    weights are served by OCI's own stack and keep ``maxTokens``. Any other
+    vendor falls back to the catalog's ``supports_reasoning`` flag.
     """
     if not model:
         return False
     name = model[4:] if model.lower().startswith("oci/") else model
+    lowered = name.lower()
+    if lowered.startswith("openai."):
+        return not lowered.startswith("openai.gpt-oss")
     return supports_reasoning(model=name, custom_llm_provider="oci")
 
 
@@ -450,6 +456,13 @@ class OCIChatConfig(BaseConfig):
                 selected_params[target] = optional_params[openai_key]  # type: ignore[index]
             elif oci_alias in optional_params:
                 selected_params[target] = optional_params[oci_alias]  # type: ignore[index]
+
+        # OCI's server-side default token cap is tiny (~20 tokens), so an
+        # omitted max_tokens silently truncates the response mid-string. Most
+        # callers never send a limit (MLflow judges among them), so inject a
+        # sane default when one is absent, mirroring litellm's Anthropic config.
+        if max_tokens_key not in selected_params:
+            selected_params[max_tokens_key] = DEFAULT_OCI_CHAT_MAX_TOKENS
 
         # OCI expects uppercase reasoning levels (LOW/MEDIUM/HIGH/NONE); OpenAI
         # clients send lowercase. OpenAI's "disable" maps to OCI's "NONE".

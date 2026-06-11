@@ -5,6 +5,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 from litellm import ModelResponse
+from litellm.constants import DEFAULT_OCI_CHAT_MAX_TOKENS
 from litellm.llms.oci.chat.cohere import (
     adapt_messages_to_cohere_standard,
     adapt_tool_definitions_to_cohere_standard,
@@ -462,7 +463,8 @@ class TestOCICohereToolCalls:
         assert "tool_choice" not in supported_params
 
     def test_cohere_default_parameters(self):
-        """Test that Cohere requests do not inject hardcoded defaults — caller supplies all params."""
+        """maxTokens is defaulted (OCI's server default truncates at ~20 tokens);
+        every other param is still pass-through with no hardcoded default."""
         config = OCIChatConfig()
         messages = [{"role": "user", "content": "Hello"}]
         optional_params = {"oci_compartment_id": TEST_COMPARTMENT_ID}
@@ -477,8 +479,7 @@ class TestOCICohereToolCalls:
 
         chat_request = transformed_request["chatRequest"]
 
-        # No hardcoded defaults injected — only pass through what the user supplies
-        assert "maxTokens" not in chat_request
+        assert chat_request["maxTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
         assert "topK" not in chat_request
         assert "topP" not in chat_request
         assert "frequencyPenalty" not in chat_request
