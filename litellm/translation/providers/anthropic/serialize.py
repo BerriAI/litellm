@@ -14,12 +14,11 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Dict, List, Mapping, Optional, Tuple
-
-from typing_extensions import assert_never
+from collections.abc import Mapping
 
 from expression import Error, Ok, Option, Result
 from expression.collections import Block
+from typing_extensions import assert_never
 
 from ...deps import TranslationDeps
 from ...errors import TranslationError
@@ -48,7 +47,11 @@ _SerializeResult = Result[Body, TranslationError]
 
 def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _SerializeResult:
     if len(request.messages) == 0:
-        return Error(TranslationError.of_unsupported("no non-system messages: v1 raises unless modify_params"))
+        return Error(
+            TranslationError.of_unsupported(
+                "no non-system messages: v1 raises unless modify_params"
+            )
+        )
     match p.map_thinking(request, deps):
         case Result(tag="ok", ok=(thinking_json, output_config)):
             pass
@@ -67,7 +70,11 @@ def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _Serialize
 
     name_forward, _ = request_name_maps(request.tools)
     tools = _tools_json(request, rf_tool, name_forward)
-    tool_choice = rf_tool_choice if rf_tool_choice is not None else _tool_choice_json(request, name_forward)
+    tool_choice = (
+        rf_tool_choice
+        if rf_tool_choice is not None
+        else _tool_choice_json(request, name_forward)
+    )
     body: Body = {
         "model": request.model,
         "messages": serialize_messages(request.messages, name_forward),
@@ -89,12 +96,14 @@ def serialize_request(request: ChatRequest, deps: TranslationDeps) -> _Serialize
     return Ok(body)
 
 
-def _present(**fields: Optional[PlainJson]) -> Dict[str, PlainJson]:
+def _present(**fields: PlainJson | None) -> dict[str, PlainJson]:
     return {key: value for key, value in fields.items() if value is not None}
 
 
-def _sampling_fields(request: ChatRequest, deps: TranslationDeps) -> Result[Dict[str, PlainJson], TranslationError]:
-    gathered: Dict[str, PlainJson] = {}
+def _sampling_fields(
+    request: ChatRequest, deps: TranslationDeps
+) -> Result[dict[str, PlainJson], TranslationError]:
+    gathered: dict[str, PlainJson] = {}
     for param, value_opt in (
         ("temperature", request.params.temperature),
         ("top_p", request.params.top_p),
@@ -115,7 +124,9 @@ def _sampling_fields(request: ChatRequest, deps: TranslationDeps) -> Result[Dict
     return Ok(gathered)
 
 
-def _max_tokens(request: ChatRequest, thinking_json: Optional[PlainJson], deps: TranslationDeps) -> int:
+def _max_tokens(
+    request: ChatRequest, thinking_json: PlainJson | None, deps: TranslationDeps
+) -> int:
     explicit = p.bump_max_tokens_for_thinking(request.params.max_tokens, thinking_json)
     match explicit:
         case Option(tag="some", some=value):
@@ -124,12 +135,12 @@ def _max_tokens(request: ChatRequest, thinking_json: Optional[PlainJson], deps: 
             return p.default_max_tokens(request.model, deps)
 
 
-def _system_json(system: Block[SystemText]) -> Optional[PlainJson]:
+def _system_json(system: Block[SystemText]) -> PlainJson | None:
     if len(system) == 0:
         return None
-    blocks: List[PlainJson] = []
+    blocks: list[PlainJson] = []
     for text in system:
-        base: Dict[str, PlainJson] = {"type": "text", "text": text.text}
+        base: dict[str, PlainJson] = {"type": "text", "text": text.text}
         match text.cache:
             case Option(tag="some", some=cache):
                 blocks.append(  # nosemgrep: translation-no-mutation
@@ -142,12 +153,12 @@ def _system_json(system: Block[SystemText]) -> Optional[PlainJson]:
 
 def _tools_json(
     request: ChatRequest,
-    rf_tool: Optional[PlainJson],
+    rf_tool: PlainJson | None,
     name_forward: Mapping[str, str],
-) -> Optional[PlainJson]:
+) -> PlainJson | None:
     user_tools = [serialize_tool(tool) for tool in request.tools]
     rf_tools = [rf_tool] if rf_tool is not None else []
-    tools: List[PlainJson] = [*user_tools, *rf_tools]
+    tools: list[PlainJson] = [*user_tools, *rf_tools]
     if tools:
         return _apply_forward_map(tools, name_forward)
     if has_tool_blocks(request.messages):
@@ -155,24 +166,29 @@ def _tools_json(
     return None
 
 
-def _apply_forward_map(tools: List[PlainJson], forward: Mapping[str, str]) -> List[PlainJson]:
+def _apply_forward_map(
+    tools: list[PlainJson], forward: Mapping[str, str]
+) -> list[PlainJson]:
     if not forward:
         return tools
-    return [
-        {**tool, "name": forward[tool["name"]]}
-        if isinstance(tool, dict)
-        and tool.get("type") == "custom"
-        and isinstance(tool.get("name"), str)
-        and tool["name"] in forward
-        else tool
-        for tool in tools
-    ]
+    return [_renamed_tool(tool, forward) for tool in tools]
 
 
-def _tool_choice_json(request: ChatRequest, name_forward: Mapping[str, str]) -> Optional[PlainJson]:
+def _renamed_tool(tool: PlainJson, forward: Mapping[str, str]) -> PlainJson:
+    if not isinstance(tool, dict) or tool.get("type") != "custom":
+        return tool
+    name = tool.get("name")
+    if not isinstance(name, str) or name not in forward:
+        return tool
+    return {**tool, "name": forward[name]}
+
+
+def _tool_choice_json(
+    request: ChatRequest, name_forward: Mapping[str, str]
+) -> PlainJson | None:
     """v1 ``_map_tool_choice`` plus the request-level name forward map."""
-    parallel: Optional[bool] = request.parallel_tool_calls.default_value(None)
-    choice_json: Optional[Dict[str, PlainJson]] = None
+    parallel: bool | None = request.parallel_tool_calls.default_value(None)
+    choice_json: dict[str, PlainJson] | None = None
     is_none_choice = False
     match request.tool_choice:
         case Option(tag="some", some=choice):
@@ -188,7 +204,9 @@ def _tool_choice_json(request: ChatRequest, name_forward: Mapping[str, str]) -> 
     return {"type": "auto", "disable_parallel_tool_use": not parallel}
 
 
-def _choice_base(choice: ToolChoice, name_forward: Mapping[str, str]) -> Tuple[Dict[str, PlainJson], bool]:
+def _choice_base(
+    choice: ToolChoice, name_forward: Mapping[str, str]
+) -> tuple[dict[str, PlainJson], bool]:
     match choice.tag:
         case "auto":
             return {"type": "auto"}, False
@@ -199,11 +217,10 @@ def _choice_base(choice: ToolChoice, name_forward: Mapping[str, str]) -> Tuple[D
         case "specific":
             name = name_forward.get(choice.specific, choice.specific)
             return {"type": "tool", "name": name}, False
-        case never:
-            assert_never(never)
+    assert_never(choice.tag)
 
 
-def _metadata(request: ChatRequest) -> Optional[PlainJson]:
+def _metadata(request: ChatRequest) -> PlainJson | None:
     match request.user:
         case Option(tag="some", some=user):
             if p.valid_user_id(user):
@@ -213,11 +230,13 @@ def _metadata(request: ChatRequest) -> Optional[PlainJson]:
             return None
 
 
-_RfFields = Tuple[Optional[PlainJson], Optional[PlainJson], Optional[PlainJson], Optional[bool]]
+_RfFields = tuple[PlainJson | None, PlainJson | None, PlainJson | None, bool | None]
 """(json_tool_call tool, forced tool_choice, output_format, json_mode)."""
 
 
-def _response_format_fields(request: ChatRequest, deps: TranslationDeps) -> Result[_RfFields, TranslationError]:
+def _response_format_fields(
+    request: ChatRequest, deps: TranslationDeps
+) -> Result[_RfFields, TranslationError]:
     match request.response_format:
         case Option(tag="some", some=response_format):
             pass
@@ -237,21 +256,35 @@ def _output_format_fields(
         return Ok((None, None, None, True))
     schema = response_format.json_schema.schema.value
     if '"$ref"' in json.dumps(schema):
-        return Error(TranslationError.of_unsupported("response_format schema with $ref needs v1's def inlining"))
+        return Error(
+            TranslationError.of_unsupported(
+                "response_format schema with $ref needs v1's def inlining"
+            )
+        )
     # v1 pops top-level $defs/definitions before filtering (they only exist to
     # back $refs, which we just proved absent).
     if isinstance(schema, dict):
-        schema = {key: value for key, value in schema.items() if key not in ("$defs", "definitions")}
+        schema = {
+            key: value
+            for key, value in schema.items()
+            if key not in ("$defs", "definitions")
+        }
     filtered = filter_output_schema(copy.deepcopy(schema))
     return Ok((None, None, {"type": "json_schema", "schema": filtered}, True))
 
 
-def _json_tool_fields(request: ChatRequest, response_format: ResponseFormat) -> Result[_RfFields, TranslationError]:
+def _json_tool_fields(
+    request: ChatRequest, response_format: ResponseFormat
+) -> Result[_RfFields, TranslationError]:
     if response_format.tag != "json_schema":
         # On the json-tool models v1 ignores type "text" AND type "json_object"
         # (no schema extracted -> no tool, no json_mode -> full no-op).
         return Ok((None, None, None, None))
-    conflicted = len(request.tools) > 0 or request.tool_choice.is_some() or request.parallel_tool_calls.is_some()
+    conflicted = (
+        len(request.tools) > 0
+        or request.tool_choice.is_some()
+        or request.parallel_tool_calls.is_some()
+    )
     if conflicted:
         return Error(
             TranslationError.of_unsupported(
@@ -260,7 +293,7 @@ def _json_tool_fields(request: ChatRequest, response_format: ResponseFormat) -> 
         )
     schema = copy.deepcopy(response_format.json_schema.schema.value)
     tool = response_format_tool(schema)
-    forced_choice: Optional[PlainJson] = None
+    forced_choice: PlainJson | None = None
     if not p.thinking_signaled(request):
         forced_choice = {"name": "json_tool_call", "type": "tool"}
     return Ok((tool, forced_choice, None, True))

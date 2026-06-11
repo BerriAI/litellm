@@ -11,53 +11,66 @@
 
 from __future__ import annotations
 
-
-from typing import Dict, List, Mapping
-
-from typing_extensions import assert_never
+from collections.abc import Mapping
 
 from expression import Nothing, Option
 from expression.collections import Block
+from typing_extensions import assert_never
 
 from ...ir import (
     CacheControl,
     ContentBlock,
     Image,
+    ImageSource,
     Message,
     PlainJson,
     Text,
     ToolResult,
+    ToolResultContent,
     ToolUse,
 )
 from .tools import cache_json, sanitize_tool_use_id
 
-_EMPTY_TEXT_PLACEHOLDER = "[System: Empty message content sanitised to satisfy protocol]"
+_EMPTY_TEXT_PLACEHOLDER = (
+    "[System: Empty message content sanitised to satisfy protocol]"
+)
 
 
-def serialize_messages(messages: Block[Message], name_forward: Mapping[str, str]) -> List[PlainJson]:
-    rendered = [{"role": message.role, "content": _content(message, name_forward)} for message in messages]
+def serialize_messages(
+    messages: Block[Message], name_forward: Mapping[str, str]
+) -> list[PlainJson]:
+    rendered: list[dict[str, PlainJson]] = [
+        {"role": message.role, "content": _content(message, name_forward)}
+        for message in messages
+    ]
     if rendered and rendered[-1]["role"] == "assistant":
-        return [*rendered[:-1], _rstrip_assistant(rendered[-1])]
-    return rendered
+        head: list[PlainJson] = [*rendered[:-1], _rstrip_assistant(rendered[-1])]
+        return head
+    return [*rendered]
 
 
-def _content(message: Message, name_forward: Mapping[str, str]) -> List[PlainJson]:
+def _content(message: Message, name_forward: Mapping[str, str]) -> list[PlainJson]:
     blocks = [_block(block, name_forward) for block in message.content]
     return _dedupe_tool_uses(blocks)
 
 
-def _dedupe_tool_uses(blocks: List[PlainJson]) -> List[PlainJson]:
+def _dedupe_tool_uses(blocks: list[PlainJson]) -> list[PlainJson]:
     """v1 drops a tool_use whose id repeats within one merged assistant turn."""
-    seen = [block["id"] for block in blocks if isinstance(block, dict) and block.get("type") == "tool_use"]
-    if len(seen) == len(set(seen)):
+    seen: list[PlainJson] = [
+        block["id"]
+        for block in blocks
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
+    if len(seen) == len(set(map(str, seen))):
         return blocks
-    kept: List[PlainJson] = []
-    used: set = set()
+    kept: list[PlainJson] = []
+    used: set[str] = set()
     for block in blocks:
         if isinstance(block, dict) and block.get("type") == "tool_use":
-            if block["id"] in used:
+            identifier = str(block["id"])
+            if identifier in used:
                 continue
-            used.add(block["id"])  # nosemgrep: translation-no-mutation
+            used.add(identifier)  # nosemgrep: translation-no-mutation
         kept.append(block)  # nosemgrep: translation-no-mutation
     return kept
 
@@ -74,7 +87,7 @@ def _block(block: ContentBlock, name_forward: Mapping[str, str]) -> PlainJson:
             return _tool_result_json(block.tool_result)
         case "thinking":
             thinking = block.thinking
-            base: Dict[str, PlainJson] = {
+            base: dict[str, PlainJson] = {
                 "type": "thinking",
                 "thinking": thinking.thinking,
             }
@@ -86,8 +99,7 @@ def _block(block: ContentBlock, name_forward: Mapping[str, str]) -> PlainJson:
                 "type": "redacted_thinking",
                 "data": block.redacted_thinking.data,
             }
-        case never:
-            assert_never(never)
+    assert_never(block.tag)
 
 
 def _text_json(text: Text, placeholder: bool) -> PlainJson:
@@ -98,23 +110,26 @@ def _text_json(text: Text, placeholder: bool) -> PlainJson:
 
 
 def _image_json(image: Image) -> PlainJson:
-    source: PlainJson
-    match image.source.tag:
+    return _with_cache(
+        {"type": "image", "source": _image_source_json(image.source)}, image.cache
+    )
+
+
+def _image_source_json(source: ImageSource) -> PlainJson:
+    match source.tag:
         case "base64":
-            source = {
+            return {
                 "type": "base64",
-                "media_type": image.source.base64.media_type,
-                "data": image.source.base64.data,
+                "media_type": source.base64.media_type,
+                "data": source.base64.data,
             }
         case "url":
-            source = {"type": "url", "url": image.source.url.url}
-        case never:
-            assert_never(never)
-    return _with_cache({"type": "image", "source": source}, image.cache)
+            return {"type": "url", "url": source.url.url}
+    assert_never(source.tag)
 
 
 def _tool_use_json(tool_use: ToolUse, name_forward: Mapping[str, str]) -> PlainJson:
-    base: Dict[str, PlainJson] = {
+    base: dict[str, PlainJson] = {
         "type": "tool_use",
         "id": sanitize_tool_use_id(tool_use.id),
         "name": name_forward.get(tool_use.name, tool_use.name),
@@ -129,24 +144,25 @@ def _tool_use_json(tool_use: ToolUse, name_forward: Mapping[str, str]) -> PlainJ
 
 
 def _tool_result_json(tool_result: ToolResult) -> PlainJson:
-    content: PlainJson
-    match tool_result.content.tag:
-        case "text":
-            content = tool_result.content.text
-        case "parts":
-            # v1 does NOT placeholder empty text inside tool_result content.
-            content = [_text_json(part, placeholder=False) for part in tool_result.content.parts]
-        case never:
-            assert_never(never)
-    base: Dict[str, PlainJson] = {
+    base: dict[str, PlainJson] = {
         "type": "tool_result",
         "tool_use_id": sanitize_tool_use_id(tool_result.tool_use_id),
-        "content": content,
+        "content": _tool_result_content_json(tool_result.content),
     }
     return _with_cache(base, tool_result.cache)
 
 
-def _with_cache(base: Dict[str, PlainJson], cache: Option[CacheControl]) -> PlainJson:
+def _tool_result_content_json(content: ToolResultContent) -> PlainJson:
+    match content.tag:
+        case "text":
+            return content.text
+        case "parts":
+            # v1 does NOT placeholder empty text inside tool_result content.
+            return [_text_json(part, placeholder=False) for part in content.parts]
+    assert_never(content.tag)
+
+
+def _with_cache(base: dict[str, PlainJson], cache: Option[CacheControl]) -> PlainJson:
     # Identity check: Nothing is a singleton and this runs once per content
     # block on the hot path; a class pattern match costs ~30x more here.
     if cache is Nothing:
@@ -154,15 +170,17 @@ def _with_cache(base: Dict[str, PlainJson], cache: Option[CacheControl]) -> Plai
     return {**base, "cache_control": cache_json(cache.some)}
 
 
-def _rstrip_assistant(message: PlainJson) -> PlainJson:
-    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
-        return message
-    return {
-        **message,
-        "content": [
-            {**block, "text": block["text"].rstrip()}
-            if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str)
-            else block
-            for block in message["content"]
-        ],
-    }
+def _rstrip_assistant(message: dict[str, PlainJson]) -> PlainJson:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return {**message}
+    return {**message, "content": [_rstrip_text_block(block) for block in content]}
+
+
+def _rstrip_text_block(block: PlainJson) -> PlainJson:
+    if not isinstance(block, dict) or block.get("type") != "text":
+        return block
+    text = block.get("text")
+    if not isinstance(text, str):
+        return block
+    return {**block, "text": text.rstrip()}

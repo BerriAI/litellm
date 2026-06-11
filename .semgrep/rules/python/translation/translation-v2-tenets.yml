@@ -1,0 +1,96 @@
+# litellm/translation v2 tenets, encoded as deterministic checks
+# (02-mateo-scope.md "What good code looks like here"). Scoped to the
+# translation package; the rest of the codebase is unaffected.
+#
+# Deliberate exceptions are visible inline as `# nosemgrep: <rule-id>` with a
+# justification comment (the only allowed ones are local build-then-freeze
+# accumulators that never escape their scope).
+
+rules:
+  - id: translation-no-raise
+    message: >
+      Nothing raises inside litellm/translation: failures are values
+      (Result/TranslationError) and errors.py is the only module allowed to
+      define error machinery. Return an Error(...) instead; the dispatch seam
+      falls back to v1 on it.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+      exclude:
+        - litellm/translation/errors.py
+    pattern-either:
+      - pattern: raise $E
+      - pattern: raise $E from $F
+      - pattern: raise
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, failures-as-values]
+      confidence: HIGH
+
+  - id: translation-no-mutation
+    message: >
+      litellm/translation data is immutable: no .append/.update/.extend/.add/
+      .pop/.setdefault, no subscript or augmented assignment, no del. Build a
+      new value (comprehension, unpacking, Block/Map) instead. A local
+      accumulator that provably never escapes its scope may carry an inline
+      nosemgrep with a justification.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+    pattern-either:
+      - pattern: $X.append(...)
+      - pattern: $X.extend(...)
+      - pattern: $X.update(...)
+      - pattern: $X.add(...)
+      - pattern: $X.insert(...)
+      - pattern: $X.setdefault(...)
+      - pattern: $X.popitem(...)
+      - pattern: $X[$K] = $V
+      - pattern: $X += $V
+      - pattern: $X -= $V
+      - pattern: $X *= $V
+      - pattern: $X /= $V
+      - pattern: $X |= $V
+      - pattern: del $X[$K]
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, no-mutation]
+      confidence: HIGH
+
+  - id: translation-no-module-level-mutable-state
+    message: >
+      No module-level mutable state in litellm/translation (this exact class
+      of bug shipped as audit F2: a module dict aliased into response bodies
+      bled across requests). Use a tuple/frozenset/MappingProxyType, or build
+      the value fresh per call.
+    severity: ERROR
+    languages: [python]
+    paths:
+      include:
+        - litellm/translation
+    patterns:
+      - pattern-either:
+          - pattern: $X = {...}
+          - pattern: $X = [...]
+          - pattern: $X = dict(...)
+          - pattern: $X = list(...)
+          - pattern: $X = set(...)
+          - pattern: "$X: $T = {...}"
+          - pattern: "$X: $T = [...]"
+          - pattern: "$X: $T = dict(...)"
+          - pattern: "$X: $T = list(...)"
+          - pattern: "$X: $T = set(...)"
+      - pattern-not-inside: |
+          def $F(...):
+            ...
+      - pattern-not-inside: |
+          class $C:
+            ...
+    metadata:
+      category: correctness
+      tags: [python, translation-v2, no-global-state]
+      confidence: HIGH

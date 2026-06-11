@@ -181,6 +181,7 @@ dev = [
     "openapi-core==0.22.0; python_version < '3.14'",
     "pytest-timeout==2.4.0",
     "vcrpy==8.1.1",
+    "import-linter==2.3",
     "pytest-recording==0.13.4",
 ]
 proxy-dev = [
@@ -333,3 +334,37 @@ pytest_add_cli_args = [
 source = ["litellm"]
 relative_files = true
 
+
+# Translation v2 layering contracts (02-mateo-scope.md / 03-tin-scope.md):
+# the package never reaches into the v1 stack, and its internal layers only
+# import downward. Run with `lint-imports` (wired into the code-quality CI
+# job and `make lint-translation`).
+[tool.importlinter]
+root_package = "litellm"
+
+[[tool.importlinter.contracts]]
+name = "translation v2 does not import the v1 stack"
+type = "forbidden"
+source_modules = ["litellm.translation"]
+forbidden_modules = [
+    "litellm.llms",
+    "litellm.main",
+    "litellm.utils",
+    "litellm.router",
+    "litellm.proxy",
+    "litellm.litellm_core_utils",
+    "litellm.types",
+]
+
+[[tool.importlinter.contracts]]
+name = "translation v2 layers are downward-only"
+type = "layers"
+containers = ["litellm.translation"]
+layers = [
+    "engine",
+    "inbound | providers",
+    "dispatch",
+    "boundary | deps",
+    "errors",
+    "ir",
+]

@@ -13,7 +13,7 @@ from .engine.pipeline import translate_chat_request
 from .errors import BoundaryError, TranslationError
 from .ir import ChatRequest
 
-__all__ = [
+__all__ = (
     "BoundaryError",
     "ChatRequest",
     "InboundSchema",
@@ -23,4 +23,4 @@ __all__ = [
     "TranslationError",
     "route",
     "translate_chat_request",
-]
+)

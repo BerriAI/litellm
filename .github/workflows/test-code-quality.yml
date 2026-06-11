@@ -126,3 +126,15 @@ jobs:
 
       - name: documentation_test_api_docs
         run: uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
+
+      # translation v2 rule gates (02-mateo-scope.md "What good code looks
+      # like here"). Ruff's folder config (litellm/translation/ruff.toml) and
+      # the semgrep rules (.semgrep/rules/python/translation/) ride the
+      # existing lint and semgrep workflows; pyright strict and the
+      # import-linter layer contracts run here. `make lint-translation` is
+      # the local equivalent of all four.
+      - name: translation_v2_pyright_strict
+        run: uv tool run --from 'pyright==1.1.406' pyright --project litellm/translation
+
+      - name: translation_v2_import_contracts
+        run: uv run --no-sync lint-imports

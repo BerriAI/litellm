@@ -2,4 +2,4 @@
 
 from .serialize import serialize_request
 
-__all__ = ["serialize_request"]
+__all__ = ("serialize_request",)

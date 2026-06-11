@@ -8,8 +8,8 @@ seam falls back to v1, so no request ever loses a feature silently.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from types import MappingProxyType
-from typing import Callable, Mapping
 
 from expression import Error, Result
 
@@ -29,8 +29,14 @@ _SERIALIZERS: Mapping[Provider, _Serializer] = MappingProxyType(
 )
 
 
-def translate_chat_request(raw: Mapping[str, object], provider: Provider, deps: TranslationDeps) -> TranslateResult:
+def translate_chat_request(
+    raw: Mapping[str, object], provider: Provider, deps: TranslationDeps
+) -> TranslateResult:
     serializer = _SERIALIZERS.get(provider)
     if serializer is None:
-        return Error(TranslationError.of_unsupported(f"provider {provider!r} has no v2 chat serializer yet"))
+        return Error(
+            TranslationError.of_unsupported(
+                f"provider {provider!r} has no v2 chat serializer yet"
+            )
+        )
     return parse_request(raw).bind(lambda request: serializer(request, deps))

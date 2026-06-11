@@ -15,12 +15,12 @@ aliases caller-owned data.
 from __future__ import annotations
 
 import json
-from typing import Mapping, Type, TypeVar
-
-from pydantic import BaseModel, ValidationError
+from collections.abc import Mapping
+from typing import TypeVar
 
 from expression import Error, Ok, Result
 from expression.collections import Block
+from pydantic import BaseModel, ValidationError
 
 from .errors import BoundaryError, TranslationError
 from .ir import PlainJson
@@ -30,7 +30,9 @@ _TModel = TypeVar("_TModel", bound=BaseModel)
 _UNSUPPORTED_ERROR_TYPES = frozenset({"extra_forbidden", "union_tag_invalid"})
 
 
-def parse(model_cls: Type[_TModel], raw: Mapping[str, object]) -> Result[_TModel, TranslationError]:
+def parse(
+    model_cls: type[_TModel], raw: Mapping[str, object]
+) -> Result[_TModel, TranslationError]:
     """Validate ``raw`` against ``model_cls``, accumulating every failure.
 
     Unknown fields (``extra_forbidden``) and unrecognized union tags become an
@@ -41,18 +43,30 @@ def parse(model_cls: Type[_TModel], raw: Mapping[str, object]) -> Result[_TModel
     try:
         return Ok(model_cls.model_validate(raw))
     except ValidationError as exc:
-        unsupported: list[str] = []
-        failures: list[str] = []
-        for err in exc.errors(include_url=False):
-            location = ".".join(str(part) for part in err["loc"])
-            if err["type"] in _UNSUPPORTED_ERROR_TYPES:
-                unsupported.append(location or "<root>")
-            else:
-                failures.append(f"{location or '<root>'}: {err['msg']}")
+        errors = exc.errors(include_url=False)
+        locations = [
+            (".".join(str(part) for part in err["loc"]), err) for err in errors
+        ]
+        unsupported = [
+            location or "<root>"
+            for location, err in locations
+            if err["type"] in _UNSUPPORTED_ERROR_TYPES
+        ]
+        failures = [
+            f"{location or '<root>'}: {err['msg']}"
+            for location, err in locations
+            if err["type"] not in _UNSUPPORTED_ERROR_TYPES
+        ]
         if unsupported:
             fields = ", ".join(sorted(set(unsupported)))
-            return Error(TranslationError.of_unsupported(f"fields not yet supported by translation v2: {fields}"))
-        return Error(TranslationError.of_boundary(BoundaryError.of(Block.of_seq(failures))))
+            return Error(
+                TranslationError.of_unsupported(
+                    f"fields not yet supported by translation v2: {fields}"
+                )
+            )
+        return Error(
+            TranslationError.of_boundary(BoundaryError.of(Block.of_seq(failures)))
+        )
 
 
 def as_plain_json(value: object) -> Result[PlainJson, str]:

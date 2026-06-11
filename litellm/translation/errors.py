@@ -54,13 +54,16 @@ class TranslationError:
 
     @property
     def summary(self) -> str:
+        # Exhaustiveness: every Literal tag has an arm; the trailing
+        # assert_never typechecks only while that stays true (the package's
+        # standard pattern -- a `case never:` capture arm is flagged by
+        # pyright strict as an unmatchable pattern).
         match self.tag:
             case "boundary":
                 return self.boundary.summary
             case "unsupported":
                 return self.unsupported
-            case never:
-                assert_never(never)
+        assert_never(self.tag)
 
 
 ParseResult = Result[ChatRequest, TranslationError]

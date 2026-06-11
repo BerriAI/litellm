@@ -13,19 +13,22 @@ Nothing in this module performs I/O or imports a provider.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, fields
-from typing import Callable, Dict, Literal, TypeVar, Union
+from typing import Literal, TypeVar, Union
 
 from expression import Option, case, tag, tagged_union
 from expression.collections import Block, Map
 
 Json = Union[None, bool, int, float, str, "Block[Json]", "Map[str, Json]"]
 
-PlainJson = Union[None, bool, int, float, str, "list[PlainJson]", "dict[str, PlainJson]"]
+PlainJson = Union[
+    None, bool, int, float, str, "list[PlainJson]", "dict[str, PlainJson]"
+]
 
-Body = Dict[str, PlainJson]
+Body = dict[str, PlainJson]
 
-Sampling = Union[int, float]
+Sampling = int | float
 """A numeric parameter kept as the caller sent it (int stays int on the wire)."""
 
 
@@ -36,11 +39,10 @@ class Unit:
 
 UNIT = Unit()
 
-_TCase = TypeVar("_TCase")
 _TUnion = TypeVar("_TUnion")
 
 
-def _case_maker(cls: "type[_TUnion]", name: str) -> "Callable[[object], _TUnion]":
+def _case_maker(cls: type[_TUnion], name: str) -> Callable[[object], _TUnion]:
     """Allocation-fast constructor for one case of an Expression tagged union.
 
     Produces instances bit-identical to ``cls(name=value)`` (same ``tag``,
@@ -57,7 +59,7 @@ def _case_maker(cls: "type[_TUnion]", name: str) -> "Callable[[object], _TUnion]
     new = cls.__new__  # type: ignore[attr-defined]
     set_attr = object.__setattr__
 
-    def make(value: object) -> "_TUnion":
+    def make(value: object) -> _TUnion:
         instance = new(cls)
         set_attr(instance, "tag", name)
         set_attr(instance, name, value)
@@ -106,11 +108,11 @@ class ImageSource:
     url: UrlSource = case()
 
     @staticmethod
-    def of_base64(value: Base64Source) -> "ImageSource":
+    def of_base64(value: Base64Source) -> ImageSource:
         return ImageSource(base64=value)
 
     @staticmethod
-    def of_url(value: UrlSource) -> "ImageSource":
+    def of_url(value: UrlSource) -> ImageSource:
         return ImageSource(url=value)
 
 
@@ -142,11 +144,11 @@ class ToolResultContent:
     parts: Block[Text] = case()
 
     @staticmethod
-    def of_text(value: str) -> "ToolResultContent":
+    def of_text(value: str) -> ToolResultContent:
         return _tool_result_text(value)
 
     @staticmethod
-    def of_parts(value: Block[Text]) -> "ToolResultContent":
+    def of_parts(value: Block[Text]) -> ToolResultContent:
         return _tool_result_parts(value)
 
 
@@ -175,7 +177,9 @@ class RedactedThinking:
 
 @tagged_union(frozen=True)
 class ContentBlock:
-    tag: Literal["text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"] = tag()
+    tag: Literal[
+        "text", "image", "tool_use", "tool_result", "thinking", "redacted_thinking"
+    ] = tag()
 
     text: Text = case()
     image: Image = case()
@@ -185,27 +189,27 @@ class ContentBlock:
     redacted_thinking: RedactedThinking = case()
 
     @staticmethod
-    def of_text(value: Text) -> "ContentBlock":
+    def of_text(value: Text) -> ContentBlock:
         return _content_text(value)
 
     @staticmethod
-    def of_image(value: Image) -> "ContentBlock":
+    def of_image(value: Image) -> ContentBlock:
         return _content_image(value)
 
     @staticmethod
-    def of_tool_use(value: ToolUse) -> "ContentBlock":
+    def of_tool_use(value: ToolUse) -> ContentBlock:
         return _content_tool_use(value)
 
     @staticmethod
-    def of_tool_result(value: ToolResult) -> "ContentBlock":
+    def of_tool_result(value: ToolResult) -> ContentBlock:
         return _content_tool_result(value)
 
     @staticmethod
-    def of_thinking(value: Thinking) -> "ContentBlock":
+    def of_thinking(value: Thinking) -> ContentBlock:
         return _content_thinking(value)
 
     @staticmethod
-    def of_redacted_thinking(value: RedactedThinking) -> "ContentBlock":
+    def of_redacted_thinking(value: RedactedThinking) -> ContentBlock:
         return _content_redacted_thinking(value)
 
 
@@ -250,19 +254,19 @@ class ToolChoice:
     specific: str = case()
 
     @staticmethod
-    def of_auto() -> "ToolChoice":
+    def of_auto() -> ToolChoice:
         return ToolChoice(auto=UNIT)
 
     @staticmethod
-    def of_required() -> "ToolChoice":
+    def of_required() -> ToolChoice:
         return ToolChoice(required=UNIT)
 
     @staticmethod
-    def of_none() -> "ToolChoice":
+    def of_none() -> ToolChoice:
         return ToolChoice(none=UNIT)
 
     @staticmethod
-    def of_specific(name: str) -> "ToolChoice":
+    def of_specific(name: str) -> ToolChoice:
         return ToolChoice(specific=name)
 
 
@@ -280,15 +284,15 @@ class ResponseFormat:
     json_schema: JsonSchemaSpec = case()
 
     @staticmethod
-    def of_text() -> "ResponseFormat":
+    def of_text() -> ResponseFormat:
         return ResponseFormat(text=UNIT)
 
     @staticmethod
-    def of_json_object() -> "ResponseFormat":
+    def of_json_object() -> ResponseFormat:
         return ResponseFormat(json_object=UNIT)
 
     @staticmethod
-    def of_json_schema(value: JsonSchemaSpec) -> "ResponseFormat":
+    def of_json_schema(value: JsonSchemaSpec) -> ResponseFormat:
         return ResponseFormat(json_schema=value)
 
 
@@ -306,15 +310,15 @@ class ThinkingParam:
     adaptive: Unit = case()
 
     @staticmethod
-    def of_enabled(budget_tokens: Option[int]) -> "ThinkingParam":
+    def of_enabled(budget_tokens: Option[int]) -> ThinkingParam:
         return ThinkingParam(enabled=ThinkingEnabled(budget_tokens=budget_tokens))
 
     @staticmethod
-    def of_disabled() -> "ThinkingParam":
+    def of_disabled() -> ThinkingParam:
         return ThinkingParam(disabled=UNIT)
 
     @staticmethod
-    def of_adaptive() -> "ThinkingParam":
+    def of_adaptive() -> ThinkingParam:
         return ThinkingParam(adaptive=UNIT)
 
 
@@ -348,4 +352,8 @@ class ChatRequest:
 
 def has_tool_blocks(messages: Block[Message]) -> bool:
     """True when any message carries a tool_use or tool_result content block."""
-    return any(block.tag in ("tool_use", "tool_result") for message in messages for block in message.content)
+    return any(
+        block.tag in ("tool_use", "tool_result")
+        for message in messages
+        for block in message.content
+    )

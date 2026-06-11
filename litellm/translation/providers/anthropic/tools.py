@@ -16,7 +16,7 @@ Ports the exact v1 behavior for the supported surface:
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
+from itertools import count
 
 from expression import Option
 from expression.collections import Block
@@ -26,11 +26,13 @@ from ...ir import Body, CacheControl, PlainJson, ToolDef
 _INVALID_NAME_CHARS = re.compile(r"[^a-zA-Z0-9_-]")
 _NAME_MAX_LEN = 128
 
-_SCHEMA_ALLOWED_KEYS = frozenset({"type", "properties", "additionalProperties", "required", "$defs", "strict"})
+_SCHEMA_ALLOWED_KEYS = frozenset(
+    {"type", "properties", "additionalProperties", "required", "$defs", "strict"}
+)
 
 
 def cache_json(cache: CacheControl) -> PlainJson:
-    base: Dict[str, PlainJson] = {"type": cache.type}
+    base: dict[str, PlainJson] = {"type": cache.type}
     match cache.ttl:
         case Option(tag="some", some=ttl):
             return {**base, "ttl": ttl}
@@ -40,12 +42,16 @@ def cache_json(cache: CacheControl) -> PlainJson:
 
 def serialize_tool(tool: ToolDef) -> Body:
     schema = _input_schema(tool.parameters.map(lambda blob: blob.value))
-    base: Dict[str, PlainJson] = {
+    base: dict[str, PlainJson] = {
         "name": tool.name,
         "input_schema": schema,
         "type": "custom",
     }
-    described = {**base, "description": tool.description.value} if tool.description.is_some() else base
+    described = (
+        {**base, "description": tool.description.value}
+        if tool.description.is_some()
+        else base
+    )
     match tool.cache:
         case Option(tag="some", some=cache):
             return {**described, "cache_control": cache_json(cache)}
@@ -63,7 +69,9 @@ def _input_schema(parameters: Option[PlainJson]) -> PlainJson:
     if not isinstance(raw, dict):
         return {"type": "object", "properties": {}}
     coerced = (
-        raw if raw.get("type") == "object" else {**raw, "type": "object", "properties": raw.get("properties") or {}}
+        raw
+        if raw.get("type") == "object"
+        else {**raw, "type": "object", "properties": raw.get("properties") or {}}
     )
     return {key: value for key, value in coerced.items() if key in _SCHEMA_ALLOWED_KEYS}
 
@@ -89,7 +97,7 @@ def _basic_sanitize_name(name: str) -> str:
 
 def build_name_maps(
     original_names: Block[str],
-) -> Tuple[Dict[str, str], Dict[str, str]]:
+) -> tuple[dict[str, str], dict[str, str]]:
     """(forward, reverse) maps; only rewritten names appear (v1 semantics).
 
     Already-valid names reserve their slot first regardless of order; invalid
@@ -97,16 +105,16 @@ def build_name_maps(
     accumulators are the standard build-locally pattern; nothing escapes.
     """
     valid = {name for name in original_names if _basic_sanitize_name(name) == name}
-    forward: Dict[str, str] = {}
+    forward: dict[str, str] = {}
     used = set(valid)
     for original in original_names:
         candidate = _basic_sanitize_name(original)
         if candidate == original or original in forward or not original:
             continue
         unique = candidate
-        n = 1
-        while unique in used:
-            n += 1
+        for n in count(2):
+            if unique not in used:
+                break
             suffix = f"_{n}"
             unique = f"{candidate[: _NAME_MAX_LEN - len(suffix)]}{suffix}"
         forward = {**forward, original: unique}
@@ -115,11 +123,11 @@ def build_name_maps(
     return forward, reverse
 
 
-def request_name_maps(tools: Block[ToolDef]) -> Tuple[Dict[str, str], Dict[str, str]]:
+def request_name_maps(tools: Block[ToolDef]) -> tuple[dict[str, str], dict[str, str]]:
     return build_name_maps(tools.map(lambda tool: tool.name))
 
 
-def response_format_tool(schema: Optional[PlainJson]) -> Body:
+def response_format_tool(schema: PlainJson | None) -> Body:
     """v1 ``_create_json_tool_call_for_response_format``: note no ``type`` key."""
     if schema is None:
         input_schema: PlainJson = {
@@ -169,13 +177,19 @@ def filter_output_schema(schema: PlainJson) -> PlainJson:
         for key, value in schema.items()
         if key not in labels and not (key == "description" and description is not None)
     }
-    with_description = {**filtered, "description": description} if description is not None else filtered
-    if with_description.get("type") == "object" and ("additionalProperties" not in with_description):
+    with_description = (
+        {**filtered, "description": description}
+        if description is not None
+        else filtered
+    )
+    if with_description.get("type") == "object" and (
+        "additionalProperties" not in with_description
+    ):
         return {**with_description, "additionalProperties": False}
     return with_description
 
 
-def _described(schema: Dict[str, PlainJson], notes: List[str]) -> Optional[str]:
+def _described(schema: dict[str, PlainJson], notes: list[str]) -> str | None:
     if not notes:
         return None
     note = "Note: " + ", ".join(notes) + "."

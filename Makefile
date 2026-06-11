@@ -34,6 +34,7 @@ help:
 	@echo "  make test-unit-integrations - Run integration tests (~60 files)"
 	@echo "  make test-unit-core-utils - Run core utils tests (~32 files)"
 	@echo "  make test-unit-other    - Run other tests (caching, responses, etc., ~69 files)"
+	@echo "  make lint-translation   - Run all translation-v2 rule gates (ruff/pyright/semgrep/import-linter) + tests"
 	@echo "  make test-unit-root     - Run root-level tests (~34 files)"
 	@echo "  make test-proxy-unit-a  - Run proxy_unit_tests (a-o, ~20 files)"
 	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
@@ -156,6 +157,17 @@ test-unit-core-utils: install-test-deps
 
 test-unit-other: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/translation tests/test_litellm/types --tb=short -vv -n 4 --durations=20
+
+# All four translation-v2 rule gates plus its unit tests, in one command.
+# CI equivalents: test-linting (ruff via litellm/translation/ruff.toml),
+# test-semgrep (.semgrep/rules/python/translation/), test-code-quality
+# (pyright strict + import-linter), test-unit-misc (pytest shard).
+lint-translation: install-test-deps
+	$(UV_RUN) ruff check litellm/translation
+	uv tool run --from 'pyright==1.1.406' pyright --project litellm/translation
+	uv tool run --from 'semgrep==1.157.0' semgrep scan --config .semgrep/rules litellm/translation --error -q
+	$(UV_RUN) lint-imports
+	LITELLM_LOCAL_MODEL_COST_MAP=True $(UV_RUN) pytest tests/test_litellm/translation --tb=short -q
 
 test-unit-root: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20

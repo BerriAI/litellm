@@ -9,7 +9,8 @@ v1 seam treats an explicit ``null`` exactly like an absent parameter.
 
 from __future__ import annotations
 
-from typing import List, Mapping, Optional, TypeVar, Union
+from collections.abc import Mapping
+from typing import TypeVar
 
 from expression import Error, Nothing, Ok, Option, Result, Some
 from expression.collections import Block
@@ -59,7 +60,9 @@ def _to_ir(wire: ChatRequestIn) -> ParseResult:
         # v1 treats string-"none" and {"type": "none"} differently when
         # parallel_tool_calls rides along; only the string form is ported.
         return Error(
-            TranslationError.of_unsupported("tool_choice {'type': 'none'} with parallel_tool_calls; v1 handles it")
+            TranslationError.of_unsupported(
+                "tool_choice {'type': 'none'} with parallel_tool_calls; v1 handles it"
+            )
         )
     match convert_messages(wire.messages):
         case Result(tag="ok", ok=(systems, messages)):
@@ -99,16 +102,16 @@ def _to_ir(wire: ChatRequestIn) -> ParseResult:
     )
 
 
-def _option(value: Optional[_T]) -> Option[_T]:
+def _option(value: _T | None) -> Option[_T]:
     return Some(value) if value is not None else Nothing
 
 
 def _parse_tools(
-    tools: Optional[List[ToolIn]],
+    tools: list[ToolIn] | None,
 ) -> Result[Block[ToolDef], TranslationError]:
     if tools is None:
         return Ok(Block.empty())
-    defs: List[ToolDef] = []
+    defs: list[ToolDef] = []
     for tool in tools:
         match _parse_tool(tool):
             case Result(tag="ok", ok=tool_def):
@@ -129,7 +132,9 @@ def _parse_tool(tool: ToolIn) -> Result[ToolDef, TranslationError]:
     )
     if any(extra is not None for extra in extras):
         return Error(
-            TranslationError.of_unsupported("tool defer_loading/allowed_callers/input_examples; v1 handles them")
+            TranslationError.of_unsupported(
+                "tool defer_loading/allowed_callers/input_examples; v1 handles them"
+            )
         )
     cache = cache_of(tool.cache_control)
     if cache.is_none():
@@ -149,23 +154,32 @@ def _parse_tool(tool: ToolIn) -> Result[ToolDef, TranslationError]:
 
 
 def _parse_tool_parameters(
-    parameters: Optional[object],
+    parameters: object | None,
 ) -> Result[Option[JsonBlob], TranslationError]:
     if parameters is None:
         return Ok(Nothing)
-    if not isinstance(parameters, dict):
-        return Error(TranslationError.of_unsupported("non-object tool parameters; v1 handles them"))
-    if "definitions" in parameters or "components" in parameters:
-        return Error(TranslationError.of_unsupported("legacy $defs (definitions/components) need v1's schema inlining"))
     match boundary.as_plain_json(parameters):
         case Result(tag="ok", ok=copied):
-            return Ok(Some(JsonBlob(value=copied)))
+            pass
         case Result(error=reason):
             return Error(TranslationError.of_unsupported(f"tool parameters: {reason}"))
+    if not isinstance(copied, dict):
+        return Error(
+            TranslationError.of_unsupported(
+                "non-object tool parameters; v1 handles them"
+            )
+        )
+    if "definitions" in copied or "components" in copied:
+        return Error(
+            TranslationError.of_unsupported(
+                "legacy $defs (definitions/components) need v1's schema inlining"
+            )
+        )
+    return Ok(Some(JsonBlob(value=copied)))
 
 
 def _parse_tool_choice(
-    choice: Union[str, ToolChoiceNamedIn, ToolChoiceTypeOnlyIn, None],
+    choice: str | ToolChoiceNamedIn | ToolChoiceTypeOnlyIn | None,
 ) -> Option[ToolChoice]:
     match choice:
         case None:
@@ -183,7 +197,7 @@ def _parse_tool_choice(
 
 
 def _parse_response_format(
-    value: Optional[ResponseFormatIn],
+    value: ResponseFormatIn | None,
 ) -> Result[Option[ResponseFormat], TranslationError]:
     if value is None:
         return Ok(Nothing)
@@ -192,18 +206,34 @@ def _parse_response_format(
     if value.type == "json_object":
         return Ok(Some(ResponseFormat.of_json_object()))
     if value.json_schema is None:
-        return Error(TranslationError.of_unsupported("response_format json_schema without a schema; v1 handles it"))
+        return Error(
+            TranslationError.of_unsupported(
+                "response_format json_schema without a schema; v1 handles it"
+            )
+        )
     match boundary.as_plain_json(value.json_schema.json_schema):
         case Result(tag="ok", ok=copied):
             if not isinstance(copied, dict):
-                return Error(TranslationError.of_unsupported("non-object response_format schema; v1 handles it"))
-            return Ok(Some(ResponseFormat.of_json_schema(JsonSchemaSpec(schema=JsonBlob(value=copied)))))
+                return Error(
+                    TranslationError.of_unsupported(
+                        "non-object response_format schema; v1 handles it"
+                    )
+                )
+            return Ok(
+                Some(
+                    ResponseFormat.of_json_schema(
+                        JsonSchemaSpec(schema=JsonBlob(value=copied))
+                    )
+                )
+            )
         case Result(error=reason):
-            return Error(TranslationError.of_unsupported(f"response_format schema: {reason}"))
+            return Error(
+                TranslationError.of_unsupported(f"response_format schema: {reason}")
+            )
 
 
 def _parse_thinking(
-    value: Optional[ThinkingIn],
+    value: ThinkingIn | None,
 ) -> Result[Option[ThinkingParam], TranslationError]:
     if value is None:
         return Ok(Nothing)
@@ -211,7 +241,9 @@ def _parse_thinking(
         return Ok(Some(ThinkingParam.of_enabled(_option(value.budget_tokens))))
     if value.budget_tokens is not None:
         return Error(
-            TranslationError.of_unsupported(f"thinking type={value.type!r} with budget_tokens; v1 forwards it")
+            TranslationError.of_unsupported(
+                f"thinking type={value.type!r} with budget_tokens; v1 forwards it"
+            )
         )
     if value.type == "disabled":
         return Ok(Some(ThinkingParam.of_disabled()))
@@ -219,7 +251,7 @@ def _parse_thinking(
 
 
 def _parse_reasoning_effort(
-    value: Union[str, ReasoningEffortObjectIn, None],
+    value: ReasoningEffort | ReasoningEffortObjectIn | None,
 ) -> Option[ReasoningEffort]:
     if value is None:
         return Nothing
@@ -229,7 +261,9 @@ def _parse_reasoning_effort(
 
 
 def _parse_params(wire: ChatRequestIn) -> InferenceParams:
-    max_tokens = wire.max_tokens if wire.max_tokens is not None else wire.max_completion_tokens
+    max_tokens = (
+        wire.max_tokens if wire.max_tokens is not None else wire.max_completion_tokens
+    )
     return InferenceParams(
         max_tokens=_option(max_tokens),
         temperature=_option(wire.temperature),
@@ -239,7 +273,7 @@ def _parse_params(wire: ChatRequestIn) -> InferenceParams:
     )
 
 
-def _parse_stop(value: Union[str, List[str], None]) -> Block[str]:
+def _parse_stop(value: str | list[str] | None) -> Block[str]:
     if value is None:
         return Block.empty()
     if isinstance(value, str):

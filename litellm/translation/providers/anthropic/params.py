@@ -12,12 +12,12 @@ leaf module of env-seeded constants (the import-linter contract pins this).
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple
-
-from typing_extensions import assert_never
+from collections.abc import Mapping
+from types import MappingProxyType
 
 from expression import Error, Nothing, Ok, Option, Result, Some
 from expression.collections import Block
+from typing_extensions import assert_never
 
 from litellm.constants import (
     ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
@@ -41,26 +41,30 @@ from ...ir import (
     ThinkingParam,
 )
 
-_EFFORT_BUDGETS: Dict[str, int] = {
-    "low": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
-    "medium": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-    "high": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
-    "xhigh": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
-    "max": DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
-    "minimal": max(
-        DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
-        ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
-    ),
-}
+_EFFORT_BUDGETS: Mapping[str, int] = MappingProxyType(
+    {
+        "low": DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
+        "medium": DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
+        "high": DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
+        "xhigh": DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
+        "max": DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
+        "minimal": max(
+            DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
+            ANTHROPIC_MIN_THINKING_BUDGET_TOKENS,
+        ),
+    }
+)
 
-_EFFORT_TO_OUTPUT_CONFIG: Dict[str, str] = {
-    "low": "low",
-    "minimal": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "xhigh",
-    "max": "max",
-}
+_EFFORT_TO_OUTPUT_CONFIG: Mapping[str, str] = MappingProxyType(
+    {
+        "low": "low",
+        "minimal": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh",
+        "max": "max",
+    }
+)
 
 # v1 map_openai_params' model substring list for the native output_format API.
 _OUTPUT_FORMAT_MODELS = (
@@ -166,26 +170,36 @@ def gate_sampling_param(
     if deps.drop_params:
         return Ok(Nothing)
     return Error(
-        TranslationError.of_unsupported(f"{model} does not support {param}={value}; v1 raises the client error")
+        TranslationError.of_unsupported(
+            f"{model} does not support {param}={value}; v1 raises the client error"
+        )
     )
 
 
-def filter_stop(stop: Block[str], deps: TranslationDeps) -> Optional[List[str]]:
+def filter_stop(stop: Block[str], deps: TranslationDeps) -> list[PlainJson] | None:
     """v1 ``_map_stop_sequences``: whitespace-only entries are filtered only
     under the GLOBAL drop_params flag."""
+    kept: list[PlainJson] = [
+        value for value in stop if not (deps.drop_params_global and value.isspace())
+    ]
     if not deps.drop_params_global:
-        return list(stop) if len(stop) > 0 else None
-    kept = [value for value in stop if not value.isspace()]
+        return kept if len(stop) > 0 else None
     return kept if kept else None
 
 
-_ThinkingOutcome = Tuple[Optional[PlainJson], Optional[PlainJson]]
+_ThinkingOutcome = tuple[PlainJson | None, PlainJson | None]
 """(thinking json, output_config json) destined for the body."""
 
 
-def map_thinking(request: ChatRequest, deps: TranslationDeps) -> Result[_ThinkingOutcome, TranslationError]:
+def map_thinking(
+    request: ChatRequest, deps: TranslationDeps
+) -> Result[_ThinkingOutcome, TranslationError]:
     if request.thinking.is_some() and request.reasoning_effort.is_some():
-        return Error(TranslationError.of_unsupported("thinking plus reasoning_effort is body-order-dependent in v1"))
+        return Error(
+            TranslationError.of_unsupported(
+                "thinking plus reasoning_effort is body-order-dependent in v1"
+            )
+        )
     match request.thinking:
         case Option(tag="some", some=thinking):
             if not supports_reasoning_param(request.model, deps):
@@ -222,8 +236,7 @@ def _thinking_json(thinking: ThinkingParam) -> PlainJson:
             return {"type": "disabled"}
         case "adaptive":
             return {"type": "adaptive"}
-        case never:
-            assert_never(never)
+    assert_never(thinking.tag)
 
 
 def _effort_outcome(
@@ -233,14 +246,24 @@ def _effort_outcome(
         return Ok((None, None))
     if not is_adaptive_thinking_model(model, deps):
         return Ok(({"type": "enabled", "budget_tokens": _EFFORT_BUDGETS[effort]}, None))
-    if effort == "xhigh" and not deps.supports_capability(model, "supports_xhigh_reasoning_effort"):
+    if effort == "xhigh" and not deps.supports_capability(
+        model, "supports_xhigh_reasoning_effort"
+    ):
         return Error(
-            TranslationError.of_unsupported(f"effort='xhigh' is gated for {model}; v1 raises the client error")
+            TranslationError.of_unsupported(
+                f"effort='xhigh' is gated for {model}; v1 raises the client error"
+            )
         )
     if effort == "max" and not (
-        is_claude_4_6(model) or is_claude_4_7(model) or deps.supports_capability(model, "supports_max_reasoning_effort")
+        is_claude_4_6(model)
+        or is_claude_4_7(model)
+        or deps.supports_capability(model, "supports_max_reasoning_effort")
     ):
-        return Error(TranslationError.of_unsupported(f"effort='max' is gated for {model}; v1 raises the client error"))
+        return Error(
+            TranslationError.of_unsupported(
+                f"effort='max' is gated for {model}; v1 raises the client error"
+            )
+        )
     output_config: PlainJson = {"effort": _EFFORT_TO_OUTPUT_CONFIG[effort]}
     if deps.drop_params_global and not model_supports_effort_param(model, deps):
         # v1 _apply_output_config drops output_config under the global flag.
@@ -260,7 +283,9 @@ def thinking_signaled(request: ChatRequest) -> bool:
     return enabled or request.reasoning_effort.is_some()
 
 
-def bump_max_tokens_for_thinking(explicit_max_tokens: Option[int], thinking_json: Optional[PlainJson]) -> Option[int]:
+def bump_max_tokens_for_thinking(
+    explicit_max_tokens: Option[int], thinking_json: PlainJson | None
+) -> Option[int]:
     """v1 ``update_optional_params_with_thinking_tokens``: when thinking is
     enabled with a budget and the caller set no max_tokens, v1 sets
     budget + DEFAULT_MAX_TOKENS (the model-map default never applies)."""

@@ -17,12 +17,11 @@ the wire (v1 forwards caller bytes; ``temperature: 1`` must not become 1.0).
 
 from __future__ import annotations
 
-from typing import List, Literal, Optional, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-from typing_extensions import Annotated
 
-Sampling = Union[int, float]
+Sampling = int | float
 
 
 class WireModel(BaseModel):
@@ -31,35 +30,35 @@ class WireModel(BaseModel):
 
 class CacheControlIn(WireModel):
     type: Literal["ephemeral"]
-    ttl: Optional[str] = None
+    ttl: str | None = None
 
 
 class TextPartIn(WireModel):
     type: Literal["text"]
     text: str
-    cache_control: Optional[CacheControlIn] = None
+    cache_control: CacheControlIn | None = None
 
 
 class ImageUrlIn(WireModel):
     url: str
-    format: Optional[str] = None
-    detail: Optional[str] = None
+    format: str | None = None
+    detail: str | None = None
 
 
 class ImagePartIn(WireModel):
     type: Literal["image_url"]
-    image_url: Union[str, ImageUrlIn]
-    cache_control: Optional[CacheControlIn] = None
+    image_url: str | ImageUrlIn
+    cache_control: CacheControlIn | None = None
 
 
-UserPartIn = Annotated[Union[TextPartIn, ImagePartIn], Field(discriminator="type")]
+UserPartIn = Annotated[TextPartIn | ImagePartIn, Field(discriminator="type")]
 
 
 class ThinkingPartIn(WireModel):
     type: Literal["thinking"]
     thinking: str
-    signature: Optional[str] = None
-    cache_control: Optional[CacheControlIn] = None
+    signature: str | None = None
+    cache_control: CacheControlIn | None = None
 
 
 class RedactedThinkingPartIn(WireModel):
@@ -68,86 +67,88 @@ class RedactedThinkingPartIn(WireModel):
 
 
 AssistantPartIn = Annotated[
-    Union[TextPartIn, ThinkingPartIn, RedactedThinkingPartIn],
+    TextPartIn | ThinkingPartIn | RedactedThinkingPartIn,
     Field(discriminator="type"),
 ]
 
-ThinkingBlockIn = Annotated[Union[ThinkingPartIn, RedactedThinkingPartIn], Field(discriminator="type")]
+ThinkingBlockIn = Annotated[
+    ThinkingPartIn | RedactedThinkingPartIn, Field(discriminator="type")
+]
 
 
 class ToolCallFunctionIn(WireModel):
     name: str
-    arguments: Optional[str] = None
+    arguments: str | None = None
 
 
 class ToolCallIn(WireModel):
     id: str
     type: str
-    function: Optional[ToolCallFunctionIn] = None
-    index: Optional[int] = None
-    cache_control: Optional[CacheControlIn] = None
+    function: ToolCallFunctionIn | None = None
+    index: int | None = None
+    cache_control: CacheControlIn | None = None
 
 
 class SystemMessageIn(WireModel):
     role: Literal["system"]
-    content: Union[str, List[TextPartIn], None] = None
-    name: Optional[str] = None
-    cache_control: Optional[CacheControlIn] = None
+    content: str | list[TextPartIn] | None = None
+    name: str | None = None
+    cache_control: CacheControlIn | None = None
 
 
 class UserMessageIn(WireModel):
     role: Literal["user"]
-    content: Union[str, List[UserPartIn], None] = None
-    name: Optional[str] = None
-    cache_control: Optional[CacheControlIn] = None
+    content: str | list[UserPartIn] | None = None
+    name: str | None = None
+    cache_control: CacheControlIn | None = None
 
 
 class AssistantMessageIn(WireModel):
     role: Literal["assistant"]
-    content: Union[str, List[AssistantPartIn], None] = None
-    tool_calls: Optional[List[ToolCallIn]] = None
-    thinking_blocks: Optional[List[ThinkingBlockIn]] = None
-    name: Optional[str] = None
-    cache_control: Optional[CacheControlIn] = None
-    refusal: Optional[object] = None
-    annotations: Optional[object] = None
-    audio: Optional[object] = None
-    function_call: Optional[object] = None
-    provider_specific_fields: Optional[object] = None
+    content: str | list[AssistantPartIn] | None = None
+    tool_calls: list[ToolCallIn] | None = None
+    thinking_blocks: list[ThinkingBlockIn] | None = None
+    name: str | None = None
+    cache_control: CacheControlIn | None = None
+    refusal: object | None = None
+    annotations: object | None = None
+    audio: object | None = None
+    function_call: object | None = None
+    provider_specific_fields: object | None = None
 
 
 class ToolMessageIn(WireModel):
     role: Literal["tool"]
     tool_call_id: str
-    content: Union[str, List[TextPartIn], None] = None
-    name: Optional[str] = None
-    cache_control: Optional[CacheControlIn] = None
+    content: str | list[TextPartIn] | None = None
+    name: str | None = None
+    cache_control: CacheControlIn | None = None
 
 
 MessageIn = Annotated[
-    Union[SystemMessageIn, UserMessageIn, AssistantMessageIn, ToolMessageIn],
+    SystemMessageIn | UserMessageIn | AssistantMessageIn | ToolMessageIn,
     Field(discriminator="role"),
 ]
 
 
 class ToolFunctionIn(WireModel):
     name: str
-    description: Optional[str] = None
-    parameters: Optional[object] = None
-    strict: Optional[bool] = None
-    cache_control: Optional[CacheControlIn] = None
-    defer_loading: Optional[object] = None
-    allowed_callers: Optional[object] = None
-    input_examples: Optional[object] = None
+    description: str | None = None
+    parameters: object | None = None
+    strict: bool | None = None
+    cache_control: CacheControlIn | None = None
+    defer_loading: object | None = None
+    allowed_callers: object | None = None
+    input_examples: object | None = None
 
 
 class ToolIn(WireModel):
     type: Literal["function", "custom"]
     function: ToolFunctionIn
-    cache_control: Optional[CacheControlIn] = None
-    defer_loading: Optional[object] = None
-    allowed_callers: Optional[object] = None
-    input_examples: Optional[object] = None
+    cache_control: CacheControlIn | None = None
+    defer_loading: object | None = None
+    allowed_callers: object | None = None
+    input_examples: object | None = None
 
 
 class ToolChoiceFunctionIn(WireModel):
@@ -155,7 +156,7 @@ class ToolChoiceFunctionIn(WireModel):
 
 
 class ToolChoiceNamedIn(WireModel):
-    type: Optional[str] = None
+    type: str | None = None
     function: ToolChoiceFunctionIn
 
 
@@ -163,19 +164,21 @@ class ToolChoiceTypeOnlyIn(WireModel):
     type: Literal["auto", "required", "any", "none"]
 
 
-ToolChoiceIn = Union[Literal["auto", "required", "none"], ToolChoiceNamedIn, ToolChoiceTypeOnlyIn]
+ToolChoiceIn = (
+    Literal["auto", "required", "none"] | ToolChoiceNamedIn | ToolChoiceTypeOnlyIn
+)
 
 
 class JsonSchemaIn(WireModel):
     json_schema: object = Field(alias="schema")
-    name: Optional[str] = None
-    description: Optional[str] = None
-    strict: Optional[bool] = None
+    name: str | None = None
+    description: str | None = None
+    strict: bool | None = None
 
 
 class ResponseFormatIn(WireModel):
     type: Literal["text", "json_object", "json_schema"]
-    json_schema: Optional[JsonSchemaIn] = None
+    json_schema: JsonSchemaIn | None = None
 
 
 class ReasoningEffortObjectIn(WireModel):
@@ -183,34 +186,34 @@ class ReasoningEffortObjectIn(WireModel):
     v1; ``summary`` is accepted there and ignored."""
 
     effort: Literal["minimal", "low", "medium", "high", "xhigh", "max", "none"]
-    summary: Optional[object] = None
+    summary: object | None = None
 
 
-ReasoningEffortIn = Union[
-    Literal["minimal", "low", "medium", "high", "xhigh", "max", "none"],
-    ReasoningEffortObjectIn,
-]
+ReasoningEffortIn = (
+    Literal["minimal", "low", "medium", "high", "xhigh", "max", "none"]
+    | ReasoningEffortObjectIn
+)
 
 
 class ThinkingIn(WireModel):
     type: Literal["enabled", "disabled", "adaptive"]
-    budget_tokens: Optional[int] = None
+    budget_tokens: int | None = None
 
 
 class ChatRequestIn(WireModel):
     model: str
-    messages: List[MessageIn]
-    stream: Optional[bool] = None
-    max_tokens: Optional[int] = None
-    max_completion_tokens: Optional[int] = None
-    temperature: Optional[Sampling] = None
-    top_p: Optional[Sampling] = None
-    top_k: Optional[Sampling] = None
-    stop: Union[str, List[str], None] = None
-    tools: Optional[List[ToolIn]] = None
-    tool_choice: Optional[ToolChoiceIn] = None
-    parallel_tool_calls: Optional[bool] = None
-    user: Optional[str] = None
-    response_format: Optional[ResponseFormatIn] = None
-    reasoning_effort: Optional[ReasoningEffortIn] = None
-    thinking: Optional[ThinkingIn] = None
+    messages: list[MessageIn]
+    stream: bool | None = None
+    max_tokens: int | None = None
+    max_completion_tokens: int | None = None
+    temperature: Sampling | None = None
+    top_p: Sampling | None = None
+    top_k: Sampling | None = None
+    stop: str | list[str] | None = None
+    tools: list[ToolIn] | None = None
+    tool_choice: ToolChoiceIn | None = None
+    parallel_tool_calls: bool | None = None
+    user: str | None = None
+    response_format: ResponseFormatIn | None = None
+    reasoning_effort: ReasoningEffortIn | None = None
+    thinking: ThinkingIn | None = None

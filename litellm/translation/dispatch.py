@@ -10,13 +10,15 @@ for a same-family pair, because the fast path forwards the message payload as-is
 
 from __future__ import annotations
 
-from typing import FrozenSet, Literal, Tuple
+from typing import Literal
 
 from expression import case, tag, tagged_union
 
 from .ir import UNIT, Unit
 
-InboundSchema = Literal["openai_chat", "anthropic_messages", "google_genai", "responses", "completions"]
+InboundSchema = Literal[
+    "openai_chat", "anthropic_messages", "google_genai", "responses", "completions"
+]
 
 Provider = Literal[
     "anthropic",
@@ -27,7 +29,7 @@ Provider = Literal[
     "openai_compat",
 ]
 
-_SAME_FAMILY: FrozenSet[Tuple[InboundSchema, Provider]] = frozenset(
+_SAME_FAMILY: frozenset[tuple[InboundSchema, Provider]] = frozenset(
     {
         ("anthropic_messages", "anthropic"),
         ("anthropic_messages", "bedrock_invoke"),
@@ -46,15 +48,15 @@ class Route:
     v2: Provider = case()
 
     @staticmethod
-    def of_v1() -> "Route":
+    def of_v1() -> Route:
         return Route(v1=UNIT)
 
     @staticmethod
-    def of_fast_path(provider: Provider) -> "Route":
+    def of_fast_path(provider: Provider) -> Route:
         return Route(fast_path=provider)
 
     @staticmethod
-    def of_v2(provider: Provider) -> "Route":
+    def of_v2(provider: Provider) -> Route:
         return Route(v2=provider)
 
 
@@ -62,7 +64,7 @@ def route(
     *,
     schema: InboundSchema,
     provider: Provider,
-    enabled_providers: FrozenSet[Provider],
+    enabled_providers: frozenset[Provider],
     body_touching: bool,
 ) -> Route:
     if provider not in enabled_providers:
