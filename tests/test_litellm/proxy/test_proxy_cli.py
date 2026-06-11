@@ -167,7 +167,10 @@ class TestProxyInitializationHelpers:
     def test_reload_uses_watchfiles_reloader(self):
         from uvicorn.supervisors import ChangeReload
 
-        assert ChangeReload.__name__ == "WatchFilesReload"
+        assert ChangeReload.__name__ == "WatchFilesReload", (
+            "uvicorn fell back to StatReload; watchfiles must ship with the proxy "
+            "extra so --reload selects the event-driven WatchFilesReload"
+        )
 
     def test_reload_includes_match_config_and_env_under_watchfiles(
         self, tmp_path, monkeypatch
@@ -216,6 +219,27 @@ class TestProxyInitializationHelpers:
         assert ".env" in warning_text
 
         assert "config.yaml" in uvicorn_args["reload_includes"]
+
+    def test_configure_dev_reload_warns_when_watchfiles_missing(
+        self, tmp_path, monkeypatch
+    ):
+        config_file = tmp_path / "config.yaml"
+        config_file.write_text("model_list: []\n")
+        monkeypatch.chdir(tmp_path)
+
+        uvicorn_args: dict = {}
+        with (
+            patch(
+                "litellm.proxy.proxy_cli.importlib.util.find_spec", return_value=None
+            ),
+            patch("litellm._logging.verbose_proxy_logger.warning") as mock_warning,
+        ):
+            ProxyInitializationHelpers._configure_dev_reload(
+                uvicorn_args, str(config_file)
+            )
+
+        warnings = [call.args[0].lower() for call in mock_warning.call_args_list]
+        assert any("watchfiles" in text for text in warnings)
 
     def test_dev_env_hot_reload_enabled_reads_flag(self, monkeypatch):
         import litellm

@@ -1,5 +1,6 @@
 # ruff: noqa: T201
 import importlib
+import importlib.util
 import json
 import os
 import random
@@ -238,6 +239,15 @@ class ProxyInitializationHelpers:
         every *.py under cwd (including any venv and node_modules) and silently
         ignore `reload_includes`."""
         from litellm._logging import verbose_proxy_logger
+
+        if importlib.util.find_spec("watchfiles") is None:
+            verbose_proxy_logger.warning(
+                "LiteLLM --reload: watchfiles is not installed, so uvicorn falls back "
+                "to its StatReload poller. StatReload stat-scans every *.py under the "
+                "current directory several times a second (high CPU) and ignores "
+                "reload_includes, so --config YAML and .env edits will not trigger "
+                "reloads. Install it with `pip install 'litellm[proxy]'`."
+            )
 
         uvicorn_args.update(ProxyInitializationHelpers._get_reload_options(config_path))
         os.environ["LITELLM_DEV_ENV_HOT_RELOAD"] = "True"
