@@ -99,7 +99,7 @@ class TestSnowflakeConfigURL:
         url = self.cfg.get_complete_url(
             api_base=API_BASE,
             api_key=JWT_TOKEN,
-            model="snowflake/claude-sonnet-4-5",
+            model="snowflake/llama3.1-70b",
             optional_params={},
             litellm_params={},
         )
@@ -114,7 +114,7 @@ class TestSnowflakeConfigURL:
             optional_params={},
             litellm_params={},
         )
-        assert "/cortex/v1/chat/completions" in url
+        assert "/cortex/v1/messages" in url
 
     def test_url_works_for_llama_models(self):
         url = self.cfg.get_complete_url(

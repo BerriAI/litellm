@@ -60,7 +60,7 @@ class TestSnowflakeToolTransformation:
         optional_params = {"tools": tools}
 
         transformed_request = config.transform_request(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             messages=[{"role": "user", "content": "What's the weather?"}],
             optional_params=optional_params,
             litellm_params={},
@@ -83,7 +83,7 @@ class TestSnowflakeToolTransformation:
         optional_params = {"tool_choice": tool_choice}
 
         transformed_request = config.transform_request(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             messages=[{"role": "user", "content": "What's the weather?"}],
             optional_params=optional_params,
             litellm_params={},
@@ -106,7 +106,7 @@ class TestSnowflakeToolTransformation:
             optional_params = {"tool_choice": value}
 
             transformed_request = config.transform_request(
-                model="claude-3-5-sonnet",
+                model="llama3.1-70b",
                 messages=[{"role": "user", "content": "Test"}],
                 optional_params=optional_params,
                 litellm_params={},
@@ -129,7 +129,7 @@ class TestSnowflakeToolTransformation:
         mock_response = {
             "id": "chatcmpl-123",
             "object": "chat.completion",
-            "model": "claude-3-5-sonnet",
+            "model": "llama3.1-70b",
             "choices": [
                 {
                     "index": 0,
@@ -166,7 +166,7 @@ class TestSnowflakeToolTransformation:
         logging_obj = MagicMock()
 
         result = config.transform_response(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
@@ -202,7 +202,7 @@ class TestSnowflakeToolTransformation:
         mock_response = {
             "id": "chatcmpl-456",
             "object": "chat.completion",
-            "model": "claude-3-5-sonnet",
+            "model": "llama3.1-70b",
             "choices": [
                 {
                     "index": 0,
@@ -239,7 +239,7 @@ class TestSnowflakeToolTransformation:
         logging_obj = MagicMock()
 
         result = config.transform_response(
-            model="claude-3-5-sonnet",
+            model="llama3.1-70b",
             raw_response=response,
             model_response=model_response,
             logging_obj=logging_obj,
@@ -310,7 +310,7 @@ class TestSnowflakeToolTransformation:
         Test that tools and tool_choice are in supported params.
         """
         config = SnowflakeConfig()
-        supported_params = config.get_supported_openai_params("claude-3-5-sonnet")
+        supported_params = config.get_supported_openai_params("llama3.1-70b")
 
         assert "tools" in supported_params
         assert "tool_choice" in supported_params
