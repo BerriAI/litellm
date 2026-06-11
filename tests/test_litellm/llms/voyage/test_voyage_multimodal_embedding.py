@@ -171,6 +171,22 @@ class TestVoyageMultimodalEmbeddings:
         )
         assert headers == {"Authorization": "Bearer test-key"}
 
+    def test_validate_environment_uses_secret_fallback(self, monkeypatch):
+        import litellm.llms.voyage.embedding.transformation_multimodal as module
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        def fake_get_secret(name):
+            return "secret-key" if name == "VOYAGE_AI_API_KEY" else None
+
+        monkeypatch.setattr(module, "get_secret_str", fake_get_secret)
+        config = VoyageMultimodalEmbeddingConfig()
+        headers = config.validate_environment(
+            {}, "voyage-multimodal-3.5", [], {}, {}, api_key=None
+        )
+        assert headers == {"Authorization": "Bearer secret-key"}
+
     def test_passthrough_non_content_input(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
             VoyageMultimodalEmbeddingConfig,
