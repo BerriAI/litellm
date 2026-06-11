@@ -2944,6 +2944,46 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 f"Error in rate limit failure event: {str(e)}"
             )
 
+    async def async_release_max_parallel_requests_on_disconnect(
+        self, user_api_key_dict: UserAPIKeyAuth
+    ) -> None:
+        """
+        Release the api-key ``max_parallel_requests`` slot that
+        ``async_pre_call_hook`` reserved, for a request that ended without
+        either logging callback firing.
+
+        The +1 is normally undone by ``async_log_success_event`` (natural
+        stream completion) or ``async_log_failure_event`` (LLM error). When a
+        client cancels a stream mid-flight, the cancellation surfaces as
+        ``asyncio.CancelledError`` / ``GeneratorExit`` and neither callback
+        runs, so without this the counter leaks one slot per cancelled stream
+        until the key wedges at its limit.
+        """
+        if (
+            not user_api_key_dict.api_key
+            or user_api_key_dict.max_parallel_requests is None
+        ):
+            return
+
+        await self.internal_usage_cache.dual_cache.async_increment_cache_pipeline(
+            increment_list=[
+                RedisPipelineIncrementOperation(
+                    key=self.create_rate_limit_keys(
+                        key="api_key",
+                        value=user_api_key_dict.api_key,
+                        rate_limit_type="max_parallel_requests",
+                    ),
+                    increment_value=-1,
+                    # Refresh the window TTL on the decrement, matching the
+                    # failure path. max_parallel_requests is a concurrency
+                    # gauge, not a rolling-window count, so the key must
+                    # outlive in-flight requests rather than expire mid-stream.
+                    ttl=self.window_size,
+                )
+            ],
+            litellm_parent_otel_span=None,
+        )
+
     async def async_post_call_success_hook(
         self, data: dict, user_api_key_dict: UserAPIKeyAuth, response
     ):

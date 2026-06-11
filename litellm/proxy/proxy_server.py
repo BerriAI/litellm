@@ -7113,6 +7113,17 @@ async def async_data_generator(  # noqa: PLR0915
         if not request_data.get("_litellm_skip_openai_stream_done"):
             done_message = "[DONE]"
             yield f"data: {done_message}\n\n"
+    except (asyncio.CancelledError, GeneratorExit):
+        # Client disconnected mid-stream. CancelledError / GeneratorExit are
+        # BaseException, so they bypass the success/failure logging callbacks
+        # that normally release the pre-call max_parallel_requests +1; release
+        # it here. This is the outermost generator Starlette closes on
+        # disconnect, so it fires reliably regardless of needs_iterator_wrap
+        # (a nested iterator hook would only see GeneratorExit on GC).
+        proxy_logging_obj._release_max_parallel_requests_on_disconnect(
+            user_api_key_dict
+        )
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.proxy_server.async_data_generator(): Exception occured - {}".format(
