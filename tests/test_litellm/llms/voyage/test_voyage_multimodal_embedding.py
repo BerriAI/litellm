@@ -211,6 +211,44 @@ class TestVoyageMultimodalEmbeddings:
             config._normalize_content_item({"type": "image_url", "image_url": {}})
         assert "image_url" in str(exc_info.value)
 
+    def test_is_multimodal_embeddings_helper(self):
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
+            "voyage-multimodal-3"
+        )
+        assert VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
+            "VOYAGE-MULTIMODAL-3.5"
+        )
+        assert not VoyageMultimodalEmbeddingConfig.is_multimodal_embeddings(
+            "voyage-3.5"
+        )
+
+    def test_utils_routing_via_provider_config_and_dimensions(self):
+        import litellm
+        from litellm.llms.voyage.embedding.transformation_multimodal import (
+            VoyageMultimodalEmbeddingConfig,
+        )
+        from litellm.utils import (
+            ProviderConfigManager,
+            get_optional_params_embeddings,
+        )
+
+        config = ProviderConfigManager.get_provider_embedding_config(
+            model="voyage-multimodal-3.5", provider=litellm.LlmProviders.VOYAGE
+        )
+        assert isinstance(config, VoyageMultimodalEmbeddingConfig)
+
+        optional_params = get_optional_params_embeddings(
+            model="voyage-multimodal-3.5",
+            dimensions=1024,
+            custom_llm_provider="voyage",
+            drop_params=True,
+        )
+        assert optional_params.get("output_dimension") == 1024
+
     def test_passthrough_non_content_input(self):
         from litellm.llms.voyage.embedding.transformation_multimodal import (
             VoyageMultimodalEmbeddingConfig,
