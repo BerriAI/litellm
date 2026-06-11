@@ -64,8 +64,8 @@
     "@types/react-copy-to-clipboard": "5.0.7",
     "@types/react-dom": "18.3.7",
     "@types/react-syntax-highlighter": "15.5.13",
-    "@vitest/coverage-v8": "3.2.4",
-    "@vitest/ui": "3.2.4",
+    "@vitest/coverage-v8": "3.2.6",
+    "@vitest/ui": "3.2.6",
     "autoprefixer": "10.4.24",
     "eslint": "9.39.2",
     "eslint-config-next": "16.2.6",
@@ -79,7 +79,7 @@
     "tailwindcss": "3.4.19",
     "typescript": "5.9.3",
     "typescript-eslint": "8.60.1",
-    "vitest": "3.2.4"
+    "vitest": "3.2.6"
   },
   "overrides": {
     "prismjs": "1.30.0",
