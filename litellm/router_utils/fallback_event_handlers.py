@@ -17,6 +17,70 @@ else:
     LitellmRouter = Any
 
 
+MID_STREAM_CONTINUATION_SYSTEM_PROMPT = "You are a helpful assistant. You are given a message and you need to respond to it. You are also given a generated content. You need to respond to the message in continuation of the generated content. Do not repeat the same content. Your response should be in continuation of this text: "
+
+
+def _prefill_explicitly_unsupported(model_group: Optional[str]) -> bool:
+    """True only when the model registry explicitly marks the model as NOT
+    supporting assistant prefill (``supports_assistant_prefill: false``).
+
+    Absent/unknown capability returns False so models without registry data keep
+    the legacy prefill behavior — only models that would reject the prefill with
+    a 400 anyway are routed to the user-message continuation.
+    """
+    if model_group is None:
+        return False
+    try:
+        from litellm.utils import get_model_info
+
+        model_info = get_model_info(model=model_group)
+        return model_info.get("supports_assistant_prefill") is False
+    except Exception:
+        return False
+
+
+def build_mid_stream_continuation_messages(
+    messages: List[Any],
+    generated_content: str,
+    model_group: Optional[str],
+) -> List[Any]:
+    """Build the message list a mid-stream fallback uses to resume an interrupted stream.
+
+    By default the partial response is appended as a prefixed assistant message,
+    so the fallback model continues the text exactly where the stream died.
+
+    Anthropic removed assistant prefill starting with Claude Sonnet 4.6 / Opus 4.6 —
+    a prefilled assistant message returns a 400 error, which made every mid-stream
+    fallback for those models fail deterministically. For models the registry
+    explicitly marks as not supporting prefill, the partial response is quoted in
+    a trailing USER message instead — the continuation pattern Anthropic's
+    migration guide documents:
+    https://platform.claude.com/docs/en/about-claude/models/migration-guide
+    """
+    if _prefill_explicitly_unsupported(model_group):
+        return messages + [
+            {
+                "role": "user",
+                "content": (
+                    "Your previous response was interrupted and ended with:\n"
+                    f"{generated_content}\n"
+                    "Continue from where you left off. Do not repeat the content already generated."
+                ),
+            }
+        ]
+    return messages + [
+        {
+            "role": "system",
+            "content": MID_STREAM_CONTINUATION_SYSTEM_PROMPT,
+        },
+        {
+            "role": "assistant",
+            "content": generated_content,
+            "prefix": True,
+        },
+    ]
+
+
 def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     """
     Handles wildcard routing scenario
