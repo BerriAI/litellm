@@ -1,0 +1,108 @@
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from .rbac import Role
+
+
+class SecuritySchemeType(str, Enum):
+    API_KEY = "apiKey"
+    HTTP = "http"
+    OAUTH2 = "oauth2"
+    OPENID_CONNECT = "openIdConnect"
+    MUTUAL_TLS = "mutualTLS"
+
+
+class AuthMethod(str, Enum):
+    API_KEY = "api_key"
+    HTTP_BASIC = "http_basic"
+    BEARER_JWT = "bearer_jwt"
+    OAUTH2_INTROSPECTION = "oauth2_introspection"
+    OIDC = "oidc"
+    MUTUAL_TLS = "mutual_tls"
+
+
+class PrincipalType(str, Enum):
+    HUMAN = "human"
+    SERVICE_ACCOUNT = "service_account"
+
+
+class TeamRole(str, Enum):
+    ADMIN = "admin"
+    MEMBER = "member"
+
+
+class UserIdentity(BaseModel):
+    id: str
+    external_id: Optional[str] = None
+    user_name: Optional[str] = None
+    email: Optional[str] = None
+    display_name: Optional[str] = None
+
+
+class OrganizationIdentity(BaseModel):
+    id: str
+    name: Optional[str] = None
+
+
+class TeamIdentity(BaseModel):
+    id: str
+    name: Optional[str] = None
+    role: TeamRole = TeamRole.MEMBER
+
+
+class CredentialRef(BaseModel):
+    key_id: Optional[str] = None
+    token_id: Optional[str] = None
+
+
+class NetworkContext(BaseModel):
+    client_ip: Optional[str] = None
+    host: Optional[str] = None
+    via_trusted_proxy: bool = False
+
+
+class ClientCertificate(BaseModel):
+    subject_dn: str
+    issuer_dn: Optional[str] = None
+    serial_number: Optional[str] = None
+
+
+class Credential(BaseModel):
+    """A verified credential, before identity resolution."""
+
+    model_config = ConfigDict(frozen=True)
+
+    scheme: SecuritySchemeType
+    method: AuthMethod
+    subject: str
+    issuer: Optional[str] = None
+    audience: List[str] = Field(default_factory=list)
+    scopes: List[str] = Field(default_factory=list)
+    claims: Dict[str, Any] = Field(default_factory=dict)
+    credential_ref: CredentialRef = Field(default_factory=CredentialRef)
+    client_certificate: Optional[ClientCertificate] = None
+
+
+class Principal(BaseModel):
+    """Normalized caller identity. Identity only, no policy/budget state."""
+
+    principal_type: PrincipalType
+    subject: str
+    issuer: Optional[str] = None
+    audience: List[str] = Field(default_factory=list)
+
+    user: Optional[UserIdentity] = None
+    organization: Optional[OrganizationIdentity] = None
+    teams: List[TeamIdentity] = Field(default_factory=list)
+
+    roles: List[Role] = Field(default_factory=list)
+    scopes: List[str] = Field(default_factory=list)
+
+    auth_method: AuthMethod
+    credential_ref: CredentialRef = Field(default_factory=CredentialRef)
+    network: NetworkContext = Field(default_factory=NetworkContext)
+    claims: Dict[str, Any] = Field(default_factory=dict)
