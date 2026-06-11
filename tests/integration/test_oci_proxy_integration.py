@@ -30,6 +30,7 @@ locally-running proxy.
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -40,7 +41,6 @@ from typing import Iterator
 
 import httpx
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Skip gate
@@ -79,7 +79,9 @@ def _wait_for_health(base_url: str, proc: subprocess.Popen, deadline: float) -> 
         except httpx.HTTPError:
             pass
         time.sleep(0.5)
-    raise RuntimeError(f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s")
+    raise RuntimeError(
+        f"litellm proxy did not become ready within {STARTUP_TIMEOUT_S}s"
+    )
 
 
 def _oci_env_from_profile() -> dict[str, str]:
@@ -206,9 +208,7 @@ def test_chat_completion_via_proxy(proxy_url: str, model: str) -> None:
     # Reasoning models may return empty content if their budget covers only
     # the thinking turn — accept either text or a non-empty reasoning field.
     has_content = bool(msg.get("content"))
-    has_reasoning = bool(msg.get("reasoning_content")) or bool(
-        msg.get("reasoning")
-    )
+    has_reasoning = bool(msg.get("reasoning_content")) or bool(msg.get("reasoning"))
     assert has_content or has_reasoning, f"empty assistant message for {model}: {msg}"
     usage = body.get("usage") or {}
     assert usage.get("total_tokens", 0) > 0
@@ -232,7 +232,7 @@ def test_chat_completion_streaming_via_proxy(proxy_url: str, model: str) -> None
                 continue
             if not line.startswith("data:"):
                 continue
-            payload = line[len("data:"):].strip()
+            payload = line[len("data:") :].strip()
             if payload == "[DONE]":
                 saw_done = True
                 break
@@ -274,9 +274,54 @@ def test_model_list_advertises_oci_models(proxy_url: str) -> None:
         assert expected in advertised, f"{expected} missing from /v1/models: {advertised}"
 
 
+@pytest.mark.parametrize("model", ["oci-cohere-command", "oci-llama"])
+def test_response_format_json_schema_via_proxy(proxy_url: str, model: str) -> None:
+    """A response_format json_schema succeeds through the gateway for both a
+    Cohere and a generic OCI model.
+    Regression for the HTTP 400 ``Please pass in correct format of request``
+    that rejected every json_schema request (which MLflow LLM judges always
+    send): generic models choke on OpenAI's ``strict`` key, and Cohere has no
+    JSON_SCHEMA type.
+    """
+    r = httpx.post(
+        f"{proxy_url}/v1/chat/completions",
+        headers=_auth_headers(),
+        json={
+            "model": model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "Rate the answer 4 to 2+2. Give an integer score and a short rationale.",
+                }
+            ],
+            "max_tokens": 200,
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "judgment",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "score": {"type": "integer"},
+                            "rationale": {"type": "string"},
+                        },
+                        "required": ["score", "rationale"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        },
+        timeout=REQUEST_TIMEOUT_S,
+    )
+    assert r.status_code == 200, f"{model} json_schema -> {r.status_code}: {r.text}"
+    content = r.json()["choices"][0]["message"]["content"]
+    assert content is not None
+    assert "score" in json.loads(content)
+
+
 def test_omitted_max_tokens_not_truncated(proxy_url: str) -> None:
     """A request that omits max_tokens completes instead of being cut off.
-
     Regression for OCI's tiny server-side maxTokens default (~20 tokens): without
     an injected default, a request that doesn't set max_tokens came back with
     finish_reason "length" after ~19 tokens, so structured outputs (e.g. MLflow
