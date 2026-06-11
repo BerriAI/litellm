@@ -2,6 +2,7 @@
 ## Helper utilities for token counting
 import base64
 import io
+import json
 import struct
 from typing import (
     Any,
@@ -744,6 +745,14 @@ def _count_content_list(
                 thinking_text = str(c.get("thinking", ""))
                 if thinking_text:
                     num_tokens += count_function(thinking_text)
+            elif c["type"] == "file":
+                # File content block (e.g. PDF input for document understanding)
+                # See: https://docs.litellm.ai/docs/completion/document_understanding
+                file_obj = c.get("file", {})
+                # Count tokens from file_id, file_data, and format fields
+                file_text = json.dumps(file_obj, ensure_ascii=False)
+                if file_text:
+                    num_tokens += count_function(file_text)
             else:
                 content_type = (
                     c.get("type", type(c).__name__)
@@ -752,7 +761,7 @@ def _count_content_list(
                 )
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking)."
+                    f"Expected str or dict with 'type' field (text, image_url, tool_use, tool_result, thinking, file)."
                 )
         return num_tokens
     except Exception as e:

@@ -1010,3 +1010,82 @@ def test_token_counter_with_thinking_content():
     assert (
         tokens_no_thinking < 15
     ), f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+
+
+def test_token_counter_file_content_type():
+    """
+    Test that _count_content_list handles 'file' content type without raising.
+    Regression test for https://github.com/BerriAI/litellm/issues/28409
+    """
+    # Message with 'file' content block (PDF input / document understanding)
+    # See: https://docs.litellm.ai/docs/completion/document_understanding
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's this file about?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/dummy.pdf",
+                        "format": "application/pdf",
+                    },
+                },
+            ],
+        }
+    ]
+    # Should NOT raise ValueError - file type should be handled gracefully
+    tokens = token_counter(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    assert tokens > 0, f"Expected positive token count for file content, got {tokens}"
+
+
+def test_token_counter_file_content_type_base64():
+    """
+    Test 'file' content type with base64 file_data (not just file_id URL).
+    """
+    import base64
+
+    dummy_b64 = base64.b64encode(b"%PDF-1.4 dummy content").decode("utf-8")
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this PDF"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": f"data:application/pdf;base64,{dummy_b64}",
+                    },
+                },
+            ],
+        }
+    ]
+    tokens = token_counter(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    assert tokens > 0, f"Expected positive token count for base64 file content, got {tokens}"
+
+
+def test_token_counter_file_content_type_empty_file_obj():
+    """
+    Test 'file' content type with empty file dict (edge case, should not crash).
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's this?"},
+                {"type": "file", "file": {}},
+            ],
+        }
+    ]
+    tokens = token_counter(
+        model="gpt-3.5-turbo",
+        messages=messages,
+    )
+    # Empty file obj still counts as "{}" which is a few tokens - should not crash
+    assert tokens > 0
