@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Type, TypeVar
 
-from fastapi import APIRouter, Request, Response, Security, status
+from fastapi import APIRouter, Query, Request, Response, Security, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 from scim2_models import (
@@ -17,6 +17,7 @@ from scim2_models import (
     PatchOp,
     Resource,
     ResourceType,
+    Schema,
     ServiceProviderConfig,
     Sort,
     User,
@@ -44,18 +45,43 @@ async def _parse(request: Request, model: Type[R]) -> R:
     return model.model_validate(body, scim_ctx=Context.RESOURCE_CREATION_REQUEST)
 
 
+def _set_path(data: Dict[str, Any], path: str, value: Any) -> None:
+    keys = path.split(".")
+    node = data
+    for key in keys[:-1]:
+        child = node.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            node[key] = child
+        node = child
+    node[keys[-1]] = value
+
+
+def _remove_path(data: Dict[str, Any], path: str) -> None:
+    keys = path.split(".")
+    node = data
+    for key in keys[:-1]:
+        child = node.get(key)
+        if not isinstance(child, dict):
+            return
+        node = child
+    node.pop(keys[-1], None)
+
+
 def _apply_patch(resource: R, patch: PatchOp) -> R:
     data: Dict[str, Any] = resource.model_dump()
     for op in patch.operations:
         action = op.op.value if hasattr(op.op, "value") else str(op.op)
+        if op.path is not None and ("[" in op.path or "]" in op.path):
+            raise ValueError(f"unsupported SCIM patch path filter: {op.path}")
         if action == "remove":
             if op.path:
-                data.pop(op.path, None)
+                _remove_path(data, op.path)
             continue
         if op.path is None and isinstance(op.value, dict):
             data.update(op.value)
         elif op.path is not None:
-            data[op.path] = op.value
+            _set_path(data, op.path, op.value)
     return type(resource).model_validate(data)
 
 
@@ -105,24 +131,19 @@ def _build_discovery_router() -> APIRouter:
 
     @router.get("/Schemas")
     async def schemas() -> Response:
-        return JSONResponse(
-            content={
-                "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
-                "totalResults": 2,
-                "startIndex": 1,
-                "itemsPerPage": 2,
-                "Resources": [
-                    User.to_schema().model_dump(),
-                    Group.to_schema().model_dump(),
-                ],
-            }
+        resources = [User.to_schema(), Group.to_schema()]
+        listing: ListResponse[Schema] = ListResponse[Schema](
+            total_results=len(resources),
+            start_index=1,
+            items_per_page=len(resources),
+            resources=resources,
         )
+        return JSONResponse(content=listing.model_dump())
 
     return router
 
 
-def build_scim_router() -> APIRouter:
-    router = APIRouter(prefix="/scim/v2", tags=["scim"])
+def _build_protected_router() -> APIRouter:
     protected = APIRouter(
         dependencies=[Security(get_current_principal, scopes=["scim:write"])],
     )
@@ -154,9 +175,10 @@ def build_scim_router() -> APIRouter:
             return _error(status.HTTP_404_NOT_FOUND, f"User {resource_id} not found")
         try:
             patch = PatchOp[User].model_validate(await request.json())
-        except ValidationError as exc:
+            patched = _apply_patch(user, patch)
+        except (ValidationError, ValueError) as exc:
             return _error(status.HTTP_400_BAD_REQUEST, str(exc))
-        updated = await store.upsert_user(_apply_patch(user, patch))
+        updated = await store.upsert_user(patched)
         return JSONResponse(content=_dump(updated, Context.RESOURCE_PATCH_RESPONSE))
 
     @protected.delete("/Users/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -168,8 +190,11 @@ def build_scim_router() -> APIRouter:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @protected.get("/Users")
-    async def list_users(request: Request, filter: Optional[str] = None) -> Response:
-        users = await _store(request).list_users(filter)
+    async def list_users(
+        request: Request,
+        filter_expr: Optional[str] = Query(default=None, alias="filter"),
+    ) -> Response:
+        users = await _store(request).list_users(filter_expr)
         listing: ListResponse[User] = ListResponse[User](
             total_results=len(users),
             start_index=1,
@@ -205,9 +230,10 @@ def build_scim_router() -> APIRouter:
             return _error(status.HTTP_404_NOT_FOUND, f"Group {resource_id} not found")
         try:
             patch = PatchOp[Group].model_validate(await request.json())
-        except ValidationError as exc:
+            patched = _apply_patch(group, patch)
+        except (ValidationError, ValueError) as exc:
             return _error(status.HTTP_400_BAD_REQUEST, str(exc))
-        updated = await store.upsert_group(_apply_patch(group, patch))
+        updated = await store.upsert_group(patched)
         return JSONResponse(content=_dump(updated, Context.RESOURCE_PATCH_RESPONSE))
 
     @protected.delete("/Groups/{resource_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -219,8 +245,11 @@ def build_scim_router() -> APIRouter:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @protected.get("/Groups")
-    async def list_groups(request: Request, filter: Optional[str] = None) -> Response:
-        groups = await _store(request).list_groups(filter)
+    async def list_groups(
+        request: Request,
+        filter_expr: Optional[str] = Query(default=None, alias="filter"),
+    ) -> Response:
+        groups = await _store(request).list_groups(filter_expr)
         listing: ListResponse[Group] = ListResponse[Group](
             total_results=len(groups),
             start_index=1,
@@ -229,6 +258,11 @@ def build_scim_router() -> APIRouter:
         )
         return JSONResponse(content=_dump(listing, Context.RESOURCE_QUERY_RESPONSE))
 
-    router.include_router(protected)
+    return protected
+
+
+def build_scim_router() -> APIRouter:
+    router = APIRouter(prefix="/scim/v2", tags=["scim"])
+    router.include_router(_build_protected_router())
     router.include_router(_build_discovery_router())
     return router
