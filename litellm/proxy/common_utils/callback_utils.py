@@ -70,6 +70,16 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                 imported_list.append(compression_interception_obj)
                 continue
 
+            if isinstance(callback, str) and callback == "mt_headroom_aggressive":
+                # MindTouch internal: Headroom-based compression with
+                # CRIS-prefix-safe DEFAULT_EXCLUDE_TOOLS override and
+                # the aggressive flags Phase A bench validated.
+                # See litellm/integrations/headroom/handler.py.
+                from litellm.integrations.headroom import MTHeadroomAggressive
+
+                imported_list.append(MTHeadroomAggressive())
+                continue
+
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(

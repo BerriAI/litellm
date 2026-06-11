@@ -70,6 +70,14 @@ proxy = [
     "soundfile>=0.12.1,<1.0",
     "pyroscope-io>=0.8.16,<1.0; sys_platform != 'win32'",
     "pydantic-settings>=2.14.1,<3.0",
+    # MindTouch internal: Headroom compression callback (see
+    # litellm/integrations/headroom/handler.py). Sourced from our fork's
+    # main branch which adds the proxy-mode async_post_call_* hooks
+    # the upstream package is missing AND moves `litellm` to an optional
+    # extra so this fork can install headroom-ai without a circular dep.
+    # When the upstream PRs merge to chopratejas/headroom and a release
+    # ships, change to a stable PyPI version pin.
+    "headroom-ai[code,ml] @ git+https://github.com/MindTouch/headroom-ai.git@main",
 ]
 # Thin client install for the `lite` CLI on developer laptops. The CLI's heavy
 # imports (fastapi, cryptography, ...) are all guarded, so it runs on the base
