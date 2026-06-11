@@ -3840,14 +3840,15 @@ async def test_model_info_v1_oci_secrets_not_leaked():
 
     # Mock the llm_router to return our test data
     mock_router = MagicMock()
+    mock_router.model_list = [mock_model_data]
     mock_router.get_model_names.return_value = ["oci-grok-test"]
     mock_router.get_model_access_groups.return_value = {}
-    mock_router.get_model_list.return_value = [mock_model_data]
 
     # Mock global variables
     with (
         patch("litellm.proxy.proxy_server.llm_router", mock_router),
         patch("litellm.proxy.proxy_server.llm_model_list", [mock_model_data]),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"infer_model_from_keys": False},
