@@ -404,15 +404,17 @@ class MutualTLSAuthenticator:
         )
 
     def _read_client_cert(self, request: Request) -> Optional[ClientCertificate]:
+        tls = request.scope.get("extensions", {}).get("tls", {})
+        verified_dn = tls.get("client_cert_name")
+        if verified_dn:
+            return ClientCertificate(subject_dn=verified_dn)
         if self._config.forwarded_subject_header:
             peer = request.client.host if request.client else None
             if not ip_in_trusted_proxies(peer, self._network):
                 return None
             dn = request.headers.get(self._config.forwarded_subject_header)
             return ClientCertificate(subject_dn=dn) if dn else None
-        tls = request.scope.get("extensions", {}).get("tls", {})
-        dn = tls.get("client_cert_name")
-        return ClientCertificate(subject_dn=dn) if dn else None
+        return None
 
     def challenge(self) -> str:
         return ""
