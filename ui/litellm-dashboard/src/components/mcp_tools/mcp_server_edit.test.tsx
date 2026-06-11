@@ -995,7 +995,7 @@ describe("MCPServerEdit (BYOK)", () => {
   });
 
   it("persists is_byok=true when saving an existing BYOK server", async () => {
-    vi.mocked(networking.updateMCPServer).mockResolvedValue(byokServer as any);
+    vi.mocked(networking.updateMCPServer).mockResolvedValue(byokServer);
 
     render(
       <MCPServerEdit
@@ -1015,7 +1015,7 @@ describe("MCPServerEdit (BYOK)", () => {
   });
 
   it("persists is_byok=false and restores the shared auth value field when BYOK is toggled off", async () => {
-    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...byokServer, is_byok: false } as any);
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...byokServer, is_byok: false });
 
     render(
       <MCPServerEdit

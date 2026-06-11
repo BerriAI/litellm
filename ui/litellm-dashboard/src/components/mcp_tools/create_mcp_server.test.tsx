@@ -854,7 +854,7 @@ describe("CreateMCPServer BYOK toggle", () => {
     });
     await waitFor(() => expect(screen.queryByText("Authentication Value")).not.toBeInTheDocument());
 
-    vi.mocked(networking.createMCPServer).mockResolvedValue({ server_id: "byok-1" } as any);
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ server_id: "byok-1" });
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
@@ -885,7 +885,7 @@ describe("CreateMCPServer BYOK toggle", () => {
     await selectAntOption("Authentication", "None");
     await waitFor(() => expect(screen.queryByText(BYOK_LABEL)).not.toBeInTheDocument());
 
-    vi.mocked(networking.createMCPServer).mockResolvedValue({ server_id: "switched-1" } as any);
+    vi.mocked(networking.createMCPServer).mockResolvedValue({ server_id: "switched-1" });
 
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Add MCP Server" }));
