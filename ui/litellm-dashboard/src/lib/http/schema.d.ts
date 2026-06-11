@@ -22175,6 +22175,11 @@ export interface components {
              * @description decrypt keys with google kms
              */
             use_google_kms?: boolean | null;
+            /**
+             * Use Spend Logs Partitioning
+             * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
+             */
+            use_spend_logs_partitioning?: boolean | null;
             /** User Header Mappings */
             user_header_mappings?: components["schemas"]["UserHeaderMapping"][] | null;
             /**
