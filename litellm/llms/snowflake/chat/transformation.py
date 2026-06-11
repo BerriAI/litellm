@@ -9,20 +9,23 @@ Ref: https://docs.snowflake.com/en/user-guide/snowflake-cortex/cortex-rest-api
 """
 
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional
 
 import httpx
 
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    ChatCompletionUsageBlock,
     Choices,
     Function,
+    GenericStreamingChunk,
     Message,
     ModelResponse,
     Usage,
 )
 
+from ...base_llm.base_model_iterator import BaseModelResponseIterator
 from ...openai_like.chat.transformation import OpenAIGPTConfig
 from ..utils import SnowflakeBaseConfig
 
@@ -487,3 +490,179 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
             model_response._hidden_params["model"] = model
 
         return model_response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Any,
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ) -> Any:
+        return SnowflakeStreamingHandler(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class SnowflakeStreamingHandler(BaseModelResponseIterator):
+    """
+    Parse streaming events from both Snowflake endpoints.
+
+    - /chat/completions: OpenAI SSE format (has "choices" key)
+    - /messages: Anthropic SSE format (has "type" key like content_block_delta)
+    """
+
+    def __init__(
+        self,
+        streaming_response: Any,
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        super().__init__(streaming_response=streaming_response, sync_stream=sync_stream)
+        self._tool_index = 0
+        self._tool_id = ""
+        self._tool_name = ""
+
+    def chunk_parser(self, chunk: dict) -> GenericStreamingChunk:
+        if "choices" in chunk:
+            return self._parse_openai_chunk(chunk)
+        return self._parse_anthropic_chunk(chunk)
+
+    def _parse_openai_chunk(self, chunk: dict) -> GenericStreamingChunk:
+        choices = chunk.get("choices", [])
+        if not choices:
+            return GenericStreamingChunk(
+                text="",
+                is_finished=False,
+                finish_reason="",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
+        choice = choices[0]
+        delta = choice.get("delta", {})
+        finish_reason = choice.get("finish_reason") or ""
+        text = delta.get("content") or ""
+
+        tool_use = None
+        tool_calls = delta.get("tool_calls")
+        if tool_calls:
+            tc = tool_calls[0]
+            func = tc.get("function", {})
+            tool_use = ChatCompletionToolCallChunk(
+                id=tc.get("id", ""),
+                type="function",
+                function={
+                    "name": func.get("name", ""),
+                    "arguments": func.get("arguments", ""),
+                },
+                index=tc.get("index", 0),
+            )
+
+        return GenericStreamingChunk(
+            text=text,
+            is_finished=finish_reason != "",
+            finish_reason=finish_reason,
+            usage=None,
+            index=choice.get("index", 0),
+            tool_use=tool_use,
+        )
+
+    def _parse_anthropic_chunk(self, chunk: dict) -> GenericStreamingChunk:
+        event_type = chunk.get("type", "")
+
+        if event_type == "content_block_delta":
+            delta = chunk.get("delta", {})
+            delta_type = delta.get("type", "")
+
+            if delta_type == "text_delta":
+                return GenericStreamingChunk(
+                    text=delta.get("text", ""),
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=chunk.get("index", 0),
+                    tool_use=None,
+                )
+            elif delta_type == "input_json_delta":
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=chunk.get("index", 0),
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=self._tool_id,
+                        type="function",
+                        function={
+                            "name": self._tool_name,
+                            "arguments": delta.get("partial_json", ""),
+                        },
+                        index=self._tool_index,
+                    ),
+                )
+
+        elif event_type == "content_block_start":
+            content_block = chunk.get("content_block", {})
+            if content_block.get("type") == "tool_use":
+                self._tool_id = content_block.get("id", "")
+                self._tool_name = content_block.get("name", "")
+                self._tool_index = chunk.get("index", 0)
+                return GenericStreamingChunk(
+                    text="",
+                    is_finished=False,
+                    finish_reason="",
+                    usage=None,
+                    index=chunk.get("index", 0),
+                    tool_use=ChatCompletionToolCallChunk(
+                        id=self._tool_id,
+                        type="function",
+                        function={"name": self._tool_name, "arguments": ""},
+                        index=self._tool_index,
+                    ),
+                )
+
+        elif event_type == "message_delta":
+            delta = chunk.get("delta", {})
+            stop_reason = delta.get("stop_reason", "")
+            usage_data = chunk.get("usage", {})
+            _stop_map = {
+                "end_turn": "stop",
+                "max_tokens": "length",
+                "tool_use": "tool_calls",
+                "stop_sequence": "stop",
+            }
+            usage = None
+            if usage_data:
+                usage = ChatCompletionUsageBlock(
+                    prompt_tokens=usage_data.get("input_tokens", 0),
+                    completion_tokens=usage_data.get("output_tokens", 0),
+                )
+            return GenericStreamingChunk(
+                text="",
+                is_finished=True,
+                finish_reason=_stop_map.get(stop_reason, "stop"),
+                usage=usage,
+                index=0,
+                tool_use=None,
+            )
+
+        elif event_type == "message_stop":
+            return GenericStreamingChunk(
+                text="",
+                is_finished=True,
+                finish_reason="stop",
+                usage=None,
+                index=0,
+                tool_use=None,
+            )
+
+        return GenericStreamingChunk(
+            text="",
+            is_finished=False,
+            finish_reason="",
+            usage=None,
+            index=0,
+            tool_use=None,
+        )
