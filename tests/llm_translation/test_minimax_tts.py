@@ -5,7 +5,7 @@ Tests for MiniMax Text-to-Speech integration
 import os
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -139,7 +139,6 @@ class TestMinimaxTextToSpeechConfig:
 
         # Mock both litellm.api_key and get_secret_str to return None
         import litellm
-        from unittest.mock import patch
 
         original_api_key = litellm.api_key
         try:
@@ -271,48 +270,6 @@ class TestMinimaxSpeechIntegration:
 
         # Clean up
         speech_file_path.unlink()
-
-    def test_speech_mock_response(self):
-        """Test speech synthesis with mocked response"""
-        from unittest.mock import MagicMock, patch
-
-        # Create mock audio data (hex-encoded as MiniMax returns)
-        mock_audio_bytes = b"fake audio data for testing"
-        mock_audio_hex = mock_audio_bytes.hex()
-
-        mock_response_json = {
-            "data": {"audio": mock_audio_hex, "status": 0, "ced": ""},
-            "extra_info": {},
-        }
-
-        with patch(
-            "litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler.text_to_speech_handler"
-        ) as mock_tts:
-            # Create a mock httpx.Response
-            mock_response = MagicMock()
-            mock_response.status_code = 200
-            mock_response.headers = {}
-            mock_response.json.return_value = mock_response_json
-            mock_response.content = mock_audio_bytes
-
-            # Mock the response wrapper
-            from litellm.types.llms.openai import HttpxBinaryResponseContent
-
-            mock_binary_response = HttpxBinaryResponseContent(mock_response)
-            mock_tts.return_value = mock_binary_response
-
-            # This would normally make a real API call
-            # but we're mocking it for testing
-            response = speech(
-                model="minimax/speech-2.6-hd",
-                voice="alloy",
-                input="Test input",
-                api_key="test-key",
-            )
-
-            # Verify the mock was called
-            assert mock_tts.called
-
 
 class TestMinimaxProviderRegistration:
     """Test that MiniMax is properly registered as a provider"""

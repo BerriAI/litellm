@@ -1,19 +1,14 @@
-import json
 import os
 import sys
-from datetime import datetime
-from unittest.mock import AsyncMock
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
 
-import httpx
 import pytest
 
 import litellm
-from litellm import Choices, Message, ModelResponse, EmbeddingResponse, Usage
 from litellm import completion
 from unittest.mock import patch
 from litellm.llms.xai.chat.transformation import XAIChatConfig, XAI_API_BASE
@@ -178,10 +173,6 @@ class TestXAIChat(BaseLLMChatTest):
         return {
             "model": "xai/grok-3-mini-beta",
         }
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
 
     def test_web_search(self):
         """Web search is only supported for Grok 4 family models"""

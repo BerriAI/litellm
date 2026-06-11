@@ -567,7 +567,6 @@ def test_gemini_imagen_models_use_predict_endpoint():
     Test that Imagen models still use :predict endpoint (not broken by gemini-2.5-flash-image-preview fix)
     """
     from unittest.mock import patch, MagicMock
-    from litellm.types.utils import ImageResponse, ImageObject
 
     with patch(
         "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
@@ -655,7 +654,7 @@ def test_gemini_thinking():
 
 def test_gemini_thinking_budget_0():
     litellm._turn_on_debug()
-    from litellm.types.utils import Message, CallTypes
+    from litellm.types.utils import CallTypes
     from litellm.utils import return_raw_request
     import json
 
@@ -677,7 +676,6 @@ def test_gemini_thinking_budget_0():
 
 
 def test_gemini_finish_reason():
-    import os
     from litellm import completion
 
     litellm._turn_on_debug()
@@ -1121,7 +1119,6 @@ def get_current_weather(location, unit="fahrenheit"):
 
 
 def test_gemini_with_thinking():
-    from litellm import completion
 
     litellm._turn_on_debug()
     litellm.modify_params = True
@@ -1218,7 +1215,6 @@ def test_gemini_reasoning_effort_minimal():
     """
     from litellm.utils import return_raw_request
     from litellm.types.utils import CallTypes
-    import json
 
     # Test with different Gemini models to verify model-specific mapping
     test_cases = [
@@ -1339,97 +1335,6 @@ def test_gemini_exception_message_format():
         assert (
             "VertexAIException" not in error_message
         ), f"Should not contain 'VertexAIException' in error message, got: {error_message}"
-
-
-@pytest.mark.parametrize(
-    "status_code,expected_exception",
-    [
-        (400, "BadRequestError"),
-        (401, "AuthenticationError"),
-        (403, "PermissionDeniedError"),
-        (404, "NotFoundError"),
-        (408, "Timeout"),
-        (429, "RateLimitError"),
-        (500, "InternalServerError"),
-        (502, "APIConnectionError"),
-        (503, "ServiceUnavailableError"),
-    ],
-)
-def l(status_code, expected_exception):
-    """
-    Test comprehensive Gemini error handling for all HTTP status codes.
-
-    This ensures that Gemini API errors of different types are properly mapped
-    to the correct LiteLLM exception types with GeminiException prefix.
-    """
-    import httpx
-    from unittest.mock import Mock
-    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
-    from litellm.exceptions import (
-        BadRequestError,
-        AuthenticationError,
-        PermissionDeniedError,
-        NotFoundError,
-        Timeout,
-        RateLimitError,
-        InternalServerError,
-        APIConnectionError,
-        ServiceUnavailableError,
-    )
-
-    # Mock the appropriate error response
-    mock_response = Mock(spec=httpx.Response)
-    mock_response.status_code = status_code
-    mock_response.text = f"API Error {status_code}"
-    mock_response.headers = {}
-
-    # Create a mock exception
-    mock_exception = httpx.HTTPStatusError(
-        message=f"HTTP {status_code}", request=Mock(), response=mock_response
-    )
-    mock_exception.response = mock_response
-    mock_exception.status_code = status_code
-    # Set message attribute for compatibility with exception mapping
-    mock_exception.message = f"HTTP {status_code}"
-
-    # Test the exception mapping
-    try:
-        exception_type(
-            model="gemini-pro",
-            original_exception=mock_exception,
-            custom_llm_provider="gemini",
-            completion_kwargs={},
-            extra_kwargs={},
-        )
-        assert (
-            False
-        ), f"Expected {expected_exception} to be raised for status {status_code}"
-    except Exception as e:
-        # Verify the correct exception type is raised
-        exception_classes = {
-            "BadRequestError": BadRequestError,
-            "AuthenticationError": AuthenticationError,
-            "PermissionDeniedError": PermissionDeniedError,
-            "NotFoundError": NotFoundError,
-            "Timeout": Timeout,
-            "RateLimitError": RateLimitError,
-            "InternalServerError": InternalServerError,
-            "APIConnectionError": APIConnectionError,
-            "ServiceUnavailableError": ServiceUnavailableError,
-        }
-        expected_class = exception_classes[expected_exception]
-        assert isinstance(
-            e, expected_class
-        ), f"Expected {expected_exception}, got {type(e).__name__}"
-
-        # Verify the error message contains GeminiException
-        error_message = str(e)
-        assert (
-            "GeminiException" in error_message
-        ), f"Expected 'GeminiException' in error message for status {status_code}, got: {error_message}"
-        assert (
-            "VertexAIException" not in error_message
-        ), f"Should not contain 'VertexAIException' for status {status_code}, got: {error_message}"
 
 
 def test_gemini_embedding():
@@ -1710,7 +1615,6 @@ def test_anthropic_thinking_param_via_map_openai_params():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
-    from litellm.types.llms.anthropic import AnthropicThinkingParam
 
     config = VertexGeminiConfig()
 

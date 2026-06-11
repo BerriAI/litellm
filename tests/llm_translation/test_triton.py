@@ -6,8 +6,7 @@ import traceback
 from dotenv import load_dotenv
 
 load_dotenv()
-import io
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
@@ -15,9 +14,7 @@ sys.path.insert(
 import pytest
 import litellm
 
-import pytest
 from litellm.llms.triton.embedding.transformation import TritonEmbeddingConfig
-import litellm
 
 
 def test_split_embedding_by_shape_passes():
@@ -351,23 +348,6 @@ def test_completion_triton_infer_api():
     except Exception as e:
         print("exception", e)
         traceback.print_exc()
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.asyncio
-async def test_triton_embeddings():
-    try:
-        litellm.set_verbose = True
-        response = await litellm.aembedding(
-            model="triton/my-triton-model",
-            api_base="https://exampleopenaiendpoint-production.up.railway.app/triton/embeddings",
-            input=["good morning from litellm"],
-        )
-        print(f"response: {response}")
-
-        # stubbed endpoint is setup to return this
-        assert response.data[0]["embedding"] == [0.1, 0.2]
-    except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
 

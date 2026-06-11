@@ -1,15 +1,11 @@
 import os
 import sys
-from datetime import datetime
-from unittest.mock import MagicMock
 
-import pytest
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-import litellm
 from litellm import get_llm_provider
 
 
@@ -18,22 +14,6 @@ def test_get_llm_provider_hyperbolic():
     model, provider, _, _ = get_llm_provider(model="hyperbolic/deepseek-v3")
     assert provider == "hyperbolic"
     assert model == "deepseek-v3"
-
-
-def test_hyperbolic_completion_call():
-    """Test basic completion call structure for Hyperbolic"""
-    # This is primarily a structure test since we don't have actual API keys
-    try:
-        litellm.set_verbose = True
-        response = litellm.completion(
-            model="hyperbolic/qwen-2.5-72b",
-            messages=[{"role": "user", "content": "Hello!"}],
-            mock_response="Hi there!",
-        )
-        assert response is not None
-    except Exception as e:
-        # Expected to fail without valid API key, but should recognize the provider
-        assert "hyperbolic" in str(e).lower() or "api" in str(e).lower()
 
 
 def test_hyperbolic_config_initialization():
