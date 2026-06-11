@@ -8,7 +8,11 @@ from litellm.llms.anthropic.experimental_pass_through.messages.transformation im
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
 
-from .common_utils import BedrockClaudePlatformMixin, strip_claude_platform_route
+from .common_utils import (
+    BedrockClaudePlatformMixin,
+    filter_claude_platform_request_body,
+    strip_claude_platform_route,
+)
 
 
 class BedrockClaudePlatformMessagesConfig(
@@ -62,6 +66,15 @@ class BedrockClaudePlatformMessagesConfig(
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Dict:
+        # Strip auth/routing config (workspace_id, aws_*) and Messages API
+        # fields the AWS endpoint does not support (e.g. context_management)
+        # from the body — the API rejects unknown fields with "Extra inputs
+        # are not permitted".
+        anthropic_messages_optional_request_params = (
+            filter_claude_platform_request_body(
+                anthropic_messages_optional_request_params
+            )
+        )
         return super().transform_anthropic_messages_request(
             model=strip_claude_platform_route(model),
             messages=messages,
