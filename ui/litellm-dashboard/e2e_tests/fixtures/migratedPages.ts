@@ -7,10 +7,10 @@
  *   - server-root-path mount:  SERVER_ROOT_PATH=/<root> npm run e2e:migration:root
  *
  * Keep this in lockstep with MIGRATED_PAGES in src/utils/migratedPages.ts.
- * Pending (uncomment as each PR lands): playground, and the leaf-pages batch
+ * Pending (uncomment as each PR lands): the leaf-pages batch
  * (budgets, caching, cost-tracking, guardrails, guardrails-monitor, logs,
  * mcp-servers, memory, policies, projects, prompts, search-tools, skills,
  * tag-management, tool-policies, transform-request, ui-theme, vector-stores,
  * workflows, access-groups).
  */
-export const MIGRATED_E2E_SEGMENTS: string[] = ["api-reference"];
+export const MIGRATED_E2E_SEGMENTS: string[] = ["api-reference", "playground"];
