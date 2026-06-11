@@ -40,6 +40,13 @@ describe("migratedHref / legacyPageHref", () => {
     expect(MIGRATED_PAGES.api_ref).toBe("api-reference");
     expect(MIGRATED_PAGES["api-reference"]).toBe("api-reference");
   });
+
+  it("maps the llm-playground sidebar id to the playground route", async () => {
+    vi.doMock("@/components/networking", () => ({ serverRootPath: "/" }));
+    const { MIGRATED_PAGES } = await import("./migratedPages");
+
+    expect(MIGRATED_PAGES["llm-playground"]).toBe("playground");
+  });
 });
 
 describe("dev server (NODE_ENV=development)", () => {
