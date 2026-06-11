@@ -287,6 +287,28 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
 
         return body
 
+    def _transform_tool_choice_to_anthropic(self, tool_choice: Any) -> Dict[str, Any]:
+        """
+        Convert tool_choice from OpenAI format to Anthropic format.
+
+        OpenAI string values: "auto", "required", "none"
+        OpenAI dict: {"type": "function", "function": {"name": "..."}}
+        Anthropic: {"type": "auto"}, {"type": "any"}, {"type": "tool", "name": "..."}
+        """
+        if isinstance(tool_choice, str):
+            mapping = {
+                "auto": {"type": "auto"},
+                "required": {"type": "any"},
+                "none": {"type": "none"},
+            }
+            return mapping.get(tool_choice, {"type": "auto"})
+        elif isinstance(tool_choice, dict):
+            if tool_choice.get("type") == "function":
+                func = tool_choice.get("function", {})
+                return {"type": "tool", "name": func.get("name", "")}
+            return tool_choice
+        return {"type": "auto"}
+
     def _transform_request_anthropic(
         self,
         model: str,
@@ -303,7 +325,14 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
                 optional_params["tools"]
             )
 
-        optional_params.pop("max_completion_tokens", None)
+        if "tool_choice" in optional_params:
+            optional_params["tool_choice"] = self._transform_tool_choice_to_anthropic(
+                optional_params["tool_choice"]
+            )
+
+        max_completion_tokens = optional_params.pop("max_completion_tokens", None)
+        if max_completion_tokens and "max_tokens" not in optional_params:
+            optional_params["max_tokens"] = max_completion_tokens
 
         model_name = model.removeprefix("snowflake/")
 
