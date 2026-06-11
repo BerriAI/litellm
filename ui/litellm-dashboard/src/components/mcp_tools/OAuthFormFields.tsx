@@ -3,6 +3,7 @@ import { Form, Input, InputNumber, Select, Tooltip } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { Button, TextInput } from "@tremor/react";
 import { OAUTH_FLOW } from "./types";
+import DelegateAuthToUpstreamField from "./DelegateAuthToUpstreamField";
 
 interface OAuthFlowStatus {
   startOAuthFlow: () => void;
@@ -115,6 +116,7 @@ const OAuthFormFields: React.FC<OAuthFormFieldsProps> = ({
         </>
       ) : (
         <>
+          <DelegateAuthToUpstreamField />
           <Form.Item
             label={
               <span className="flex items-center justify-between w-full">

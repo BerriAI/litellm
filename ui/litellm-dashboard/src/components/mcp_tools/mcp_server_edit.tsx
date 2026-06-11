@@ -16,6 +16,7 @@ import { getToken, isTokenValid, setToken } from "@/utils/mcpTokenStore";
 import { buildMcpPassthroughAuthHeader } from "@/utils/mcpHeaderUtils";
 import MCPServerCostConfig from "./mcp_server_cost_config";
 import MCPPermissionManagement from "./MCPPermissionManagement";
+import DelegateAuthToUpstreamField from "./DelegateAuthToUpstreamField";
 import MCPToolConfiguration from "./mcp_tool_configuration";
 import StdioConfiguration from "./StdioConfiguration";
 import MCPLogoSelector from "./MCPLogoSelector";
@@ -426,6 +427,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         authorization_url: undefined,
         token_url: undefined,
         registration_url: undefined,
+        delegate_auth_to_upstream: false,
       });
     } else if (value === TRANSPORT.OPENAPI) {
       form.setFieldsValue({
@@ -641,16 +643,15 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_vars: envVars,
         allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
         available_on_public_internet: Boolean(availableOnPublicInternetRaw ?? mcpServer.available_on_public_internet),
-        // ``delegate_auth_to_upstream`` is only honored server-side for
-        // ``auth_type=oauth2`` (PKCE passthrough). The Form.Item is
-        // conditionally rendered so the value drops out of the form on
-        // auth_type change; force false for any other configuration to avoid
-        // persisting a stale ``true`` that would silently re-activate if the
-        // configuration is later switched back.
-        delegate_auth_to_upstream: (() => {
-          const isOauth2 = restValues.auth_type === AUTH_TYPE.OAUTH2;
-          return isOauth2 ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream) : false;
-        })(),
+        // ``delegate_auth_to_upstream`` (PKCE passthrough) is only honored for the
+        // Interactive OAuth flow. The toggle is conditionally rendered, so force
+        // false for M2M or non-oauth2 auth to avoid persisting a stale ``true``
+        // that would silently re-activate if the configuration is later switched
+        // back.
+        delegate_auth_to_upstream:
+          isOAuthAuthType && !isM2MFlow
+            ? Boolean(delegateAuthToUpstreamRaw ?? mcpServer.delegate_auth_to_upstream)
+            : false,
         // ``oauth_passthrough`` is the dedicated, non-oauth2 opt-in. It is only
         // honored for ``auth_type=none`` servers that forward ``Authorization``
         // upstream. Kept separate from ``delegate_auth_to_upstream`` so enabling
@@ -913,6 +914,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
 
             {!isStdioTransport && isOAuthAuthType && (
               <>
+                {!isM2MFlow && <DelegateAuthToUpstreamField />}
                 <Form.Item
                   label={
                     <span className="text-sm font-medium text-gray-700 flex items-center">

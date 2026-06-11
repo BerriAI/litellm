@@ -262,6 +262,60 @@ describe("MCPServerEdit (delegate auth)", () => {
     expect(payload.delegate_auth_to_upstream).toBe(false);
   });
 
+  it("clears the delegate auth flag when switching an oauth2 server to stdio transport", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...interactiveOAuthServer,
+      transport: "stdio",
+      auth_type: "none",
+      command: "npx",
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          delegate_auth_to_upstream: true,
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    // Sanity: the delegate toggle is shown for the interactive-OAuth server.
+    expect(screen.getByText("Delegate auth to upstream (PKCE passthrough)")).toBeInTheDocument();
+
+    // Switch transport to stdio: the OAuth section (and toggle) unmounts.
+    const transportSelect = screen.getByLabelText("Transport Type");
+    await act(async () => {
+      fireEvent.mouseDown(transportSelect);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Standard Input/Output (stdio)"));
+    });
+
+    expect(screen.queryByText("Delegate auth to upstream (PKCE passthrough)")).not.toBeInTheDocument();
+
+    const commandInput = screen.getByLabelText("Command");
+    await act(async () => {
+      fireEvent.change(commandInput, { target: { value: "npx" } });
+    });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.transport).toBe("stdio");
+    expect(payload.delegate_auth_to_upstream).toBe(false);
+  });
+
   it("does not enable oauth_passthrough for an oauth2 server", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...interactiveOAuthServer,

@@ -73,11 +73,11 @@ describe("MCPPermissionManagement", () => {
     );
   };
 
-  it("shows only the oauth2 PKCE-delegation toggle for oauth2 servers", async () => {
+  it("does not render the oauth2 PKCE-delegation toggle here (it lives next to the auth fields now)", async () => {
     renderWithInitialValues({ allow_all_keys: false, auth_type: "oauth2" });
     await expandPanel();
-    expect(screen.getByText("Delegate auth to upstream (PKCE passthrough)")).toBeInTheDocument();
-    // The non-oauth2 pass-through toggle must NOT appear for oauth2 servers.
+    expect(screen.queryByText("Delegate auth to upstream (PKCE passthrough)")).not.toBeInTheDocument();
+    // The none-auth pass-through toggle must NOT appear for oauth2 servers either.
     expect(screen.queryByText("OAuth pass-through")).not.toBeInTheDocument();
   });
 
