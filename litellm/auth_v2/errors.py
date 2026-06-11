@@ -44,3 +44,7 @@ def insufficient_scope() -> AuthError:
 
 def forbidden_role() -> AuthError:
     return AuthError(403, "Insufficient role")
+
+
+def forbidden_permission() -> AuthError:
+    return AuthError(403, "Forbidden")

@@ -104,3 +104,4 @@ class AuthConfig(BaseModel):
     mutual_tls: MutualTlsConfig = Field(default_factory=MutualTlsConfig)
     network: TrustedProxyConfig = Field(default_factory=TrustedProxyConfig)
     saml: Optional[SamlConfig] = None
+    casbin_policy_path: Optional[str] = None

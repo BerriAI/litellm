@@ -256,12 +256,19 @@ class OAuth2Authenticator:
     async def _introspect(self, token: str) -> Credential:
         config = self._introspection
         assert config is not None
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.post(
-                str(config.introspection_endpoint),
-                data={"token": token},
-                auth=(config.client_id, config.client_secret.get_secret_value()),
-            )
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+        from litellm.types.llms.custom_http import httpxSpecialProvider
+
+        basic = base64.b64encode(
+            f"{config.client_id}:{config.client_secret.get_secret_value()}".encode()
+        ).decode()
+        client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+        response = await client.post(
+            str(config.introspection_endpoint),
+            data={"token": token},
+            headers={"Authorization": f"Basic {basic}"},
+            timeout=10.0,
+        )
         if response.status_code != 200:
             raise errors.invalid_token("introspection failed")
         body = response.json()

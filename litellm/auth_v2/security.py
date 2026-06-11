@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Annotated, Callable, List
+from dataclasses import dataclass, field
+from typing import Annotated, Callable, List, Optional
 
 from fastapi import FastAPI, Request, Security
 from fastapi.security import SecurityScopes
@@ -11,7 +11,7 @@ from .authenticators import Authenticator, build_authenticators
 from .config import AuthConfig
 from .models import Principal
 from .network import resolve_network_context
-from .rbac import Role, has_any_role, has_required_scopes
+from .rbac import RbacEngine, Role, has_required_scopes
 from .resolver import IdentityResolver
 
 
@@ -20,6 +20,7 @@ class AuthContext:
     config: AuthConfig
     authenticators: List[Authenticator]
     resolver: IdentityResolver
+    rbac: RbacEngine = field(default_factory=RbacEngine)
 
 
 def install_auth(
@@ -27,6 +28,7 @@ def install_auth(
     config: AuthConfig,
     resolver: IdentityResolver,
     *,
+    rbac: Optional[RbacEngine] = None,
     mount_scim: bool = True,
     mount_oidc: bool = True,
     mount_saml: bool = True,
@@ -40,7 +42,8 @@ def install_auth(
     this module resolve the client IP, or leave ``trusted_proxy_cidrs`` empty and
     rely on uvicorn's own ``--forwarded-allow-ips``. Do not enable both.
     """
-    ctx = AuthContext(config, build_authenticators(config), resolver)
+    engine = rbac if rbac is not None else RbacEngine(config.casbin_policy_path)
+    ctx = AuthContext(config, build_authenticators(config), resolver, engine)
     app.state.auth_v2 = ctx
     if mount_scim:
         from .scim import build_scim_router
@@ -96,10 +99,23 @@ async def get_current_principal(
 
 def require_roles(*allowed: Role) -> Callable[..., object]:
     async def dependency(
+        request: Request,
         principal: Annotated[Principal, Security(get_current_principal)],
     ) -> Principal:
-        if not has_any_role(principal, allowed):
+        if not _ctx(request).rbac.has_role(principal, allowed):
             raise errors.forbidden_role()
+        return principal
+
+    return dependency
+
+
+def require_permission(obj: str, act: str) -> Callable[..., object]:
+    async def dependency(
+        request: Request,
+        principal: Annotated[Principal, Security(get_current_principal)],
+    ) -> Principal:
+        if not _ctx(request).rbac.enforce(principal, obj, act):
+            raise errors.forbidden_permission()
         return principal
 
     return dependency
