@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from litellm.auth_v2.models import (
+from litellm.proxy.auth_v2.models import (
     AuthMethod,
     Credential,
     Principal,
@@ -13,7 +13,7 @@ from litellm.auth_v2.models import (
     TeamRole,
     UserIdentity,
 )
-from litellm.auth_v2.rbac import Role
+from litellm.proxy.auth_v2.rbac import Role
 
 
 def _credential() -> Credential:

@@ -6,8 +6,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from litellm.auth_v2.authenticators import JwtVerifier
-from litellm.auth_v2.config import OidcProviderConfig
+from litellm.proxy.auth_v2.authenticators import JwtVerifier
+from litellm.proxy.auth_v2.config import OidcProviderConfig
 
 from auth_v2_helpers import TEST_AUDIENCE, TEST_ISSUER, FakeJwksClient, TokenFactory
 

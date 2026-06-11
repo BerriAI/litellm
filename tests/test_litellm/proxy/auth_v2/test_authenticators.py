@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from litellm.auth_v2.authenticators import (
+from litellm.proxy.auth_v2.authenticators import (
     ApiKeyAuthenticator,
     HttpAuthenticator,
     JwtVerifier,
@@ -15,7 +15,7 @@ from litellm.auth_v2.authenticators import (
     OidcAuthenticator,
     build_authenticators,
 )
-from litellm.auth_v2.config import (
+from litellm.proxy.auth_v2.config import (
     ApiKeySchemeConfig,
     AuthConfig,
     HttpBasicConfig,
@@ -23,8 +23,8 @@ from litellm.auth_v2.config import (
     OAuth2IntrospectionConfig,
     OidcProviderConfig,
 )
-from litellm.auth_v2.errors import AuthError
-from litellm.auth_v2.models import AuthMethod, SecuritySchemeType
+from litellm.proxy.auth_v2.errors import AuthError
+from litellm.proxy.auth_v2.models import AuthMethod, SecuritySchemeType
 
 from auth_v2_helpers import (
     TEST_AUDIENCE,

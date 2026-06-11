@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from litellm.auth_v2.errors import AuthError
-from litellm.auth_v2.models import (
+from litellm.proxy.auth_v2.errors import AuthError
+from litellm.proxy.auth_v2.models import (
     AuthMethod,
     ClientCertificate,
     Credential,
@@ -11,8 +11,8 @@ from litellm.auth_v2.models import (
     PrincipalType,
     SecuritySchemeType,
 )
-from litellm.auth_v2.rbac import Role
-from litellm.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
+from litellm.proxy.auth_v2.rbac import Role
+from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
 
 
 def _api_key_credential(raw: str) -> Credential:

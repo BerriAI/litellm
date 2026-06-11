@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from litellm.auth_v2.config import (
+from litellm.proxy.auth_v2.config import (
     OAuth2IntrospectionConfig,
     OidcProviderConfig,
     SamlConfig,

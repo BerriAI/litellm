@@ -6,21 +6,21 @@ import pytest
 from fastapi import FastAPI, Security
 from fastapi.testclient import TestClient
 
-from litellm.auth_v2.authenticators import (
+from litellm.proxy.auth_v2.authenticators import (
     ApiKeyAuthenticator,
     HttpAuthenticator,
     JwtVerifier,
 )
-from litellm.auth_v2.config import (
+from litellm.proxy.auth_v2.config import (
     ApiKeySchemeConfig,
     AuthConfig,
     HttpBasicConfig,
     OidcProviderConfig,
 )
-from litellm.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.auth_v2.rbac import RbacEngine, Role
-from litellm.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
-from litellm.auth_v2.security import (
+from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
+from litellm.proxy.auth_v2.rbac import RbacEngine, Role
+from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
+from litellm.proxy.auth_v2.security import (
     AuthContext,
     get_current_principal,
     require_permission,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from litellm.auth_v2.config import TrustedProxyConfig
-from litellm.auth_v2.network import resolve_client_ip, resolve_network_context
+from litellm.proxy.auth_v2.config import TrustedProxyConfig
+from litellm.proxy.auth_v2.network import resolve_client_ip, resolve_network_context
 
 from auth_v2_helpers import make_request
 

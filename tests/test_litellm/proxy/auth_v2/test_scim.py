@@ -4,10 +4,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from litellm.auth_v2.config import AuthConfig
-from litellm.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
-from litellm.auth_v2.security import install_auth
+from litellm.proxy.auth_v2.config import AuthConfig
+from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
+from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
+from litellm.proxy.auth_v2.security import install_auth
 
 USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
 GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"

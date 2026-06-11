@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from litellm.auth_v2.config import OidcProviderConfig
-from litellm.auth_v2.oidc import _provider_key, _user_from_userinfo
-from litellm.auth_v2.resolver import InMemoryIdentityStore
+from litellm.proxy.auth_v2.config import OidcProviderConfig
+from litellm.proxy.auth_v2.oidc import _provider_key, _user_from_userinfo
+from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore
 
 
 def test_userinfo_maps_standard_claims_to_scim_user():

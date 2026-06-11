@@ -3,8 +3,8 @@ from __future__ import annotations
 import pytest
 from fastapi.security import SecurityScopes
 
-from litellm.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.auth_v2.rbac import RbacEngine, Role, has_required_scopes
+from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
+from litellm.proxy.auth_v2.rbac import RbacEngine, Role, has_required_scopes
 
 
 def _principal(*, scopes=None, roles=None) -> Principal:
