@@ -94,7 +94,7 @@ def saml_env(tmp_path: Path) -> SamlEnv:
     from saml2.saml import NAMEID_FORMAT_EMAILADDRESS
     from saml2.server import Server
 
-    from litellm.proxy.auth_v2.config import SamlConfig
+    from litellm.proxy.auth_v2.config import SAMLConfig
 
     idp_key, idp_cert = _gen_cert(tmp_path, "idp")
     sp_key, sp_cert = _gen_cert(tmp_path, "sp")
@@ -142,7 +142,7 @@ def saml_env(tmp_path: Path) -> SamlEnv:
     idp = Server(config=idp_conf)
     idp_metadata = str(entity_descriptor(idp.config))
 
-    config = SamlConfig(
+    config = SAMLConfig(
         enabled=True,
         entity_id=SP_ENTITY_ID,
         acs_url=ACS_URL,
@@ -161,22 +161,17 @@ def _build_app(saml_env: SamlEnv):
     from litellm.proxy.auth_v2.config import AuthConfig
     from litellm.proxy.auth_v2.models import Principal
     from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore
-    from litellm.proxy.auth_v2.security import get_current_principal, install_auth
+    from litellm.proxy.auth_v2.saml import build_saml_router
+    from litellm.proxy.auth_v2.security import AuthSecurity
 
     app = FastAPI()
     store = InMemoryIdentityStore()
-    install_auth(
-        app,
-        AuthConfig(saml=saml_env.config),
-        store,
-        mount_scim=False,
-        mount_oidc=False,
-        mount_saml=True,
-    )
+    auth = AuthSecurity(AuthConfig(saml=saml_env.config), store)
+    app.include_router(build_saml_router(auth))
 
     @app.get("/whoami")
     async def whoami(
-        principal: "Principal" = Security(get_current_principal),
+        principal: "Principal" = Security(auth.principal),
     ):
         return {
             "subject": principal.subject,
@@ -226,7 +221,7 @@ def test_acs_accepts_signed_assertion_and_provisions_user(saml_env):
         follow_redirects=False,
     )
     assert acs.status_code == 303
-    assert "saml_session" in acs.cookies
+    assert "litellm_session" in acs.cookies
 
     # user was provisioned into the ProvisioningStore via the shared upsert seam
     users = list(store._users.values())
@@ -243,7 +238,7 @@ def test_session_cookie_authenticates_with_saml_method(saml_env):
         data={"SAMLResponse": saml_env.mint_response()},
         follow_redirects=False,
     )
-    client.cookies.set("saml_session", acs.cookies["saml_session"])
+    client.cookies.set("litellm_session", acs.cookies["litellm_session"])
 
     whoami = client.get("/whoami")
     assert whoami.status_code == 200
@@ -404,9 +399,9 @@ def test_user_from_mapped_builds_name_and_email():
     ],
 )
 def test_safe_relay_state_blocks_open_redirects(candidate, expected):
-    from litellm.proxy.auth_v2.saml import _safe_relay_state
+    from litellm.proxy.auth_v2.session import safe_relay_state
 
-    assert _safe_relay_state(candidate, "/") == expected
+    assert safe_relay_state(candidate, "/") == expected
 
 
 @pytest.mark.parametrize(
@@ -431,28 +426,28 @@ def test_acs_session_cookie_is_secure(saml_env):
         data={"SAMLResponse": saml_env.mint_response()},
         follow_redirects=False,
     )
-    assert "saml_session" in acs.cookies
+    assert "litellm_session" in acs.cookies
     assert "secure" in acs.headers["set-cookie"].lower()
 
 
 # --------------------------------------------------------------------------- #
-# SamlSessionStore TTL + size eviction (no xmlsec1 needed)
+# SessionStore TTL + size eviction (no xmlsec1 needed)
 # --------------------------------------------------------------------------- #
 
 
 def test_session_store_expires_entries():
-    from litellm.proxy.auth_v2.saml import SamlSessionStore
+    from litellm.proxy.auth_v2.session import SessionStore
 
-    store = SamlSessionStore(ttl_seconds=0)
+    store = SessionStore(ttl_seconds=0)
     session_id = store.create_session({"name_id": "alice@example.com"})
     # ttl of 0 means the entry is already past its expiry on the next read
     assert store.get(session_id) is None
 
 
 def test_session_store_evicts_when_over_capacity():
-    from litellm.proxy.auth_v2.saml import SamlSessionStore
+    from litellm.proxy.auth_v2.session import SessionStore
 
-    store = SamlSessionStore(max_size=3)
+    store = SessionStore(max_size=3)
     ids = [store.create_session({"name_id": f"user-{i}"}) for i in range(5)]
     live = [sid for sid in ids if store.get(sid) is not None]
     assert len(live) <= 3

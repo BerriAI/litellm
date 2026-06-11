@@ -7,13 +7,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy.auth_v2.authenticators import (
-    ApiKeyAuthenticator,
+    APIKeyAuthenticator,
     HttpAuthenticator,
     InMemoryBasicAuthStore,
-    JwtVerifier,
-    MutualTlsAuthenticator,
+    JWTVerifier,
+    MutualTLSAuthenticator,
     OAuth2Authenticator,
-    OidcAuthenticator,
+    OIDCAuthenticator,
     build_authenticators,
     hash_basic_password,
 )
@@ -21,13 +21,13 @@ from litellm.proxy.auth_v2.config import (
     ApiKeySchemeConfig,
     AuthConfig,
     HttpBasicConfig,
-    MutualTlsConfig,
+    MutualTLSConfig,
     OAuth2IntrospectionConfig,
-    OidcProviderConfig,
+    OIDCProviderConfig,
     TrustedProxyConfig,
 )
 from litellm.proxy.auth_v2.errors import AuthError
-from litellm.proxy.auth_v2.models import AuthMethod, SecuritySchemeType
+from litellm.proxy.auth_v2.models import AuthMethod
 
 from auth_v2_helpers import (
     TEST_AUDIENCE,
@@ -37,7 +37,7 @@ from auth_v2_helpers import (
 )
 
 # --------------------------------------------------------------------------- #
-# JwtVerifier: every RFC 7519 check must be enforced.
+# JWTVerifier: every RFC 7519 check must be enforced.
 # --------------------------------------------------------------------------- #
 
 
@@ -51,7 +51,7 @@ def test_jwt_verifier_rejects_bad_signature(
     rsa_keypair, other_rsa_keypair, oidc_provider, token_factory
 ):
     _, public_key = rsa_keypair
-    verifier = JwtVerifier(oidc_provider, jwks_client=FakeJwksClient(public_key))
+    verifier = JWTVerifier(oidc_provider, jwks_client=FakeJwksClient(public_key))
     other_pem, _ = other_rsa_keypair
     forged = token_factory.mint(private_pem=other_pem)
     with pytest.raises(AuthError) as exc:
@@ -99,12 +99,12 @@ def test_jwt_verifier_enforces_at_jwt_typ(jwt_verifier, token_factory):
 
 
 # --------------------------------------------------------------------------- #
-# ApiKeyAuthenticator
+# APIKeyAuthenticator
 # --------------------------------------------------------------------------- #
 
 
 async def test_api_key_authenticator_extracts_header():
-    auth = ApiKeyAuthenticator(ApiKeySchemeConfig(header_name="x-litellm-api-key"))
+    auth = APIKeyAuthenticator(ApiKeySchemeConfig(header_name="x-litellm-api-key"))
     request = make_request(headers={"x-litellm-api-key": "sk-secret-value"})
     credential = await auth.authenticate(request)
     assert credential is not None
@@ -115,7 +115,7 @@ async def test_api_key_authenticator_extracts_header():
 
 
 async def test_api_key_authenticator_returns_none_when_absent():
-    auth = ApiKeyAuthenticator(ApiKeySchemeConfig())
+    auth = APIKeyAuthenticator(ApiKeySchemeConfig())
     assert await auth.authenticate(make_request()) is None
 
 
@@ -127,8 +127,8 @@ async def test_api_key_authenticator_returns_none_when_absent():
 def _http_auth(
     public_key: Any, *, basic: HttpBasicConfig = None, basic_verifier=None
 ) -> HttpAuthenticator:
-    verifier = JwtVerifier(
-        OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
+    verifier = JWTVerifier(
+        OIDCProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
         jwks_client=FakeJwksClient(public_key),
     )
     return HttpAuthenticator(
@@ -265,8 +265,8 @@ def test_hash_basic_password_is_salted_and_verifiable():
 
 
 def _oauth2(public_key: Any) -> OAuth2Authenticator:
-    verifier = JwtVerifier(
-        OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
+    verifier = JWTVerifier(
+        OIDCProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
         jwks_client=FakeJwksClient(public_key),
     )
     return OAuth2Authenticator([verifier], introspection=None)
@@ -373,16 +373,16 @@ async def test_oauth2_introspection_non_200_raises():
 
 
 # --------------------------------------------------------------------------- #
-# OidcAuthenticator
+# OIDCAuthenticator
 # --------------------------------------------------------------------------- #
 
 
-def _oidc(public_key: Any) -> OidcAuthenticator:
-    verifier = JwtVerifier(
-        OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
+def _oidc(public_key: Any) -> OIDCAuthenticator:
+    verifier = JWTVerifier(
+        OIDCProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
         jwks_client=FakeJwksClient(public_key),
     )
-    return OidcAuthenticator([verifier])
+    return OIDCAuthenticator([verifier])
 
 
 async def test_oidc_valid_token_sets_oidc_method(rsa_keypair, token_factory):
@@ -405,7 +405,7 @@ async def test_oidc_unknown_issuer_raises(rsa_keypair, token_factory):
 
 
 # --------------------------------------------------------------------------- #
-# MutualTlsAuthenticator
+# MutualTLSAuthenticator
 # --------------------------------------------------------------------------- #
 
 
@@ -413,12 +413,12 @@ async def test_oidc_unknown_issuer_raises(rsa_keypair, token_factory):
 _TRUSTED_NET = TrustedProxyConfig(trusted_proxy_cidrs=["203.0.113.0/24"])
 
 
-def _mtls(config: MutualTlsConfig, network: TrustedProxyConfig = None):
-    return MutualTlsAuthenticator(config, network or _TRUSTED_NET)
+def _mtls(config: MutualTLSConfig, network: TrustedProxyConfig = None):
+    return MutualTLSAuthenticator(config, network or _TRUSTED_NET)
 
 
 async def test_mtls_reads_forwarded_subject_header_from_trusted_peer():
-    auth = _mtls(MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn"))
+    auth = _mtls(MutualTLSConfig(enabled=True, forwarded_subject_header="x-client-dn"))
     request = make_request(headers={"x-client-dn": "CN=svc-a,O=Co,C=US"})
     credential = await auth.authenticate(request)
     assert credential is not None
@@ -429,7 +429,7 @@ async def test_mtls_reads_forwarded_subject_header_from_trusted_peer():
 
 async def test_mtls_forwarded_header_from_untrusted_peer_is_ignored():
     # spoofing guard: a client that is not a trusted proxy cannot forge the DN header
-    auth = _mtls(MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn"))
+    auth = _mtls(MutualTLSConfig(enabled=True, forwarded_subject_header="x-client-dn"))
     request = make_request(
         headers={"x-client-dn": "CN=attacker"}, client=("8.8.8.8", 4444)
     )
@@ -437,12 +437,12 @@ async def test_mtls_forwarded_header_from_untrusted_peer_is_ignored():
 
 
 async def test_mtls_forwarded_header_absent_returns_none():
-    auth = _mtls(MutualTlsConfig(enabled=True, forwarded_subject_header="x-client-dn"))
+    auth = _mtls(MutualTLSConfig(enabled=True, forwarded_subject_header="x-client-dn"))
     assert await auth.authenticate(make_request()) is None
 
 
 async def test_mtls_reads_asgi_tls_extension():
-    auth = _mtls(MutualTlsConfig(enabled=True))
+    auth = _mtls(MutualTLSConfig(enabled=True))
     request = make_request(
         scope_extra={"extensions": {"tls": {"client_cert_name": "CN=from-asgi"}}}
     )
@@ -452,7 +452,7 @@ async def test_mtls_reads_asgi_tls_extension():
 
 
 async def test_mtls_no_cert_returns_none():
-    auth = _mtls(MutualTlsConfig(enabled=True))
+    auth = _mtls(MutualTLSConfig(enabled=True))
     assert await auth.authenticate(make_request()) is None
 
 
@@ -463,24 +463,23 @@ async def test_mtls_no_cert_returns_none():
 
 def test_build_authenticators_follows_scheme_order():
     config = AuthConfig()
-    authenticators = build_authenticators(config)
-    schemes = [a.scheme for a in authenticators]
+    types = [type(a) for a in build_authenticators(config)]
     # mutual_tls disabled by default -> excluded
-    assert schemes == [
-        SecuritySchemeType.API_KEY,
-        SecuritySchemeType.HTTP,
-        SecuritySchemeType.OPENID_CONNECT,
-        SecuritySchemeType.OAUTH2,
+    assert types == [
+        APIKeyAuthenticator,
+        HttpAuthenticator,
+        OIDCAuthenticator,
+        OAuth2Authenticator,
     ]
 
 
 def test_build_authenticators_omits_api_key_when_unconfigured():
     config = AuthConfig(api_key=None)
-    schemes = [a.scheme for a in build_authenticators(config)]
-    assert SecuritySchemeType.API_KEY not in schemes
+    types = [type(a) for a in build_authenticators(config)]
+    assert APIKeyAuthenticator not in types
 
 
 def test_build_authenticators_includes_mtls_when_enabled():
-    config = AuthConfig(mutual_tls=MutualTlsConfig(enabled=True))
-    schemes = [a.scheme for a in build_authenticators(config)]
-    assert SecuritySchemeType.MUTUAL_TLS == schemes[-1]
+    config = AuthConfig(mutual_tls=MutualTLSConfig(enabled=True))
+    types = [type(a) for a in build_authenticators(config)]
+    assert types[-1] is MutualTLSAuthenticator

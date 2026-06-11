@@ -5,23 +5,23 @@ from pydantic import ValidationError
 
 from litellm.proxy.auth_v2.config import (
     OAuth2IntrospectionConfig,
-    OidcProviderConfig,
-    SamlConfig,
+    OIDCProviderConfig,
+    SAMLConfig,
 )
 
 
 def test_saml_config_requires_idp_metadata_when_enabled():
     with pytest.raises(ValidationError):
-        SamlConfig(enabled=True, entity_id="sp", acs_url="https://sp/acs")
+        SAMLConfig(enabled=True, entity_id="sp", acs_url="https://sp/acs")
 
 
 def test_saml_config_allows_empty_metadata_when_disabled():
-    config = SamlConfig(enabled=False, entity_id="sp", acs_url="https://sp/acs")
+    config = SAMLConfig(enabled=False, entity_id="sp", acs_url="https://sp/acs")
     assert config.idp_metadata == ""
 
 
 def test_saml_config_accepts_inline_metadata():
-    config = SamlConfig(
+    config = SAMLConfig(
         enabled=True,
         entity_id="sp",
         acs_url="https://sp/acs",
@@ -32,11 +32,11 @@ def test_saml_config_accepts_inline_metadata():
 
 def test_oidc_provider_requires_audience():
     with pytest.raises(ValidationError):
-        OidcProviderConfig(issuer="https://idp.example.com")
+        OIDCProviderConfig(issuer="https://idp.example.com")
 
 
 def test_oidc_provider_defaults_to_rs256():
-    provider = OidcProviderConfig(issuer="https://idp.example.com", audience=["x"])
+    provider = OIDCProviderConfig(issuer="https://idp.example.com", audience=["x"])
     assert provider.algorithms == ["RS256"]
     assert provider.require_at_jwt is False
 

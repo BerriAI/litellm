@@ -6,8 +6,8 @@ import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from litellm.proxy.auth_v2.authenticators import JwtVerifier
-from litellm.proxy.auth_v2.config import OidcProviderConfig
+from litellm.proxy.auth_v2.authenticators import JWTVerifier
+from litellm.proxy.auth_v2.config import OIDCProviderConfig
 
 from auth_v2_helpers import TEST_AUDIENCE, TEST_ISSUER, FakeJwksClient, TokenFactory
 
@@ -39,13 +39,13 @@ def token_factory(rsa_keypair: Tuple[bytes, Any]) -> TokenFactory:
 
 
 @pytest.fixture
-def oidc_provider() -> OidcProviderConfig:
-    return OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE])
+def oidc_provider() -> OIDCProviderConfig:
+    return OIDCProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE])
 
 
 @pytest.fixture
 def jwt_verifier(
-    rsa_keypair: Tuple[bytes, Any], oidc_provider: OidcProviderConfig
-) -> JwtVerifier:
+    rsa_keypair: Tuple[bytes, Any], oidc_provider: OIDCProviderConfig
+) -> JWTVerifier:
     _, public_key = rsa_keypair
-    return JwtVerifier(oidc_provider, jwks_client=FakeJwksClient(public_key))
+    return JWTVerifier(oidc_provider, jwks_client=FakeJwksClient(public_key))

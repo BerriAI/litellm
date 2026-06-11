@@ -4,7 +4,7 @@ import pytest
 from fastapi.security import SecurityScopes
 
 from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.proxy.auth_v2.rbac import RbacEngine, Role, has_required_scopes
+from litellm.proxy.auth_v2.rbac import RBACEngine, Role, has_required_scopes
 
 
 def _principal(*, scopes=None, roles=None) -> Principal:
@@ -38,13 +38,13 @@ def test_empty_required_scopes_always_passes():
 
 
 # --------------------------------------------------------------------------- #
-# RbacEngine.has_role honors the role hierarchy (Casbin g-rules)
+# RBACEngine.has_role honors the role hierarchy (Casbin g-rules)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.fixture
-def engine() -> RbacEngine:
-    return RbacEngine()
+def engine() -> RBACEngine:
+    return RBACEngine()
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,7 @@ def engine() -> RbacEngine:
     ],
 )
 def test_has_role_inherits_down_the_hierarchy(engine, held, gate):
-    assert engine.has_role(_principal(roles=[held]), (gate,))
+    assert engine.has_any_role(_principal(roles=[held]), (gate,))
 
 
 @pytest.mark.parametrize(
@@ -73,15 +73,15 @@ def test_has_role_inherits_down_the_hierarchy(engine, held, gate):
     ],
 )
 def test_has_role_does_not_climb_the_hierarchy(engine, held, gate):
-    assert not engine.has_role(_principal(roles=[held]), (gate,))
+    assert not engine.has_any_role(_principal(roles=[held]), (gate,))
 
 
 def test_has_role_false_without_roles(engine):
-    assert not engine.has_role(_principal(), (Role.TEAM_MEMBER,))
+    assert not engine.has_any_role(_principal(), (Role.TEAM_MEMBER,))
 
 
 # --------------------------------------------------------------------------- #
-# RbacEngine.enforce against the default policy
+# RBACEngine.enforce against the default policy
 # --------------------------------------------------------------------------- #
 
 
@@ -115,7 +115,7 @@ def test_enforce_false_without_roles(engine):
 def test_csv_policy_overrides_defaults(tmp_path):
     policy = tmp_path / "policy.csv"
     policy.write_text("p, platform_viewer, /reports, POST\n")
-    engine = RbacEngine(policy_path=str(policy))
+    engine = RBACEngine(policy_path=str(policy))
 
     # the operator rule is honored
     assert engine.enforce(_principal(roles=[Role.PLATFORM_VIEWER]), "/reports", "POST")

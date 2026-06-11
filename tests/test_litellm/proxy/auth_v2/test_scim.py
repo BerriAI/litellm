@@ -7,7 +7,8 @@ from fastapi.testclient import TestClient
 from litellm.proxy.auth_v2.config import AuthConfig
 from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
 from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
-from litellm.proxy.auth_v2.security import install_auth
+from litellm.proxy.auth_v2.scim import build_scim_router
+from litellm.proxy.auth_v2.security import AuthSecurity
 
 USER_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:User"
 GROUP_SCHEMA = "urn:ietf:params:scim:schemas:core:2.0:Group"
@@ -28,19 +29,14 @@ def _principal(subject: str, scopes: list) -> Principal:
 
 def _app() -> FastAPI:
     app = FastAPI()
-    install_auth(
-        app,
-        AuthConfig(),
-        InMemoryIdentityStore(
-            api_keys={
-                _hash_api_key(SCIM_KEY): _principal("scim-writer", ["scim:write"]),
-                _hash_api_key(NOSCOPE_KEY): _principal("no-scope", []),
-            }
-        ),
-        mount_scim=True,
-        mount_oidc=False,
-        mount_saml=False,
+    store = InMemoryIdentityStore(
+        api_keys={
+            _hash_api_key(SCIM_KEY): _principal("scim-writer", ["scim:write"]),
+            _hash_api_key(NOSCOPE_KEY): _principal("no-scope", []),
+        }
     )
+    auth = AuthSecurity(AuthConfig(), store)
+    app.include_router(build_scim_router(auth))
     return app
 
 

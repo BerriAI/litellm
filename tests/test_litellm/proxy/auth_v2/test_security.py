@@ -1,31 +1,26 @@
 from __future__ import annotations
 
-from typing import Annotated, Any, Tuple
+from typing import Any, Tuple
 
 import pytest
 from fastapi import FastAPI, Security
 from fastapi.testclient import TestClient
 
 from litellm.proxy.auth_v2.authenticators import (
-    ApiKeyAuthenticator,
+    APIKeyAuthenticator,
     HttpAuthenticator,
-    JwtVerifier,
+    JWTVerifier,
 )
 from litellm.proxy.auth_v2.config import (
     ApiKeySchemeConfig,
     AuthConfig,
     HttpBasicConfig,
-    OidcProviderConfig,
+    OIDCProviderConfig,
 )
 from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
-from litellm.proxy.auth_v2.rbac import RbacEngine, Role
+from litellm.proxy.auth_v2.rbac import RBACEngine, Role
 from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key
-from litellm.proxy.auth_v2.security import (
-    AuthContext,
-    get_current_principal,
-    require_permission,
-    require_roles,
-)
+from litellm.proxy.auth_v2.security import AuthSecurity
 
 from auth_v2_helpers import TEST_AUDIENCE, TEST_ISSUER, FakeJwksClient
 
@@ -46,13 +41,15 @@ def _principal(subject: str, *, scopes=None, roles=None) -> Principal:
     )
 
 
-def _build_app(public_key: Any) -> Tuple[FastAPI, InMemoryIdentityStore]:
-    verifier = JwtVerifier(
-        OidcProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
+def _build_app(
+    public_key: Any, *, rbac: RBACEngine = None
+) -> Tuple[FastAPI, InMemoryIdentityStore]:
+    verifier = JWTVerifier(
+        OIDCProviderConfig(issuer=TEST_ISSUER, audience=[TEST_AUDIENCE]),
         jwks_client=FakeJwksClient(public_key),
     )
     authenticators = [
-        ApiKeyAuthenticator(ApiKeySchemeConfig()),
+        APIKeyAuthenticator(ApiKeySchemeConfig()),
         HttpAuthenticator(HttpBasicConfig(), [verifier]),
     ]
     resolver = InMemoryIdentityStore(
@@ -72,15 +69,17 @@ def _build_app(public_key: Any) -> Tuple[FastAPI, InMemoryIdentityStore]:
             ),
         }
     )
-    ctx = AuthContext(AuthConfig(), authenticators, resolver)
+    auth = AuthSecurity(
+        AuthConfig(), resolver, rbac=rbac, authenticators=authenticators
+    )
 
     app = FastAPI()
-    app.state.auth_v2 = ctx
 
+    # default-value Security() style: the dependency marker stays a real object even
+    # under `from __future__ import annotations`, where Annotated[...] would be a string
+    # that FastAPI re-evaluates in module globals (the closure-local `auth` is invisible)
     @app.get("/open")
-    async def open_route(
-        principal: Annotated[Principal, Security(get_current_principal)],
-    ):
+    async def open_route(principal: Principal = Security(auth.principal)):
         return {
             "subject": principal.subject,
             "auth_method": principal.auth_method.value,
@@ -89,23 +88,19 @@ def _build_app(public_key: Any) -> Tuple[FastAPI, InMemoryIdentityStore]:
 
     @app.get("/scoped")
     async def scoped_route(
-        principal: Annotated[
-            Principal, Security(get_current_principal, scopes=["models:read"])
-        ],
+        principal: Principal = Security(auth.principal, scopes=["models:read"]),
     ):
         return {"subject": principal.subject}
 
     @app.get("/admin")
     async def admin_route(
-        principal: Annotated[Principal, Security(require_roles(Role.ORG_ADMIN))],
+        principal: Principal = Security(auth.require_roles(Role.ORG_ADMIN)),
     ):
         return {"subject": principal.subject}
 
     @app.post("/perm-widgets")
     async def widgets_route(
-        principal: Annotated[
-            Principal, Security(require_permission("/widgets", "POST"))
-        ],
+        principal: Principal = Security(auth.require_permission("/widgets", "POST")),
     ):
         return {"subject": principal.subject}
 
@@ -229,7 +224,7 @@ def test_required_role_honors_hierarchy(client):
 
 
 # --------------------------------------------------------------------------- #
-# Permission enforcement (require_permission -> RbacEngine.enforce)
+# Permission enforcement (require_permission -> RBACEngine.enforce)
 # --------------------------------------------------------------------------- #
 
 
@@ -262,8 +257,7 @@ def test_injected_rbac_engine_overrides_default_policy(rsa_keypair, tmp_path):
     policy.write_text("p, platform_viewer, /widgets, POST\n")
 
     _, public_key = rsa_keypair
-    app, _ = _build_app(public_key)
-    app.state.auth_v2.rbac = RbacEngine(policy_path=str(policy))
+    app, _ = _build_app(public_key, rbac=RBACEngine(policy_path=str(policy)))
     client = TestClient(app)
 
     # viewer now passes, platform_admin (default grant removed) now fails

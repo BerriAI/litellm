@@ -17,7 +17,7 @@ class _StaticSigningKey:
 
 class FakeJwksClient:
     """Stands in for PyJWKClient. Returns one fixed key for every token so
-    JwtVerifier performs a real RS256 signature check against it via PyJWT."""
+    JWTVerifier performs a real RS256 signature check against it via PyJWT."""
 
     def __init__(self, public_key: Any) -> None:
         self._public_key = public_key

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from litellm.proxy.auth_v2.config import OidcProviderConfig
+from litellm.proxy.auth_v2.config import OIDCProviderConfig
 from litellm.proxy.auth_v2.oidc import _provider_key, _user_from_userinfo
 from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore
 
@@ -26,7 +26,7 @@ def test_userinfo_falls_back_to_email_when_no_preferred_username():
 
 def test_provider_key_sanitizes_issuer_url():
     key = _provider_key(
-        OidcProviderConfig(issuer="https://Login.Example.com/realm", audience=["x"])
+        OIDCProviderConfig(issuer="https://Login.Example.com/realm", audience=["x"])
     )
     assert key == "https-login-example-com-realm"
     assert " " not in key
