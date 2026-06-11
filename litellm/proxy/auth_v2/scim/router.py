@@ -23,10 +23,10 @@ from scim2_models import (
     User,
 )
 
-from .resolver import ProvisioningStore
+from ..resolver import ProvisioningStore
 
 if TYPE_CHECKING:
-    from .security import AuthSecurity
+    from ..security import AuthSecurity
 
 R = TypeVar("R", bound=Resource)
 

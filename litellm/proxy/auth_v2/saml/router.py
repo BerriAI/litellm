@@ -13,11 +13,11 @@ from scim2_models import Email, Name
 from scim2_models import User as ScimUser
 
 from .config import SAMLConfig
-from .resolver import ProvisioningStore
-from .session import safe_relay_state
+from ..resolver import ProvisioningStore
+from ..session import safe_relay_state
 
 if TYPE_CHECKING:
-    from .security import AuthSecurity
+    from ..security import AuthSecurity
 
 _SINGLE_VALUE_TARGETS = {
     "email",

@@ -5,8 +5,19 @@ import time
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import Request
+from pydantic import BaseModel
 
 from .models import AuthMethod, Credential, CredentialRef, SecuritySchemeType
+
+
+class SessionConfig(BaseModel):
+    cookie: str = "litellm_session"
+    secure: bool = True
+    ttl_seconds: int = 3600
+    max_size: int = 10000
+    default_redirect_path: str = "/"
+    login_cookie: str = "litellm_oidc_txn"
+    login_state_ttl: int = 300
 
 
 def safe_relay_state(target: Optional[str], default: str) -> str:

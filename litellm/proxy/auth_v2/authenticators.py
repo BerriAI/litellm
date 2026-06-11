@@ -21,9 +21,9 @@ from .config import (
     HttpBasicConfig,
     MutualTLSConfig,
     OAuth2IntrospectionConfig,
-    OIDCProviderConfig,
     TrustedProxyConfig,
 )
+from .oidc.config import OIDCProviderConfig
 from .models import (
     AuthMethod,
     ClientCertificate,

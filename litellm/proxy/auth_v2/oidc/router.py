@@ -9,11 +9,11 @@ from fastapi.responses import RedirectResponse
 from scim2_models import User as ScimUser
 
 from .config import OIDCProviderConfig
-from .resolver import ProvisioningStore
-from .session import safe_relay_state
+from ..resolver import ProvisioningStore
+from ..session import safe_relay_state
 
 if TYPE_CHECKING:
-    from .security import AuthSecurity
+    from ..security import AuthSecurity
 
 _CLAIM_KEYS = ("email", "preferred_username", "name", "groups", "roles")
 
