@@ -94,7 +94,7 @@ def saml_env(tmp_path: Path) -> SamlEnv:
     from saml2.saml import NAMEID_FORMAT_EMAILADDRESS
     from saml2.server import Server
 
-    from litellm.proxy.auth_v2.config import SAMLConfig
+    from litellm.proxy.auth_v2 import SAMLConfig
 
     idp_key, idp_cert = _gen_cert(tmp_path, "idp")
     sp_key, sp_cert = _gen_cert(tmp_path, "sp")
@@ -355,8 +355,8 @@ def test_login_rejects_open_redirect_next(saml_env):
 
 
 def test_map_attributes_applies_attribute_map():
-    from litellm.proxy.auth_v2.config import DEFAULT_SAML_ATTRIBUTE_MAP
-    from litellm.proxy.auth_v2.saml import _map_attributes
+    from litellm.proxy.auth_v2.saml.config import DEFAULT_SAML_ATTRIBUTE_MAP
+    from litellm.proxy.auth_v2.saml.router import _map_attributes
 
     ava = {
         "email": ["alice@example.com"],
@@ -372,7 +372,7 @@ def test_map_attributes_applies_attribute_map():
 
 
 def test_user_from_mapped_builds_name_and_email():
-    from litellm.proxy.auth_v2.saml import _user_from_mapped
+    from litellm.proxy.auth_v2.saml.router import _user_from_mapped
 
     user = _user_from_mapped(
         "alice@example.com",
@@ -413,7 +413,7 @@ def test_safe_relay_state_blocks_open_redirects(candidate, expected):
     ],
 )
 def test_metadata_source_classifies_input(metadata, expected_key):
-    from litellm.proxy.auth_v2.saml import _metadata_source
+    from litellm.proxy.auth_v2.saml.router import _metadata_source
 
     assert expected_key in _metadata_source(metadata)
 

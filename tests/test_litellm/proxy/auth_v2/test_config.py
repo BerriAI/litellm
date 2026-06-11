@@ -5,9 +5,8 @@ from pydantic import ValidationError
 
 from litellm.proxy.auth_v2.config import (
     OAuth2IntrospectionConfig,
-    OIDCProviderConfig,
-    SAMLConfig,
 )
+from litellm.proxy.auth_v2 import OIDCProviderConfig, SAMLConfig
 
 
 def test_saml_config_requires_idp_metadata_when_enabled():

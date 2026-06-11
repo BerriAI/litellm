@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from litellm.proxy.auth_v2.config import OIDCProviderConfig
-from litellm.proxy.auth_v2.oidc import _provider_key, _user_from_userinfo
+from litellm.proxy.auth_v2 import OIDCProviderConfig
+from litellm.proxy.auth_v2.oidc.router import _provider_key, _user_from_userinfo
 from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore
 
 

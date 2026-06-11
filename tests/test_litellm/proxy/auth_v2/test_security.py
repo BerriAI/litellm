@@ -15,8 +15,8 @@ from litellm.proxy.auth_v2.config import (
     ApiKeySchemeConfig,
     AuthConfig,
     HttpBasicConfig,
-    OIDCProviderConfig,
 )
+from litellm.proxy.auth_v2 import OIDCProviderConfig
 from litellm.proxy.auth_v2.models import AuthMethod, Principal, PrincipalType
 from litellm.proxy.auth_v2.rbac import RBACEngine, Role
 from litellm.proxy.auth_v2.resolver import InMemoryIdentityStore, _hash_api_key

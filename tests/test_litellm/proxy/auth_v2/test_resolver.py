@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from scim2_models import Group as ScimGroup
 
 from litellm.proxy.auth_v2.errors import AuthError
 from litellm.proxy.auth_v2.models import (
@@ -80,9 +81,8 @@ async def test_subject_lookup_prefers_stored_principal():
     assert resolved.subject == "from-store"
 
 
-async def test_self_describing_token_builds_principal_from_claims():
-    store = InMemoryIdentityStore()
-    credential = Credential(
+def _oidc_credential(**claims) -> Credential:
+    return Credential(
         scheme=SecuritySchemeType.OPENID_CONNECT,
         method=AuthMethod.OIDC,
         subject="sub-42",
@@ -92,17 +92,37 @@ async def test_self_describing_token_builds_principal_from_claims():
             "email": "dana@example.com",
             "preferred_username": "dana",
             "name": "Dana D",
-            "groups": ["eng", "oncall"],
-            "roles": ["org_admin", "bogus_role"],
+            **claims,
         },
     )
-    principal = await store.resolve(credential)
+
+
+async def test_self_describing_token_builds_principal_from_claims():
+    store = InMemoryIdentityStore()
+    principal = await store.resolve(_oidc_credential(roles=["org_admin", "bogus_role"]))
     assert principal.user.email == "dana@example.com"
     assert principal.user.user_name == "dana"
-    assert [team.id for team in principal.teams] == ["eng", "oncall"]
     # invalid role strings are filtered out, valid ones become Role enums
     assert principal.roles == [Role.ORG_ADMIN]
     assert principal.scopes == ["models:read"]
+
+
+async def test_group_claim_without_provisioned_scim_group_is_not_a_team():
+    # H1: a token group claim is not authoritative on its own
+    store = InMemoryIdentityStore()
+    principal = await store.resolve(_oidc_credential(groups=["eng", "oncall"]))
+    assert principal.teams == []
+
+
+async def test_group_claim_becomes_team_only_when_provisioned():
+    store = InMemoryIdentityStore(
+        groups={"eng": ScimGroup(id="eng", display_name="Engineering")}
+    )
+    principal = await store.resolve(_oidc_credential(groups=["eng", "unprovisioned"]))
+    # only the provisioned group resolves to a team; the unknown one is dropped
+    assert len(principal.teams) == 1
+    assert principal.teams[0].id == "eng"
+    assert principal.teams[0].name == "Engineering"
 
 
 async def test_mtls_credential_resolves_to_service_account():

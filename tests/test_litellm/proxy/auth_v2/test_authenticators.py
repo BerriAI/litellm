@@ -23,9 +23,9 @@ from litellm.proxy.auth_v2.config import (
     HttpBasicConfig,
     MutualTLSConfig,
     OAuth2IntrospectionConfig,
-    OIDCProviderConfig,
     TrustedProxyConfig,
 )
+from litellm.proxy.auth_v2 import OIDCProviderConfig
 from litellm.proxy.auth_v2.errors import AuthError
 from litellm.proxy.auth_v2.models import AuthMethod
 

@@ -7,7 +7,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 
 from litellm.proxy.auth_v2.authenticators import JWTVerifier
-from litellm.proxy.auth_v2.config import OIDCProviderConfig
+from litellm.proxy.auth_v2 import OIDCProviderConfig
 
 from auth_v2_helpers import TEST_AUDIENCE, TEST_ISSUER, FakeJwksClient, TokenFactory
 
